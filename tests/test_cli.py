@@ -19,8 +19,10 @@ from lumen.tools import ToolStatus
 
 try:
     from tests.test_astro import FAKE_SIRIL, SIRIL
+    from tests.test_catalog import seed_filter_photos
 except ModuleNotFoundError:  # discovered with -s tests
     from test_astro import FAKE_SIRIL, SIRIL
+    from test_catalog import seed_filter_photos
 
 
 class CliTests(unittest.TestCase):
@@ -230,6 +232,34 @@ class CliTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(original_bytes, second.read_bytes())
+
+
+    def test_groups_filter_flags_narrow_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library_dir = Path(directory) / "library"
+            with Library(Settings(library_dir=library_dir)) as library:
+                ids, _ = seed_filter_photos(library.catalog)
+            names = {photo_id: name for name, photo_id in ids.items()}
+
+            def shown(*flags):
+                code, payload = self.run_json(library_dir, "groups", *flags)
+                self.assertEqual(0, code, payload)
+                return sorted(names[photo["id"]] for group in payload["groups"] for photo in group["photos"])
+
+            self.assertEqual(["a1", "a2", "b2", "c1"], shown())
+            self.assertEqual(["a1", "a2", "a3", "b1", "b2", "c1"], shown("--show-rejected"))
+            self.assertEqual(["b2"], shown("--from", "2026-10-22", "--to", "2026-10-22"))
+            self.assertEqual(["b2", "c1"], shown("--camera", "B"))
+            self.assertEqual(["a3", "b1"], shown("--decision", "reject"))
+            self.assertEqual(["a1", "b2"], shown("--min-rating", "3"))
+            self.assertEqual(["a1", "a2", "c1"], shown("--keepers"))
+            self.assertEqual(["a1", "b2"], shown("--tagged"))
+            self.assertEqual(["b2"], shown("--text", "heron"))
+            self.assertEqual(["a1", "a2"], shown("--camera", "A", "--keepers", "--from", "2026-10-21"))
+            code, payload = self.run_json(library_dir, "groups", "--from", "2026-10-22", "--to", "2026-10-21")
+            self.assertEqual((2, {"error": "invalid filter: date_to"}), (code, payload))
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(["--library", str(library_dir), "groups", "--decision", "maybe"])
 
 
 class ExportCleanupCliTests(unittest.TestCase):

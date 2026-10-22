@@ -5,12 +5,13 @@ import re
 import subprocess
 import sys
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse, urlsplit
 
+from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups
 from .config import Settings
 from .diagnostics import doctor_report
@@ -24,6 +25,30 @@ STATIC_FILES = {
     "/static/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
+
+_FLAG_FILTERS = {"keepers_only", "tagged_only", "show_rejected"}
+
+
+def parse_group_filters(query: str) -> GroupFilters:
+    """Strict `/api/groups` query parser: unknown, repeated, or malformed keys raise ValueError("invalid filter: <name>")."""
+    values = {}
+    for key, items in parse_qs(query, keep_blank_values=False).items():
+        if key not in GroupFilters.__dataclass_fields__:
+            raise ValueError(f"invalid filter: {key if re.fullmatch(r'[a-z_]{1,32}', key) else 'unknown'}")
+        if len(items) != 1:
+            raise ValueError(f"invalid filter: {key}")
+        value = items[0]
+        if key in _FLAG_FILTERS:
+            if value not in {"0", "1"}:
+                raise ValueError(f"invalid filter: {key}")
+            values[key] = value == "1"
+        elif key == "min_rating":
+            if not re.fullmatch(r"[0-5]", value):
+                raise ValueError("invalid filter: min_rating")
+            values[key] = int(value)
+        else:
+            values[key] = (value.strip() or None) if key == "text" else value
+    return GroupFilters(**values)
 
 
 def choose_macos_folder() -> str | None:
@@ -156,17 +181,23 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 })
                 return
             if path == "/api/groups":
-                show_rejected = parse_qs(urlparse(self.path).query).get("show_rejected") == ["1"]
+                try:
+                    filters = parse_group_filters(urlparse(self.path).query)
+                except ValueError as error:
+                    self._send_json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                    return
                 with Library(settings) as library:
-                    groups = _serializable_groups(library.list_groups())
-                    photo_count = library.photo_count()
-                for group in groups:  # Every group stays listed; counts cover hidden rejected frames too.
+                    # Rejected frames are fetched so an all-rejected burst stays listed and its counts cover them.
+                    groups = _serializable_groups(library.list_groups(replace(filters, show_rejected=True)))
+                    payload = {"photo_count": library.photo_count(), "counts": library.catalog.group_counts(filters), "cameras": library.cameras()}
+                hide_rejected = not filters.show_rejected and filters.decision == "any"
+                for group in groups:
                     group["frame_count"] = len(group["photos"])
                     group["rejected_count"] = sum(photo["decision"] == "reject" for photo in group["photos"])
-                    if not show_rejected:
+                    if hide_rejected:
                         group["photos"] = [photo for photo in group["photos"] if photo["decision"] != "reject"]
                 rejected_count = sum(group["rejected_count"] for group in groups)
-                self._send_json({"groups": groups, "photo_count": photo_count, "rejected_count": rejected_count})
+                self._send_json({"groups": groups, "rejected_count": rejected_count, **payload})
                 return
             if path == "/api/jobs":
                 with Library(settings) as library:

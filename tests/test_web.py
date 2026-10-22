@@ -20,8 +20,10 @@ from lumen.web import make_server
 
 try:
     from tests.test_astro import FAKE_SIRIL, SIRIL
+    from tests.test_catalog import seed_filter_photos
 except ModuleNotFoundError:  # discovered with -s tests
     from test_astro import FAKE_SIRIL, SIRIL
+    from test_catalog import seed_filter_photos
 
 
 class LandmarkParser(HTMLParser):
@@ -804,7 +806,7 @@ const document = {
     : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
     if (selector === '.frame') return element('#contact-sheet').children.filter(item => item.className === 'frame');
-    if (selector === '.batch-button') return element('#batch-list').children;
+    if (selector === '.batch-button') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === 'batch-button'); }
     if (selector === '[role="tab"]') return tabElements;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
@@ -813,6 +815,8 @@ const document = {
 };
 let activeTimers = 0;
 const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; return setInterval(callback, 5); }, clearInterval: id => { activeTimers -= 1; clearInterval(id); } };
+const location = { search: '', pathname: '/' };
+const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
 const localStorage = { getItem: key => (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : null), setItem() {}, removeItem() {} };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
@@ -864,7 +868,11 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
-  else if (url === '/api/groups' || url === '/api/groups?show_rejected=1') { groupLoads += 1; lastGroupsUrl = url; payload = { groups, photo_count: groups.reduce((count, item) => count + item.frame_count, 0), rejected_count: groups.reduce((count, item) => count + item.rejected_count, 0) }; }
+  else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
+    groupLoads += 1; lastGroupsUrl = url;
+    const frames = groups.reduce((count, item) => count + item.photos.length, 0);
+    payload = { groups, photo_count: groups.reduce((count, item) => count + item.frame_count, 0), rejected_count: groups.reduce((count, item) => count + item.rejected_count, 0), counts: { filtered: frames, total: frames }, cameras: ['ILCE-7M4:1', 'ILCE-7RV:2'] };
+  }
   else if (/^\/api\/photos\/\d+\/pick$/.test(url)) { assert.deepEqual(JSON.parse(options.body), {}); picks.push(url); payload = { photo_id: Number(url.split('/')[3]), manual_pick: true }; }
   else if (url === '/api/jobs') payload = { jobs: resumeJobs };
   else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
@@ -1230,13 +1238,87 @@ const regression = `
     assert.equal(state.focusedId, 2);
     return;
   }
+  if (scenario === 'filters') {
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
+    const burst = (id, day, ids) => ({ ...group(id, ids), started_at: day && day + 'T08:00:00+00:00' });
+    groups = [burst(1, '2026-10-21', range(1, 150)), burst(2, '2026-10-21', range(151, 100)), burst(3, '2026-10-22', range(251, 140)), burst(4, null, range(391, 10))];
+    groups[0].photos[1].decision = 'flag';
+    groups[2].photos[0].decision = 'reject';
+    groups[2].rejected_count = 1;
+    await load();
+    assert.equal(lastGroupsUrl, '/api/groups');
+    const days = () => element('#batch-list').children;
+    assert.deepEqual(days().map(day => [day.tagName, day.open, day.children[0].tagName]), [['DETAILS', true, 'SUMMARY'], ['DETAILS', true, 'SUMMARY'], ['DETAILS', true, 'SUMMARY']]);
+    assert.deepEqual(days().map(day => day.children[0].textContent), ['2026-10-21 · 250 frames · 3 keepers', '2026-10-22 · 140 frames · 0 keepers', 'Undated · 10 frames · 1 keeper']);
+    assert.deepEqual(days().map(day => day.children.slice(1).map(item => item.className)), [['batch-button', 'batch-button'], ['batch-button'], ['batch-button']]);
+    const cards = () => document.querySelectorAll('.frame');
+    const more = element('#show-more');
+    assert.equal(cards().length, 200);
+    assert.ok(cards().every(card => card.children[0].loading === 'lazy'));
+    assert.equal(more.hidden, false);
+    assert.equal(more.textContent, 'Show 200 more · 200 remaining');
+    assert.deepEqual(element('#filter-camera').children.map(option => option.value), ['', 'ILCE-7M4:1', 'ILCE-7RV:2']);
+
+    element('#filter-from').value = '2026-10-21';
+    element('#filter-to').value = '2026-10-22';
+    element('#filter-camera').value = 'ILCE-7M4:1';
+    element('#filter-decision').value = 'flag';
+    element('#filter-rating').value = '2';
+    element('#filter-keepers').checked = true;
+    element('#filter-tagged').checked = true;
+    element('#filter-text').value = ' red fox ';
+    groups = groups.slice(0, 3);
+    await element('#filter-form').listeners.submit({ preventDefault() {} });
+    const query = 'date_from=2026-10-21&date_to=2026-10-22&camera=ILCE-7M4%3A1&decision=flag&min_rating=2&keepers_only=1&tagged_only=1&text=red+fox';
+    assert.equal(location.search, '?' + query);
+    assert.equal(lastGroupsUrl, '/api/groups?' + query);
+    assert.equal(element('#announcer').textContent, 'Showing 200 of 390 frames');
+    assert.equal(more.textContent, 'Show 190 more · 190 remaining');
+    assert.equal(cards().length, 200);
+    assert.deepEqual(cards().map(card => card.getAttribute('tabindex')).filter(value => value === '0'), ['0'], 'one frame in the tab order');
+    await more.listeners.click();
+    assert.equal(cards().length, 390);
+    assert.equal(more.hidden, true);
+    assert.equal(element('#announcer').textContent, 'Showing 390 of 390 frames');
+    assert.equal(focused, cards()[200], 'focus moves to the first revealed frame');
+    assert.equal(state.focusedId, cards()[200].dataset.id);
+    assert.deepEqual(cards().map(card => card.getAttribute('tabindex')).filter(value => value === '0'), ['0']);
+    const loadsBefore = groupLoads;
+    await document.querySelectorAll('.batch-button')[0].listeners.click();
+    assert.equal(cards().length, 390, 'choosing a burst keeps the revealed pages');
+
+    for (const name of ['#filter-from', '#filter-to', '#filter-camera', '#filter-decision', '#filter-rating', '#filter-text']) element(name).value = '';
+    element('#filter-keepers').checked = false;
+    element('#filter-tagged').checked = false;
+    await load();
+    assert.equal(groupLoads, loadsBefore + 1);
+    assert.equal(lastGroupsUrl, '/api/groups?' + query, 'a reload keeps the filters from the URL');
+    assert.deepEqual(['#filter-from', '#filter-to', '#filter-camera', '#filter-decision', '#filter-rating', '#filter-text'].map(name => element(name).value),
+      ['2026-10-21', '2026-10-22', 'ILCE-7M4:1', 'flag', '2', 'red fox']);
+    assert.deepEqual([element('#filter-keepers').checked, element('#filter-tagged').checked, element('#show-rejected').checked], [true, true, false]);
+
+    groups = [burst(9, '2026-10-21', range(1, 3))];
+    await element('#reset-filters').listeners.click();
+    assert.equal(location.search, '');
+    assert.equal(lastGroupsUrl, '/api/groups');
+    assert.deepEqual(['#filter-from', '#filter-camera', '#filter-decision', '#filter-rating', '#filter-text'].map(name => element(name).value), ['', '', 'any', '0', '']);
+    assert.equal(element('#filter-keepers').checked, false);
+    assert.equal(more.hidden, true);
+    assert.equal(element('#announcer').textContent, 'Showing 3 of 3 frames');
+    groups = [];
+    element('#filter-text').value = 'zebra';
+    await element('#filter-form').listeners.submit({ preventDefault() {} });
+    assert.ok(tree(element('#contact-sheet')).some(node => node.textContent === 'No frames match these filters.'));
+    return;
+  }
   if (scenario === 'all-rejected') {
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const rejected = id => ({ ...photo(id), decision: 'reject' });
     const NO_KEEPER = 'No keeper in this burst: every frame is rejected.';
     groups = [{ id: 1, automatic_pick_id: 1, frame_count: 2, rejected_count: 2, photos: [] }, group(2, [3])];
     await load();
-    const batches = () => element('#batch-list').children;
+    const batches = () => document.querySelectorAll('.batch-button');
     assert.equal(batches().length, 2, 'an all-rejected burst keeps its rail entry while hidden');
     assert.equal(batches()[0].textContent, 'Burst 1 · 2 frames · ' + NO_KEEPER);
     assert.equal(element('#keeper-count').textContent, '1 keeper');
@@ -1498,7 +1580,7 @@ const regression = `
     assert.equal(state.selectedGroupId, id, 'selected batch must follow the selected photo');
     assert.equal(element('#group-cleanup-count').textContent, scenario === 'split' ? 'Burst 2 · 1 frame' : 'Burst 1 · 2 frames');
     assert.equal(element('#remove-group').disabled, false);
-    const batches = element('#batch-list').children;
+    const batches = document.querySelectorAll('.batch-button');
     assert.deepEqual(batches.map(item => item.getAttribute('aria-pressed')), scenario === 'split' ? ['false', 'true'] : ['true']);
     await element('#remove-group').listeners.click();
     assert.deepEqual(removals, ['/api/groups/' + id + '/remove']);
@@ -1506,7 +1588,7 @@ const regression = `
 })()
 `;
 vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regression, {
-  assert: require('node:assert/strict'), setImmediate, setInterval, clearInterval, setTimeout, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
+  assert: require('node:assert/strict'), URLSearchParams, setImmediate, setInterval, clearInterval, setTimeout, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
 }).catch(error => { console.error(error); process.exitCode = 1; });
 """
         app = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js"
@@ -1515,6 +1597,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_decisions_update_cards_in_place_and_keeper_count(self):
         self.run_javascript_cleanup_regression("decisions")
+
+    def test_javascript_filters_write_url_group_days_and_page_frames(self):
+        self.run_javascript_cleanup_regression("filters")
 
     def test_javascript_all_rejected_burst_explains_no_keeper_and_offers_pick(self):
         self.run_javascript_cleanup_regression("all-rejected")
@@ -1639,6 +1724,81 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual((1, 0, 1, 0), (len(restored["groups"][0]["photos"]), restored["rejected_count"],
                                         restored["groups"][0]["frame_count"], restored["groups"][0]["rejected_count"]))
 
+    def test_groups_filters_round_trip_and_reject_invalid_repeated_or_inverted_params_publicly(self):
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            ids, _ = seed_filter_photos(library.catalog)
+            original = library.catalog.list_photos()[0]
+        names = {photo_id: name for name, photo_id in ids.items()} | {original.id: "original"}
+
+        def shown(query):
+            code, payload = self.get_json("/api/groups" + query)
+            self.assertEqual(200, code, payload)
+            self.assertNotIn(str(self.root), json.dumps(payload))
+            return payload, sorted(names[photo["id"]] for group in payload["groups"] for photo in group["photos"])
+
+        payload, everything = shown("")
+        self.assertEqual(["a1", "a2", "b2", "c1", "original"], everything)
+        self.assertEqual({"filtered": 5, "total": 7}, payload["counts"])
+        self.assertEqual(sorted({"A", "B", original.camera_id}), payload["cameras"])
+        self.assertEqual((7, 2), (payload["photo_count"], payload["rejected_count"]))
+        payload, narrowed = shown("?date_from=2026-10-21&date_to=2026-10-22&camera=B&min_rating=1&tagged_only=1&text=Heron")
+        self.assertEqual((["b2"], {"filtered": 1, "total": 7}), (narrowed, payload["counts"]))
+        self.assertEqual(sorted({"A", "B", original.camera_id}), payload["cameras"], "cameras ignore the filters")
+        self.assertEqual([(1, 0)], [(group["frame_count"], group["rejected_count"]) for group in payload["groups"]])
+        self.assertEqual(["a1", "a2", "c1", "original"], shown("?keepers_only=1")[1])
+        self.assertEqual(["a3", "b1"], shown("?decision=reject")[1])
+        payload, rejected = shown("?camera=B&show_rejected=1")
+        self.assertEqual((["b1", "b2", "c1"], 1), (rejected, payload["rejected_count"]))
+        self.assertEqual(["b2", "c1"], shown("?camera=B&show_rejected=0")[1])
+        self.assertEqual(shown("")[1], shown("?text=&camera=")[1], "blank values are ignored")
+
+        invalid = {
+            "?camera=A&camera=B": "camera", "?decision=reject&decision=flag": "decision",
+            "?date_from=2026-10-22&date_to=2026-10-21": "date_to", "?date_from=2026-13-01": "date_from",
+            "?date_to=20261021": "date_to", "?min_rating=two": "min_rating", "?min_rating=6": "min_rating",
+            "?min_rating=2.0": "min_rating", "?decision=maybe": "decision", "?decision=FLAG": "decision",
+            "?keepers_only=true": "keepers_only", "?tagged_only=2": "tagged_only", "?show_rejected=yes": "show_rejected",
+            "?bogus=1": "bogus", f"?{self.root}=1": "unknown",
+        }
+        for query, name in invalid.items():
+            with self.subTest(query=query):
+                code, payload = self.get_json("/api/groups" + query)
+                self.assertEqual((400, {"error": f"invalid filter: {name}"}), (code, payload))
+
+    def test_filter_form_and_day_headings_are_native_and_labeled(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        labels = {node["attrs"].get("for"): node["text"].strip() for node in parser.nodes if node["tag"] == "label"}
+        form = by_id["filter-form"]
+        self.assertEqual("form", form["tag"])
+        controls = {"filter-from": ("input", "date"), "filter-to": ("input", "date"), "filter-camera": ("select", None),
+                    "filter-decision": ("select", None), "filter-rating": ("select", None), "filter-keepers": ("input", "checkbox"),
+                    "filter-tagged": ("input", "checkbox"), "show-rejected": ("input", "checkbox"), "filter-text": ("input", "search")}
+        for name, (tag, kind) in controls.items():
+            with self.subTest(control=name):
+                node = by_id[name]
+                self.assertEqual((tag, kind), (node["tag"], node["attrs"].get("type")))
+                self.assertIn(form, node["parents"])
+                self.assertTrue(labels.get(name), f"{name} needs a visible label")
+        options = lambda name: [node["attrs"]["value"] for node in parser.nodes if node["tag"] == "option" and by_id[name] in node["parents"]]
+        self.assertEqual(["any", "flag", "reject", "none"], options("filter-decision"))
+        self.assertEqual(["0", "1", "2", "3", "4", "5"], options("filter-rating"))
+        buttons = {node["text"].strip(): node["attrs"].get("type") for node in parser.nodes if node["tag"] == "button" and form in node["parents"]}
+        self.assertEqual({"Apply": "submit", "Reset": "button"}, buttons)
+        more = by_id["show-more"]
+        self.assertEqual(("button", "button"), (more["tag"], more["attrs"].get("type")))
+        self.assertIn("hidden", more["attrs"])
+        self.assertNotIn(by_id["contact-sheet"], more["parents"])
+        javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
+        for text in ("createElement('details')", "createElement('summary')", "open = true", "history.replaceState", "location.search",
+                     "loading = 'lazy'", "Showing ${"):
+            self.assertIn(text, javascript)
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\.day summary \{[^}]*min-height: 44px")
+        self.assertRegex(styles, r"summary:focus-visible")
+
     def test_export_panel_states_keeper_definition_and_inspector_has_native_decision_controls(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
@@ -1652,7 +1812,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertTrue(any(node["tag"] == "label" and "Show rejected" in node["text"] for node in toggle["parents"]))
         javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
         for text in ("'Flag'", "'Reject'", "'Clear decision'", "'Flagged'", "'Rejected'", "`Rating ${", "createElement('select')",
-                     "id = 'rating'", "htmlFor = 'rating'", "`Rating ${result.rating} set for ${", "show_rejected=1"):
+                     "id = 'rating'", "htmlFor = 'rating'", "`Rating ${result.rating} set for ${", "'show_rejected'"):
             self.assertIn(text, javascript)
         self.assertNotRegex(javascript, r"decision[^\n]*\.innerHTML")
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
@@ -1690,7 +1850,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(1 if retain_success else 0, sum(len(group["photos"]) for group in payload["groups"]))
         self.run_javascript_cleanup_regression("workspace-mixed" if retain_success else "workspace-ungrouped")
         with urllib.request.urlopen(self.base + "/api/groups", timeout=3) as response:
-            self.assertEqual({"groups": [], "photo_count": 0, "rejected_count": 0}, json.load(response))
+            self.assertEqual({"groups": [], "photo_count": 0, "rejected_count": 0, "counts": {"filtered": 0, "total": 0}, "cameras": []}, json.load(response))
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual([], library.catalog.list_photos())
 

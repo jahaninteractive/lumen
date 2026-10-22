@@ -5,10 +5,31 @@ from datetime import datetime, timezone
 from contextlib import closing
 from pathlib import Path
 
-from lumen.catalog import Catalog
+from lumen.catalog import Catalog, GroupFilters
 from lumen.config import Settings
+from lumen.library import Library
 from lumen.domain import Artifact, Job, Photo, PhotoEdit, PhotoMetrics
 from lumen.composition import CropRect
+
+
+def seed_filter_photos(catalog):
+    """Two dated days on cameras A and B plus an undated burst; returns {name: photo_id} and group ids."""
+    ids = {}
+    specs = [("a1", "A", 21, "none", 3), ("a2", "A", 21, "flag", 1), ("a3", "A", 21, "reject", 5),
+             ("b1", "B", 22, "reject", 0), ("b2", "B", 22, "none", 4), ("c1", "B", None, "none", 0)]
+    for name, camera, day, decision, rating in specs:
+        captured = datetime(2026, 10, day, 8, 0, tzinfo=timezone.utc) if day else None
+        ids[name] = catalog.upsert_photo(Photo(path=f"/photos/{name}.ARW", fingerprint=name * 8, captured_at=captured, camera_id=camera))
+        catalog.set_decision(ids[name], decision)
+        catalog.set_rating(ids[name], rating)
+    groups = {
+        "g1": catalog.assign_group("g1", "A", "2026-10-21T08:00:00+00:00", [ids["a1"], ids["a2"], ids["a3"]], ids["a1"], {}),
+        "g2": catalog.assign_group("g2", "B", "2026-10-22T08:00:00+00:00", [ids["b1"], ids["b2"]], ids["b1"], {}),
+        "g3": catalog.assign_group("g3", "B", None, [ids["c1"]], ids["c1"], {}),
+    }
+    catalog.save_tags(ids["a1"], {"description": "Red fox in snow", "subjects": ["animal"]}, "model")
+    catalog.save_tags(ids["b2"], {"description": "Bird by the lake", "subjects": ["Heron", "water"]}, "model")
+    return ids, groups
 
 
 class CatalogTests(unittest.TestCase):
@@ -527,6 +548,59 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNotNone(self.catalog.get_tags(photo_id))
         self.assertEqual(1, len(self.catalog.events_for(photo_id)))
         self.assertEqual(photo_id, self.catalog.list_artifacts()[0].photo_id)
+
+
+    def test_group_filters_each_condition_and_combination_with_counts(self):
+        ids, groups = seed_filter_photos(self.catalog)
+        names = {photo_id: name for name, photo_id in ids.items()}
+
+        def shown(**fields):
+            filters = GroupFilters(**fields)
+            return sorted(names[photo["id"]] for group in self.catalog.list_groups(filters) for photo in group["photos"])
+
+        cases = [
+            ({}, ["a1", "a2", "b2", "c1"]),
+            ({"show_rejected": True}, ["a1", "a2", "a3", "b1", "b2", "c1"]),
+            ({"date_from": "2026-10-22"}, ["b2"]),
+            ({"date_to": "2026-10-21"}, ["a1", "a2"]),
+            ({"camera": "B"}, ["b2", "c1"]),
+            ({"decision": "flag"}, ["a2"]),
+            ({"decision": "reject"}, ["a3", "b1"]),
+            ({"decision": "none"}, ["a1", "b2", "c1"]),
+            ({"min_rating": 3}, ["a1", "b2"]),
+            ({"keepers_only": True}, ["a1", "a2", "c1"]),
+            ({"tagged_only": True}, ["a1", "b2"]),
+            ({"text": "FOX"}, ["a1"]),
+            ({"text": "heron"}, ["b2"]),
+            ({"text": "%"}, []),
+            ({"text": "_"}, []),
+            ({"date_from": "2026-10-21", "date_to": "2026-10-21", "camera": "A", "keepers_only": True, "min_rating": 1}, ["a1", "a2"]),
+            ({"camera": "B", "show_rejected": True, "decision": "reject"}, ["b1"]),
+        ]
+        for fields, expected in cases:
+            with self.subTest(fields=fields):
+                self.assertEqual(expected, shown(**fields))
+                self.assertEqual({"filtered": len(expected), "total": 6}, self.catalog.group_counts(GroupFilters(**fields)))
+        self.assertEqual([groups["g2"], groups["g3"]], [group["id"] for group in self.catalog.list_groups(GroupFilters(camera="B"))],
+                         "groups keep only matching photos and empty groups are omitted")
+        self.assertEqual(6, sum(len(group["photos"]) for group in self.catalog.list_groups()), "no filters lists every grouped frame")
+        invalid = [{"date_from": "2026-10-32"}, {"date_from": "20261021"}, {"date_to": "2026-W43-4"}, {"date_from": 20261021},
+                   {"date_from": "2026-10-22", "date_to": "2026-10-21"}, {"decision": "maybe"}, {"decision": "FLAG"},
+                   {"min_rating": 6}, {"min_rating": -1}, {"min_rating": True}, {"min_rating": "3"}, {"keepers_only": 1},
+                   {"tagged_only": "yes"}, {"show_rejected": None}, {"camera": 5}, {"text": ["fox"]}]
+        for fields in invalid:
+            with self.subTest(invalid=fields), self.assertRaisesRegex(ValueError, "^invalid filter: "):
+                GroupFilters(**fields)
+
+    def test_keepers_only_filter_matches_library_keeper_definition(self):
+        with Library(Settings(library_dir=Path(self.tmp.name) / "library")) as library:
+            ids, groups = seed_filter_photos(library.catalog)
+            library.catalog.set_manual_pick(ids["a3"])  # a rejected manual pick is still no keeper
+            for show_rejected in (False, True):
+                filtered = sorted(photo["id"] for group in library.catalog.list_groups(GroupFilters(keepers_only=True, show_rejected=show_rejected))
+                                  for photo in group["photos"])
+                self.assertEqual(sorted(library.keeper_ids()), filtered)
+            self.assertEqual(sorted([ids["a2"], ids["c1"]]), sorted(library.keeper_ids()))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 const JOB_ACTIVE = ['queued', 'running'];
 const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
-  job: null, jobTimer: null, jobRequest: 0, details: null, showRejected: false, rejectedCount: 0, focusedId: null, compare: [],
+  job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -261,6 +261,7 @@ async function decide(photo, field, value, focusAfter = null) {
       refreshPanes(photo.id);
       const batch = document.querySelectorAll('.batch-button')[groupIndex];
       if (batch) batch.textContent = batchText(group, groupIndex);
+      refreshDays();
     }
     const name = photo.name.replace(/\.[^.]+$/, '');
     announce(field === 'pick' ? `${photo.name} is now your best frame.`
@@ -508,23 +509,66 @@ function handleCullingKey(event) {
   return photo ? action(photo) : undefined;
 }
 
+const PAGE = 200;
+let dayHeadings = [];  // { day, summary, groups } per rail <details>, so decisions can refresh keeper counts
+
+function dayText(day, groups) {
+  const frames = groups.reduce((total, group) => total + group.frame_count, 0);
+  const keepers = groups.reduce((total, group) => total + group.photos.filter(photo => isKeeper(photo, group)).length, 0);
+  return `${day} · ${frameCount(frames)} · ${keepers} keeper${keepers === 1 ? '' : 's'}`;
+}
+
+function refreshDays() {
+  dayHeadings.forEach(heading => { heading.summary.textContent = dayText(heading.day, heading.groups); });
+}
+
+function pagedPhotos() {
+  return state.groups.flatMap(group => group.photos.map(photo => [photo, group]));
+}
+
+function announceShowing() {
+  const total = pagedPhotos().length;
+  announce(`Showing ${Math.min(state.shown, total)} of ${total} frames`);
+}
+
+// The rail groups bursts by capture day; the sheet renders PAGE frames at a time.
 function renderGroups() {
   sheet.replaceChildren();
   const rail = document.querySelector('#batch-list');
   rail.replaceChildren();
-  let count = 0;
-  const ids = state.groups.flatMap(group => group.photos.map(photo => photo.id));
+  dayHeadings = [];
+  const photos = pagedPhotos();
+  const visible = photos.slice(0, state.shown);
+  const ids = visible.map(([photo]) => photo.id);
   if (!ids.includes(state.focusedId)) state.focusedId = ids.includes(state.selectedId) ? state.selectedId : ids[0] ?? null;
-  state.compare = state.compare.filter(id => ids.includes(id));
+  state.compare = state.compare.filter(id => photos.some(([photo]) => photo.id === id));
   state.groups.forEach((group, groupIndex) => {
+    const day = group.started_at?.slice(0, 10) || 'Undated';
+    let heading = dayHeadings.at(-1);
+    if (heading?.day !== day) {
+      const details = document.createElement('details');
+      details.className = 'day';
+      details.open = true;
+      const summary = document.createElement('summary');
+      details.append(summary);
+      rail.append(details);
+      heading = { day, summary, details, groups: [] };
+      dayHeadings.push(heading);
+    }
+    heading.groups.push(group);
     const batch = document.createElement('button');
     batch.type = 'button';
     batch.className = 'batch-button';
     batch.textContent = batchText(group, groupIndex);
     batch.setAttribute('aria-pressed', String(group.id === state.selectedGroupId));
     batch.addEventListener('click', () => {
+      const first = group.photos[0];
+      if (first && !frameCard(first.id)) {  // reveal the pages up to this burst
+        state.shown = Math.ceil((photos.findIndex(([photo]) => photo === first) + 1) / PAGE) * PAGE;
+        renderGroups();
+      }
       document.querySelector(`[data-group="${group.id}"]`)?.focus();
-      if (group.photos[0]) inspect(group.photos[0]).catch(error => announce(error.message));
+      if (first) inspect(first).catch(error => announce(error.message));
       else {  // An all-rejected burst with its frames hidden can still be selected, e.g. to remove it.
         state.selectedId = null;
         state.selectedGroupId = group.id;
@@ -533,29 +577,84 @@ function renderGroups() {
         announce(batch.textContent);
       }
     });
-    rail.append(batch);
-    group.photos.forEach(photo => {
-      count += 1;
-      sheet.append(renderFrame(photo, group));
-    });
+    heading.details.append(batch);
   });
-  if (count === 0) {
+  refreshDays();
+  visible.forEach(([photo, group]) => sheet.append(renderFrame(photo, group)));
+  const remaining = photos.length - visible.length;
+  const more = document.querySelector('#show-more');
+  more.hidden = remaining <= 0;
+  more.textContent = `Show ${Math.min(PAGE, remaining)} more · ${remaining} remaining`;
+  if (!photos.length) {
     const empty = document.createElement('p');
     empty.className = 'quiet';
-    empty.textContent = 'Import a folder to build your first contact sheet.';
+    empty.textContent = location.search ? 'No frames match these filters.' : 'Import a folder to build your first contact sheet.';
     sheet.append(empty);
   }
-  document.querySelector('#photo-count').textContent = `${count} frame${count === 1 ? '' : 's'}`;
-  if (!count) rail.textContent = 'No imported batches yet.';
+  document.querySelector('#photo-count').textContent = frameCount(photos.length);
+  if (!state.groups.length) rail.textContent = location.search ? 'No batches match these filters.' : 'No imported batches yet.';
   updateWorkflow();
 }
 
+function showMore() {
+  const first = state.shown;
+  state.shown += PAGE;
+  renderGroups();
+  const card = document.querySelectorAll('.frame')[first];
+  if (card) focusFrame(Number(card.dataset.id));
+  announceShowing();
+}
+
+// Filter state lives only in the URL query; the field names match the /api/groups parameters.
+const FILTER_CONTROLS = {
+  date_from: '#filter-from', date_to: '#filter-to', camera: '#filter-camera', decision: '#filter-decision', min_rating: '#filter-rating',
+  keepers_only: '#filter-keepers', tagged_only: '#filter-tagged', text: '#filter-text', show_rejected: '#show-rejected',
+};
+const FLAG_FILTERS = ['keepers_only', 'tagged_only', 'show_rejected'];
+const FILTER_DEFAULTS = { decision: 'any', min_rating: '0' };
+
+function filterQuery() {
+  const params = new URLSearchParams();
+  Object.entries(FILTER_CONTROLS).forEach(([name, selector]) => {
+    const control = document.querySelector(selector);
+    const value = FLAG_FILTERS.includes(name) ? (control.checked ? '1' : '') : control.value.trim();
+    if (value && value !== FILTER_DEFAULTS[name]) params.set(name, value);
+  });
+  return params.toString();
+}
+
+function syncFilters(cameras) {
+  const params = new URLSearchParams(location.search);
+  const anyCamera = document.createElement('option');
+  anyCamera.value = '';
+  anyCamera.textContent = 'Any camera';
+  document.querySelector('#filter-camera').replaceChildren(anyCamera, ...cameras.map(camera => {
+    const option = document.createElement('option');
+    option.value = camera;
+    option.textContent = camera;
+    return option;
+  }));
+  Object.entries(FILTER_CONTROLS).forEach(([name, selector]) => {
+    const control = document.querySelector(selector);
+    if (FLAG_FILTERS.includes(name)) control.checked = params.get(name) === '1';
+    else control.value = params.get(name) ?? FILTER_DEFAULTS[name] ?? '';
+  });
+}
+
+async function applyFilters(query = filterQuery()) {
+  history.replaceState(null, '', query ? `?${query}` : location.pathname);
+  state.shown = PAGE;
+  await load();
+  announceShowing();
+}
+
 async function load() {
-  const [status, groups] = await Promise.all([request('/api/status'), request(state.showRejected ? '/api/groups?show_rejected=1' : '/api/groups')]);
+  const [status, groups] = await Promise.all([request('/api/status'), request(`/api/groups${location.search}`)]);
   state.status = status;
   state.groups = groups.groups;
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
+  syncFilters(groups.cameras);
   const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId))
     || (state.selectedId === null ? state.groups.find(group => group.id === state.selectedGroupId) : undefined);
   state.selectedGroupId = selectedGroup?.id ?? null;
@@ -979,10 +1078,13 @@ document.querySelector('#browse-xmp').addEventListener('click', async () => {
 document.querySelector('#reset-xmp').addEventListener('click', () => rememberProfile(null));
 document.querySelectorAll('input[name="export-scope"]').forEach(input => input.addEventListener('change', updateWorkflow));
 document.querySelector('#clear-confirmation').addEventListener('input', updateWorkflow);
-document.querySelector('#show-rejected').addEventListener('change', () => {
-  state.showRejected = document.querySelector('#show-rejected').checked;
-  return load().catch(error => announce(error.message));
+document.querySelector('#show-rejected').addEventListener('change', () => applyFilters().catch(error => announce(error.message)));
+document.querySelector('#filter-form').addEventListener('submit', event => {
+  event.preventDefault();
+  return applyFilters().catch(error => announce(error.message));
 });
+document.querySelector('#reset-filters').addEventListener('click', () => applyFilters('').catch(error => announce(error.message)));
+document.querySelector('#show-more').addEventListener('click', showMore);
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
 sheet.addEventListener('keydown', handleCullingKey);
 const shortcuts = document.querySelector('#shortcuts');

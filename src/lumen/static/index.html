@@ -198,12 +198,41 @@
       <section aria-labelledby="contact-heading" class="contact-area">
         <div class="section-heading">
           <h1 id="contact-heading">Contact sheet</h1>
-          <label for="show-rejected" class="toggle"><input type="checkbox" id="show-rejected"> Show rejected <span id="rejected-count">(0)</span></label>
           <span id="photo-count">0 frames</span>
           <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
           <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" disabled>Compare marked</button>
         </div>
+        <form id="filter-form" class="filter-form" aria-label="Filter frames">
+          <div><label for="filter-from">From</label><input type="date" id="filter-from"></div>
+          <div><label for="filter-to">To</label><input type="date" id="filter-to"></div>
+          <div><label for="filter-camera">Camera</label><select id="filter-camera"><option value="">Any camera</option></select></div>
+          <div><label for="filter-decision">Decision</label>
+            <select id="filter-decision">
+              <option value="any">Any decision</option>
+              <option value="flag">Flagged</option>
+              <option value="reject">Rejected</option>
+              <option value="none">No decision</option>
+            </select></div>
+          <div><label for="filter-rating">Minimum rating</label>
+            <select id="filter-rating">
+              <option value="0">Any rating</option>
+              <option value="1">1 star</option>
+              <option value="2">2 stars</option>
+              <option value="3">3 stars</option>
+              <option value="4">4 stars</option>
+              <option value="5">5 stars</option>
+            </select></div>
+          <div><label for="filter-text">Tag text</label><input type="search" id="filter-text" autocomplete="off" placeholder="fox, harbour…"></div>
+          <label for="filter-keepers" class="toggle"><input type="checkbox" id="filter-keepers"> Keepers only</label>
+          <label for="filter-tagged" class="toggle"><input type="checkbox" id="filter-tagged"> Tagged only</label>
+          <label for="show-rejected" class="toggle"><input type="checkbox" id="show-rejected"> Show rejected <span id="rejected-count">(0)</span></label>
+          <div class="button-row">
+            <button type="submit">Apply</button>
+            <button type="button" id="reset-filters" class="secondary">Reset</button>
+          </div>
+        </form>
         <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>
+        <button type="button" id="show-more" class="secondary" hidden>Show 200 more</button>
       </section>
     </main>
 

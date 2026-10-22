@@ -4,7 +4,8 @@ import json
 import math
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable, Any
 
@@ -22,6 +23,76 @@ _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
     "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT"},
 }
+
+
+@dataclass(frozen=True)
+class GroupFilters:
+    """Contact-sheet filters; every condition is ANDed in SQL. Invalid values raise ValueError("invalid filter: <field>")."""
+    date_from: str | None = None
+    date_to: str | None = None
+    camera: str | None = None
+    decision: str = "any"
+    min_rating: int = 0
+    keepers_only: bool = False
+    tagged_only: bool = False
+    text: str | None = None
+    show_rejected: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("date_from", "date_to"):
+            value = getattr(self, name)
+            if value is not None and not (isinstance(value, str) and _canonical_date(value)):
+                raise ValueError(f"invalid filter: {name}")
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("invalid filter: date_to")
+        for name in ("camera", "text"):
+            if getattr(self, name) is not None and not isinstance(getattr(self, name), str):
+                raise ValueError(f"invalid filter: {name}")
+        if not isinstance(self.decision, str) or self.decision not in DECISIONS | {"any"}:
+            raise ValueError("invalid filter: decision")
+        if type(self.min_rating) is not int or not 0 <= self.min_rating <= 5:
+            raise ValueError("invalid filter: min_rating")
+        for name in ("keepers_only", "tagged_only", "show_rejected"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"invalid filter: {name}")
+
+    def where(self) -> tuple[str, list[Any]]:
+        """SQL conditions over photos `p` joined to photo_groups `g`; values are always bound parameters."""
+        conditions, params = ["1"], []
+        if self.date_from:
+            conditions.append("substr(p.captured_at, 1, 10) >= ?")
+            params.append(self.date_from)
+        if self.date_to:
+            conditions.append("substr(p.captured_at, 1, 10) <= ?")
+            params.append(self.date_to)
+        if self.camera:
+            conditions.append("p.camera_id = ?")
+            params.append(self.camera)
+        if self.decision != "any":
+            conditions.append("p.decision = ?")
+            params.append(self.decision)
+        elif not self.show_rejected:
+            conditions.append("p.decision != 'reject'")
+        if self.min_rating:
+            conditions.append("p.rating >= ?")
+            params.append(self.min_rating)
+        if self.keepers_only:  # Same rule as Library.keeper_ids.
+            conditions.append("p.decision != 'reject' AND (p.decision = 'flag' OR p.id = g.automatic_pick_id)")
+        if self.tagged_only or self.text:
+            conditions.append("EXISTS (SELECT 1 FROM tags t WHERE t.photo_id = p.id"
+                              + (" AND (json_extract(t.data_json, '$.description') LIKE ? ESCAPE '\\'"
+                                 " OR json_extract(t.data_json, '$.subjects') LIKE ? ESCAPE '\\'))" if self.text else ")"))
+            if self.text:
+                pattern = "%" + self.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                params += [pattern, pattern]
+        return " AND ".join(conditions), params
+
+
+def _canonical_date(value: str) -> bool:
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
 
 
 class Catalog:
@@ -695,7 +766,9 @@ class Catalog:
                 "UPDATE metrics SET total_score = ? WHERE photo_id = ?", ((score, photo_id) for photo_id, score in scores.items())
             )
 
-    def list_groups(self) -> list[dict[str, Any]]:
+    def list_groups(self, filters: GroupFilters | None = None) -> list[dict[str, Any]]:
+        """Groups with their ranked photos; with filters, only matching photos and non-empty groups."""
+        where, params = filters.where() if filters else ("1", [])
         groups = self.connection.execute(
             """
             SELECT g.* FROM photo_groups g
@@ -706,26 +779,36 @@ class Catalog:
         result: list[dict[str, Any]] = []
         for group in groups:
             rows = self.connection.execute(
-                """
+                f"""
                 SELECT p.*, m.sharpness, m.exposure, m.clipping, m.face_quality,
                        m.eye_quality, m.astro_json, m.total_score
-                FROM photos p LEFT JOIN metrics m ON m.photo_id = p.id
-                WHERE p.group_id = ?
+                FROM photos p JOIN photo_groups g ON g.id = p.group_id LEFT JOIN metrics m ON m.photo_id = p.id
+                WHERE p.group_id = ? AND {where}
                 ORDER BY COALESCE(m.total_score, -1) DESC, p.path
                 """,
-                (group["id"],),
+                (group["id"], *params),
             ).fetchall()
-            result.append(
-                {
-                    "id": int(group["id"]),
-                    "stable_key": group["stable_key"],
-                    "camera_id": group["camera_id"],
-                    "started_at": group["started_at"],
-                    "automatic_pick_id": group["automatic_pick_id"],
-                    "photos": [dict(row) for row in rows],
-                }
-            )
+            if rows:
+                result.append(
+                    {
+                        "id": int(group["id"]),
+                        "stable_key": group["stable_key"],
+                        "camera_id": group["camera_id"],
+                        "started_at": group["started_at"],
+                        "automatic_pick_id": group["automatic_pick_id"],
+                        "photos": [dict(row) for row in rows],
+                    }
+                )
         return result
+
+    def group_counts(self, filters: GroupFilters | None = None) -> dict[str, int]:
+        """Grouped photos matching the filters, and all grouped photos."""
+        where, params = filters.where() if filters else ("1", [])
+        query = "SELECT COUNT(*) FROM photos p JOIN photo_groups g ON g.id = p.group_id WHERE "
+        return {
+            "filtered": self.connection.execute(query + where, params).fetchone()[0],
+            "total": self.connection.execute(query + "1").fetchone()[0],
+        }
 
     def append_event(self, photo_id: int | None, kind: str, details: dict[str, Any]) -> int:
         cursor = self.connection.execute(

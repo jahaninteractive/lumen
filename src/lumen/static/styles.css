@@ -41,7 +41,7 @@ button.secondary { color: var(--paper); background: transparent; }
 
 button:disabled { cursor: not-allowed; opacity: .5; }
 
-button:focus-visible, input:focus-visible, select:focus-visible, [role="tabpanel"]:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, [role="tabpanel"]:focus-visible {
   outline: 3px solid var(--cyan);
   outline-offset: 3px;
 }
@@ -199,6 +199,15 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .decision-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
 .inspector select { padding: .5rem; color: var(--paper); background: var(--graphite); }
 
+.filter-form { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem 1rem; margin-bottom: 1rem; padding: .75rem; border: 1px solid var(--line); border-radius: 6px; background: var(--charcoal); }
+.filter-form > div:not(.button-row) { display: grid; gap: .2rem; }
+.filter-form label { color: var(--muted); font-size: .9rem; }
+.filter-form input:not([type="checkbox"]), .filter-form select { padding: 0 .5rem; color: var(--paper); background: var(--graphite); color-scheme: dark; }
+.filter-form .toggle { margin-left: 0; }
+#show-more { display: block; margin: 1rem auto 0; }
+#show-more[hidden] { display: none; }
+.day { margin-bottom: .75rem; }
+.day summary { min-height: 44px; padding: .6rem 0; color: var(--cyan); cursor: pointer; font-weight: 700; font-variant-numeric: tabular-nums; }
 .batch-button { display: block; width: 100%; margin-bottom: .55rem; color: var(--paper); background: transparent; text-align: left; font-weight: 600; }
 .batch-button:hover { border-color: var(--amber); }
 .quiet { color: var(--muted); }

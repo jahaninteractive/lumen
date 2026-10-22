@@ -19,7 +19,7 @@ from pathlib import Path
 from PIL import Image
 
 from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, measure_image
-from .catalog import Catalog
+from .catalog import Catalog, GroupFilters
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
 from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
@@ -410,8 +410,12 @@ class Library:
             self.catalog.update_job(job.id, status="cancelled")  # Never leave a queued row nothing will run.
             raise
 
-    def list_groups(self) -> list[dict]:
-        return self.catalog.list_groups()
+    def list_groups(self, filters: GroupFilters | None = None) -> list[dict]:
+        return self.catalog.list_groups(filters)
+
+    def cameras(self) -> list[str]:
+        """Every camera in the catalog, unfiltered, for the filter menu."""
+        return [row[0] for row in self.catalog.connection.execute("SELECT DISTINCT camera_id FROM photos ORDER BY camera_id")]
 
     def photo_count(self) -> int:
         return self.catalog.photo_count()

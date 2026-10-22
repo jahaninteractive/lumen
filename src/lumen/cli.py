@@ -8,6 +8,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
+from .catalog import GroupFilters
 from .config import Settings
 from .diagnostics import doctor_report
 from .library import CleanupError, ExportRequest, Library, public_message
@@ -34,6 +35,15 @@ def build_parser() -> argparse.ArgumentParser:
     ingester.add_argument("--json", action="store_true")
 
     groups = commands.add_parser("groups", help="list burst groups and scores")
+    groups.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="captured on or after this date")
+    groups.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="captured on or before this date")
+    groups.add_argument("--camera")
+    groups.add_argument("--decision", choices=("any", "flag", "reject", "none"), default="any")
+    groups.add_argument("--min-rating", type=int, choices=range(6), default=0)
+    groups.add_argument("--keepers", dest="keepers_only", action="store_true", help="only keepers (not rejected; flagged or best)")
+    groups.add_argument("--tagged", dest="tagged_only", action="store_true", help="only frames with local AI tags")
+    groups.add_argument("--text", help="match tag descriptions or subjects")
+    groups.add_argument("--show-rejected", action="store_true")
     groups.add_argument("--json", action="store_true")
 
     tag = commands.add_parser("tag", help="tag previews with the configured local oMLX model")
@@ -163,8 +173,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload.get("status") == "succeeded" and not (payload.get("result") or {}).get("failed") else 2
 
     if args.command == "groups":
+        try:
+            filters = GroupFilters(**{name: getattr(args, name) for name in GroupFilters.__dataclass_fields__})
+        except ValueError as error:
+            _print({"error": str(error)}, args.json)
+            return 2
         with Library(settings) as library:
-            payload = {"groups": _serializable_groups(library.list_groups())}
+            payload = {"groups": _serializable_groups(library.list_groups(filters))}
         _print(payload, args.json)
         return 0
 
