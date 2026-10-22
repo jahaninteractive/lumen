@@ -31,6 +31,16 @@ function post(url, payload = {}) {
   return request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
 }
 
+// Every AI control waits for its role's model to be loaded in oMLX right now; the reason is spelled out, never only greyed.
+function roleReady(role) {
+  return state.status?.omlx_roles?.[role]?.loaded === true;
+}
+
+function roleUnavailable(role) {
+  const item = state.status?.omlx_roles?.[role];
+  return item && !item.loaded ? `${role === 'fast' ? 'Fast' : 'Review'} model ${item.model} is not loaded in oMLX. Load it in oMLX, then reload this page.` : '';
+}
+
 function announce(message) {
   announcer.textContent = '';
   window.setTimeout(() => { announcer.textContent = message; }, 10);
@@ -109,7 +119,7 @@ function renderComposition() {
   document.querySelector('#more-crop-shapes').hidden = alternatives.children.length === 0;
   document.querySelector('#compose-empty').hidden = true;
   document.querySelector('#compose-workspace').hidden = false;
-  document.querySelector('#ask-composition-ai').disabled = state.busy;
+  document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review');
 }
 
 async function loadComposition() {
@@ -491,6 +501,8 @@ function renderInspector(photo) {
   const tag = document.createElement('button');
   tag.type = 'button';
   tag.textContent = 'Add local AI tags';
+  tag.dataset.tagPhoto = 'true';
+  tag.disabled = !roleReady('fast');
   tag.addEventListener('click', async () => {
     tag.disabled = true;
     try {
@@ -504,6 +516,14 @@ function renderInspector(photo) {
   });
   actions.append(tag);
   inspection.append(actions);
+  if (roleUnavailable('fast')) {
+    const reason = document.createElement('p');
+    reason.className = 'quiet';
+    reason.id = 'tag-photo-availability';
+    reason.textContent = roleUnavailable('fast');
+    tag.setAttribute('aria-describedby', reason.id);
+    inspection.append(reason);
+  }
 }
 
 // Applied keywords each carry a Remove (undo); suggestions carry an Add. Species ride along as labelled text.
@@ -1214,14 +1234,15 @@ function updateWorkflow() {
   document.querySelector('#import-form button[type="submit"]').disabled = state.busy;
   document.querySelector('#browse-path').disabled = state.busy;
   document.querySelector('#open-compare').disabled = state.cullingBlocked || state.compare.length !== 2;
-  document.querySelector('#tag-all').disabled = state.busy;
-  const fast = state.status?.omlx_roles?.fast;
-  const fastLoaded = fast?.loaded === true;
+  const fastLoaded = roleReady('fast');
+  document.querySelector('#tag-all').disabled = state.busy || !fastLoaded;
+  document.querySelector('#tag-all-availability').textContent = roleUnavailable('fast');
   document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;
   document.querySelector('#tag-keepers').disabled = state.busy || !keepers || !fastLoaded;
-  document.querySelector('#tag-keepers-availability').textContent = fast && !fastLoaded ? `Fast model ${fast.model} is not loaded in oMLX. Load it in oMLX, then reload this page.` : '';
+  document.querySelector('#tag-keepers-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#composition-availability').textContent = roleUnavailable('review');
   document.querySelector('#retag-all').disabled = state.busy;
-  document.querySelector('#ask-composition-ai').disabled = state.busy || !state.composition || state.composition.photo_id !== state.selectedId;
+  document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review') || !state.composition || state.composition.photo_id !== state.selectedId;
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
 

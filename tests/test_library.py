@@ -1734,5 +1734,24 @@ class LibraryTests(unittest.TestCase):
                 self.assertEqual(["keyword_added", "keyword_removed"], kinds[-2:])
 
 
+    def test_low_confidence_species_named_in_subjects_stays_suggested(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("d", ["Chinstrap Penguin", "ice"], "", [], 0.9, "{}",
+                                 species=[{"name": "chinstrap penguin", "confidence": 0.4}], conditions=[])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root / "p.jpg")
+                photo_id = library.catalog.list_photos()[0].id
+                library.tag_photo(photo_id, FakeTagger())
+                data = library.catalog.get_tags(photo_id)["data"]
+        self.assertEqual(["ice"], data["subjects"])
+        self.assertEqual(1, [word.casefold() for word in data["suggested"]].count("chinstrap penguin"))
+
+
 if __name__ == "__main__":
     unittest.main()

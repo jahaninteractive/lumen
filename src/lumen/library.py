@@ -1094,8 +1094,10 @@ class Library:
             )
             self._write_sidecar(photo_id)
             raise
-        applied, suggested = match_keywords(
-            list(result.subjects) + ([result.scene] if result.scene else []) + list(result.conditions), vocab)
+        # A species below 0.6 is never applied, even when the model also lists it as a subject; it stays a suggestion.
+        weak = {item["name"].casefold() for item in result.species if item["confidence"] < 0.6}
+        candidates = list(result.subjects) + ([result.scene] if result.scene else []) + list(result.conditions)
+        applied, suggested = match_keywords([word for word in candidates if word.strip().casefold() not in weak], vocab)
         vocabulary_names = {word.casefold() for words in vocab.values() for word in words}
         for item in result.species:  # Species are labelled suggestions unless confident and in the vocabulary.
             name = item["name"]

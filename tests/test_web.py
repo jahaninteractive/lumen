@@ -1077,7 +1077,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: false } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
+  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
   else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
@@ -1338,12 +1338,27 @@ const regression = `
     await load();
     const loaded = scenario === 'keywords';
     assert.equal(element('#tag-keepers').textContent, 'Tag keepers with local AI (2 keepers)');
-    assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + (loaded ? 'loaded' : 'not loaded') + ' · review Qwen3.8-27B-4bit not loaded');
+    const state_ = loaded ? 'loaded' : 'not loaded';
+    assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + state_ + ' · review Qwen3.8-27B-4bit ' + state_);
+    const aiTree = node => [node, ...(node.children || []).flatMap(aiTree)];
     if (!loaded) {
-      assert.equal(element('#tag-keepers').disabled, true);
-      assert.ok(element('#tag-keepers-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX'));
+      for (const id of ['#tag-keepers', '#tag-all']) {
+        assert.equal(element(id).disabled, true, id + ' waits for the fast model');
+        assert.ok(element(id + '-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX'));
+      }
+      await inspect(state.groups[0].photos[0]);
+      const tagPhoto = aiTree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true');
+      assert.equal(tagPhoto.disabled, true, 'the per-photo tag button waits for the fast model');
+      assert.ok(aiTree(element('#inspection')).some(node => node.id === 'tag-photo-availability' && node.textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded')));
+      state.composition = { photo_id: state.selectedId };
+      updateWorkflow();
+      assert.equal(element('#ask-composition-ai').disabled, true, 'composition review waits for the review model');
+      assert.ok(element('#composition-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX'));
       return;
     }
+    assert.equal(element('#tag-all').disabled, false);
+    assert.equal(element('#tag-all-availability').textContent, '');
+    assert.equal(element('#composition-availability').textContent, '');
     assert.equal(element('#tag-keepers').disabled, false);
     assert.equal(element('#tag-keepers-availability').textContent, '');
     const loadsBefore = groupLoads;

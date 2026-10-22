@@ -49,9 +49,10 @@
       </form>
       <div class="tag-bar">
         <div class="input-row">
-          <button type="button" id="tag-all" class="secondary">Tag all untagged</button>
+          <button type="button" id="tag-all" class="secondary" aria-describedby="tag-all-availability">Tag all untagged</button>
           <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
         </div>
+        <p id="tag-all-availability" class="quiet"></p>
         <p>Tags come from the local oMLX model. Progress appears in the job strip at the top.</p>
       </div>
       <div class="tab-row">
@@ -73,8 +74,9 @@
           <p id="compose-empty">Select a photo from the contact sheet to see crop choices.</p>
           <div id="compose-workspace" hidden>
             <div class="button-row">
-              <button type="button" id="ask-composition-ai" class="secondary">Ask local AI</button>
+              <button type="button" id="ask-composition-ai" class="secondary" aria-describedby="composition-availability">Ask local AI</button>
             </div>
+            <p id="composition-availability" class="quiet"></p>
             <p id="composition-advice" class="quiet"></p>
             <div id="primary-crops" class="crop-grid"></div>
             <details id="more-crop-shapes">
