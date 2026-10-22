@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Lumen — local RAW workbench</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div>
+      <span class="mark" aria-hidden="true"></span>
+      <strong>Lumen</strong>
+      <span class="subtitle">local RAW workbench</span>
+    </div>
+    <p id="system-status" role="status" aria-live="polite">Checking local tools…</p>
+  </header>
+
+  <div class="workspace">
+    <nav aria-label="Photo batches" class="batch-rail">
+      <h2>Batches</h2>
+      <div id="batch-list"><p class="quiet">No imported batches yet.</p></div>
+    </nav>
+
+    <main id="main-content" tabindex="-1">
+      <form id="import-form" class="import-bar">
+        <label for="import-path">Folder or photo path</label>
+        <div class="input-row">
+          <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
+          <button type="button" id="browse-path" class="secondary">Browse…</button>
+          <button type="submit">Import originals</button>
+        </div>
+        <p>Files stay where they are. Lumen writes previews and sidecars to its own library.</p>
+        <p id="import-status" role="status" aria-live="polite"></p>
+      </form>
+
+      <section class="workflow" aria-label="Finish this shoot">
+        <div class="tab-rail" role="tablist" aria-label="Finishing workflow">
+          <button type="button" id="compose-tab" role="tab" aria-controls="compose-panel" aria-selected="true" tabindex="0">Compose</button>
+          <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
+          <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
+        </div>
+        <section id="compose-panel" role="tabpanel" aria-labelledby="compose-tab" tabindex="0">
+          <h2>Compose without changing the original</h2>
+          <p class="quiet">Select a photo, then compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
+          <p id="compose-empty">Select a photo from the contact sheet to see crop choices.</p>
+          <div id="compose-workspace" hidden>
+            <div class="button-row">
+              <button type="button" id="ask-composition-ai" class="secondary">Ask local AI</button>
+            </div>
+            <p id="composition-advice" class="quiet"></p>
+            <div id="primary-crops" class="crop-grid"></div>
+            <details id="more-crop-shapes">
+              <summary>More crop shapes</summary>
+              <div id="alternative-crops" class="crop-grid"></div>
+            </details>
+          </div>
+          <p id="compose-status" role="status" aria-live="polite"></p>
+        </section>
+        <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
+          <h2>Finish as JPEG</h2>
+          <p class="quiet">Quality 92 · sRGB · Full resolution. GPS location is omitted.</p>
+          <fieldset id="export-controls">
+            <legend>Choose what to export</legend>
+            <div class="scope-options">
+              <label><input type="radio" name="export-scope" value="current" checked> Current photo <span id="current-export-name">No photo selected</span></label>
+              <label><input type="radio" name="export-scope" value="keepers"> All keepers <span id="keeper-count">0 keepers</span></label>
+            </div>
+            <p id="profile-label">Optional darktable XMP profile</p>
+            <p id="profile-path" class="path" aria-labelledby="profile-label">Camera-aware defaults</p>
+            <div class="button-row">
+              <button type="button" id="browse-xmp" class="secondary">Choose XMP…</button>
+              <button type="button" id="reset-xmp" class="secondary" disabled>Use camera defaults</button>
+            </div>
+            <p>Destination</p>
+            <p id="export-destination" class="path">Checking managed output folder…</p>
+            <p id="export-availability" class="quiet">Checking darktable…</p>
+            <div class="button-row">
+              <button type="button" id="export-jpegs" disabled>Export JPEGs</button>
+              <button type="button" id="reveal-outputs" class="secondary">Show outputs in Finder</button>
+            </div>
+          </fieldset>
+          <p id="export-status" role="status" aria-live="polite"></p>
+          <ul id="export-results" aria-label="Export result paths"></ul>
+        </section>
+        <section id="clear-panel" role="tabpanel" aria-labelledby="clear-tab" tabindex="0" hidden>
+          <h2>Make room for the next shoot</h2>
+          <p class="quiet">Camera originals and completed exports remain. Lumen moves working files and a catalog snapshot into recoverable library trash.</p>
+          <div class="cleanup-group">
+            <h3>Selected batch</h3>
+            <p id="group-cleanup-count">No batch selected · 0 frames</p>
+            <button type="button" id="remove-group" class="danger" disabled>Remove batch from Lumen</button>
+          </div>
+          <div class="cleanup-group">
+            <h3>Whole workspace</h3>
+            <p id="workspace-cleanup-count">0 batches · 0 frames</p>
+            <label for="clear-confirmation">Type CLEAR to clear the workspace</label>
+            <p id="clear-help" class="quiet">Use the exact uppercase word CLEAR. This removes every batch from Lumen.</p>
+            <div class="input-row">
+              <input id="clear-confirmation" aria-describedby="clear-help" autocomplete="off" spellcheck="false">
+              <button type="button" id="clear-workspace" class="danger" disabled>Clear workspace</button>
+            </div>
+          </div>
+          <p id="clear-status" role="status" aria-live="polite"></p>
+          <div id="recovery-paths" class="recovery" aria-label="Cleanup recovery paths"></div>
+        </section>
+      </section>
+
+      <section aria-labelledby="contact-heading" class="contact-area">
+        <div class="section-heading">
+          <h1 id="contact-heading">Contact sheet</h1>
+          <span id="photo-count">0 frames</span>
+        </div>
+        <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <aside aria-labelledby="inspect-heading" class="inspector">
+      <h2 id="inspect-heading">Inspect</h2>
+      <div id="inspection">
+        <p class="quiet">Select a frame to see why it ranked where it did.</p>
+      </div>
+    </aside>
+  </div>
+
+  <div id="announcer" class="sr-only" aria-live="assertive"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

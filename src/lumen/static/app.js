@@ -1,0 +1,580 @@
+const state = { groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, busy: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0 };
+const sheet = document.querySelector('#contact-sheet');
+const inspection = document.querySelector('#inspection');
+const announcer = document.querySelector('#announcer');
+
+async function request(url, options = {}) {
+  const response = await fetch(url, options);
+  const payload = await response.json();
+  if (!response.ok) {
+    const error = new Error(payload.error || `Request failed (${response.status})`);
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+function post(url, payload = {}) {
+  return request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+}
+
+function announce(message) {
+  announcer.textContent = '';
+  window.setTimeout(() => { announcer.textContent = message; }, 10);
+}
+
+function cropLabel(kind) {
+  return {
+    original: 'Original',
+    'subject-in-scene': 'Subject in scene',
+    'tighter-subject': 'Tighter subject',
+    'centered-fallback': 'Centered fallback',
+  }[kind] || 'Crop option';
+}
+
+function cropCard(candidate) {
+  const photoId = state.composition.photo_id;
+  const card = document.createElement('article');
+  card.className = 'crop-card';
+  const activeId = state.composition.active_crop?.candidate_id;
+  const active = candidate.kind === 'original' ? !activeId : candidate.id === activeId;
+  if (active) card.classList?.add('active');
+  if (candidate.id === state.recommendedCropId) card.classList?.add('recommended');
+
+  const heading = document.createElement('h3');
+  heading.textContent = cropLabel(candidate.kind);
+  const viewport = document.createElement('div');
+  viewport.className = 'crop-preview';
+  viewport.style.aspectRatio = `${candidate.pixel_box[2] - candidate.pixel_box[0]} / ${candidate.pixel_box[3] - candidate.pixel_box[1]}`;
+  const image = document.createElement('img');
+  image.src = state.composition.preview_url;
+  image.alt = `${heading.textContent} preview`;
+  image.style.setProperty('--crop-left', candidate.rect.left);
+  image.style.setProperty('--crop-top', candidate.rect.top);
+  image.style.setProperty('--crop-width', candidate.rect.width);
+  const thirds = document.createElement('span');
+  thirds.className = 'rule-of-thirds';
+  thirds.setAttribute('aria-hidden', 'true');
+  viewport.append(image, thirds);
+
+  const details = document.createElement('p');
+  details.className = 'crop-details';
+  const aspectLabel = candidate.aspect === 'native' ? 'Original ratio' : candidate.aspect;
+  details.textContent = `${aspectLabel} · ${candidate.remaining_megapixels.toFixed(1)} MP remaining`;
+  const rationale = document.createElement('p');
+  rationale.className = 'quiet';
+  rationale.textContent = candidate.rationale || 'Full frame, unchanged.';
+  const warning = document.createElement('p');
+  warning.className = 'crop-warning';
+  warning.textContent = candidate.resolution_warning || '';
+  const marker = document.createElement('p');
+  marker.className = 'crop-marker';
+  marker.textContent = `${active ? 'Current choice' : ''}${active && candidate.id === state.recommendedCropId ? ' · ' : ''}${candidate.id === state.recommendedCropId ? 'Local AI recommendation' : ''}`;
+
+  const action = document.createElement('button');
+  action.type = 'button';
+  action.dataset.cropAction = candidate.id;
+  action.className = candidate.kind === 'original' ? 'secondary' : '';
+  action.textContent = candidate.kind === 'original' ? 'Keep original' : 'Use this crop';
+  action.setAttribute('aria-label', candidate.kind === 'original'
+    ? `Keep ${heading.textContent}, ${aspectLabel}`
+    : `Use ${heading.textContent} crop, ${aspectLabel}`);
+  action.disabled = state.busy || active;
+  action.addEventListener('click', () => applyCrop(photoId, candidate));
+  card.append(heading, viewport, details, rationale, warning, marker, action);
+  return card;
+}
+
+function renderComposition() {
+  const primary = document.querySelector('#primary-crops');
+  const alternatives = document.querySelector('#alternative-crops');
+  primary.replaceChildren();
+  alternatives.replaceChildren();
+  state.composition.candidates.forEach(candidate => {
+    (candidate.revealable ? alternatives : primary).append(cropCard(candidate));
+  });
+  document.querySelector('#more-crop-shapes').hidden = alternatives.children.length === 0;
+  document.querySelector('#compose-empty').hidden = true;
+  document.querySelector('#compose-workspace').hidden = false;
+  document.querySelector('#ask-composition-ai').disabled = state.busy;
+}
+
+async function loadComposition() {
+  const requestId = ++state.compositionRequest;
+  state.reviewRequest += 1;
+  const photoId = state.selectedId;
+  state.composition = null;
+  state.recommendedCropId = null;
+  document.querySelector('#composition-advice').textContent = '';
+  document.querySelector('#compose-workspace').hidden = true;
+  if (!photoId) {
+    document.querySelector('#compose-empty').textContent = 'Select a photo from the contact sheet to see crop choices.';
+    document.querySelector('#compose-empty').hidden = false;
+    document.querySelector('#compose-workspace').hidden = true;
+    document.querySelector('#compose-status').textContent = '';
+    return;
+  }
+  document.querySelector('#compose-status').textContent = 'Loading crop choices…';
+  try {
+    const composition = await request(`/api/photos/${photoId}/crops`);
+    if (requestId !== state.compositionRequest || state.selectedId !== photoId) return;
+    state.composition = composition;
+    state.recommendedCropId = null;
+    renderComposition();
+    document.querySelector('#compose-status').textContent = 'Choose a crop or keep the original. Your RAW file will not change.';
+  } catch (error) {
+    if (requestId !== state.compositionRequest || state.selectedId !== photoId) return;
+    state.composition = null;
+    document.querySelector('#compose-workspace').hidden = true;
+    document.querySelector('#compose-empty').hidden = false;
+    document.querySelector('#compose-empty').textContent = 'Crop choices are unavailable for this photo.';
+    document.querySelector('#compose-status').textContent = error.message;
+    announce(error.message);
+  }
+}
+
+async function applyCrop(photoId, candidate) {
+  if (state.selectedId !== photoId) return;
+  state.compositionRequest += 1;
+  state.reviewRequest += 1;
+  state.recommendedCropId = null;
+  document.querySelector('#composition-advice').textContent = '';
+  state.busy = true;
+  updateWorkflow();
+  try {
+    if (candidate.kind === 'original') await post(`/api/photos/${photoId}/crop/clear`);
+    else await post(`/api/photos/${photoId}/crop`, { candidate_id: candidate.id });
+    announce(candidate.kind === 'original' ? 'Original frame kept.' : `${cropLabel(candidate.kind)} selected.`);
+    if (state.selectedId === photoId) await loadComposition();
+  } catch (error) {
+    document.querySelector('#compose-status').textContent = error.message;
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+async function askCompositionAI() {
+  const photoId = state.selectedId;
+  if (!photoId || !state.composition || state.composition.photo_id !== photoId) return;
+  const requestId = ++state.reviewRequest;
+  const compositionRequest = state.compositionRequest;
+  state.busy = true;
+  updateWorkflow();
+  document.querySelector('#compose-status').textContent = 'Asking the loaded local vision model…';
+  try {
+    const review = await post(`/api/photos/${photoId}/composition-review`);
+    if (requestId !== state.reviewRequest || compositionRequest !== state.compositionRequest || state.selectedId !== photoId) return;
+    const candidate = state.composition.candidates.find(item => item.id === review.candidate_id);
+    if (!candidate) {
+      document.querySelector('#compose-status').textContent = 'Crop choices changed while the local AI was reviewing them. Reloading current choices…';
+      announce('Crop choices changed. Reloading current choices.');
+      await loadComposition();
+      return;
+    }
+    state.recommendedCropId = review.candidate_id;
+    renderComposition();
+    const advice = `${cropLabel(candidate?.kind)} recommended (${Math.round(review.confidence * 100)}% confidence): ${review.rationale}`;
+    document.querySelector('#composition-advice').textContent = advice;
+    document.querySelector('#compose-status').textContent = 'Local AI advice is ready. It has not changed your crop.';
+    announce(advice);
+  } catch (error) {
+    if (requestId !== state.reviewRequest || compositionRequest !== state.compositionRequest || state.selectedId !== photoId) return;
+    const message = `Local AI advice is unavailable: ${error.message}. Manual crop choices still work.`;
+    document.querySelector('#compose-status').textContent = message;
+    announce(message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+function metric(label, value) {
+  const safe = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'metric';
+  const caption = document.createElement('span');
+  caption.innerHTML = `<b>${label}</b><em>${Math.round(safe * 100)}%</em>`;
+  const meter = document.createElement('div');
+  meter.className = 'meter';
+  meter.setAttribute('role', 'meter');
+  meter.setAttribute('aria-label', label);
+  meter.setAttribute('aria-valuenow', String(Math.round(safe * 100)));
+  const fill = document.createElement('i');
+  fill.style.width = `${safe * 100}%`;
+  meter.append(fill);
+  wrapper.append(caption, meter);
+  return wrapper;
+}
+
+async function inspect(photo) {
+  if (state.selectedId !== photo.id) {
+    state.compositionRequest += 1;
+    state.reviewRequest += 1;
+    state.recommendedCropId = null;
+    document.querySelector('#composition-advice').textContent = '';
+  }
+  state.selectedId = photo.id;
+  state.selectedGroupId = state.groups.find(group => group.photos.some(item => item.id === photo.id))?.id ?? null;
+  updateWorkflow();
+  const compositionLoad = document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true' ? loadComposition() : null;
+  document.querySelectorAll('.frame').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.id) === photo.id)));
+  const details = await request(`/api/photos/${photo.id}`);
+  if (state.selectedId !== photo.id) return;
+  inspection.replaceChildren();
+  const heading = document.createElement('h3');
+  heading.textContent = photo.name;
+  const verdict = document.createElement('p');
+  verdict.className = 'quiet';
+  verdict.textContent = photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
+  inspection.append(heading, verdict);
+  inspection.append(metric('Overall', photo.total_score), metric('Sharpness', details.metrics.sharpness), metric('Exposure', details.metrics.exposure));
+  if (details.metrics.eye_quality !== null) inspection.append(metric('Eyes', details.metrics.eye_quality));
+  if (details.tags?.data) {
+    const description = document.createElement('p');
+    description.textContent = details.tags.data.description;
+    inspection.append(description);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  if (photo.id !== photo.groupPick) {
+    const choose = document.createElement('button');
+    choose.type = 'button';
+    choose.className = 'secondary';
+    choose.textContent = 'Choose as best';
+    choose.addEventListener('click', async () => {
+      choose.disabled = true;
+      try {
+        await request(`/api/photos/${photo.id}/pick`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        announce(`${photo.name} is now your best frame.`);
+        await load();
+      } catch (error) {
+        announce(error.message);
+        choose.disabled = false;
+      }
+    });
+    actions.append(choose);
+  }
+  const tag = document.createElement('button');
+  tag.type = 'button';
+  tag.textContent = 'Add local AI tags';
+  tag.addEventListener('click', async () => {
+    tag.disabled = true;
+    try {
+      await request(`/api/photos/${photo.id}/tag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      announce(`Tags added to ${photo.name}`);
+      await inspect(photo);
+    } catch (error) {
+      announce(error.message);
+      tag.disabled = false;
+    }
+  });
+  actions.append(tag);
+  inspection.append(actions);
+  if (compositionLoad) await compositionLoad;
+}
+
+function renderGroups() {
+  sheet.replaceChildren();
+  const rail = document.querySelector('#batch-list');
+  rail.replaceChildren();
+  let count = 0;
+  state.groups.forEach((group, groupIndex) => {
+    const batch = document.createElement('button');
+    batch.type = 'button';
+    batch.className = 'batch-button';
+    batch.textContent = `Burst ${groupIndex + 1} · ${group.photos.length} frame${group.photos.length === 1 ? '' : 's'}`;
+    batch.setAttribute('aria-pressed', String(group.id === state.selectedGroupId));
+    batch.addEventListener('click', () => {
+      document.querySelector(`[data-group="${group.id}"]`)?.focus();
+      if (group.photos[0]) inspect(group.photos[0]).catch(error => announce(error.message));
+    });
+    rail.append(batch);
+    group.photos.forEach(photo => {
+      count += 1;
+      photo.groupPick = group.automatic_pick_id;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'frame';
+      button.dataset.id = photo.id;
+      button.dataset.group = group.id;
+      button.setAttribute('aria-pressed', String(photo.id === state.selectedId));
+      button.setAttribute('aria-label', `${photo.name}, score ${Math.round(photo.total_score * 100)} percent${photo.id === group.automatic_pick_id ? ', best in group' : ''}`);
+      const image = document.createElement('img');
+      image.src = photo.preview_url;
+      image.alt = '';
+      image.loading = 'lazy';
+      const meta = document.createElement('span');
+      meta.className = 'frame-meta';
+      const name = document.createElement('span');
+      name.textContent = photo.name;
+      const score = document.createElement('span');
+      score.className = 'score';
+      score.textContent = String(Math.round(photo.total_score * 100));
+      meta.append(name, score);
+      button.append(image, meta);
+      if (photo.id === group.automatic_pick_id) {
+        const winner = document.createElement('span');
+        winner.className = 'winner';
+        winner.textContent = 'Best';
+        button.append(winner);
+      }
+      button.addEventListener('click', () => inspect(photo).catch(error => announce(error.message)));
+      sheet.append(button);
+    });
+  });
+  if (count === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'quiet';
+    empty.textContent = 'Import a folder to build your first contact sheet.';
+    sheet.append(empty);
+  }
+  document.querySelector('#photo-count').textContent = `${count} frame${count === 1 ? '' : 's'}`;
+  if (!count) rail.textContent = 'No imported batches yet.';
+  updateWorkflow();
+}
+
+async function load() {
+  const [status, groups] = await Promise.all([request('/api/status'), request('/api/groups')]);
+  state.status = status;
+  state.groups = groups.groups;
+  state.photoCount = groups.photo_count;
+  const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId));
+  state.selectedGroupId = selectedGroup?.id ?? null;
+  if (!selectedGroup) {
+    state.selectedId = null;
+    inspection.textContent = 'Select a frame to see why it ranked where it did.';
+  }
+  document.querySelector('#system-status').textContent = status.omlx_live.summary;
+  document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
+  renderGroups();
+  if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
+}
+
+document.querySelector('#import-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  state.busy = true;
+  updateWorkflow();
+  button.disabled = true;
+  document.querySelector('#import-status').textContent = 'Importing originals…';
+  try {
+    const path = document.querySelector('#import-path').value;
+    const result = await request('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+    document.querySelector('#import-status').textContent = `Import complete: ${result.imported} new, ${result.updated} updated, ${result.failed} failed. ${result.errors.join(' ')}`;
+    await load();
+  } catch (error) {
+    document.querySelector('#import-status').textContent = error.message;
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+    button.disabled = false;
+  }
+});
+
+document.querySelector('#browse-path').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const result = await request('/api/browse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!result.cancelled && result.path) {
+      const input = document.querySelector('#import-path');
+      input.value = result.path;
+      input.focus();
+      announce(`Selected folder: ${result.path}`);
+    }
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function frameCount(count) {
+  return `${count} frame${count === 1 ? '' : 's'}`;
+}
+
+function updateWorkflow() {
+  const photos = state.groups.flatMap(group => group.photos);
+  const photo = photos.find(item => item.id === state.selectedId);
+  const groupIndex = state.groups.findIndex(item => item.id === state.selectedGroupId);
+  const group = state.groups[groupIndex];
+  const keepers = state.groups.filter(item => item.automatic_pick_id !== null).length;
+  const available = state.status?.tools?.['darktable-cli']?.available === true;
+  document.querySelector('#current-export-name').textContent = photo?.name || 'No photo selected';
+  document.querySelector('#keeper-count').textContent = `${keepers} keeper${keepers === 1 ? '' : 's'}`;
+  document.querySelector('#group-cleanup-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.photos.length)}` : 'No batch selected · 0 frames';
+  document.querySelector('#workspace-cleanup-count').textContent = `${state.groups.length} batch${state.groups.length === 1 ? '' : 'es'} · ${frameCount(state.photoCount)}`;
+  document.querySelector('#clear-help').textContent = `Use the exact uppercase word CLEAR. This removes all ${frameCount(state.photoCount)} from Lumen, including photos outside visible batches.`;
+  document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
+  const scope = document.querySelector('input[name="export-scope"]:checked').value;
+  document.querySelector('#export-jpegs').disabled = state.busy || !available || (scope === 'current' ? !photo : !keepers);
+  document.querySelector('#remove-group').disabled = state.busy || !group;
+  document.querySelector('#clear-workspace').disabled = state.busy || !state.photoCount || document.querySelector('#clear-confirmation').value !== 'CLEAR';
+  document.querySelector('#browse-xmp').disabled = state.busy;
+  document.querySelector('#reset-xmp').disabled = state.busy || !state.profile;
+  document.querySelector('#import-form button[type="submit"]').disabled = state.busy;
+  document.querySelector('#browse-path').disabled = state.busy;
+  document.querySelector('#ask-composition-ai').disabled = state.busy || !state.composition || state.composition.photo_id !== state.selectedId;
+  document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
+  document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
+}
+
+const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+function selectTab(tab) {
+  tabs.forEach(item => {
+    const selected = item === tab;
+    item.setAttribute('aria-selected', String(selected));
+    item.tabIndex = selected ? 0 : -1;
+    document.querySelector(`#${item.getAttribute('aria-controls')}`).hidden = !selected;
+  });
+  if (tab.id === 'compose-tab') loadComposition();
+}
+tabs.forEach((tab, index) => {
+  tab.addEventListener('click', () => selectTab(tab));
+  tab.addEventListener('keydown', event => {
+    const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    selectTab(tabs[next]);
+    tabs[next].focus();
+  });
+});
+
+function rememberProfile(path) {
+  state.profile = path;
+  document.querySelector('#profile-path').textContent = path || 'Camera-aware defaults';
+  try {
+    if (path) localStorage.setItem('lumen-xmp-profile', path);
+    else localStorage.removeItem('lumen-xmp-profile');
+  } catch {
+    document.querySelector('#export-status').textContent = 'Browser storage is unavailable; choose the XMP again next visit.';
+  }
+  updateWorkflow();
+}
+
+document.querySelector('#browse-xmp').addEventListener('click', async () => {
+  state.busy = true;
+  updateWorkflow();
+  const status = document.querySelector('#export-status');
+  status.textContent = 'Choose an existing XMP file in the macOS picker…';
+  try {
+    const result = await post('/api/browse-xmp');
+    status.textContent = result.cancelled ? 'XMP selection cancelled; the current profile is unchanged.' : 'XMP selected for the next export.';
+    if (!result.cancelled) rememberProfile(result.path);
+  } catch (error) {
+    status.textContent = `${error.message}. Choose an XMP again or use camera defaults.`;
+    announce(status.textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+});
+document.querySelector('#reset-xmp').addEventListener('click', () => rememberProfile(null));
+document.querySelectorAll('input[name="export-scope"]').forEach(input => input.addEventListener('change', updateWorkflow));
+document.querySelector('#clear-confirmation').addEventListener('input', updateWorkflow);
+document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
+
+function showExportResults(results) {
+  const list = document.querySelector('#export-results');
+  list.replaceChildren();
+  results.forEach(result => {
+    const item = document.createElement('li');
+    item.textContent = result.success ? result.output : `Photo ${result.photo_id}: ${result.message}`;
+    if (result.success) item.className = 'path';
+    list.append(item);
+  });
+  const succeeded = results.filter(result => result.success).length;
+  document.querySelector('#export-status').textContent = `Export complete: ${succeeded} saved, ${results.length - succeeded} failed.${succeeded < results.length ? ' Successful JPEGs remain; fix the reported problem and retry the failed photo.' : ''}`;
+}
+
+document.querySelector('#export-jpegs').addEventListener('click', async () => {
+  const scope = document.querySelector('input[name="export-scope"]:checked').value;
+  const payload = { scope, profile: state.profile };
+  if (scope === 'current') payload.photo_id = state.selectedId;
+  state.busy = true;
+  updateWorkflow();
+  document.querySelector('#export-status').textContent = `Exporting ${scope === 'current' ? 'current photo' : 'all keepers'}… Keep this page open until the result appears.`;
+  document.querySelector('#export-results').replaceChildren();
+  try {
+    showExportResults((await post('/api/export', payload)).results);
+  } catch (error) {
+    if (error.payload?.results) showExportResults(error.payload.results);
+    else document.querySelector('#export-status').textContent = `${error.message}. Check darktable and the selected XMP, then retry. You can also use camera defaults.`;
+    announce(document.querySelector('#export-status').textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+});
+
+document.querySelector('#reveal-outputs').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const result = await post('/api/outputs/reveal');
+    document.querySelector('#export-status').textContent = `Opened outputs in Finder: ${result.path}`;
+  } catch (error) {
+    document.querySelector('#export-status').textContent = `${error.message}. Open the destination shown above in Finder.`;
+    announce(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+async function cleanup(url, payload) {
+  state.busy = true;
+  updateWorkflow();
+  const status = document.querySelector('#clear-status');
+  status.textContent = 'Moving Lumen working files into recoverable trash…';
+  let removed = false;
+  try {
+    const result = await post(url, payload);
+    removed = true;
+    status.textContent = `Removed ${frameCount(result.photos_removed)} and moved ${result.files_removed} working files. Camera originals and completed exports remain.`;
+    const recovery = document.querySelector('#recovery-paths');
+    recovery.replaceChildren();
+    for (const [label, path] of [['Recovery folder', result.trash_path], ['Catalog snapshot', result.snapshot_path]]) {
+      const caption = document.createElement('p');
+      caption.textContent = label;
+      const value = document.createElement('p');
+      value.className = 'path';
+      value.textContent = path;
+      recovery.append(caption, value);
+    }
+    document.querySelector('#clear-confirmation').value = '';
+    state.selectedId = null;
+    state.selectedGroupId = null;
+    state.groups = url === '/api/library/clear' ? [] : state.groups.filter(group => `/api/groups/${group.id}/remove` !== url);
+    state.photoCount = url === '/api/library/clear' ? 0 : Math.max(0, state.photoCount - result.photos_removed);
+    inspection.textContent = 'Select a frame to see why it ranked where it did.';
+    renderGroups();
+    await load();
+    document.querySelector('#clear-tab').focus();
+  } catch (error) {
+    status.textContent = removed ? `${status.textContent} Could not refresh batches: ${error.message}. Reload this page.` : `${error.message}. No cleanup was completed; retry after resolving the problem.`;
+    announce(status.textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+document.querySelector('#remove-group').addEventListener('click', () => cleanup(`/api/groups/${state.selectedGroupId}/remove`, {}));
+document.querySelector('#clear-workspace').addEventListener('click', () => cleanup('/api/library/clear', { confirmation: document.querySelector('#clear-confirmation').value }));
+
+try {
+  const remembered = localStorage.getItem('lumen-xmp-profile');
+  if (remembered) {
+    state.profile = remembered;
+    document.querySelector('#profile-path').textContent = remembered;
+  }
+} catch {
+  document.querySelector('#export-status').textContent = 'Browser storage is unavailable; choose an XMP for this visit.';
+}
+load().catch(error => announce(error.message));

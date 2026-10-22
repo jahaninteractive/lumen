@@ -1,0 +1,12 @@
+.venv/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.DS_Store
+.superpowers/
+vendor/apps/
+vendor/downloads/
+vendor/state/
+
