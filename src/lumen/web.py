@@ -18,7 +18,7 @@ from .diagnostics import doctor_report
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .pipelines import EXPORT_PRESETS
-from .omlx import OmlxTagger
+from .vocabulary import load_vocabulary
 
 
 STATIC_FILES = {
@@ -69,6 +69,21 @@ def _refine_selector(payload: dict) -> dict:
             raise ValueError("all scope takes no other fields")
         return {"all_photos": True}
     raise ValueError("scope must be group, filtered, or all")
+
+
+def _tag_scope(payload: dict) -> tuple[str | list[int], bool]:
+    """Strict `/api/photos/tag` body: scope is keepers, all, or distinct positive photo IDs; retag is optional."""
+    if payload.keys() - {"scope", "retag"} or "scope" not in payload:
+        raise ValueError("tag requires scope and optional retag only")
+    scope, retag = payload["scope"], payload.get("retag", False)
+    if type(retag) is not bool:
+        raise ValueError("retag must be true or false")
+    if scope in ("keepers", "all"):
+        return scope, retag
+    if (isinstance(scope, list) and scope and len(set(scope)) == len(scope)
+            and all(type(item) is int and item > 0 for item in scope)):
+        return scope, retag
+    raise ValueError("scope must be keepers, all, or a list of distinct photo IDs")
 
 
 def choose_macos_folder() -> str | None:
@@ -223,6 +238,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 groups = [group for group in groups if group["photos"] or group["rejected_count"] == group["frame_count"]]
                 self._send_json({"groups": groups, "rejected_count": rejected_count, **payload})
                 return
+            if path == "/api/vocabulary":
+                try:
+                    self._send_json({"categories": load_vocabulary(settings)})
+                except (ValueError, OSError) as error:
+                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                return
             if path == "/api/jobs":
                 with Library(settings) as library:
                     self._send_json({"jobs": library.list_job_status()})
@@ -331,15 +352,14 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                                                        Path(mirror) if mirror is not None else None)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
-                if path == "/api/photos/tag-all":
-                    if payload.keys() - {"retag"}:
-                        raise ValueError("unexpected tag fields")
-                    retag = payload.get("retag", False)
-                    if type(retag) is not bool:
-                        raise ValueError("retag must be true or false")
-                    tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
+                if path in ("/api/photos/tag", "/api/photos/tag-all"):
+                    if path.endswith("-all"):  # Older alias: the whole catalog.
+                        if "scope" in payload:
+                            raise ValueError("unexpected tag fields")
+                        payload = payload | {"scope": "all"}
+                    scope, retag = _tag_scope(payload)
                     with Library(settings, job_runner=self.server.job_runner()) as library:
-                        job = library.start_tag_job(tagger, retag=retag)
+                        job = library.start_tag_job(library.tagger_for("fast"), scope=scope, retag=retag)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/previews/refine":
@@ -411,10 +431,18 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/tag", path)
                 if match:
-                    tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
                     with Library(settings) as library:
-                        result = library.tag_photo(int(match.group(1)), tagger)
+                        result = library.tag_photo(int(match.group(1)), library.tagger_for("fast"))
                     self._send_json(asdict(result) | {"raw_response": None})
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/keywords", path)
+                if match:
+                    if (payload.keys() != {"action", "keyword"} or payload["action"] not in ("add", "remove")
+                            or not isinstance(payload["keyword"], str)):
+                        raise ValueError("keywords requires action add or remove and a string keyword")
+                    with Library(settings) as library:
+                        change = library.add_suggested_keyword if payload["action"] == "add" else library.remove_keyword
+                        self._send_json(change(int(match.group(1)), payload["keyword"]))
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/crop", path)
                 if match:
@@ -443,7 +471,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if match:
                     if payload:
                         raise ValueError("composition review requires an empty JSON object")
-                    tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
+                    with Library(settings) as library:
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
                     try:
                         with Library(settings) as library:
                             review = library.review_composition(int(match.group(1)), tagger)
@@ -500,7 +529,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if isinstance(error, RuntimeError) and "another heavy job" in str(error):
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
-                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag-all",
+                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag",
                                              "/api/previews/"))
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)

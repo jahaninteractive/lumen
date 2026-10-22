@@ -26,13 +26,14 @@ from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
-from .omlx import OmlxError
+from .omlx import ROLES, OmlxError, OmlxTagger, get_server_status
 from .pipelines import EXPORT_PRESETS, PipelineRegistry
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
+from .vocabulary import load_vocabulary, match_keywords
 
 
 _MUTATION_LOCKS = {}
@@ -249,16 +250,42 @@ class Library:
         self._submit_job(runner, job, work)
         return job
 
-    def start_tag_job(self, tagger, *, retag: bool = False) -> Job:
+    def tagger_for(self, role: str) -> OmlxTagger:
+        """A tagger for a model role, only when oMLX reports that role's model loaded right now."""
+        if role not in ROLES:
+            raise ValueError(f"unknown model role: {role}")
+        model = getattr(self.settings, ROLES[role])
+        try:
+            loaded = get_server_status(self.settings.omlx_url)["loaded_models"]
+        except (OmlxError, ValueError):
+            raise RuntimeError(f"{role} model {model} is not loaded in oMLX; oMLX is offline") from None
+        if model not in loaded:
+            raise RuntimeError(f"{role} model {model} is not loaded in oMLX")
+        return OmlxTagger(self.settings.omlx_url, model, role=role)
+
+    def start_tag_job(self, tagger, *, scope: str | list[int] = "keepers", retag: bool = False) -> Job:
         if type(retag) is not bool:
             raise ValueError("retag must be true or false")
+        if scope == "keepers":
+            ids = self.keeper_ids()
+        elif scope == "all":
+            ids = None
+        elif (isinstance(scope, list) and scope and all(type(item) is int for item in scope)
+              and len(set(scope)) == len(scope)):
+            for photo_id in scope:
+                if self.catalog.get_photo(photo_id) is None:
+                    raise ValueError(f"unknown photo ID: {photo_id}")
+            ids = list(scope)
+        else:
+            raise ValueError("scope must be keepers, all, or a non-empty list of distinct photo IDs")
+        manifest = {"kind": "tag", "scope": scope, "retag": retag, "role": getattr(tagger, "role", None), "model": tagger.model}
         runner = self.job_runner
-        job = self.catalog.create_prepared_job(
-            "tag", lambda job_id: self._write_job_files(job_id, {"kind": "tag", "retag": retag}))
+        job = self.catalog.create_prepared_job("tag", lambda job_id: self._write_job_files(job_id, manifest))
 
         def work(context) -> None:
             with Library(self.settings, job_runner=runner) as worker:
-                photos = worker.catalog.list_photos()
+                photos = worker.catalog.list_photos() if ids is None else [
+                    photo for photo_id in ids if (photo := worker.catalog.get_photo(photo_id))]
                 counts = {"tagged": 0, "skipped": 0, "failed": 0}
                 failed_photo_ids = []
                 for index, photo in enumerate(photos, 1):
@@ -279,8 +306,7 @@ class Library:
                                             processed=index, total=len(photos))
                 with worker._mutation():
                     worker._regroup_and_write_sidecars()
-                worker._write_job_files(job.id, {"kind": "tag", "retag": retag,
-                                                 "failed_photo_ids": failed_photo_ids, "summary": counts})
+                worker._write_job_files(job.id, manifest | {"failed_photo_ids": failed_photo_ids, "summary": counts})
 
         self._submit_job(runner, job, work)
         return job
@@ -1050,8 +1076,10 @@ class Library:
         photo = self.catalog.get_photo(photo_id)
         if not photo or not photo.preview_path:
             raise ValueError(f"photo {photo_id} has no preview")
+        role = getattr(tagger, "role", None)
         try:
-            result = tagger.tag(Path(photo.preview_path))
+            vocab = load_vocabulary(self.settings)
+            result = tagger.tag(Path(photo.preview_path), vocabulary=vocab)
         except Exception as error:
             raw_response = getattr(error, "raw_response", None)
             self.catalog.append_event(
@@ -1059,27 +1087,63 @@ class Library:
                 "tag_failed",
                 {
                     "model": getattr(tagger, "model", "unknown"),
+                    "role": role,
                     "error": str(error),
                     "raw_response": raw_response,
                 } | _job_detail(job_id),
             )
             self._write_sidecar(photo_id)
             raise
-        payload = {
+        applied, suggested = match_keywords(
+            list(result.subjects) + ([result.scene] if result.scene else []) + list(result.conditions), vocab)
+        vocabulary_names = {word.casefold() for words in vocab.values() for word in words}
+        for item in result.species:  # Species are labelled suggestions unless confident and in the vocabulary.
+            name = item["name"]
+            confident = item["confidence"] >= 0.6 and name.casefold() in vocabulary_names
+            target = applied if confident else suggested
+            if name.casefold() not in {word.casefold() for word in applied + suggested}:
+                target.append(match_keywords([name], vocab)[0][0] if confident else name)
+        existing = self.catalog.get_tags(photo_id)
+        payload = (existing["data"] if existing else {}) | {
             "description": result.description,
-            "subjects": result.subjects,
+            "subjects": applied,
             "scene": result.scene,
             "technical": result.technical,
             "confidence": result.confidence,
+            "species": list(result.species),
+            "conditions": list(result.conditions),
+            "suggested": suggested,
         }
         self.catalog.save_tags(photo_id, payload, tagger.model)
         self.catalog.append_event(
             photo_id,
             "tagged",
-            {"model": tagger.model, "confidence": result.confidence, "raw_response": result.raw_response} | _job_detail(job_id),
+            {"model": tagger.model, "role": role, "confidence": result.confidence, "applied": applied,
+             "suggested": suggested, "raw_response": result.raw_response} | _job_detail(job_id),
         )
         self._write_sidecar(photo_id)
         return result
+
+    @_coordinated
+    def add_suggested_keyword(self, photo_id: int, keyword: str) -> dict:
+        return self._move_keyword(photo_id, keyword, "suggested", "subjects", "keyword_added")
+
+    @_coordinated
+    def remove_keyword(self, photo_id: int, keyword: str) -> dict:
+        return self._move_keyword(photo_id, keyword, "subjects", "suggested", "keyword_removed")
+
+    def _move_keyword(self, photo_id: int, keyword: str, source: str, target: str, kind: str) -> dict:
+        """Photographer's per-keyword accept or undo; the only way a suggestion reaches the sidecar keywords."""
+        tags = self.catalog.get_tags(photo_id)
+        data = tags["data"] if tags else {}
+        if keyword not in data.get(source, []):
+            raise ValueError(f"keyword is not {'suggested' if source == 'suggested' else 'applied'} for photo {photo_id}")
+        data[source] = [word for word in data[source] if word != keyword]
+        data[target] = data.get(target, []) + ([] if keyword in data.get(target, []) else [keyword])
+        self.catalog.save_tags(photo_id, data, tags["model"])
+        self.catalog.append_event(photo_id, kind, {"keyword": keyword})
+        self._write_sidecar(photo_id)
+        return {"photo_id": photo_id, "subjects": data["subjects"], "suggested": data["suggested"]}
 
     @_coordinated
     def set_pick(self, photo_id: int) -> None:

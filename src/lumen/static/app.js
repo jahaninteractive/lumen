@@ -476,7 +476,7 @@ function renderInspector(photo) {
   if (details.tags?.data) {
     const description = document.createElement('p');
     description.textContent = details.tags.data.description;
-    inspection.append(description);
+    inspection.append(description, ...keywordLists(photo, details.tags.data));
   }
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -504,6 +504,56 @@ function renderInspector(photo) {
   });
   actions.append(tag);
   inspection.append(actions);
+}
+
+// Applied keywords each carry a Remove (undo); suggestions carry an Add. Species ride along as labelled text.
+function keywordLists(photo, data) {
+  const subjects = data.subjects || [];
+  const applied = new Set(subjects.map(word => word.toLowerCase()));
+  const lists = [];
+  for (const [id, label, words, action] of [['keywords', 'Keywords', subjects, 'remove'], ['suggested-keywords', 'Suggested keywords', data.suggested || [], 'add']]) {
+    const heading = document.createElement('h4');
+    heading.id = `${id}-heading`;
+    heading.textContent = label;
+    const list = document.createElement('ul');
+    list.id = id;
+    list.setAttribute('aria-labelledby', heading.id);
+    for (const word of words) {
+      const item = document.createElement('li');
+      const text = document.createElement('span');
+      text.textContent = word;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary';
+      button.textContent = action === 'add' ? 'Add' : 'Remove';
+      button.setAttribute('aria-label', `${action === 'add' ? 'Add' : 'Remove'} keyword ${word}`);
+      button.addEventListener('click', () => changeKeyword(photo, action, word));
+      item.append(text, button);
+      list.append(item);
+      if (state.keywordFocus === `${action}:${word}`) { state.keywordFocus = null; window.setTimeout(() => button.focus(), 0); }
+    }
+    for (const species of data.species || []) {
+      if (applied.has(species.name.toLowerCase()) !== (action === 'remove')) continue;
+      const item = document.createElement('li');
+      item.textContent = `Species: ${species.name} (${Math.round(species.confidence * 100)}%)`;
+      list.append(item);
+    }
+    lists.push(heading, list);
+  }
+  return lists;
+}
+
+async function changeKeyword(photo, action, keyword) {
+  try {
+    const result = await post(`/api/photos/${photo.id}/keywords`, { action, keyword });
+    if (state.selectedId !== photo.id) return;
+    Object.assign(state.details.tags.data, { subjects: result.subjects, suggested: result.suggested });
+    state.keywordFocus = `${action === 'add' ? 'remove' : 'add'}:${keyword}`;  // focus lands on the undo control
+    renderInspector(photo);
+    announce(`Keyword ${keyword} ${action === 'add' ? 'added to' : 'removed from'} ${photo.name}`);
+  } catch (error) {
+    announce(error.message);
+  }
 }
 
 function fillFrame(button, photo, group) {
@@ -800,7 +850,8 @@ async function load() {
     state.selectedId = null;
     inspection.textContent = 'Select a frame to see why it ranked where it did.';
   }
-  document.querySelector('#system-status').textContent = status.omlx_live.summary;
+  const roleText = role => `${role} ${status.omlx_roles[role].model} ${status.omlx_roles[role].loaded ? 'loaded' : 'not loaded'}`;
+  document.querySelector('#system-status').textContent = `${status.omlx_live.summary} · ${roleText('fast')} · ${roleText('review')}`;
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
   if (!state.astro.job) {
@@ -833,18 +884,20 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   }
 });
 
-document.querySelector('#tag-all').addEventListener('click', async () => {
+async function startTagJob(url, payload) {
   state.busy = true;
   updateWorkflow();
   try {
-    watchJob(await post('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
+    watchJob(await post(url, payload));
   } catch (error) {
     announce(error.message);
   } finally {
     state.busy = false;
     updateWorkflow();
   }
-});
+}
+document.querySelector('#tag-all').addEventListener('click', () => startTagJob('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
+document.querySelector('#tag-keepers').addEventListener('click', () => startTagJob('/api/photos/tag', { scope: 'keepers' }));
 
 const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
@@ -1162,6 +1215,11 @@ function updateWorkflow() {
   document.querySelector('#browse-path').disabled = state.busy;
   document.querySelector('#open-compare').disabled = state.cullingBlocked || state.compare.length !== 2;
   document.querySelector('#tag-all').disabled = state.busy;
+  const fast = state.status?.omlx_roles?.fast;
+  const fastLoaded = fast?.loaded === true;
+  document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;
+  document.querySelector('#tag-keepers').disabled = state.busy || !keepers || !fastLoaded;
+  document.querySelector('#tag-keepers-availability').textContent = fast && !fastLoaded ? `Fast model ${fast.model} is not loaded in oMLX. Load it in oMLX, then reload this page.` : '';
   document.querySelector('#retag-all').disabled = state.busy;
   document.querySelector('#ask-composition-ai').disabled = state.busy || !state.composition || state.composition.photo_id !== state.selectedId;
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });

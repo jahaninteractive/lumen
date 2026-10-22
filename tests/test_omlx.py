@@ -215,5 +215,36 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual("Bearer secret", opener.request.headers["Authorization"])
 
 
+    def test_tag_response_accepts_species_and_conditions_and_rejects_extra_fields(self):
+        raw = json.dumps({"description": "Two penguins on ice", "subjects": ["gentoo penguin"], "scene": "ice",
+                          "technical": [], "confidence": 0.9,
+                          "species": [{"name": "gentoo penguin", "confidence": 0.82}], "conditions": ["overcast"]})
+        result = parse_tag_response(raw)
+        self.assertEqual([{"name": "gentoo penguin", "confidence": 0.82}], result.species)
+        self.assertEqual(["overcast"], result.conditions)
+        for bad in ({"species": [{"name": "x"}]}, {"species": [{"name": "x", "confidence": 2}]}, {"people": ["a"]}):
+            with self.subTest(bad=bad), self.assertRaises(TagResponseError):
+                parse_tag_response(json.dumps({"description": "d", "subjects": [], "scene": "", "technical": [], "confidence": 0.5} | bad))
+
+    def test_tag_prompt_lists_vocabulary_and_forbids_identifying_people(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k", role="fast")
+        captured = {}
+
+        def fake_complete(content, timeout, **kwargs):
+            captured["content"] = content
+            captured["kwargs"] = kwargs
+            return json.dumps({"description": "d", "subjects": [], "scene": "", "technical": [], "confidence": 0.5, "species": [], "conditions": []})
+
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"
+            Image.new("RGB", (8, 8)).save(preview)
+            with patch.object(tagger, "_complete", fake_complete):
+                tagger.tag(preview, vocabulary={"wildlife": ["gentoo penguin"], "scene": ["ice"]})
+        text = captured["content"][0]["text"]
+        self.assertIn("wildlife: gentoo penguin", text)
+        self.assertIn("Do not identify a person.", text)
+        self.assertEqual("fast", tagger.role)
+
+
 if __name__ == "__main__":
     unittest.main()

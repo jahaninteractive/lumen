@@ -88,6 +88,10 @@
           <h2>Finish as JPEG</h2>
           <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose a size below; only Full resolution keeps GPS location.</p>
           <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
+          <div class="button-row">
+            <button type="button" id="tag-keepers" class="secondary" aria-describedby="tag-keepers-availability" disabled>Tag keepers with local AI (0 keepers)</button>
+          </div>
+          <p id="tag-keepers-availability" class="quiet"></p>
           <fieldset id="export-controls">
             <legend>Choose what to export</legend>
             <div class="scope-options">

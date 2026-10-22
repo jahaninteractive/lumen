@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .omlx import OmlxError, get_server_status
+from .omlx import ROLES, OmlxError, get_server_status
 from .astro import probe_siril
 from .tools import tool_status
 
@@ -69,6 +69,8 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
             "summary": f"{settings.omlx_model} target · oMLX offline",
             "error": str(error),
         }
+    roles = {role: {"model": (model := getattr(settings, attribute)), "loaded": model in live_report["loaded_models"]}
+             for role, attribute in ROLES.items()}
     return {
         "library": str(settings.library_dir),
         "tools": tools,
@@ -88,6 +90,7 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
             ),
         },
         "omlx_live": live_report,
+        "omlx_roles": roles,
     }
 
 

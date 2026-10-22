@@ -131,10 +131,10 @@ class CliTests(unittest.TestCase):
         class FakeTagger:
             calls = 0
 
-            def __init__(self, *args):
-                self.model = "test-vlm"
+            def __init__(self, *args, **kwargs):
+                self.model, self.role = "test-vlm", kwargs.get("role")
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 FakeTagger.calls += 1
                 return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
 
@@ -144,7 +144,8 @@ class CliTests(unittest.TestCase):
             source = root / "photo.jpg"
             Image.new("RGB", (60, 40), (1, 2, 3)).save(source)
             self.run_json(library_dir, "import", str(source))
-            with patch("lumen.cli.OmlxTagger", FakeTagger):
+            live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live):
                 tag_code, tagged = self.run_json(library_dir, "tag", "--all")
                 skip_code, skipped = self.run_json(library_dir, "tag", "--all")
                 retag_code, retagged = self.run_json(library_dir, "tag", "--all", "--retag")
@@ -326,6 +327,40 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(str(root), json.dumps(payload))
             for fingerprint in fingerprints:
                 self.assertNotIn(fingerprint, json.dumps(payload))
+    def test_tag_keepers_runs_job_and_doctor_reports_both_roles(self):
+        from lumen.omlx import TagResult
+
+        class FakeTagger:
+            calls = 0
+            def __init__(self, *args, **kwargs):
+                self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def tag(self, preview, *, vocabulary=None):
+                FakeTagger.calls += 1
+                return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        live = {"version": "0.7.2", "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                Image.new("RGB", (120, 90), (index, 0, 0)).save(root / f"p{index}.jpg")
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "tag", "--keepers", "--json"])
+            self.assertEqual(0, code)
+            self.assertEqual(2, FakeTagger.calls)
+            self.assertEqual({"tagged": 2, "skipped": 0, "failed": 0}, json.loads(output.getvalue())["result"])  # job_status exposes the manifest summary as result
+            output = io.StringIO()
+            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), redirect_stdout(output):
+                main(["--library", str(root / "library"), "doctor", "--json"])
+            roles = json.loads(output.getvalue())["omlx_roles"]
+            self.assertEqual({"fast": {"model": "Qwen3-VL-8B-Instruct-4bit", "loaded": True}, "review": {"model": "Qwen3.8-27B-4bit", "loaded": False}}, roles)
+            output = io.StringIO()
+            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), redirect_stdout(output):
+                main(["--library", str(root / "library"), "doctor"])
+            self.assertIn("fast: Qwen3-VL-8B-Instruct-4bit (loaded)", output.getvalue())
+            self.assertIn("review: Qwen3.8-27B-4bit (not loaded)", output.getvalue())
 
 
 class ExportCleanupCliTests(unittest.TestCase):

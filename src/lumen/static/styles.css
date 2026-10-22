@@ -282,3 +282,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
 #ingest-verdict { font-weight: 700; color: var(--amber); }
+#keywords, #suggested-keywords { margin: .25rem 0 1rem; padding: 0; list-style: none; }
+#keywords li, #suggested-keywords li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-height: 44px; }
+#suggested-keywords li { color: var(--muted); }
+.inspector h4 { margin: 1rem 0 0; font-size: .9rem; }

@@ -21,7 +21,7 @@ from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
 from lumen.domain import PhotoEdit
-from lumen.omlx import CompositionResponseError, CompositionReview, TagResult
+from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, TagResult
 from lumen.omlx import TagResponseError, parse_composition_response, parse_tag_response
 from lumen.catalog import GroupFilters
 
@@ -933,7 +933,7 @@ class LibraryTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 return TagResult("A red bird", ["bird", "red"], "garden", ["sharp"], 0.9, "{}")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1075,7 +1075,7 @@ class LibraryTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 return TagResult("Old image", ["old"], "room", [], 0.8, "{}")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1112,7 +1112,7 @@ class LibraryTests(unittest.TestCase):
         class BrokenTagger:
             model = "broken-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 raise TagResponseError("invalid response")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1131,7 +1131,7 @@ class LibraryTests(unittest.TestCase):
         class BrokenTagger:
             model = "broken-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 return parse_tag_response("not model json")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1424,7 +1424,7 @@ class LibraryTests(unittest.TestCase):
                 self.failing = failing
                 self.calls = []
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 self.calls.append(preview)
                 if preview == self.failing:
                     raise TagResponseError(f"bad response for {preview}")
@@ -1435,13 +1435,13 @@ class LibraryTests(unittest.TestCase):
             first, second, third = library.catalog.list_photos()
             library.tag_photo(first.id, FlakyTagger(None))
             tagger = FlakyTagger(Path(second.preview_path))
-            status = self.run_job(library, library.start_tag_job(tagger))
+            status = self.run_job(library, library.start_tag_job(tagger, scope="all"))
             manifest = json.loads((self.library_dir / "outputs" / "jobs" / str(status["job_id"]) / "manifest.json").read_text())
             second_kinds = library.catalog.events_for(second.id)
             third_event = library.catalog.events_for(third.id)[-1]
             third_tags = library.catalog.get_tags(third.id)
             retagger = FlakyTagger(None)
-            retag_status = self.run_job(library, library.start_tag_job(retagger, retag=True))
+            retag_status = self.run_job(library, library.start_tag_job(retagger, scope="all", retag=True))
             with self.assertRaises(ValueError):
                 library.start_tag_job(retagger, retag="yes")
 
@@ -1649,6 +1649,89 @@ class LibraryTests(unittest.TestCase):
                 with self.subTest(primary=primary, mirror=mirror), self.assertRaises(ValueError):
                     library.start_ingest_job(card, primary, mirror)
             self.assertEqual([], library.catalog.list_jobs())
+
+
+    def test_tagger_for_refuses_roles_whose_model_is_not_loaded(self):
+        live = {"version": "0.7.2", "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.library.get_server_status", return_value=live):
+            with Library(Settings(library_dir=Path(directory))) as library:
+                self.assertEqual(("fast", "Qwen3-VL-8B-Instruct-4bit"), (library.tagger_for("fast").role, library.tagger_for("fast").model))
+                with self.assertRaisesRegex(RuntimeError, "review model Qwen3.8-27B-4bit is not loaded in oMLX"):
+                    library.tagger_for("review")
+                with self.assertRaises(ValueError):
+                    library.tagger_for("judge")
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.library.get_server_status", side_effect=OmlxError("down")):
+            with Library(Settings(library_dir=Path(directory))) as library:
+                with self.assertRaisesRegex(RuntimeError, "fast model .* is not loaded in oMLX; oMLX is offline"):
+                    library.tagger_for("fast")
+
+    def test_tag_job_keepers_scope_applies_vocabulary_and_high_confidence_species_only(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            calls = []
+
+            def tag(self, preview, *, vocabulary=None):
+                FakeTagger.calls.append(sorted(vocabulary))
+                return TagResult("Penguins", ["Gentoo Penguin", "snow", "krill"], "ice", [], 0.9, '{"raw": true}',
+                                 species=[{"name": "gentoo penguin", "confidence": 0.82}, {"name": "chinstrap penguin", "confidence": 0.4}],
+                                 conditions=["overcast", "spindrift"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(3):
+                Image.new("RGB", (120, 90), (index, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                photos = library.catalog.list_photos()
+                library.set_decision(photos[2].id, "reject")  # three single-frame bursts: two keepers, one rejected
+                job = library.start_tag_job(FakeTagger(), scope="keepers")
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                data = library.catalog.get_tags(photos[0].id)["data"]
+                event = [e for e in library.catalog.events_for(photos[0].id) if e.kind == "tagged"][-1]
+                sidecar = json.loads(library.sidecars.paths(photos[0])[0].read_text())
+                xmp = library.sidecars.paths(photos[0])[1].read_text()
+                self.assertIsNone(library.catalog.get_tags(photos[2].id))
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual(2, status["processed"])
+        self.assertEqual(["gentoo penguin", "ice", "overcast"], data["subjects"])
+        self.assertEqual(["snow", "krill", "spindrift"], data["suggested"][:3])
+        self.assertIn("chinstrap penguin", data["suggested"])
+        self.assertEqual("fast", event.details["role"])
+        self.assertEqual('{"raw": true}', event.details["raw_response"])
+        self.assertEqual(["gentoo penguin", "ice", "overcast"], sidecar["keywords"])
+        self.assertIn("<rdf:li>gentoo penguin</rdf:li>", xmp)
+        self.assertNotIn("krill", xmp)
+        self.assertEqual(2, len(FakeTagger.calls))
+        self.assertIn("wildlife", FakeTagger.calls[0])
+
+    def test_tag_job_explicit_ids_validate_and_keyword_add_remove_round_trip(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root / "p.jpg")
+                photo_id = library.catalog.list_photos()[0].id
+                with self.assertRaisesRegex(ValueError, "unknown photo ID: 99"):
+                    library.start_tag_job(FakeTagger(), scope=[photo_id, 99])
+                with self.assertRaises(ValueError):
+                    library.start_tag_job(FakeTagger(), scope=[])
+                job = library.start_tag_job(FakeTagger(), scope=[photo_id])
+                library.wait_for_job(job.id)
+                library.catalog.save_tags(photo_id, library.catalog.get_tags(photo_id)["data"] | {"suggested": ["krill"]}, "fast-model")
+                added = library.add_suggested_keyword(photo_id, "krill")
+                self.assertEqual((["ice", "krill"], []), (added["subjects"], added["suggested"]))
+                removed = library.remove_keyword(photo_id, "ice")
+                self.assertEqual((["krill"], ["ice"]), (removed["subjects"], removed["suggested"]))
+                with self.assertRaises(ValueError):
+                    library.add_suggested_keyword(photo_id, "orca")
+                kinds = [e.kind for e in library.catalog.events_for(photo_id)]
+                self.assertEqual(["keyword_added", "keyword_removed"], kinds[-2:])
 
 
 if __name__ == "__main__":

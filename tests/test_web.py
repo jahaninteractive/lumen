@@ -29,6 +29,9 @@ except ModuleNotFoundError:  # discovered with -s tests
     from test_previews import write_fake_darktable
 
 
+REVIEW_LOADED = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+
+
 class LandmarkParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -267,16 +270,18 @@ class WebTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def __init__(self, *args):
+            def __init__(self, *args, **kwargs):
                 pass
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 from lumen.omlx import TagResult
                 return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
 
         changed = self.root / "photo.jpg"
         Image.new("RGB", (120, 90), (1, 2, 3)).save(changed)
-        with patch.object(Library, "_import_one", held), patch("lumen.web.OmlxTagger", FakeTagger):
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch.object(Library, "_import_one", held), patch("lumen.library.OmlxTagger", FakeTagger), patch(
+                "lumen.library.get_server_status", return_value=live):
             code, started = self.post_json("/api/import", {"path": str(changed)})
             self.assertEqual(202, code)
             code, body = self.post_json("/api/photos/tag-all", {})
@@ -758,7 +763,7 @@ class WebTests(unittest.TestCase):
             def review_composition(self, original, candidates):
                 return CompositionReview(candidates[0][0], "The original keeps useful context.", 0.75)
 
-        with patch("lumen.web.OmlxTagger", return_value=Tagger()):
+        with patch("lumen.library.OmlxTagger", return_value=Tagger()), patch("lumen.library.get_server_status", return_value=REVIEW_LOADED):
             code, payload = self.post_json("/api/photos/1/composition-review", {})
         self.assertEqual(200, code, payload)
         self.assertEqual({"candidate_id", "rationale", "confidence"}, set(payload))
@@ -779,7 +784,7 @@ class WebTests(unittest.TestCase):
             with urllib.request.urlopen(self.base + "/api/photos/1/crops", timeout=3) as response:
                 candidate = next(item for item in json.load(response)["candidates"] if item["kind"] != "original")
             self.assertEqual(200, self.post_json("/api/photos/1/crop", {"candidate_id": candidate["id"]})[0])
-            with patch("lumen.web.OmlxTagger", return_value=BrokenTagger()):
+            with patch("lumen.library.OmlxTagger", return_value=BrokenTagger()), patch("lumen.library.get_server_status", return_value=REVIEW_LOADED):
                 code, payload = self.post_json("/api/photos/1/composition-review", {})
         self.assertEqual(400, code, payload)
         self.assertEqual("local composition review is unavailable for this photo", payload["error"])
@@ -876,6 +881,59 @@ class WebTests(unittest.TestCase):
         self.assertIn("resolution_warning", javascript)
         self.assertNotRegex(javascript, r"composition[^\n]*\.innerHTML|rationale[^\n]*\.innerHTML")
         self.assertIn("loadComposition", javascript)
+
+    def test_tag_scope_route_gates_on_live_model_and_never_creates_a_job_when_refused(self):  # Review Focus
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def __init__(self, *args, **kwargs): self.role = kwargs.get("role", "review")
+            def tag(self, preview, *, vocabulary=None):
+                from lumen.omlx import TagResult
+                return TagResult("A frame", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        offline = {"version": None, "default_model": None, "loaded_models": []}
+        with patch("lumen.library.get_server_status", return_value=offline):
+            code, body = self.post_json("/api/photos/tag", {"scope": "keepers"})
+            self.assertEqual((400, {"error": "fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX"}), (code, body))
+            self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"])
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        Image.new("RGB", (120, 90)).save(self.root / "photo.jpg")
+        # /api/status reads oMLX through diagnostics; patch it too so the test never contacts a real server.
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.diagnostics.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root / "photo.jpg")})[1]["job_id"])
+            for payload in ({"scope": "some"}, {"scope": [1, 1]}, {"scope": ["1"]}, {"scope": "keepers", "extra": 1}, {}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/tag", payload)[0])
+            code, job = self.post_json("/api/photos/tag", {"scope": "keepers"})
+            self.assertEqual(202, code)
+            final = self.wait_job(job["job_id"])
+            self.assertEqual("succeeded", final["status"])
+            self.assertNotIn("raw_response", json.dumps(final))
+            code, status = self.get_json("/api/status")
+            self.assertEqual({"model": "Qwen3-VL-8B-Instruct-4bit", "loaded": True}, status["omlx_roles"]["fast"])
+            self.assertFalse(status["omlx_roles"]["review"]["loaded"])
+            code, vocab = self.get_json("/api/vocabulary")
+            self.assertIn("wildlife", vocab["categories"])
+            photo = self.get_json("/api/photos/1")[1]
+            self.assertEqual(["ice"], photo["tags"]["data"]["subjects"])
+            self.assertNotIn("raw_response", json.dumps(photo))
+            self.assertEqual(403, self.post_json("/api/photos/1/keywords", {"action": "remove", "keyword": "ice"}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json("/api/photos/1/keywords", {"action": "drop", "keyword": "ice"})[0])
+            code, body = self.post_json("/api/photos/1/keywords", {"action": "remove", "keyword": "ice"})
+            self.assertEqual((200, [], ["ice"]), (code, body["subjects"], body["suggested"]))
+
+    def test_export_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('id="tag-keepers"', html)
+        self.assertIn('id="tag-keepers-availability"', html)
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("omlx_roles", js)
+        self.assertIn("suggested-keywords", js)
+
+    def test_javascript_keywords_add_and_remove_without_reload_and_tag_keepers_gates_on_role(self):
+        self.run_javascript_cleanup_regression("keywords")
+
+    def test_javascript_tag_keepers_disabled_when_fast_model_unloaded(self):
+        self.run_javascript_cleanup_regression("keywords-unloaded")
 
     def run_javascript_cleanup_regression(self, scenario):
         script = r"""
@@ -993,6 +1051,8 @@ let importPolls = 0;
 const tagPosts = [];
 let tagPolls = 0;
 const tagJob = (status, progress, extra = {}) => ({ job_id: 15, kind: 'tag', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
+const keywordPosts = [];
+const keywordData = { subjects: ['ice'], suggested: ['krill'] };
 const removals = [];
 const mergePosts = [];
 const compositionReviews = [];
@@ -1017,7 +1077,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
+  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: false } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
   else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
@@ -1059,7 +1119,18 @@ async function fetch(url, options = {}) {
     if ('decision' in body) decisions[id] = body.decision; else ratings[id] = body.rating;
     payload = { photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 };
   }
-  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
+  else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
+  else if (url === '/api/photos/1/keywords') {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    keywordPosts.push(body);
+    const [from, to] = body.action === 'add' ? [keywordData.suggested, keywordData.subjects] : [keywordData.subjects, keywordData.suggested];
+    from.splice(from.indexOf(body.keyword), 1);
+    to.push(body.keyword);
+    payload = { photo_id: 1, subjects: [...keywordData.subjects], suggested: [...keywordData.suggested] };
+  }
+  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
+    tags: scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (url === '/api/photos/2/crops') {
     cropLoads += 1;
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
@@ -1260,6 +1331,46 @@ const regression = `
     await element('#show-rejected').listeners.change();
     assert.equal(groupLoads, loadsBefore + 1, 'the hide-rejected toggle reloads with the rejected frames');
     assert.equal(lastGroupsUrl, '/api/groups?show_rejected=1');
+    return;
+  }
+  if (scenario === 'keywords' || scenario === 'keywords-unloaded') {
+    keeperOverride = 2;
+    await load();
+    const loaded = scenario === 'keywords';
+    assert.equal(element('#tag-keepers').textContent, 'Tag keepers with local AI (2 keepers)');
+    assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + (loaded ? 'loaded' : 'not loaded') + ' · review Qwen3.8-27B-4bit not loaded');
+    if (!loaded) {
+      assert.equal(element('#tag-keepers').disabled, true);
+      assert.ok(element('#tag-keepers-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX'));
+      return;
+    }
+    assert.equal(element('#tag-keepers').disabled, false);
+    assert.equal(element('#tag-keepers-availability').textContent, '');
+    const loadsBefore = groupLoads;
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const list = id => tree(element('#inspection')).find(node => node.id === id);
+    const texts = id => tree(list(id)).map(node => node.textContent);
+    const labelled = label => tree(element('#inspection')).find(node => node.getAttribute?.('aria-label') === label);
+    await inspect(state.groups[0].photos[0]);
+    assert.ok(texts('keywords').includes('ice'));
+    assert.ok(texts('suggested-keywords').includes('krill'));
+    assert.ok(texts('suggested-keywords').includes('Species: gentoo penguin (82%)'), 'a species below the vocabulary threshold stays a suggestion');
+    await labelled('Add keyword krill').listeners.click();
+    assert.deepEqual(keywordPosts, [{ action: 'add', keyword: 'krill' }]);
+    assert.ok(texts('keywords').includes('krill'));
+    assert.ok(!texts('suggested-keywords').includes('krill'));
+    assert.equal(focused, labelled('Remove keyword krill'), 'focus moves to the undo control');
+    assert.equal(element('#announcer').textContent, 'Keyword krill added to photo-1.jpg');
+    await labelled('Remove keyword ice').listeners.click();
+    assert.deepEqual(keywordPosts.at(-1), { action: 'remove', keyword: 'ice' });
+    assert.ok(texts('suggested-keywords').includes('ice'));
+    assert.equal(element('#announcer').textContent, 'Keyword ice removed from photo-1.jpg');
+    assert.equal(groupLoads, loadsBefore, 'keyword changes re-render in place without load()');
+    await element('#tag-keepers').listeners.click();
+    assert.deepEqual(tagPosts, [{ scope: 'keepers' }]);
+    assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
+    await settle();
+    assert.equal(state.job.status, 'succeeded');
     return;
   }
   if (scenario === 'culling-keys') {

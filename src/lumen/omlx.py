@@ -11,6 +11,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
+ROLES = {"fast": "omlx_fast_model", "review": "review_model"}  # role -> Settings attribute naming its model
+
+
 class OmlxError(RuntimeError):
     pass
 
@@ -40,6 +43,8 @@ class TagResult:
     technical: list[str]
     confidence: float
     raw_response: str
+    species: list[dict] | tuple = ()  # [{"name": str, "confidence": float}]
+    conditions: list[str] | tuple = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +54,7 @@ class CompositionReview:
     confidence: float
 
 
-def parse_tag_response(raw: str) -> TagResult:
+def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
     text = raw.strip()
     if text.startswith("```"):
         first_newline = text.find("\n")
@@ -63,6 +68,11 @@ def parse_tag_response(raw: str) -> TagResult:
         raise TagResponseError(f"oMLX did not return valid JSON: {error.msg}", raw) from error
     if not isinstance(payload, dict):
         raise TagResponseError("oMLX tag response must be a JSON object", raw)
+    allowed = {"description", "subjects", "scene", "technical", "confidence"}
+    if allow_species:
+        allowed |= {"species", "conditions"}
+    if set(payload) - allowed:
+        raise TagResponseError("oMLX tag response contains unexpected fields", raw)
     description = payload.get("description")
     subjects = payload.get("subjects")
     scene = payload.get("scene", "")
@@ -78,6 +88,16 @@ def parse_tag_response(raw: str) -> TagResult:
         raise TagResponseError("oMLX technical observations must be strings", raw)
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
         raise TagResponseError("oMLX confidence must be between 0 and 1", raw)
+    species = payload.get("species", [])
+    if not isinstance(species, list) or not all(
+            isinstance(item, dict) and set(item) == {"name", "confidence"}
+            and isinstance(item["name"], str) and item["name"].strip()
+            and isinstance(item["confidence"], (int, float)) and not isinstance(item["confidence"], bool)
+            and math.isfinite(item["confidence"]) and 0 <= item["confidence"] <= 1 for item in species):
+        raise TagResponseError("oMLX species must be a list of {name, confidence} objects", raw)
+    conditions = payload.get("conditions", [])
+    if not isinstance(conditions, list) or not all(isinstance(value, str) for value in conditions):
+        raise TagResponseError("oMLX conditions must be a list of strings", raw)
     return TagResult(
         description=description.strip(),
         subjects=[value.strip() for value in subjects if value.strip()],
@@ -85,6 +105,8 @@ def parse_tag_response(raw: str) -> TagResult:
         technical=[value.strip() for value in technical if value.strip()],
         confidence=float(confidence),
         raw_response=raw,
+        species=[{"name": item["name"].strip(), "confidence": float(item["confidence"])} for item in species],
+        conditions=[value.strip() for value in conditions if value.strip()],
     )
 
 
@@ -117,21 +139,29 @@ def parse_composition_response(raw: str, candidate_ids: set[str]) -> Composition
 
 
 class OmlxTagger:
-    def __init__(self, base_url: str, model: str, api_key: str | None = None):
+    def __init__(self, base_url: str, model: str, api_key: str | None = None, *, role: str = "review"):
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("oMLX endpoint must be a loopback http(s) URL")
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.role = role
         self.api_key = api_key or self._local_api_key()
 
-    def tag(self, preview: Path, timeout: float = 240) -> TagResult:
+    def tag(self, preview: Path, timeout: float = 240, *, vocabulary: dict[str, list[str]] | None = None) -> TagResult:
         prompt = (
             "Analyze this photograph for a local photo catalog. Return JSON only with: "
             'description (string), subjects (string array), scene (string), '
             "technical (string array of visible focus/exposure/motion observations), "
             "and confidence (number 0 to 1). Do not identify a person."
         )
+        if vocabulary:
+            prompt += (
+                " Also return species (array of {name, confidence 0 to 1} for animals you can name) and "
+                "conditions (string array of light and weather). Keyword list by category: "
+                + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
+                + ". Choose keywords from the list where one fits; add at most three others. Do not identify a person."
+            )
         content = self._complete([
             {"type": "text", "text": prompt},
             self._image_content(preview),
@@ -182,12 +212,12 @@ class OmlxTagger:
         image = base64.b64encode(path.read_bytes()).decode("ascii")
         return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}}
 
-    def _complete(self, content: list[dict], timeout: float) -> str:
+    def _complete(self, content: list[dict], timeout: float, *, max_tokens: int = 500) -> str:
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
             "temperature": 0,
-            "max_tokens": 500,
+            "max_tokens": max_tokens,
             "chat_template_kwargs": {"enable_thinking": False},  # Qwen-style thinking otherwise eats the budget and returns no content.
         }
         headers = {"Content-Type": "application/json"}
