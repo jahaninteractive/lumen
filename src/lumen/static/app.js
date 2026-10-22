@@ -1,7 +1,7 @@
 const JOB_ACTIVE = ['queued', 'running'];
 const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
-  job: null, jobTimer: null, jobRequest: 0, details: null, showRejected: false, rejectedCount: 0,
+  job: null, jobTimer: null, jobRequest: 0, details: null, showRejected: false, rejectedCount: 0, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -234,12 +234,20 @@ function isKeeper(photo, group) {
   return photo.decision !== 'reject' && (photo.decision === 'flag' || photo.id === group.automatic_pick_id);
 }
 
-async function decide(photo, field, value) {
+// The one decision path for the inspector and the keyboard: field is 'decision', 'rating', or 'pick'.
+// focusAfter (inspector only) returns focus to the re-rendered control; keyboard focus stays on the frame.
+async function decide(photo, field, value, focusAfter = null) {
+  if (state.busy) return announce('Wait for the current change or job to finish.');
   const previous = photo.decision;
   state.busy = true;
   updateWorkflow();
   try {
-    const result = await post(`/api/photos/${photo.id}/${field}`, { [field]: value });
+    let result;
+    if (field === 'pick') {  // Choosing a frame as best clears its rejection (Library.set_pick).
+      await post(`/api/photos/${photo.id}/pick`);
+      const group = state.groups.find(item => item.photos.includes(photo));
+      result = { decision: previous === 'reject' ? 'none' : previous, rating: photo.rating, group_id: group?.id, automatic_pick_id: photo.id };
+    } else result = await post(`/api/photos/${photo.id}/${field}`, { [field]: value });
     photo.decision = result.decision;
     photo.rating = result.rating;
     const delta = (result.decision === 'reject') - (previous === 'reject');
@@ -254,10 +262,11 @@ async function decide(photo, field, value) {
       if (batch) batch.textContent = batchText(group, groupIndex);
     }
     const name = photo.name.replace(/\.[^.]+$/, '');
-    announce(field === 'rating' ? `Rating ${result.rating} set for ${name}` : `${name} ${DECISION_ANNOUNCEMENTS[result.decision]}`);
+    announce(field === 'pick' ? `${photo.name} is now your best frame.`
+      : field === 'rating' ? `Rating ${result.rating} set for ${name}` : `${name} ${DECISION_ANNOUNCEMENTS[result.decision]}`);
     if (state.selectedId === photo.id) {
       renderInspector(photo);
-      document.querySelector(field === 'rating' ? '#rating' : `[data-decision-control="${value}"]`)?.focus();
+      if (focusAfter) document.querySelector(focusAfter)?.focus();
     }
   } catch (error) {
     announce(error.message);
@@ -281,7 +290,7 @@ function decisionControls(photo) {
     button.className = 'secondary';
     button.dataset.decisionControl = value;
     button.textContent = label;
-    button.addEventListener('click', () => decide(photo, 'decision', value));
+    button.addEventListener('click', () => decide(photo, 'decision', value, `[data-decision-control="${value}"]`));
     buttons.append(button);
   }
   const label = document.createElement('label');
@@ -296,7 +305,7 @@ function decisionControls(photo) {
     rating.append(option);
   }
   rating.value = String(photo.rating);
-  rating.addEventListener('change', () => decide(photo, 'rating', Number(rating.value)));
+  rating.addEventListener('change', () => decide(photo, 'rating', Number(rating.value), '#rating'));
   wrapper.append(status, buttons, label, rating);
   return wrapper;
 }
@@ -345,17 +354,7 @@ function renderInspector(photo) {
     choose.type = 'button';
     choose.className = 'secondary';
     choose.textContent = 'Choose as best';
-    choose.addEventListener('click', async () => {
-      choose.disabled = true;
-      try {
-        await request(`/api/photos/${photo.id}/pick`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        announce(`${photo.name} is now your best frame.`);
-        await load();
-      } catch (error) {
-        announce(error.message);
-        choose.disabled = false;
-      }
-    });
+    choose.addEventListener('click', () => decide(photo, 'pick', null, `.frame[data-id="${photo.id}"]`));
     actions.append(choose);
   }
   const tag = document.createElement('button');
@@ -379,7 +378,8 @@ function renderInspector(photo) {
 function fillFrame(button, photo, group) {
   photo.groupPick = group.automatic_pick_id;
   const best = photo.id === group.automatic_pick_id && photo.decision !== 'reject';
-  const marks = [DECISION_WORDS[photo.decision], photo.rating ? `Rating ${photo.rating}` : null].filter(word => word && word !== DECISION_WORDS.none);
+  const marks = [DECISION_WORDS[photo.decision], photo.rating ? `Rating ${photo.rating}` : null, state.compare.includes(photo.id) ? 'Compare' : null]
+    .filter(word => word && word !== DECISION_WORDS.none);
   button.dataset.decision = photo.decision;
   button.setAttribute('aria-label', [`${photo.name}, score ${Math.round(photo.total_score * 100)} percent`, best ? 'best in group' : null, ...marks.map(word => word.toLowerCase())].filter(Boolean).join(', '));
   const image = document.createElement('img');
@@ -414,13 +414,88 @@ function fillFrame(button, photo, group) {
   }
 }
 
-// Updates one group's cards in place (marks, Best badge) without reloading the contact sheet.
+function frameCard(photoId) {
+  return Array.from(document.querySelectorAll('.frame')).find(card => Number(card.dataset.id) === photoId);
+}
+
+// Refills one card in place (marks, Best badge); the node stays, so focus and listeners survive.
+function refreshFrame(photoId) {
+  const group = state.groups.find(item => item.photos.some(photo => photo.id === photoId));
+  const card = frameCard(photoId);
+  if (group && card) fillFrame(card, group.photos.find(photo => photo.id === photoId), group);
+}
+
 function refreshFrames(group) {
-  const cards = Array.from(document.querySelectorAll('.frame'));
-  group.photos.forEach(photo => {
-    const card = cards.find(item => Number(item.dataset.id) === photo.id);
-    if (card) fillFrame(card, photo, group);
+  group.photos.forEach(photo => refreshFrame(photo.id));
+}
+
+function renderFrame(photo, group) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'frame';
+  button.dataset.id = photo.id;
+  button.dataset.group = group.id;
+  button.setAttribute('aria-pressed', String(photo.id === state.selectedId));
+  button.setAttribute('tabindex', photo.id === state.focusedId ? '0' : '-1');
+  fillFrame(button, photo, group);
+  button.addEventListener('click', () => {
+    focusFrame(photo.id);  // Safari does not focus a clicked button; culling keys need it focused
+    inspect(photo).catch(error => announce(error.message));
   });
+  button.addEventListener('focus', () => focusFrame(photo.id, false));  // Tab keeps the roving stop in step
+  return button;
+}
+
+// Roving tabindex: only the focused frame is in the Tab order.
+function focusFrame(photoId, move = true) {
+  state.focusedId = photoId;
+  document.querySelectorAll('.frame').forEach(card => card.setAttribute('tabindex', Number(card.dataset.id) === photoId ? '0' : '-1'));
+  if (move) frameCard(photoId)?.focus();
+}
+
+function sheetColumns() {
+  const columns = window.getComputedStyle?.(sheet).gridTemplateColumns;
+  return columns && columns !== 'none' ? columns.trim().split(/\s+/).length : 1;
+}
+
+function toggleCompare(photo) {
+  const marked = state.compare.includes(photo.id);
+  const changed = marked ? [photo.id] : [photo.id, ...(state.compare.length >= 2 ? [state.compare.shift()] : [])];
+  state.compare = marked ? state.compare.filter(id => id !== photo.id) : [...state.compare, photo.id];
+  changed.forEach(refreshFrame);
+  announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
+}
+
+const CULLING_KEYS = { p: 'pick', x: 'reject', f: 'flag', u: 'clear', c: 'compare', Enter: 'loupe', Escape: 'close' };
+const CULLING_ACTIONS = {
+  pick: photo => decide(photo, 'pick'),
+  reject: photo => decide(photo, 'decision', 'reject'),
+  flag: photo => decide(photo, 'decision', 'flag'),
+  clear: photo => decide(photo, 'decision', 'none'),
+  compare: toggleCompare,
+  loupe: null,  // Task 5 adds the loupe; until then Enter keeps its native click (inspect).
+  close: null,  // Task 5 closes compare/loupe views.
+};
+
+function handleCullingKey(event) {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  const target = event.target;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || (target?.tagName === 'BUTTON' && target.closest?.('dialog form'))) return;
+  const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
+  const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
+  const index = ids.indexOf(state.focusedId);
+  const row = sheetColumns();
+  const next = { ArrowLeft: index - 1, ArrowRight: index + 1, ArrowUp: index - row, ArrowDown: index + row, PageUp: index - row, PageDown: index + row, Home: 0, End: ids.length - 1 }[key];
+  if (next !== undefined) {
+    if (!ids.length) return;
+    event.preventDefault();
+    return focusFrame(ids[Math.max(0, Math.min(ids.length - 1, next))]);
+  }
+  const action = /^[0-5]$/.test(key) ? photo => decide(photo, 'rating', Number(key)) : CULLING_ACTIONS[CULLING_KEYS[key]];
+  if (!action) return;
+  event.preventDefault();
+  const photo = state.groups.flatMap(group => group.photos).find(item => item.id === state.focusedId);
+  return photo ? action(photo) : undefined;
 }
 
 function renderGroups() {
@@ -428,6 +503,9 @@ function renderGroups() {
   const rail = document.querySelector('#batch-list');
   rail.replaceChildren();
   let count = 0;
+  const ids = state.groups.flatMap(group => group.photos.map(photo => photo.id));
+  if (!ids.includes(state.focusedId)) state.focusedId = ids.includes(state.selectedId) ? state.selectedId : ids[0] ?? null;
+  state.compare = state.compare.filter(id => ids.includes(id));
   state.groups.forEach((group, groupIndex) => {
     const batch = document.createElement('button');
     batch.type = 'button';
@@ -448,15 +526,7 @@ function renderGroups() {
     rail.append(batch);
     group.photos.forEach(photo => {
       count += 1;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'frame';
-      button.dataset.id = photo.id;
-      button.dataset.group = group.id;
-      button.setAttribute('aria-pressed', String(photo.id === state.selectedId));
-      fillFrame(button, photo, group);
-      button.addEventListener('click', () => inspect(photo).catch(error => announce(error.message)));
-      sheet.append(button);
+      sheet.append(renderFrame(photo, group));
     });
   });
   if (count === 0) {
@@ -903,6 +973,15 @@ document.querySelector('#show-rejected').addEventListener('change', () => {
   return load().catch(error => announce(error.message));
 });
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
+sheet.addEventListener('keydown', handleCullingKey);
+const shortcuts = document.querySelector('#shortcuts');
+document.querySelector('#shortcuts-button').addEventListener('click', () => {
+  if (shortcuts.showModal) shortcuts.showModal();
+  else shortcuts.hidden = false;
+});
+shortcuts.addEventListener('keydown', event => {  // a modal <dialog> closes on Escape natively
+  if (event.key === 'Escape' && !shortcuts.showModal) shortcuts.hidden = true;
+});
 
 function showExportResults(results) {
   const list = document.querySelector('#export-results');

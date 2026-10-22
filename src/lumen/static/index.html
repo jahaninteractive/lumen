@@ -200,6 +200,7 @@
           <h1 id="contact-heading">Contact sheet</h1>
           <label for="show-rejected" class="toggle"><input type="checkbox" id="show-rejected"> Show rejected <span id="rejected-count">(0)</span></label>
           <span id="photo-count">0 frames</span>
+          <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
         </div>
         <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>
       </section>
@@ -212,6 +213,25 @@
       </div>
     </aside>
   </div>
+
+  <dialog id="shortcuts" aria-labelledby="shortcuts-heading">
+    <form method="dialog">
+      <h2 id="shortcuts-heading">Keyboard shortcuts</h2>
+      <p>Use these single keys while a frame on the contact sheet has focus. They do nothing while you type in a text field.</p>
+      <dl>
+        <dt><kbd>&larr;</kbd> <kbd>&rarr;</kbd></dt><dd>Previous or next frame</dd>
+        <dt><kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>Page Up</kbd> <kbd>Page Down</kbd></dt><dd>Previous or next row</dd>
+        <dt><kbd>Home</kbd> <kbd>End</kbd></dt><dd>First or last frame</dd>
+        <dt><kbd>P</kbd></dt><dd>Choose as best in its burst</dd>
+        <dt><kbd>X</kbd></dt><dd>Reject</dd>
+        <dt><kbd>F</kbd></dt><dd>Flag</dd>
+        <dt><kbd>U</kbd></dt><dd>Clear decision</dd>
+        <dt><kbd>0</kbd> to <kbd>5</kbd></dt><dd>Set rating; 0 removes it</dd>
+        <dt><kbd>C</kbd></dt><dd>Mark or unmark for compare (two frames at most)</dd>
+      </dl>
+      <button type="submit">Close</button>
+    </form>
+  </dialog>
 
   <div id="announcer" class="sr-only" aria-live="assertive"></div>
   <script src="/static/app.js"></script>

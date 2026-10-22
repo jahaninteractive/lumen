@@ -795,7 +795,7 @@ const tabElements = ['compose', 'export', 'astro', 'ingest', 'clear'].map((name,
 });
 const scope = new Element(); scope.value = 'current';
 const document = {
-  createElement: () => new Element(),
+  createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
   querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
@@ -1045,6 +1045,83 @@ const regression = `
     await element('#show-rejected').listeners.change();
     assert.equal(groupLoads, loadsBefore + 1, 'the hide-rejected toggle reloads with the rejected frames');
     assert.equal(lastGroupsUrl, '/api/groups?show_rejected=1');
+    return;
+  }
+  if (scenario === 'culling-keys') {
+    groups = [group(1, [1, 2, 3])];
+    await load();
+    const loadsBefore = groupLoads;
+    const sheetNode = element('#contact-sheet');
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const card = id => sheetNode.children.find(item => Number(item.dataset.id) === id);
+    const texts = id => tree(card(id)).map(node => node.textContent);
+    const tabindexes = () => sheetNode.children.map(item => item.getAttribute('tabindex'));
+    let prevented = 0;
+    const key = (name, extra = {}) => sheetNode.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target: card(state.focusedId), preventDefault() { prevented += 1; }, ...extra });
+    assert.equal(state.focusedId, 1);
+    assert.deepEqual(tabindexes(), ['0', '-1', '-1'], 'exactly one frame is in the tab order');
+    await key('ArrowRight');
+    assert.equal(state.focusedId, 2);
+    assert.equal(focused, card(2));
+    assert.deepEqual(tabindexes(), ['-1', '0', '-1']);
+    assert.equal(prevented, 1);
+    await key('End');
+    assert.equal(focused, card(3));
+    await key('Home');
+    assert.equal(focused, card(1));
+    assert.deepEqual(tabindexes(), ['0', '-1', '-1']);
+    await key('PageDown');
+    assert.equal(state.focusedId, 2, 'without computed grid columns a row is one frame');
+    await key('x');
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/decision', body: { decision: 'reject' } });
+    assert.ok(texts(2).includes('Rejected'));
+    assert.equal(element('#announcer').textContent, 'photo-2 rejected');
+    assert.equal(focused, card(2), 'a keyboard decision keeps focus on the frame');
+    await key('3');
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/rating', body: { rating: 3 } });
+    assert.ok(texts(2).includes('Rating 3'));
+    assert.ok(texts(1).includes('Best'));
+    await key('p');
+    assert.deepEqual(picks, ['/api/photos/2/pick']);
+    assert.ok(texts(2).includes('Best') && !texts(2).includes('Rejected'), 'a pick clears the rejection and moves Best in place');
+    assert.ok(!texts(1).includes('Best'));
+    assert.equal(element('#announcer').textContent, 'photo-2.jpg is now your best frame.');
+    assert.equal(groupLoads, loadsBefore, 'keyboard culling updates cards without load()');
+    await key('Home');
+    await key('c');
+    assert.deepEqual(state.compare, [1]);
+    assert.equal(element('#announcer').textContent, 'Marked for compare (1 of 2)');
+    await key('ArrowRight');
+    await key('C');
+    assert.deepEqual(state.compare, [1, 2]);
+    assert.equal(element('#announcer').textContent, 'Marked for compare (2 of 2)');
+    await key('End');
+    await key('c');
+    assert.deepEqual(state.compare, [2, 3], 'a third mark replaces the oldest');
+    assert.ok(texts(3).includes('Compare') && !texts(1).includes('Compare'));
+    await key('c');
+    assert.deepEqual(state.compare, [2]);
+    assert.equal(element('#announcer').textContent, 'Unmarked');
+    const posts = decisionPosts.length;
+    const before = prevented;
+    for (const modifier of ['metaKey', 'ctrlKey', 'altKey']) await key('x', { [modifier]: true });
+    for (const name of ['#import-path', '#clear-confirmation']) {
+      element(name).tagName = 'INPUT';
+      await key('x', { target: element(name) });
+      await key('Home', { target: element(name) });
+    }
+    await key('Tab');
+    assert.equal(decisionPosts.length, posts, 'modified keys and typing never cull');
+    assert.equal(state.focusedId, 3);
+    assert.equal(prevented, before, 'ignored keys keep their native behaviour');
+    state.busy = true;
+    await key('f');
+    assert.equal(decisionPosts.length, posts, 'no decision while busy');
+    state.busy = false;
+    element('#shortcuts-button').listeners.click();
+    assert.equal(element('#shortcuts').hidden, false);
+    element('#shortcuts').listeners.keydown({ key: 'Escape' });
+    assert.equal(element('#shortcuts').hidden, true);
     return;
   }
   if (scenario === 'all-rejected') {
@@ -1335,6 +1412,29 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_all_rejected_burst_explains_no_keeper_and_offers_pick(self):
         self.run_javascript_cleanup_regression("all-rejected")
+
+    def test_javascript_culling_keys_move_focus_and_decide_in_place(self):
+        self.run_javascript_cleanup_regression("culling-keys")
+
+    def test_index_has_shortcuts_button_and_readable_legend_without_reserved_modifiers(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        self.assertEqual(("button", "button"), (by_id["shortcuts-button"]["tag"], by_id["shortcuts-button"]["attrs"].get("type")))
+        self.assertEqual("dialog", by_id["shortcuts"]["tag"])
+        legend = [node for node in parser.nodes if by_id["shortcuts"] in node["parents"]]
+        self.assertTrue(any(node["tag"] == "dl" for node in legend))
+        terms = [node for node in legend if node["tag"] == "dt"]
+        keys = [node["text"].strip() for node in legend if node["tag"] == "kbd"]
+        self.assertGreaterEqual(len(terms), 8)
+        for key in ("P", "X", "F", "U", "C", "0", "5", "Home", "End"):
+            self.assertIn(key, keys)
+        for key in keys:
+            self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down"}, key)
+        for term in terms:
+            self.assertNotRegex(term["text"], r"Cmd|Ctrl|Option|Command|Control|Alt|Shift|[+⌘⌥⌃]")
+        self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() for node in legend))
 
     def test_decision_and_rating_routes_validate_strictly_and_hide_rejected_by_default(self):
         def photo_state():
