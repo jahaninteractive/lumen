@@ -387,16 +387,17 @@ class Library:
         for photo_id in photo_ids:
             if photo_id not in current:
                 raise ValueError(f"photo {photo_id} is not a current reject suggestion")
+        decided = []
         for photo_id in photo_ids:
             if decision == "reject":
-                self.set_decision(photo_id, "reject")
+                decided.append(self.set_decision(photo_id, "reject"))
             else:
                 tags = self.catalog.get_tags(photo_id)
                 problems = tags["data"]["problems"] | {"dismissed_at": datetime.now(timezone.utc).isoformat()}
                 self.catalog.save_tags(photo_id, tags["data"] | {"problems": problems}, tags["model"])
-                self._write_sidecar(photo_id)
+                decided.append(self._decided(self.catalog.get_photo(photo_id)))  # unchanged decision, same shape
             self.catalog.append_event(photo_id, "reject_suggestion_decided", {"decision": decision})
-        return {"decided": list(photo_ids), "remaining": len(self.reject_suggestions())}
+        return {"decided": decided, "remaining": len(self.reject_suggestions())}
 
     def start_refine_job(self, *, group_id: int | None = None, filters: GroupFilters | None = None,
                          all_photos: bool = False) -> Job:

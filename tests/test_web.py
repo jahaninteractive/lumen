@@ -955,7 +955,8 @@ class WebTests(unittest.TestCase):
                     self.assertEqual(400, self.post_json("/api/photos/reject-suggestions/decide", payload)[0])
             self.assertEqual("none", self.get_json(f"/api/photos/{ids[0]}")[1]["photo"]["decision"])
             code, body = self.post_json("/api/photos/reject-suggestions/decide", {"photo_ids": ids, "decision": "reject"})
-            self.assertEqual((200, sorted(ids), 0), (code, sorted(body["decided"]), body["remaining"]))
+            self.assertEqual((200, sorted(ids), 0), (code, sorted(d["photo_id"] for d in body["decided"]), body["remaining"]))
+            self.assertTrue(all(d["decision"] == "reject" and "automatic_pick_id" in d and "group_id" in d for d in body["decided"]))
         with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}):
             self.assertEqual(400, self.post_json("/api/photos/review-rejects", {"scope": "keepers"})[0])
             self.assertFalse(any(j["kind"] == "review_rejects" and j["status"] in ("queued", "running") for j in self.get_json("/api/jobs")[1]["jobs"]))
@@ -1170,7 +1171,7 @@ async function fetch(url, options = {}) {
     rejectPosts.push(body);
     if (body.decision === 'reject') body.photo_ids.forEach(id => { decisions[id] = 'reject'; });
     rejectRows = rejectRows.filter(row => !body.photo_ids.includes(row.photo_id));
-    payload = { decided: body.photo_ids, remaining: rejectRows.length };
+    payload = { decided: body.photo_ids.map(id => ({ photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 })), remaining: rejectRows.length };
   }
   else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
   else if (url === '/api/photos/1/keywords') {

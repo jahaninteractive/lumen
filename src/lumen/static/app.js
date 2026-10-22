@@ -979,15 +979,6 @@ async function loadRejectSuggestions() {
   }
 }
 
-// Mirrors Library._select for a rejected frame: a surviving pick stays, else the best unrejected frame by score.
-// ponytail: client-side guess until the next load(); exact unless scores tie.
-function pickAfterReject(group, photo) {
-  if (group.automatic_pick_id !== photo.id) return group.automatic_pick_id;
-  const kept = group.photos.filter(item => item.id !== photo.id && item.decision !== 'reject');
-  kept.sort((a, b) => b.total_score - a.total_score);
-  return (kept[0] || photo).id;
-}
-
 function rowButton(index, action) {
   const row = rejectList.children[Math.max(0, Math.min(rejectList.children.length - 1, index))];
   return row?.children[2].children[action === 'keep' ? 1 : 0] || null;
@@ -1001,16 +992,14 @@ async function decideSuggestions(ids, decision) {
   updateWorkflow();
   try {
     const result = await post('/api/photos/reject-suggestions/decide', { photo_ids: ids, decision });
-    if (decision === 'reject') {
-      for (const id of result.decided) {
-        const photo = photoById(id);
-        const group = state.groups.find(item => item.photos.includes(photo));
-        if (photo) recordDecision(photo, { decision: 'reject', rating: photo.rating, group_id: group?.id, automatic_pick_id: group ? pickAfterReject(group, photo) : null });
-      }
+    for (const item of result.decided) {  // the server's decision and burst pick, as after decide()
+      const photo = photoById(item.photo_id);
+      if (photo) recordDecision(photo, item);
     }
-    renderRejectList(state.rejectSuggestions.filter(item => !result.decided.includes(item.photo_id)));
+    const decidedIds = result.decided.map(item => item.photo_id);
+    renderRejectList(state.rejectSuggestions.filter(item => !decidedIds.includes(item.photo_id)));
     const verb = decision === 'reject' ? 'rejected' : 'kept';
-    announce(result.decided.length === 1 ? `${names.get(result.decided[0])} ${verb}` : `${result.decided.length} frames ${verb}`);
+    announce(decidedIds.length === 1 ? `${names.get(decidedIds[0])} ${verb}` : `${decidedIds.length} frames ${verb}`);
     (rowButton(index, decision) || document.querySelector('#scan-rejects')).focus();
   } catch (error) {
     announce(error.message);

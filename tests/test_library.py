@@ -1776,9 +1776,12 @@ class LibraryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"photo {c} is not a current reject suggestion"):
                     library.apply_reject_suggestions([a, c], "reject")
                 self.assertEqual("none", library.catalog.get_photo(a).decision)
-                self.assertEqual({"decided": [a], "remaining": 1}, library.apply_reject_suggestions([a], "reject"))
+                result = library.apply_reject_suggestions([a], "reject")
+                self.assertEqual(([a], ["reject"], 1), ([d["photo_id"] for d in result["decided"]], [d["decision"] for d in result["decided"]], result["remaining"]))
+                self.assertEqual({"photo_id", "decision", "rating", "group_id", "automatic_pick_id"}, set(result["decided"][0]))
                 self.assertEqual("reject", library.catalog.get_photo(a).decision)
-                self.assertEqual({"decided": [b], "remaining": 0}, library.apply_reject_suggestions([b], "keep"))
+                result = library.apply_reject_suggestions([b], "keep")
+                self.assertEqual(([b], ["none"], 0), ([d["photo_id"] for d in result["decided"]], [d["decision"] for d in result["decided"]], result["remaining"]))
                 self.assertEqual("none", library.catalog.get_photo(b).decision)
                 self.assertIn("dismissed_at", library.catalog.get_tags(b)["data"]["problems"])
                 with self.assertRaises(ValueError):
