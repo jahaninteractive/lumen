@@ -244,6 +244,14 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 except (ValueError, OSError) as error:
                     self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
                 return
+            if path == "/api/photos/reject-suggestions":
+                with Library(settings) as library:
+                    suggestions = library.reject_suggestions()
+                for item in suggestions:  # The fingerprint only versions the preview URL; it never reaches the browser.
+                    version = f"{item.pop('fingerprint16')}-{item.pop('preview_kind')}"
+                    item["preview_url"] = f"/preview/{item['photo_id']}?v={version}"
+                self._send_json({"suggestions": suggestions, "count": len(suggestions)})
+                return
             if path == "/api/jobs":
                 with Library(settings) as library:
                     self._send_json({"jobs": library.list_job_status()})
@@ -361,6 +369,23 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         job = library.start_tag_job(library.tagger_for("fast"), scope=scope, retag=retag)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/photos/review-rejects":
+                    if payload.keys() != {"scope"}:
+                        raise ValueError("review-rejects requires only scope")
+                    scope, _ = _tag_scope(payload)
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        job = library.start_reject_review_job(library.tagger_for("fast"), scope=scope)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/photos/reject-suggestions/decide":
+                    if payload.keys() != {"photo_ids", "decision"}:
+                        raise ValueError("decide requires exactly photo_ids and decision")
+                    ids = payload["photo_ids"]
+                    if not isinstance(ids, list) or not ids or not all(type(item) is int and item > 0 for item in ids):
+                        raise ValueError("photo_ids must be a non-empty list of photo IDs")
+                    with Library(settings) as library:
+                        self._send_json(library.apply_reject_suggestions(ids, payload["decision"]))
                     return
                 if path == "/api/previews/refine":
                     with Library(settings, job_runner=self.server.job_runner()) as library:
@@ -530,7 +555,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
                 job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag",
-                                             "/api/previews/"))
+                                             "/api/photos/review-rejects", "/api/previews/"))
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 

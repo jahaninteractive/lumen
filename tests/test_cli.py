@@ -327,6 +327,27 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(str(root), json.dumps(payload))
             for fingerprint in fingerprints:
                 self.assertNotIn(fingerprint, json.dumps(payload))
+    def test_review_rejects_command_runs_job_and_reports_summary(self):
+        from lumen.omlx import RejectReview
+
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def review_rejects(self, preview):
+                return RejectReview([], False, 0.7, "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "review-rejects", "--json"])
+        self.assertEqual(0, code)
+        # job_status exposes the manifest summary as result (see the tag --keepers test).
+        self.assertEqual({"reviewed": 1, "skipped": 0, "failed": 0, "suggested": 0}, json.loads(output.getvalue())["result"])
+
     def test_tag_keepers_runs_job_and_doctor_reports_both_roles(self):
         from lumen.omlx import TagResult
 

@@ -21,7 +21,7 @@ from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
 from lumen.domain import PhotoEdit
-from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, TagResult
+from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, RejectReview, TagResult
 from lumen.omlx import TagResponseError, parse_composition_response, parse_tag_response
 from lumen.catalog import GroupFilters
 
@@ -1733,6 +1733,97 @@ class LibraryTests(unittest.TestCase):
                 kinds = [e.kind for e in library.catalog.events_for(photo_id)]
                 self.assertEqual(["keyword_added", "keyword_removed"], kinds[-2:])
 
+    def test_reject_review_job_stores_problems_and_never_changes_decisions(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                blurry = preview.stat().st_size % 2 == 0  # deterministic per generated preview
+                return RejectReview([{"kind": "motion_blur", "confidence": 0.84}] if blurry else [], blurry, 0.8, '{"r":1}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(4):
+                Image.new("RGB", (120 + index, 90), (index * 20, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                job = library.start_reject_review_job(FakeTagger(), scope="all")
+                library.wait_for_job(job.id)
+                photos = library.catalog.list_photos()
+                self.assertTrue(all(photo.decision == "none" for photo in photos))
+                suggestions = library.reject_suggestions()
+                self.assertEqual(sorted(s["photo_id"] for s in suggestions),
+                                 sorted(p.id for p in photos if library.catalog.get_tags(p.id)["data"]["problems"]["suggest_reject"]))
+                first = photos[0].id
+                event = [e for e in library.catalog.events_for(first) if e.kind == "reject_suggested"][-1]
+                self.assertEqual(("fast", '{"r":1}'), (event.details["role"], event.details["raw_response"]))
+                self.assertEqual("succeeded", library.job_status(job.id)["status"])
+
+    def test_apply_reject_suggestions_uses_ids_not_counts_and_keep_dismisses(self):  # Review Focus
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                return RejectReview([{"kind": "misfire", "confidence": 0.9}], True, 0.9, "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(3):
+                Image.new("RGB", (120, 90), (index, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                library.wait_for_job(library.start_reject_review_job(FakeTagger(), scope="all").id)
+                a, b, c = [s["photo_id"] for s in library.reject_suggestions()]
+                library.set_decision(c, "reject")  # decided elsewhere while the list was on screen
+                with self.assertRaisesRegex(ValueError, f"photo {c} is not a current reject suggestion"):
+                    library.apply_reject_suggestions([a, c], "reject")
+                self.assertEqual("none", library.catalog.get_photo(a).decision)
+                self.assertEqual({"decided": [a], "remaining": 1}, library.apply_reject_suggestions([a], "reject"))
+                self.assertEqual("reject", library.catalog.get_photo(a).decision)
+                self.assertEqual({"decided": [b], "remaining": 0}, library.apply_reject_suggestions([b], "keep"))
+                self.assertEqual("none", library.catalog.get_photo(b).decision)
+                self.assertIn("dismissed_at", library.catalog.get_tags(b)["data"]["problems"])
+                with self.assertRaises(ValueError):
+                    library.apply_reject_suggestions([b], "maybe")
+
+    def test_reject_review_merges_into_existing_tags_and_records_failures(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                raise OmlxError("offline")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                photo_id = library.catalog.list_photos()[0].id
+                library.catalog.save_tags(photo_id, {"subjects": ["ice"]}, "other")
+                job = library.start_reject_review_job(FakeTagger(), scope=[photo_id])
+                library.wait_for_job(job.id)
+                self.assertEqual({"reviewed": 0, "skipped": 0, "failed": 1, "suggested": 0}, library.job_status(job.id)["result"])
+                self.assertEqual("reject_review_failed", library.catalog.events_for(photo_id)[-1].kind)
+                FakeTagger.review_rejects = lambda self, preview: RejectReview([], False, 0.7, "{}")
+                library.wait_for_job(library.start_reject_review_job(FakeTagger(), scope=[photo_id]).id)
+                data = library.catalog.get_tags(photo_id)["data"]
+                self.assertEqual((["ice"], False, []), (data["subjects"], data["problems"]["suggest_reject"], data["problems"]["kinds"]))
+
+    def test_tag_job_still_tags_a_photo_that_only_has_reject_problems(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                return RejectReview([], False, 0.7, "{}")
+            def tag(self, preview, vocabulary=None):
+                return TagResult("ice", ["ice"], "", [], 0.9, "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                library.wait_for_job(library.start_reject_review_job(FakeTagger(), scope="all").id)
+                job = library.start_tag_job(FakeTagger(), scope="all")
+                library.wait_for_job(job.id)
+                self.assertEqual(1, library.job_status(job.id)["result"]["tagged"])
+                self.assertIn("problems", library.catalog.get_tags(library.catalog.list_photos()[0].id)["data"])
 
     def test_low_confidence_species_named_in_subjects_stays_suggested(self):
         class FakeTagger:

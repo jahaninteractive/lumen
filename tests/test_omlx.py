@@ -13,8 +13,11 @@ from lumen.omlx import (
     NoRedirectHandler,
     OmlxError,
     OmlxTagger,
+    PROBLEMS,
+    RejectResponseError,
     TagResponseError,
     parse_composition_response,
+    parse_reject_response,
     parse_tag_response,
 )
 
@@ -157,6 +160,32 @@ class OmlxTests(unittest.TestCase):
                     with self.subTest(candidates=candidates), self.assertRaises((ValueError, OSError)):
                         tagger.review_composition(preview, candidates)
             build.assert_not_called()
+
+    def test_reject_response_requires_known_problem_kinds_and_exact_fields(self):
+        good = json.dumps({"problems": [{"kind": "motion_blur", "confidence": 0.84}], "suggest_reject": True, "confidence": 0.8})
+        result = parse_reject_response(good)
+        self.assertEqual(([{"kind": "motion_blur", "confidence": 0.84}], True), (result.problems, result.suggest_reject))
+        for bad in ({"problems": [{"kind": "ugly", "confidence": 0.5}], "suggest_reject": False, "confidence": 0.5},
+                    {"problems": [], "suggest_reject": "yes", "confidence": 0.5},
+                    {"problems": [], "suggest_reject": False, "confidence": 0.5, "note": "x"},
+                    {"problems": [{"kind": "misfire", "confidence": 0.5}, {"kind": "misfire", "confidence": 0.6}], "suggest_reject": True, "confidence": 0.5}):
+            with self.subTest(bad=bad), self.assertRaises(RejectResponseError):
+                parse_reject_response(json.dumps(bad))
+
+    def test_review_rejects_sends_one_image_listing_every_problem_with_small_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"
+            Image.new("RGB", (8, 8)).save(preview)
+            tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", "key", role="fast")
+            reply = '{"problems": [], "suggest_reject": false, "confidence": 0.7}'
+            with patch.object(tagger, "_complete", return_value=reply) as complete:
+                result = tagger.review_rejects(preview)
+        content = complete.call_args.args[0]
+        self.assertEqual(["text", "image_url"], [part["type"] for part in content])
+        self.assertTrue(all(kind in content[0]["text"] for kind in PROBLEMS))
+        self.assertIn("Do not identify a person.", content[0]["text"])
+        self.assertEqual(300, complete.call_args.kwargs["max_tokens"])
+        self.assertFalse(result.suggest_reject)
 
     def test_remote_endpoint_is_rejected(self):
         with self.assertRaises(ValueError):

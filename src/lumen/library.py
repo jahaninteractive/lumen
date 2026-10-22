@@ -266,6 +266,29 @@ class Library:
     def start_tag_job(self, tagger, *, scope: str | list[int] = "keepers", retag: bool = False) -> Job:
         if type(retag) is not bool:
             raise ValueError("retag must be true or false")
+
+        def per_photo(worker, photo, job) -> tuple[str, ...]:
+            existing = worker.catalog.get_tags(photo.id)
+            if not retag and existing is not None and "description" in existing["data"]:  # A reject-only row is untagged.
+                return ("skipped",)
+            worker.tag_photo(photo.id, tagger, job_id=job.id)  # A model failure appends tag_failed itself.
+            return ("tagged",)
+
+        return self._run_photo_job("tag", tagger, scope, retag, per_photo)
+
+    def start_reject_review_job(self, tagger, *, scope: str | list[int] = "keepers") -> Job:
+        """Advisory: stores problems and a reject suggestion per photo; never changes a decision."""
+        def per_photo(worker, photo, job) -> tuple[str, ...]:
+            existing = worker.catalog.get_tags(photo.id)
+            if existing is not None and "problems" in existing["data"]:
+                return ("skipped",)
+            review = worker._review_rejects_one(photo.id, tagger, job_id=job.id)
+            return ("reviewed", "suggested") if review.suggest_reject else ("reviewed",)
+
+        return self._run_photo_job("review_rejects", tagger, scope, False, per_photo)
+
+    def _run_photo_job(self, kind: str, tagger, scope, retag: bool, per_photo) -> Job:
+        """One worker loop for per-photo model jobs; per_photo returns the summary counters to increment."""
         if scope == "keepers":
             ids = self.keeper_ids()
         elif scope == "all":
@@ -278,30 +301,29 @@ class Library:
             ids = list(scope)
         else:
             raise ValueError("scope must be keepers, all, or a non-empty list of distinct photo IDs")
-        manifest = {"kind": "tag", "scope": scope, "retag": retag, "role": getattr(tagger, "role", None), "model": tagger.model}
+        manifest = {"kind": kind, "scope": scope} | ({"retag": retag} if kind == "tag" else {}) | {
+            "role": getattr(tagger, "role", None), "model": tagger.model}
+        counter_names = ("tagged", "skipped", "failed") if kind == "tag" else ("reviewed", "skipped", "failed", "suggested")
         runner = self.job_runner
-        job = self.catalog.create_prepared_job("tag", lambda job_id: self._write_job_files(job_id, manifest))
+        job = self.catalog.create_prepared_job(kind, lambda job_id: self._write_job_files(job_id, manifest))
 
         def work(context) -> None:
             with Library(self.settings, job_runner=runner) as worker:
                 photos = worker.catalog.list_photos() if ids is None else [
                     photo for photo_id in ids if (photo := worker.catalog.get_photo(photo_id))]
-                counts = {"tagged": 0, "skipped": 0, "failed": 0}
+                counts = dict.fromkeys(counter_names, 0)
                 failed_photo_ids = []
                 for index, photo in enumerate(photos, 1):
                     if context.cancelled:
                         break
                     with worker._mutation():
-                        if not retag and worker.catalog.get_tags(photo.id) is not None:
-                            counts["skipped"] += 1
-                        else:
-                            try:
-                                worker.tag_photo(photo.id, tagger, job_id=job.id)  # A model failure appends tag_failed itself.
-                                counts["tagged"] += 1
-                            except (OmlxError, ValueError, OSError) as error:
-                                counts["failed"] += 1
-                                failed_photo_ids.append(photo.id)
-                                worker._log_job(job, f"{Path(photo.path).name}: {type(error).__name__}: {error}")
+                        try:
+                            for name in per_photo(worker, photo, job):
+                                counts[name] += 1
+                        except (OmlxError, ValueError, OSError) as error:
+                            counts["failed"] += 1
+                            failed_photo_ids.append(photo.id)
+                            worker._log_job(job, f"{Path(photo.path).name}: {type(error).__name__}: {error}")
                     context.update_progress(index / len(photos), label=Path(photo.path).name[:200],
                                             processed=index, total=len(photos))
                 with worker._mutation():
@@ -310,6 +332,71 @@ class Library:
 
         self._submit_job(runner, job, work)
         return job
+
+    def _review_rejects_one(self, photo_id: int, tagger, *, job_id: int | None = None):
+        photo = self.catalog.get_photo(photo_id)
+        if not photo or not photo.preview_path:
+            raise ValueError(f"photo {photo_id} has no preview")
+        role = getattr(tagger, "role", None)
+        try:
+            review = tagger.review_rejects(Path(photo.preview_path))
+        except Exception as error:
+            self.catalog.append_event(photo_id, "reject_review_failed", {
+                "model": getattr(tagger, "model", "unknown"), "role": role, "error": str(error),
+                "raw_response": getattr(error, "raw_response", None)} | _job_detail(job_id))
+            self._write_sidecar(photo_id)
+            raise
+        existing = self.catalog.get_tags(photo_id)
+        problems = {"items": review.problems, "kinds": [item["kind"] for item in review.problems],
+                    "suggest_reject": review.suggest_reject, "confidence": review.confidence,
+                    "reviewed_at": datetime.now(timezone.utc).isoformat()}
+        self.catalog.save_tags(photo_id, (existing["data"] if existing else {}) | {"problems": problems},
+                               existing["model"] if existing else tagger.model)
+        self.catalog.append_event(photo_id, "reject_suggested", {
+            "model": tagger.model, "role": role, "problems": review.problems, "suggest_reject": review.suggest_reject,
+            "confidence": review.confidence, "raw_response": review.raw_response} | _job_detail(job_id))
+        self._write_sidecar(photo_id)
+        return review
+
+    def reject_suggestions(self) -> list[dict]:
+        """Advisory reject suggestions still awaiting the photographer; web turns fingerprint16 into preview_url."""
+        rows = self.catalog.connection.execute("""
+            SELECT photos.id, photos.path, photos.group_id, photos.fingerprint, photos.preview_kind, tags.data_json
+            FROM tags JOIN photos ON photos.id = tags.photo_id
+            WHERE json_extract(tags.data_json, '$.problems.suggest_reject') = 1
+              AND json_extract(tags.data_json, '$.problems.dismissed_at') IS NULL
+              AND photos.decision != 'reject'
+            ORDER BY json_extract(tags.data_json, '$.problems.confidence') DESC, photos.id
+        """).fetchall()
+        result = []
+        for row in rows:
+            problems = json.loads(row["data_json"])["problems"]
+            result.append({"photo_id": row["id"], "name": Path(row["path"]).name, "group_id": row["group_id"],
+                           "problems": problems["items"], "confidence": problems["confidence"],
+                           "fingerprint16": row["fingerprint"][:16], "preview_kind": row["preview_kind"]})
+        return result
+
+    @_coordinated
+    def apply_reject_suggestions(self, photo_ids: list[int], decision: str) -> dict:
+        """Apply the photographer's choice to exactly these ids; any id no longer suggested changes nothing."""
+        if decision not in {"reject", "keep"}:
+            raise ValueError("decision must be reject or keep")
+        if not isinstance(photo_ids, list) or not photo_ids or len(set(photo_ids)) != len(photo_ids):
+            raise ValueError("photo_ids must be a non-empty list of distinct photo IDs")
+        current = {item["photo_id"] for item in self.reject_suggestions()}
+        for photo_id in photo_ids:
+            if photo_id not in current:
+                raise ValueError(f"photo {photo_id} is not a current reject suggestion")
+        for photo_id in photo_ids:
+            if decision == "reject":
+                self.set_decision(photo_id, "reject")
+            else:
+                tags = self.catalog.get_tags(photo_id)
+                problems = tags["data"]["problems"] | {"dismissed_at": datetime.now(timezone.utc).isoformat()}
+                self.catalog.save_tags(photo_id, tags["data"] | {"problems": problems}, tags["model"])
+                self._write_sidecar(photo_id)
+            self.catalog.append_event(photo_id, "reject_suggestion_decided", {"decision": decision})
+        return {"decided": list(photo_ids), "remaining": len(self.reject_suggestions())}
 
     def start_refine_job(self, *, group_id: int | None = None, filters: GroupFilters | None = None,
                          all_photos: bool = False) -> Job:

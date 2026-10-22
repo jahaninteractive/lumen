@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 
 
 ROLES = {"fast": "omlx_fast_model", "review": "review_model"}  # role -> Settings attribute naming its model
+PROBLEMS = ("eyes_closed", "motion_blur", "out_of_focus", "subject_cut_off", "obstructed", "misfire",
+            "severely_under_exposed", "severely_over_exposed")
 
 
 class OmlxError(RuntimeError):
@@ -25,6 +27,12 @@ class TagResponseError(OmlxError):
 
 
 class CompositionResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class RejectResponseError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
@@ -52,6 +60,52 @@ class CompositionReview:
     candidate_id: str
     rationale: str
     confidence: float
+
+
+@dataclass(frozen=True, slots=True)
+class RejectReview:
+    problems: list[dict]  # [{"kind": one of PROBLEMS, "confidence": float}]
+    suggest_reject: bool
+    confidence: float
+    raw_response: str
+
+
+def _json_object(raw: str, error_type) -> dict:
+    """Strip an optional Markdown fence and parse one JSON object, raising error_type(message, raw)."""
+    text = raw.strip()
+    if text.startswith("```"):
+        first_newline = text.find("\n")
+        final_fence = text.rfind("```")
+        if first_newline == -1 or final_fence <= first_newline or not text.endswith("```"):
+            raise error_type("oMLX returned an incomplete JSON fence", raw)
+        text = text[first_newline + 1 : final_fence].strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise error_type(f"oMLX did not return valid JSON: {error.msg}", raw) from error
+    if not isinstance(payload, dict):
+        raise error_type("oMLX response must be a JSON object", raw)
+    return payload
+
+
+def _confidence(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1
+
+
+def parse_reject_response(raw: str) -> RejectReview:
+    payload = _json_object(raw, RejectResponseError)
+    if set(payload) != {"problems", "suggest_reject", "confidence"}:
+        raise RejectResponseError("oMLX reject response must contain only problems, suggest_reject, and confidence", raw)
+    problems = payload["problems"]
+    if (not isinstance(problems, list)
+            or not all(isinstance(p, dict) and set(p) == {"kind", "confidence"} and p["kind"] in PROBLEMS
+                       and _confidence(p["confidence"]) for p in problems)
+            or len({p["kind"] for p in problems}) != len(problems)):
+        raise RejectResponseError("oMLX problems must be unique known kinds with confidence", raw)
+    if type(payload["suggest_reject"]) is not bool or not _confidence(payload["confidence"]):
+        raise RejectResponseError("oMLX suggest_reject must be boolean and confidence 0 to 1", raw)
+    return RejectReview([{"kind": p["kind"], "confidence": float(p["confidence"])} for p in problems],
+                        payload["suggest_reject"], float(payload["confidence"]), raw)
 
 
 def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
@@ -203,6 +257,12 @@ class OmlxTagger:
             ))
         response = self._complete(content, timeout)
         return parse_composition_response(response, set(ids))
+
+    def review_rejects(self, preview: Path, timeout: float = 240) -> RejectReview:
+        prompt = ("Look for technical failures only: " + ", ".join(PROBLEMS) + ". Return JSON only with problems "
+                  "(array of {kind, confidence}), suggest_reject (boolean), confidence (0 to 1). Do not identify a person.")
+        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=300)
+        return parse_reject_response(content)
 
     @staticmethod
     def _image_content(path: Path) -> dict:

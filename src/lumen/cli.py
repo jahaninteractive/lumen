@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument("--retag", action="store_true", help="with --all or --keepers, also re-tag photos that already have tags")
     tag.add_argument("--json", action="store_true")
 
+    review = commands.add_parser("review-rejects", help="suggest rejects with the fast oMLX model (never rejects)")
+    selection = review.add_mutually_exclusive_group()
+    selection.add_argument("--keepers", action="store_true", help="review keepers (default)")
+    selection.add_argument("--all", action="store_true")
+    review.add_argument("--json", action="store_true")
+
     jobs = commands.add_parser("jobs", help="list recent background jobs")
     jobs.add_argument("--json", action="store_true")
 
@@ -172,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         verified = payload.get("status") == "succeeded" and payload.get("ingest", {}).get("card_verified_everywhere") is True
         return 0 if verified else 2
 
-    if args.command in {"import", "jobs", "cancel", "refine-previews"} or (args.command == "tag" and (args.all or args.keepers)):
+    if args.command in {"import", "jobs", "cancel", "refine-previews", "review-rejects"} or (args.command == "tag" and (args.all or args.keepers)):
         try:
             with Library(settings) as library:
                 if args.command == "jobs":
@@ -190,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
                                                        filters=filters if filtered else None)
                     elif args.command == "import":
                         job = library.start_import_job(args.path)
+                    elif args.command == "review-rejects":
+                        job = library.start_reject_review_job(library.tagger_for("fast"),
+                                                              scope="all" if args.all else "keepers")
                     else:
                         job = library.start_tag_job(library.tagger_for("fast"), scope="all" if args.all else "keepers",
                                                     retag=args.retag)

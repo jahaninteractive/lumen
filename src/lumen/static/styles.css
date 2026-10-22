@@ -286,3 +286,8 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 #keywords li, #suggested-keywords li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-height: 44px; }
 #suggested-keywords li { color: var(--muted); }
 .inspector h4 { margin: 1rem 0 0; font-size: .9rem; }
+
+#reject-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.reject-row { display: grid; grid-template-columns: 96px 1fr auto; align-items: center; gap: .75rem; padding: .5rem; border: 1px solid var(--line); border-radius: 4px; }
+.reject-row img { width: 96px; height: 64px; object-fit: cover; background: var(--black); }
+.reject-row p { margin: 0; }

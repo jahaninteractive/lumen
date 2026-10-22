@@ -619,7 +619,7 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab"]
-        self.assertEqual(["Compose", "Export", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
+        self.assertEqual(["Compose", "Export", "Review", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for index, tab in enumerate(tabs):
             self.assertEqual("button", tab["tag"])
@@ -929,6 +929,47 @@ class WebTests(unittest.TestCase):
         self.assertIn("omlx_roles", js)
         self.assertIn("suggested-keywords", js)
 
+    def test_reject_suggestion_routes_gate_validate_and_decide_by_ids(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def review_rejects(self, preview):
+                from lumen.omlx import RejectReview
+                return RejectReview([{"kind": "misfire", "confidence": 0.9}], True, 0.9, "{}")
+
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        for index in range(2):
+            Image.new("RGB", (120, 90), (index, 0, 0)).save(self.root / f"p{index}.jpg")
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            code, job = self.post_json("/api/photos/review-rejects", {"scope": "keepers"})
+            self.assertEqual(202, code)
+            self.assertEqual("succeeded", self.wait_job(job["job_id"])["status"])
+            code, body = self.get_json("/api/photos/reject-suggestions")
+            self.assertEqual(3, body["count"])  # setUp's photo.jpg is a keeper too, beside the two new frames
+            self.assertNotIn("raw_response", json.dumps(body))
+            self.assertTrue(all(s["preview_url"].startswith("/preview/") for s in body["suggestions"]))
+            ids = [s["photo_id"] for s in body["suggestions"]]
+            self.assertEqual(403, self.post_json("/api/photos/reject-suggestions/decide", {"photo_ids": ids, "decision": "reject"}, headers={"Origin": "https://attacker.example"})[0])
+            for payload in ({"photo_ids": ids}, {"photo_ids": [], "decision": "reject"}, {"photo_ids": ids, "decision": "reject", "count": 2}, {"photo_ids": [ids[0], 99], "decision": "reject"}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/reject-suggestions/decide", payload)[0])
+            self.assertEqual("none", self.get_json(f"/api/photos/{ids[0]}")[1]["photo"]["decision"])
+            code, body = self.post_json("/api/photos/reject-suggestions/decide", {"photo_ids": ids, "decision": "reject"})
+            self.assertEqual((200, sorted(ids), 0), (code, sorted(body["decided"]), body["remaining"]))
+        with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}):
+            self.assertEqual(400, self.post_json("/api/photos/review-rejects", {"scope": "keepers"})[0])
+            self.assertFalse(any(j["kind"] == "review_rejects" and j["status"] in ("queued", "running") for j in self.get_json("/api/jobs")[1]["jobs"]))
+
+    def test_review_panel_has_native_rows_keys_and_counted_confirmation(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        for needle in ('id="review-tab"', 'id="review-panel"', 'id="scan-rejects"', 'id="reject-list"', 'id="reject-all-shown"', 'id="reject-all-confirm"'):
+            self.assertIn(needle, html)
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("Reject all ${", js)
+
+    def test_javascript_review_panel_decides_rows_by_button_and_key_and_confirms_count(self):
+        self.run_javascript_cleanup_regression("review-rejects")
+
     def test_javascript_keywords_add_and_remove_without_reload_and_tag_keepers_gates_on_role(self):
         self.run_javascript_cleanup_regression("keywords")
 
@@ -955,7 +996,7 @@ class Element {
   addEventListener(name, callback) { this.listeners[name] = callback; }
   querySelector(selector) { return element('#import-form ' + selector); }
   closest(selector) {
-    const test = { '.crop-card': node => node.classList.contains('crop-card'), dialog: node => node.tagName === 'DIALOG', 'dialog form': node => node.tagName === 'FORM' && Boolean(node.parent?.closest('dialog')) }[selector];
+    const test = { '.crop-card': node => node.classList.contains('crop-card'), '.reject-row': node => node.classList.contains('reject-row'), 'input, textarea, select': node => ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName), dialog: node => node.tagName === 'DIALOG', 'dialog form': node => node.tagName === 'FORM' && Boolean(node.parent?.closest('dialog')) }[selector];
     for (let node = this; node; node = node.parent) if (test?.(node)) return node;
     return null;
   }
@@ -984,7 +1025,7 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['compose', 'export', 'astro', 'ingest', 'clear'].map((name, index) => {
+const tabElements = ['compose', 'export', 'review', 'astro', 'ingest', 'clear'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -1051,6 +1092,9 @@ let importPolls = 0;
 const tagPosts = [];
 let tagPolls = 0;
 const tagJob = (status, progress, extra = {}) => ({ job_id: 15, kind: 'tag', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
+const suggestionRows = () => [1, 2].map(id => ({ photo_id: id, name: 'photo-' + id + '.jpg', group_id: 1, problems: [{ kind: 'motion_blur', confidence: 0.84 }, { kind: 'eyes_closed', confidence: 0.61 }], confidence: 0.9, preview_url: '/preview/' + id + '?v=x' }));
+let rejectRows = suggestionRows();
+const rejectPosts = [];
 const keywordPosts = [];
 const keywordData = { subjects: ['ice'], suggested: ['krill'] };
 const removals = [];
@@ -1118,6 +1162,15 @@ async function fetch(url, options = {}) {
     decisionPosts.push({ url, body });
     if ('decision' in body) decisions[id] = body.decision; else ratings[id] = body.rating;
     payload = { photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 };
+  }
+  else if (url === '/api/photos/reject-suggestions') { assert.equal(options.method, undefined); payload = { suggestions: rejectRows.map(row => ({ ...row })), count: rejectRows.length }; }
+  else if (url === '/api/photos/reject-suggestions/decide') {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    rejectPosts.push(body);
+    if (body.decision === 'reject') body.photo_ids.forEach(id => { decisions[id] = 'reject'; });
+    rejectRows = rejectRows.filter(row => !body.photo_ids.includes(row.photo_id));
+    payload = { decided: body.photo_ids, remaining: rejectRows.length };
   }
   else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
   else if (url === '/api/photos/1/keywords') {
@@ -1386,6 +1439,68 @@ const regression = `
     assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
     await settle();
     assert.equal(state.job.status, 'succeeded');
+    return;
+  }
+  if (scenario === 'review-rejects') {
+    await load();
+    const loadsBefore = groupLoads;
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    element('#review-tab').listeners.click();
+    await new Promise(setImmediate);
+    await loadRejectSuggestions();
+    await tick();
+    const rows = () => element('#reject-list').children;
+    const button = (label) => rows().flatMap(row => row.children[2].children).find(node => node.getAttribute('aria-label') === label);
+    assert.equal(rows().length, 2);
+    assert.deepEqual(rejectPosts, [], 'rendering and polling never post a decision');
+    assert.equal(element('#review-count').textContent, '2 suggested rejects');
+    assert.equal(rows()[0].className, 'reject-row');
+    assert.equal(rows()[0].dataset.photoId, '1');
+    assert.equal(rows()[0].children[0].alt, '');
+    assert.equal(rows()[0].children[0].loading, 'lazy');
+    assert.equal(rows()[0].children[1].children[1].textContent, 'motion blur 84%, eyes closed 61%');
+    assert.equal(element('#scan-rejects').disabled, false, 'the fast role is loaded');
+    assert.equal(element('#scan-rejects-availability').textContent, '');
+    const typing = { key: 'x', target: Object.assign(document.createElement('input'), { parent: rows()[0] }), preventDefault() {} };
+    await element('#reject-list').listeners.keydown(typing);
+    assert.deepEqual(rejectPosts, [], 'X typed in a field is ignored');
+    await element('#reject-list').listeners.keydown({ key: 'ArrowDown', target: button('Reject photo-1.jpg'), preventDefault() {} });
+    assert.equal(focused, button('Reject photo-2.jpg'), 'ArrowDown moves to the next row');
+    await element('#reject-list').listeners.keydown({ key: 'ArrowUp', target: button('Reject photo-2.jpg'), preventDefault() {} });
+    assert.equal(focused, button('Reject photo-1.jpg'));
+    await element('#reject-list').listeners.keydown({ key: 'X', target: button('Reject photo-1.jpg'), preventDefault() {} });
+    await tick();
+    assert.deepEqual(rejectPosts, [{ photo_ids: [1], decision: 'reject' }]);
+    assert.equal(rows().length, 1);
+    assert.equal(element('#review-count').textContent, '1 suggested reject');
+    assert.equal(state.groups[0].photos[0].decision, 'reject', 'the frame is marked through the decide bookkeeping');
+    assert.equal(state.rejectedCount, 1);
+    assert.equal(state.groups[0].automatic_pick_id, 2, 'the next frame becomes best in place');
+    assert.ok(document.querySelectorAll('.frame').find(card => Number(card.dataset.id) === 1).getAttribute('aria-label').includes('rejected'));
+    assert.equal(announcements.at(-1), 'photo-1.jpg rejected');
+    await button('Keep photo-2.jpg').listeners.click();
+    await tick();
+    assert.deepEqual(rejectPosts.at(-1), { photo_ids: [2], decision: 'keep' });
+    assert.equal(rows().length, 0);
+    assert.equal(state.groups[0].photos[1].decision, 'none', 'Keep never changes a decision');
+    assert.equal(announcements.at(-1), 'photo-2.jpg kept');
+    rejectRows = suggestionRows();
+    await loadRejectSuggestions();
+    assert.equal(rows().length, 2);
+    const posted = rejectPosts.length;
+    element('#reject-all-shown').listeners.click();
+    assert.equal(rejectPosts.length, posted, 'opening the confirmation posts nothing');
+    assert.equal(element('#reject-all-confirm').hidden, false);
+    assert.ok(element('#reject-all-text').textContent.includes('Reject all 2 shown frames?'));
+    assert.equal(element('#reject-all-text').textContent, 'Reject all 2 shown frames? This marks them rejected; you can restore any frame from the inspector.');
+    await element('#reject-all-yes').listeners.click();
+    await tick();
+    assert.deepEqual(rejectPosts.at(-1), { photo_ids: [1, 2], decision: 'reject' });
+    assert.equal(rows().length, 0);
+    assert.equal(element('#reject-all-confirm').hidden, true);
+    assert.equal(announcements.at(-1), '2 frames rejected');
+    assert.equal(groupLoads, loadsBefore, 'decisions update in place without load()');
     return;
   }
   if (scenario === 'culling-keys') {

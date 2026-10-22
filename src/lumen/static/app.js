@@ -2,7 +2,7 @@ const JOB_ACTIVE = ['queued', 'running'];
 const CULLING_JOBS = ['import', 'ingest'];  // jobs that only add frames, so culling may continue alongside them
 const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
-  job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
+  rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
   mergeSelection: new Set(),
   ingest: { card: null, primary: null, mirror: null },
@@ -347,11 +347,34 @@ function cullingBlockedText() {
   return state.acting ? 'Wait for the current change to finish.' : `Culling is paused while ${(JOB_NAMES[state.job.kind] || 'a job').toLowerCase()} runs.`;
 }
 
-async function decide(photo, field, value, focusAfter = null) {
-  if (state.cullingBlocked) return announce(cullingBlockedText());
+// Applies a server-confirmed decision to the cards, counts, rail, and inspector in place, without load().
+function recordDecision(photo, result) {
   const previous = photo.decision;
   const owner = state.groups.find(item => item.photos.includes(photo));
   const keepersBefore = owner ? keepersIn(owner) : 0;
+  photo.decision = result.decision;
+  photo.rating = result.rating;
+  const delta = (result.decision === 'reject') - (previous === 'reject');
+  state.rejectedCount += delta;
+  const groupIndex = state.groups.findIndex(item => item.id === result.group_id);
+  const group = state.groups[groupIndex];
+  if (group) {
+    group.automatic_pick_id = result.automatic_pick_id;
+    group.rejected_count += delta;
+    // ponytail: library-wide count adjusted by the visible burst; exact unfiltered, may drift under a filter until the next load.
+    if (group === owner) state.keeperCount += keepersIn(group) - keepersBefore;
+    refreshFrames(group);
+    refreshPanes(photo.id);
+    const batch = document.querySelectorAll('.batch-button')[groupIndex];
+    if (batch) batch.textContent = batchText(group, groupIndex);
+    refreshDays();
+  }
+  if (state.selectedId === photo.id) renderInspector(photo);
+}
+
+async function decide(photo, field, value, focusAfter = null) {
+  if (state.cullingBlocked) return announce(cullingBlockedText());
+  const previous = photo.decision;
   state.busy = true;
   updateWorkflow();
   try {
@@ -361,30 +384,11 @@ async function decide(photo, field, value, focusAfter = null) {
       const group = state.groups.find(item => item.photos.includes(photo));
       result = { decision: previous === 'reject' ? 'none' : previous, rating: photo.rating, group_id: group?.id, automatic_pick_id: photo.id };
     } else result = await post(`/api/photos/${photo.id}/${field}`, { [field]: value });
-    photo.decision = result.decision;
-    photo.rating = result.rating;
-    const delta = (result.decision === 'reject') - (previous === 'reject');
-    state.rejectedCount += delta;
-    const groupIndex = state.groups.findIndex(item => item.id === result.group_id);
-    const group = state.groups[groupIndex];
-    if (group) {
-      group.automatic_pick_id = result.automatic_pick_id;
-      group.rejected_count += delta;
-      // ponytail: library-wide count adjusted by the visible burst; exact unfiltered, may drift under a filter until the next load.
-      if (group === owner) state.keeperCount += keepersIn(group) - keepersBefore;
-      refreshFrames(group);
-      refreshPanes(photo.id);
-      const batch = document.querySelectorAll('.batch-button')[groupIndex];
-      if (batch) batch.textContent = batchText(group, groupIndex);
-      refreshDays();
-    }
+    recordDecision(photo, result);
     const name = photo.name.replace(/\.[^.]+$/, '');
     announce(field === 'pick' ? `${photo.name} is now your best frame.`
       : field === 'rating' ? `Rating ${result.rating} set for ${name}` : `${name} ${DECISION_ANNOUNCEMENTS[result.decision]}`);
-    if (state.selectedId === photo.id) {
-      renderInspector(photo);
-      if (focusAfter) document.querySelector(focusAfter)?.focus();
-    }
+    if (state.selectedId === photo.id && focusAfter) document.querySelector(focusAfter)?.focus();
   } catch (error) {
     announce(error.message);
   } finally {
@@ -885,6 +889,7 @@ async function load() {
     if (active) watchJob(active);
   }
   if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
+  if (document.querySelector('#review-tab').getAttribute('aria-selected') === 'true') await loadRejectSuggestions();
 }
 
 document.querySelector('#import-form').addEventListener('submit', async event => {
@@ -919,13 +924,142 @@ async function startTagJob(url, payload) {
 document.querySelector('#tag-all').addEventListener('click', () => startTagJob('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
 document.querySelector('#tag-keepers').addEventListener('click', () => startTagJob('/api/photos/tag', { scope: 'keepers' }));
 
-const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+document.querySelector('#scan-rejects').addEventListener('click', () => startTagJob('/api/photos/review-rejects', { scope: 'keepers' }));
+
+// Review tab: advisory reject suggestions. Rendering and polling never post; only Reject/Keep, X/K, and the counted confirm do.
+const rejectList = document.querySelector('#reject-list');
+const rejectConfirm = document.querySelector('#reject-all-confirm');
+
+function problemText(problems) {
+  return problems.map(item => `${item.kind.replace(/_/g, ' ')} ${Math.round(item.confidence * 100)}%`).join(', ') || 'No specific problem named';
+}
+
+function renderRejectList(suggestions) {
+  state.rejectSuggestions = suggestions;
+  const count = suggestions.length;
+  document.querySelector('#review-count').textContent = `${count} suggested reject${count === 1 ? '' : 's'}`;
+  rejectList.replaceChildren(...suggestions.map(item => {
+    const row = document.createElement('li');
+    row.className = 'reject-row';
+    row.dataset.photoId = String(item.photo_id);
+    const image = document.createElement('img');
+    image.loading = 'lazy';
+    image.alt = '';
+    image.src = item.preview_url;
+    const text = document.createElement('div');
+    const name = document.createElement('p');
+    name.textContent = item.name;
+    const problems = document.createElement('p');
+    problems.className = 'quiet';
+    problems.textContent = problemText(item.problems);
+    text.append(name, problems);
+    const buttons = document.createElement('div');
+    buttons.className = 'button-row';
+    for (const [action, label] of [['reject', 'Reject'], ['keep', 'Keep']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = action === 'keep' ? 'secondary' : '';
+      button.dataset.rejectAction = action;
+      button.textContent = label;
+      button.setAttribute('aria-label', `${label} ${item.name}`);
+      button.addEventListener('click', () => decideSuggestions([item.photo_id], action));
+      buttons.append(button);
+    }
+    row.append(image, text, buttons);
+    return row;
+  }));
+  updateWorkflow();
+}
+
+async function loadRejectSuggestions() {
+  try {
+    renderRejectList((await request('/api/photos/reject-suggestions')).suggestions);
+  } catch (error) {
+    announce(error.message);
+  }
+}
+
+// Mirrors Library._select for a rejected frame: a surviving pick stays, else the best unrejected frame by score.
+// ponytail: client-side guess until the next load(); exact unless scores tie.
+function pickAfterReject(group, photo) {
+  if (group.automatic_pick_id !== photo.id) return group.automatic_pick_id;
+  const kept = group.photos.filter(item => item.id !== photo.id && item.decision !== 'reject');
+  kept.sort((a, b) => b.total_score - a.total_score);
+  return (kept[0] || photo).id;
+}
+
+function rowButton(index, action) {
+  const row = rejectList.children[Math.max(0, Math.min(rejectList.children.length - 1, index))];
+  return row?.children[2].children[action === 'keep' ? 1 : 0] || null;
+}
+
+async function decideSuggestions(ids, decision) {
+  if (state.cullingBlocked) return announce(cullingBlockedText());
+  const index = state.rejectSuggestions.findIndex(item => item.photo_id === ids[0]);
+  const names = new Map(state.rejectSuggestions.map(item => [item.photo_id, item.name]));
+  state.busy = true;
+  updateWorkflow();
+  try {
+    const result = await post('/api/photos/reject-suggestions/decide', { photo_ids: ids, decision });
+    if (decision === 'reject') {
+      for (const id of result.decided) {
+        const photo = photoById(id);
+        const group = state.groups.find(item => item.photos.includes(photo));
+        if (photo) recordDecision(photo, { decision: 'reject', rating: photo.rating, group_id: group?.id, automatic_pick_id: group ? pickAfterReject(group, photo) : null });
+      }
+    }
+    renderRejectList(state.rejectSuggestions.filter(item => !result.decided.includes(item.photo_id)));
+    const verb = decision === 'reject' ? 'rejected' : 'kept';
+    announce(result.decided.length === 1 ? `${names.get(result.decided[0])} ${verb}` : `${result.decided.length} frames ${verb}`);
+    (rowButton(index, decision) || document.querySelector('#scan-rejects')).focus();
+  } catch (error) {
+    announce(error.message);
+    await loadRejectSuggestions();  // a stale list (decided elsewhere) is refreshed, never applied by count
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+function handleRejectKey(event) {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.target?.closest('input, textarea, select')) return;
+  const row = event.target?.closest('.reject-row');
+  if (!row || event.target.tagName !== 'BUTTON') return;
+  const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
+  const index = Array.from(rejectList.children).indexOf(row);
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    event.preventDefault();
+    return rowButton(index + (key === 'ArrowDown' ? 1 : -1), event.target.dataset.rejectAction)?.focus();
+  }
+  const decision = { x: 'reject', k: 'keep' }[key];
+  if (!decision) return;
+  event.preventDefault();
+  return decideSuggestions([Number(row.dataset.photoId)], decision);
+}
+rejectList.addEventListener('keydown', handleRejectKey);
+
+document.querySelector('#reject-all-shown').addEventListener('click', () => {
+  const ids = state.rejectSuggestions.map(item => item.photo_id);
+  if (!ids.length) return;
+  rejectConfirm.dataset.ids = ids.join(',');  // the ids shown at open time, not a count
+  document.querySelector('#reject-all-text').textContent = `Reject all ${ids.length} shown frames? This marks them rejected; you can restore any frame from the inspector.`;
+  if (rejectConfirm.showModal) rejectConfirm.showModal();
+  else rejectConfirm.hidden = false;
+});
+document.querySelector('#reject-all-yes').addEventListener('click', () => {
+  if (rejectConfirm.close) rejectConfirm.close();
+  else rejectConfirm.hidden = true;
+  return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
+});
+
+const JOB_NAMES = { import: 'Import', tag: 'Tagging', review_rejects: 'Reject review', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
+    : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.` : '';
   const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
   return {
@@ -1240,6 +1374,9 @@ function updateWorkflow() {
   document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;
   document.querySelector('#tag-keepers').disabled = state.busy || !keepers || !fastLoaded;
   document.querySelector('#tag-keepers-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#scan-rejects').disabled = state.busy || !keepers || !fastLoaded;
+  document.querySelector('#scan-rejects-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#reject-all-shown').disabled = state.cullingBlocked || !state.rejectSuggestions.length;
   document.querySelector('#composition-availability').textContent = roleUnavailable('review');
   document.querySelector('#retag-all').disabled = state.busy;
   document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review') || !state.composition || state.composition.photo_id !== state.selectedId;
@@ -1278,6 +1415,7 @@ function selectTab(tab) {
   });
   collapsePanel(false);  // choosing a tab always shows its panel
   if (tab.id === 'compose-tab') loadComposition();
+  if (tab.id === 'review-tab') loadRejectSuggestions();
 }
 
 function collapsePanel(collapsed) {
