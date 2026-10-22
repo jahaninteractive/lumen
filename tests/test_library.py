@@ -23,6 +23,12 @@ from lumen.composition import CropRect
 from lumen.domain import PhotoEdit
 from lumen.omlx import CompositionResponseError, CompositionReview, TagResult
 from lumen.omlx import TagResponseError, parse_composition_response, parse_tag_response
+from lumen.catalog import GroupFilters
+
+try:
+    from tests.test_previews import write_fake_darktable
+except ModuleNotFoundError:  # discovered with -s tests
+    from test_previews import write_fake_darktable
 
 
 class LibraryTests(unittest.TestCase):
@@ -1103,6 +1109,122 @@ class LibraryTests(unittest.TestCase):
     def run_job(self, library, job):
         self.assertTrue(library.wait_for_job(job.id, 10))
         return library.job_status(job.id)
+
+    def refine(self, library, sharp=(), **selector):
+        darktable = write_fake_darktable(self.root, sharp)
+        with patch("lumen.library.find_tool", return_value=darktable):
+            return self.run_job(library, library.start_refine_job(**selector))
+
+    def test_refine_job_changes_sharpness_reranks_group_and_keeps_pick_decision_and_rating(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate, worst), single = self.import_burst(library, (118, 70, 30))
+            library.set_rating(best, 3)
+            library.set_rating(alternate, 2)
+            library.set_decision(worst, "flag")
+            group_id = self.group_of(library, best)["id"]
+            state = lambda: {photo_id: (photo.manual_pick, photo.decision, photo.rating)
+                             for photo_id in (best, alternate, worst) if (photo := library.catalog.get_photo(photo_id))}
+            choices = lambda: [(event.photo_id, event.kind) for photo_id in (best, alternate, worst)
+                               for event in library.catalog.events_for(photo_id)
+                               if event.kind in {"manual_pick", "decision_changed", "rating_changed"}]
+            before, choices_before = state(), choices()
+            embedded = {photo_id: Path(library.catalog.get_photo(photo_id).preview_path) for photo_id in (best, alternate, worst)}
+
+            status = self.refine(library, ("DSC0003",), group_id=group_id)
+
+            self.assertEqual(("succeeded", "refine_previews"), (status["status"], status["kind"]))
+            self.assertEqual({"refined": 3, "skipped": 0, "failed": 0}, status["result"])
+            self.assertEqual((3, 3), (status["processed"], status["total"]))
+            self.assertRegex(status["label"], r"^DSC000[234]\.jpg$")
+            self.assertEqual(alternate, self.group_of(library, best)["automatic_pick_id"], "the sharper refined frame now ranks first")
+            self.assertEqual(before, state(), "manual pick, decision, and rating are never written")
+            self.assertEqual(choices_before, choices())
+            for photo_id in (best, alternate, worst):
+                photo = library.catalog.get_photo(photo_id)
+                self.assertEqual(("refined", f"{photo.fingerprint}-2048.jpg"), (photo.preview_kind, Path(photo.preview_path).name))
+                with Image.open(photo.preview_path) as preview:
+                    self.assertEqual(2048, max(preview.size))
+                self.assertFalse(embedded[photo_id].exists(), "an unshared embedded preview is removed")
+                event = [item for item in library.catalog.events_for(photo_id) if item.kind == "preview_refined"][-1]
+                self.assertEqual((status["job_id"], "refined"), (event.details["job_id"], event.details["preview_kind"]))
+                self.assertEqual(library.catalog.get_metrics(photo_id).sharpness, event.details["metrics"]["sharpness"])
+                sidecar = json.loads(library.sidecars.paths(photo)[0].read_text())
+                self.assertEqual(("refined", photo_id == alternate), (sidecar["preview_kind"], sidecar["selection"]["best_in_group"]))
+                self.assertEqual("preview_refined", sidecar["provenance"][-1]["kind"])
+            self.assertGreater(library.catalog.get_metrics(alternate).sharpness, 0.9)
+            self.assertEqual("embedded", library.catalog.get_photo(single).preview_kind, "other groups are untouched")
+
+            library.set_pick(worst)
+            before = state()
+            again = self.refine(library, ("DSC0003",), all_photos=True)
+            self.assertEqual({"refined": 4, "skipped": 0, "failed": 0}, again["result"])
+            self.assertEqual(worst, self.group_of(library, best)["automatic_pick_id"], "a manual pick is honoured after re-rank")
+            self.assertEqual(before, state())
+            self.assertTrue(library.catalog.get_photo(worst).manual_pick)
+
+    def test_refine_job_skips_changed_sources_and_retains_shared_embedded_previews(self):
+        (self.source_dir / "copy.jpg").write_bytes(self.image_path.read_bytes())
+        changed = self.source_dir / "DSC0005.jpg"
+        Image.new("RGB", (320, 240), (10, 200, 10)).save(changed)
+        Image.new("RGB", (320, 240), (200, 10, 10)).save(self.source_dir / "DSC_FAIL.jpg")
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            by_name = lambda: {Path(photo.path).name: photo for photo in library.catalog.list_photos()}
+            first, copy = by_name()["DSC0001.jpg"], by_name()["copy.jpg"]
+            embedded = Path(first.preview_path)
+            self.assertEqual(first.preview_path, copy.preview_path)
+            changed_preview = by_name()["DSC0005.jpg"].preview_path
+            Image.new("RGB", (320, 240), (11, 201, 11)).save(changed)
+
+            status = self.refine(library, group_id=first.group_id)
+            self.assertEqual({"refined": 1, "skipped": 0, "failed": 0}, status["result"])
+            self.assertTrue(embedded.is_file(), "the copy still shows the shared embedded preview")
+            self.assertEqual(("refined", "embedded"), (by_name()["DSC0001.jpg"].preview_kind, by_name()["copy.jpg"].preview_kind))
+            self.assertEqual(str(embedded), by_name()["copy.jpg"].preview_path)
+
+            status = self.refine(library, all_photos=True)
+            self.assertEqual("succeeded", status["status"])
+            self.assertEqual({"refined": 2, "skipped": 1, "failed": 1}, status["result"])
+            self.assertFalse(embedded.exists(), "removed once no photo references it")
+            skipped = by_name()["DSC0005.jpg"]
+            self.assertEqual(("embedded", changed_preview), (skipped.preview_kind, skipped.preview_path))
+            self.assertTrue(Path(changed_preview).is_file())
+            self.assertEqual("embedded", by_name()["DSC_FAIL.jpg"].preview_kind)
+            log = Path(library.catalog.get_job(status["job_id"]).log_path).read_text()
+            self.assertIn("DSC0005.jpg", log)
+            self.assertIn("DSC_FAIL.jpg", log)
+            self.assertNotIn(str(self.root), log)
+            self.assertNotIn(str(self.root), json.dumps(status))
+            leftovers = [path.name for path in (self.library_dir / "previews").iterdir()
+                         if path.name.startswith(".") or path.suffix != ".jpg"]
+            self.assertEqual([], leftovers, "failed renders leave no temporary files")
+
+    def test_refine_job_scopes_group_filtered_and_all(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate, worst), single = self.import_burst(library, (118, 70, 30))
+            library.set_rating(alternate, 4)
+            kinds = lambda: {photo.id: photo.preview_kind for photo in library.catalog.list_photos()}
+            with patch("lumen.library.find_tool", return_value=None):
+                with self.assertRaisesRegex(RuntimeError, "^darktable-cli is not installed$"):
+                    library.start_refine_job(all_photos=True)
+            darktable = write_fake_darktable(self.root)
+            with patch("lumen.library.find_tool", return_value=darktable):
+                for selector in ({}, {"group_id": 1, "all_photos": True}, {"filters": GroupFilters(), "group_id": 1},
+                                 {"group_id": 999}, {"group_id": "1"}, {"all_photos": 1}):
+                    with self.subTest(selector=selector), self.assertRaises(ValueError):
+                        library.start_refine_job(**selector)
+            self.assertEqual([], library.catalog.list_jobs(), "rejected selectors never create a job")
+
+            status = self.refine(library, filters=GroupFilters(min_rating=4))
+            self.assertEqual((1, 1), (status["processed"], status["total"]))
+            self.assertEqual({alternate}, {photo_id for photo_id, kind in kinds().items() if kind == "refined"})
+            status = self.refine(library, group_id=self.group_of(library, single)["id"])
+            self.assertEqual({alternate, single}, {photo_id for photo_id, kind in kinds().items() if kind == "refined"})
+            status = self.refine(library, all_photos=True)
+            self.assertEqual((4, 4), (status["processed"], status["total"]))
+            self.assertEqual({"refined"}, set(kinds().values()))
+            manifest = json.loads(Path(library.catalog.get_job(status["job_id"]).manifest_path).read_text())
+            self.assertEqual(("refine_previews", "all"), (manifest["kind"], manifest["scope"]))
 
     def test_import_job_skips_cataloged_matching_photos_without_preview_work(self):
         second = self.source_dir / "DSC0002.jpg"

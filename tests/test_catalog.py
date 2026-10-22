@@ -299,6 +299,48 @@ class CatalogTests(unittest.TestCase):
             photo = migrated.get_photo(1)
             self.assertEqual(("def", "flag", 4), (photo.fingerprint, photo.decision, photo.rating))
 
+    def test_migration_adds_preview_kind_and_update_preview_round_trips(self):
+        legacy_path = Path(self.tmp.name) / "pre-refine.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE photos (
+                    id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL,
+                    captured_at TEXT, camera_id TEXT NOT NULL, preview_path TEXT,
+                    format TEXT NOT NULL DEFAULT 'ARW', group_id INTEGER,
+                    manual_pick INTEGER NOT NULL DEFAULT 0, imported_at TEXT NOT NULL
+                );
+                INSERT INTO photos (id, path, fingerprint, camera_id, preview_path, imported_at)
+                    VALUES (1, '/photos/a.ARW', 'abc', 'A1', '/lib/previews/abc.jpg', '2026-10-21T10:00:00+00:00');
+                """
+            )
+        for _ in range(2):
+            with Catalog(legacy_path) as migrated:
+                columns = [row["name"] for row in migrated.connection.execute("PRAGMA table_info(photos)")]
+                photo = migrated.get_photo(1)
+        self.assertEqual(1, columns.count("preview_kind"))
+        self.assertEqual("embedded", photo.preview_kind)
+        with Catalog(legacy_path) as migrated:
+            migrated.update_preview(1, "/lib/previews/abc-2048.jpg", "refined")
+            photo = migrated.get_photo(1)
+            self.assertEqual(("/lib/previews/abc-2048.jpg", "refined"), (photo.preview_path, photo.preview_kind))
+            for bad in ("raw", "", None):
+                with self.subTest(kind=bad), self.assertRaises(ValueError):
+                    migrated.update_preview(1, "/lib/previews/x.jpg", bad)
+            with self.assertRaises(ValueError):
+                migrated.update_preview(99, "/lib/previews/x.jpg", "refined")
+            self.assertEqual("refined", migrated.get_photo(1).preview_kind)
+            migrated.upsert_photo(Photo(path="/photos/a.ARW", fingerprint="def", captured_at=None, camera_id="A1",
+                                        preview_path="/lib/previews/def.jpg"))
+            self.assertEqual(("/lib/previews/def.jpg", "embedded"), (migrated.get_photo(1).preview_path, migrated.get_photo(1).preview_kind),
+                             "a re-import writes a fresh embedded preview")
+
+    def test_photos_for_filters_returns_matching_grouped_photo_ids(self):
+        ids, _ = seed_filter_photos(self.catalog)
+        self.assertEqual(sorted([ids["a1"], ids["a2"], ids["b2"], ids["c1"]]), self.catalog.photos_for_filters(GroupFilters()))
+        self.assertEqual([ids["a1"], ids["a2"]], self.catalog.photos_for_filters(GroupFilters(camera="A")))
+        self.assertEqual([ids["b1"]], self.catalog.photos_for_filters(GroupFilters(decision="reject", camera="B")))
+
     def test_set_decision_and_rating_validate_and_record_events(self):
         photo_id = self.catalog.upsert_photo(Photo(path="/photos/a.ARW", fingerprint="abc", captured_at=None, camera_id="A1"))
         rejected = self.catalog.set_decision(photo_id, "reject")

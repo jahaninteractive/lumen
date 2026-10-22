@@ -9,7 +9,7 @@ from dataclasses import asdict, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse, urlsplit
+from urllib.parse import parse_qs, urlencode, urlparse, urlsplit
 
 from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups
@@ -50,6 +50,25 @@ def parse_group_filters(query: str) -> GroupFilters:
         else:
             values[key] = (value.strip() or None) if key == "text" else value
     return GroupFilters(**values)
+
+
+def _refine_selector(payload: dict) -> dict:
+    """Strict `/api/previews/refine` body: group needs only an integer group_id; filtered takes `/api/groups` fields as strings."""
+    scope = payload.get("scope")
+    fields = {key: value for key, value in payload.items() if key != "scope"}
+    if scope == "group":
+        if fields.keys() != {"group_id"} or type(fields["group_id"]) is not int:
+            raise ValueError("group scope requires exactly one integer group_id")
+        return {"group_id": fields["group_id"]}
+    if scope == "filtered":
+        if not all(isinstance(value, str) for value in fields.values()):
+            raise ValueError("filter values must be strings")
+        return {"filters": parse_group_filters(urlencode(fields))}  # Same validation as the /api/groups query.
+    if scope == "all":
+        if fields:
+            raise ValueError("all scope takes no other fields")
+        return {"all_photos": True}
+    raise ValueError("scope must be group, filtered, or all")
 
 
 def choose_macos_folder() -> str | None:
@@ -226,7 +245,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError(f"unknown photo ID: {photo_id}")
                     self._send_json({
                         "photo_id": photo_id,
-                        "preview_url": f"/preview/{photo_id}?v={photo.fingerprint[:16]}",
+                        "preview_url": f"/preview/{photo_id}?v={photo.fingerprint[:16]}-{photo.preview_kind}",
                         "candidates": [asdict(candidate) for candidate in candidates],
                         "active_crop": active.to_dict() if active else None,
                     })
@@ -241,7 +260,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 photo = asdict(item["photo"])
-                preview_version = photo["fingerprint"][:16]
+                preview_version = f"{photo['fingerprint'][:16]}-{photo['preview_kind']}"
                 for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                     photo.pop(key, None)
                 photo["preview_url"] = f"/preview/{photo['id']}?v={preview_version}"
@@ -319,6 +338,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         job = library.start_tag_job(tagger, retag=retag)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/previews/refine":
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        try:
+                            job = library.start_refine_job(**_refine_selector(payload))
+                        except RuntimeError as error:
+                            if str(error) != "darktable-cli is not installed":
+                                raise
+                            raise ValueError("darktable-cli is unavailable") from None
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 match = re.fullmatch(r"/api/jobs/(\d+)/cancel", path)
@@ -459,7 +488,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if isinstance(error, RuntimeError) and "another heavy job" in str(error):
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
-                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag-all"))
+                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag-all",
+                                             "/api/previews/"))
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 

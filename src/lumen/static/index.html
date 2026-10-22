@@ -209,6 +209,17 @@
           <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
           <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" disabled>Compare marked</button>
         </div>
+        <div class="refine-row">
+          <label for="refine-scope">Refine</label>
+          <select id="refine-scope" aria-describedby="refine-availability">
+            <option value="group">Selected burst</option>
+            <option value="filtered">Filtered frames</option>
+            <option value="all">Whole catalog</option>
+          </select>
+          <button type="button" id="refine-previews" class="secondary" aria-describedby="refine-availability" disabled>Refine previews</button>
+          <span id="refine-availability" class="quiet"></span>
+          <span id="refine-status"></span>
+        </div>
         <form id="filter-form" class="filter-form" aria-label="Filter frames">
           <div><label for="filter-from">From</label><input type="date" id="filter-from"></div>
           <div><label for="filter-to">To</label><input type="date" id="filter-to"></div>

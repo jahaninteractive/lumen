@@ -20,9 +20,11 @@ from lumen.tools import ToolStatus
 try:
     from tests.test_astro import FAKE_SIRIL, SIRIL
     from tests.test_catalog import seed_filter_photos
+    from tests.test_previews import write_fake_darktable
 except ModuleNotFoundError:  # discovered with -s tests
     from test_astro import FAKE_SIRIL, SIRIL
     from test_catalog import seed_filter_photos
+    from test_previews import write_fake_darktable
 
 
 class CliTests(unittest.TestCase):
@@ -260,6 +262,50 @@ class CliTests(unittest.TestCase):
             self.assertEqual((2, {"error": "invalid filter: date_to"}), (code, payload))
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 main(["--library", str(library_dir), "groups", "--decision", "maybe"])
+
+
+    def test_refine_previews_command_waits_and_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / "Card"
+            folder.mkdir()
+            for index in range(2):
+                Image.new("RGB", (60, 40), (index * 90, 20, 20)).save(folder / f"DSC000{index}.jpg")
+            library_dir = root / "library"
+            self.run_json(library_dir, "import", str(folder))
+            with Library(Settings(library_dir=library_dir)) as library:
+                group_id = library.list_groups()[0]["id"]
+                library.set_rating(library.list_groups()[0]["photos"][0]["id"], 4)
+            darktable = write_fake_darktable(root)
+            with patch("lumen.library.find_tool", return_value=darktable):
+                code, grouped = self.run_json(library_dir, "refine-previews", "--group", str(group_id))
+                filtered_code, filtered = self.run_json(library_dir, "refine-previews", "--min-rating", "4")
+                all_code, everything = self.run_json(library_dir, "refine-previews", "--all")
+                for flags in ((), ("--all", "--group", "1"), ("--all", "--min-rating", "4"), ("--group", "1", "--camera", "A")):
+                    with self.subTest(flags=flags):
+                        if flags[:2] == ("--all", "--group"):
+                            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                                main(["--library", str(library_dir), "refine-previews", *flags])
+                        else:
+                            bad_code, bad = self.run_json(library_dir, "refine-previews", *flags)
+                            self.assertEqual(2, bad_code)
+                            self.assertIn("exactly one", bad["error"])
+            with patch("lumen.library.find_tool", return_value=None):
+                missing_code, missing = self.run_json(library_dir, "refine-previews", "--all")
+            with Library(Settings(library_dir=library_dir)) as library:
+                kinds = {photo.preview_kind for photo in library.catalog.list_photos()}
+                fingerprints = [photo.fingerprint for photo in library.catalog.list_photos()]
+
+        self.assertEqual((0, "succeeded", "refine_previews"), (code, grouped["status"], grouped["kind"]))
+        self.assertEqual({"refined": grouped["total"], "skipped": 0, "failed": 0}, grouped["result"])
+        self.assertEqual((0, 1), (filtered_code, filtered["total"]))
+        self.assertEqual((0, {"refined": 2, "skipped": 0, "failed": 0}), (all_code, everything["result"]))
+        self.assertEqual({"refined"}, kinds)
+        self.assertEqual((2, {"error": "darktable-cli is not installed"}), (missing_code, missing))
+        for payload in (grouped, filtered, everything):
+            self.assertNotIn(str(root), json.dumps(payload))
+            for fingerprint in fingerprints:
+                self.assertNotIn(fingerprint, json.dumps(payload))
 
 
 class ExportCleanupCliTests(unittest.TestCase):

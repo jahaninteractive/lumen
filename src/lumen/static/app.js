@@ -392,7 +392,8 @@ function renderInspector(photo) {
 function fillFrame(button, photo, group) {
   photo.groupPick = group.automatic_pick_id;
   const best = photo.id === group.automatic_pick_id && photo.decision !== 'reject';
-  const marks = [DECISION_WORDS[photo.decision], photo.rating ? `Rating ${photo.rating}` : null, state.compare.includes(photo.id) ? 'Compare' : null]
+  const marks = [DECISION_WORDS[photo.decision], photo.rating ? `Rating ${photo.rating}` : null, state.compare.includes(photo.id) ? 'Compare' : null,
+    photo.preview_kind === 'refined' ? 'Refined' : null]
     .filter(word => word && word !== DECISION_WORDS.none);
   button.dataset.decision = photo.decision;
   button.setAttribute('aria-label', [`${photo.name}, score ${Math.round(photo.total_score * 100)} percent`, best ? 'best in group' : null, ...marks.map(word => word.toLowerCase())].filter(Boolean).join(', '));
@@ -710,13 +711,14 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   }
 });
 
-const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack', ingest: 'Ingest' };
+const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
-    : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.` : '';
+    : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
+    : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.` : '';
   const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
   return {
     queued: `${name} queued.`,
@@ -1007,6 +1009,8 @@ function updateWorkflow() {
   document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   const scope = document.querySelector('input[name="export-scope"]:checked').value;
   document.querySelector('#export-jpegs').disabled = state.busy || !available || (scope === 'current' ? !photo : !keepers);
+  document.querySelector('#refine-availability').textContent = available ? '' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
+  document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
   document.querySelector('#clear-workspace').disabled = state.busy || !state.photoCount || document.querySelector('#clear-confirmation').value !== 'CLEAR';
   document.querySelector('#browse-xmp').disabled = state.busy;
@@ -1284,6 +1288,30 @@ document.querySelector('#export-jpegs').addEventListener('click', async () => {
     if (error.payload?.results) showExportResults(error.payload.results, size);
     else document.querySelector('#export-status').textContent = `${error.message}. Check darktable and the selected XMP, then retry. You can also use camera defaults.`;
     announce(document.querySelector('#export-status').textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+});
+
+// The filtered scope sends the same fields the contact sheet's URL query holds; the server validates them alike.
+function refinePayload() {
+  const scope = document.querySelector('#refine-scope').value;
+  if (scope === 'group') return { scope, group_id: state.selectedGroupId };
+  return scope === 'filtered' ? { scope, ...Object.fromEntries(new URLSearchParams(location.search)) } : { scope };
+}
+
+document.querySelector('#refine-scope').addEventListener('change', updateWorkflow);
+document.querySelector('#refine-previews').addEventListener('click', async () => {
+  state.busy = true;
+  updateWorkflow();
+  const status = document.querySelector('#refine-status');
+  status.textContent = '';
+  try {
+    watchJob(await post('/api/previews/refine', refinePayload()));
+  } catch (error) {
+    status.textContent = `Refine previews could not start: ${error.message}.`;
+    announce(status.textContent);
   } finally {
     state.busy = false;
     updateWorkflow();

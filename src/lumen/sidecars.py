@@ -41,6 +41,7 @@ class SidecarWriter:
                 "camera_id": photo.camera_id,
             },
             "preview_path": photo.preview_path,
+            "preview_kind": photo.preview_kind,
             "measurements": asdict(metrics),
             "selection": {"best_in_group": selected, "manual": photo.manual_pick},
             "decision": decision,

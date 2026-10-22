@@ -121,6 +121,30 @@ class ExifToolPreviewProvider:
                     return self._normalize(candidate, destination)
         raise PreviewError(f"No local preview provider could decode {source.name}")
 
+    def create_refined_preview(self, source: Path, destination: Path, *, darktable: str, runner=subprocess.run) -> Path:
+        """Render the RAW with darktable into a temporary beside `destination`, then normalise it atomically into place."""
+        with tempfile.TemporaryDirectory(prefix=".refine-", dir=destination.parent) as directory:
+            candidate = Path(directory) / "render.jpg"
+            try:
+                result = runner(
+                    [darktable, str(source), str(candidate), "--width", str(self.max_size), "--height", str(self.max_size),
+                     "--core", "--conf", "plugins/lighttable/export/metadata_flags=5"],
+                    capture_output=True, timeout=300, check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise PreviewError(f"darktable timed out refining {source.name}") from error
+            except (OSError, subprocess.SubprocessError) as error:
+                raise PreviewError(f"darktable could not start for {source.name}") from error
+            if result.returncode != 0:
+                raise PreviewError(f"darktable exited with code {result.returncode} refining {source.name}")
+            if not candidate.is_file():
+                raise PreviewError(f"darktable wrote no preview for {source.name}")
+            try:
+                return self._normalize(candidate, destination)
+            except OSError as error:
+                destination.with_suffix(destination.suffix + ".tmp").unlink(missing_ok=True)
+                raise PreviewError(f"darktable's preview for {source.name} could not be read") from error
+
     def _normalize_bytes(self, data: bytes, destination: Path) -> Path:
         with tempfile.NamedTemporaryFile(suffix=".jpg") as temporary:
             temporary.write(data)

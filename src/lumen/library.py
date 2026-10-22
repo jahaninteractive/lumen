@@ -11,7 +11,7 @@ import tempfile
 import threading
 from collections.abc import Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -280,6 +280,94 @@ class Library:
 
         self._submit_job(runner, job, work)
         return job
+
+    def start_refine_job(self, *, group_id: int | None = None, filters: GroupFilters | None = None,
+                         all_photos: bool = False) -> Job:
+        """Replace embedded previews with darktable renders, re-measure, and re-rank; never touches picks, decisions, or ratings."""
+        if type(all_photos) is not bool or (group_id is not None) + (filters is not None) + all_photos != 1:
+            raise ValueError("refine requires exactly one of a group, filters, or all photos")
+        darktable = find_tool("darktable-cli")
+        if not darktable:
+            raise RuntimeError("darktable-cli is not installed")
+        if group_id is not None:
+            if type(group_id) is not int or not (photo_ids := self.catalog.group_photo_ids(group_id)):
+                raise ValueError(f"unknown group ID: {group_id}")
+            scope = {"scope": "group", "group_id": group_id}
+        elif filters is not None:
+            if not isinstance(filters, GroupFilters):
+                raise ValueError("filters must be GroupFilters")
+            photo_ids, scope = self.catalog.photos_for_filters(filters), {"scope": "filtered", "filters": asdict(filters)}
+        else:
+            photo_ids, scope = [photo.id for photo in self.catalog.list_photos()], {"scope": "all"}
+        manifest = {"kind": "refine_previews", **scope}
+        runner = self.job_runner
+        job = self.catalog.create_prepared_job("refine_previews", lambda job_id: self._write_job_files(job_id, manifest))
+
+        def work(context) -> None:
+            with Library(self.settings, job_runner=runner) as worker:
+                counts = {"refined": 0, "skipped": 0, "failed": 0}
+                refined = []
+                for index, photo_id in enumerate(photo_ids, 1):
+                    if context.cancelled:
+                        break
+                    with worker._mutation():
+                        if photo := worker.catalog.get_photo(photo_id):  # Removed since the job started: nothing to do.
+                            outcome = worker._refine_one(photo, darktable, job)
+                            counts[outcome] += 1
+                            if outcome == "refined":
+                                refined.append(photo)
+                    context.update_progress(index / len(photo_ids), label=Path(photo.path).name[:200] if photo else None,
+                                            processed=index, total=len(photo_ids))
+                with worker._mutation():
+                    for affected in sorted({photo.group_id for photo in refined if photo.group_id is not None}):
+                        worker._rerank_group(affected)  # Rewrites the group's sidecars too.
+                    for photo in refined:
+                        if photo.group_id is None:
+                            worker._write_sidecar(photo.id)
+                worker._write_job_files(job.id, manifest | {"summary": counts})
+
+        self._submit_job(runner, job, work)
+        return job
+
+    def _refine_one(self, photo: Photo, darktable: str, job: Job) -> str:
+        """Render, measure, and record one refined preview; returns refined, skipped, or failed. Logs basenames only."""
+        source = Path(photo.path)
+        destination = self.settings.preview_dir / f"{photo.fingerprint}-2048.jpg"
+
+        def unchanged() -> bool:
+            try:
+                return fingerprint_file(source) == photo.fingerprint
+            except OSError:
+                return False
+
+        if not unchanged():
+            self._log_job(job, f"{source.name}: source changed or is unavailable since import; reimport before refining")
+            return "skipped"
+        try:
+            self.previews.create_refined_preview(source, destination, darktable=darktable)
+            if not unchanged():  # Swapped during the render: the preview may show other bytes.
+                raise PreviewError("source changed during refinement; reimport before refining")
+            metrics = measure_image(destination)
+            metrics.astro = analyze_astro(destination)
+            if vision := analyze_faces(destination, self.settings.vision_analyzer_path):
+                apply_vision_result(metrics, vision)
+        except (OSError, PreviewError, ValueError, subprocess.SubprocessError) as error:
+            if not self.catalog.preview_references(str(destination)):  # Never a render another photo shows.
+                destination.unlink(missing_ok=True)
+            self._log_job(job, f"{source.name}: {error}")
+            return "failed"
+        previous = Path(photo.preview_path) if photo.preview_path else None
+        self.catalog.update_preview(photo.id, str(destination), "refined")
+        self.catalog.save_metrics(photo.id, metrics)  # total_score is kept until the group is re-ranked.
+        self.catalog.append_event(photo.id, "preview_refined", {
+            "job_id": job.id, "preview_kind": "refined",
+            "metrics": {key: getattr(metrics, key) for key in ("sharpness", "exposure", "clipping", "face_quality", "eye_quality")},
+        })
+        # The old embedded preview goes only when no other photo still shows it (the cleanup retention rule).
+        if (previous and previous != destination and previous.resolve().parent == self.settings.preview_dir.resolve()
+                and not self.catalog.preview_references(str(previous))):
+            previous.unlink(missing_ok=True)
+        return "refined"
 
     def start_ingest_job(self, card: Path, primary: Path, mirror: Path | None = None) -> Job:
         """Copy a card to primary (and mirror), verify every copy, then import only the primary copies."""

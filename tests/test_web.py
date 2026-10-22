@@ -1,5 +1,6 @@
 import json
 import subprocess
+from io import BytesIO
 import tempfile
 import threading
 import unittest
@@ -21,9 +22,11 @@ from lumen.web import make_server
 try:
     from tests.test_astro import FAKE_SIRIL, SIRIL
     from tests.test_catalog import seed_filter_photos
+    from tests.test_previews import write_fake_darktable
 except ModuleNotFoundError:  # discovered with -s tests
     from test_astro import FAKE_SIRIL, SIRIL
     from test_catalog import seed_filter_photos
+    from test_previews import write_fake_darktable
 
 
 class LandmarkParser(HTMLParser):
@@ -598,6 +601,61 @@ class WebTests(unittest.TestCase):
             self.assertNotIn(export, by_id[name]["parents"])
             self.assertIn(by_id["clear-panel"], by_id[name]["parents"])
 
+    def test_refine_route_scope_validation_and_unavailable_darktable_reason(self):
+        with patch("lumen.library.find_tool", return_value=None):
+            self.assertEqual((400, {"error": "darktable-cli is unavailable"}), self.post_json("/api/previews/refine", {"scope": "all"}))
+        with patch("lumen.library.find_tool", return_value=write_fake_darktable(self.root)):
+            for payload in ({}, {"scope": "everything"}, {"scope": "group"}, {"scope": "group", "group_id": "1"},
+                            {"scope": "group", "group_id": True}, {"scope": "group", "group_id": 1, "extra": 1},
+                            {"scope": "group", "group_id": 999}, {"scope": "all", "group_id": 1},
+                            {"scope": "filtered", "bogus": "1"}, {"scope": "filtered", "min_rating": 3},
+                            {"scope": "filtered", "min_rating": "9"}, {"scope": "filtered", "date_from": "2026-13-01"},
+                            {"scope": "filtered", "group_id": 1}):
+                with self.subTest(payload=payload):
+                    code, body = self.post_json("/api/previews/refine", payload)
+                    self.assertEqual(400, code, body)
+                    self.assertIsInstance(body["error"], str)
+                    self.assertNotIn(str(self.root), json.dumps(body))
+            self.assertEqual(400, self.post_json("/api/previews/refine", None, raw=b"[]")[0])
+            self.assertEqual(403, self.post_json("/api/previews/refine", {"scope": "all"}, headers={"Origin": "http://evil.example"})[0])
+            self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"], "rejected requests never create a job")
+            code, started = self.post_json("/api/previews/refine", {"scope": "filtered", "camera": "nobody"})
+            self.assertEqual((202, "refine_previews"), (code, started["kind"]))
+            self.assertEqual({"refined": 0, "skipped": 0, "failed": 0}, self.wait_job(started["job_id"])["result"])
+            code, started = self.post_json("/api/previews/refine", {"scope": "all"})
+            self.assertEqual(202, code, started)
+            finished = self.wait_job(started["job_id"])
+        self.assertEqual(("succeeded", {"refined": 1, "skipped": 0, "failed": 0}), (finished["status"], finished["result"]))
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            fingerprint = library.catalog.list_photos()[0].fingerprint
+        for body in (started, finished):
+            self.assertNotIn(str(self.root), json.dumps(body))
+            self.assertNotIn(fingerprint, json.dumps(body))
+
+    def test_preview_url_version_changes_after_refinement_and_cards_show_refined_mark(self):
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            version = library.catalog.list_photos()[0].fingerprint[:16]
+            group_id = library.list_groups()[0]["id"]
+        before = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]
+        self.assertEqual((f"/preview/1?v={version}-embedded", "embedded"), (before["preview_url"], before["preview_kind"]))
+        with patch("lumen.library.find_tool", return_value=write_fake_darktable(self.root)):
+            code, started = self.post_json("/api/previews/refine", {"scope": "group", "group_id": group_id})
+            self.assertEqual(202, code, started)
+            self.assertEqual("succeeded", self.wait_job(started["job_id"])["status"])
+        refined_url = f"/preview/1?v={version}-refined"
+        after = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]
+        self.assertEqual((refined_url, "refined"), (after["preview_url"], after["preview_kind"]))
+        photo = self.get_json("/api/photos/1")[1]["photo"]
+        self.assertEqual((refined_url, "refined"), (photo["preview_url"], photo["preview_kind"]))
+        with patch("lumen.library.read_image_dimensions", return_value=(4000, 3000)), patch(
+            "lumen.library.analyze_subject_regions", return_value=None
+        ):
+            self.assertEqual(refined_url, self.get_json("/api/photos/1/crops")[1]["preview_url"])
+        with urllib.request.urlopen(self.base + refined_url, timeout=3) as response:
+            with Image.open(BytesIO(response.read())) as preview:
+                self.assertEqual(2048, max(preview.size))
+        self.run_javascript_cleanup_regression("refine")
+
     def test_crop_api_returns_safe_candidates_and_active_edit(self):
         with patch("lumen.library.read_image_dimensions", return_value=(4000, 3000)), patch(
             "lumen.library.analyze_subject_regions", return_value=None
@@ -605,7 +663,7 @@ class WebTests(unittest.TestCase):
             with urllib.request.urlopen(self.base + "/api/photos/1/crops", timeout=3) as response:
                 payload = json.load(response)
             self.assertEqual(1, payload["photo_id"])
-            self.assertRegex(payload["preview_url"], r"^/preview/1\?v=[0-9a-f]{16}$")
+            self.assertRegex(payload["preview_url"], r"^/preview/1\?v=[0-9a-f]{16}-embedded$")
             self.assertIsNone(payload["active_crop"])
             self.assertGreaterEqual(len(payload["candidates"]), 2)
             self.assertEqual("original", payload["candidates"][0]["kind"])
@@ -873,6 +931,11 @@ let ingestPolls = 0;
 let ingestOutcome = { copied: 3, already_present: 1, verified: 4, skipped: 2, card_verified_everywhere: true, snapshot: '20261022T120000Z.sqlite3' };
 const ingestCounts = extra => ({ copied: 0, verified: 0, already_present: 0, failed: 0, files: 4, skipped: 0, unreadable: 0, card_verified_everywhere: false, manifest: 'manifest.json', snapshot: null, ...extra });
 const ingestJob = (status, progress, extra = {}) => ({ job_id: 11, kind: 'ingest', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ingest: ingestCounts(), ...extra });
+let darktableReady = true;
+let refineError = null;
+const refinePosts = [];
+let refinePolls = 0;
+const refineJob = (status, progress, extra = {}) => ({ job_id: 13, kind: 'refine_previews', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 let groupLoads = 0;
 let lastGroupsUrl = null;
 let keeperOverride = null;
@@ -902,7 +965,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
+  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
   else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
@@ -913,6 +976,18 @@ async function fetch(url, options = {}) {
   }
   else if (/^\/api\/photos\/\d+\/pick$/.test(url)) { assert.deepEqual(JSON.parse(options.body), {}); picks.push(url); payload = { photo_id: Number(url.split('/')[3]), manual_pick: true }; }
   else if (url === '/api/jobs') payload = { jobs: resumeJobs };
+  else if (url === '/api/previews/refine') {
+    assert.equal(options.method, 'POST'); refinePosts.push(JSON.parse(options.body));
+    if (refineError) { ok = false; payload = { error: refineError }; } else payload = refineJob('queued', 0);
+  }
+  else if (url === '/api/jobs/13') {
+    refinePolls += 1;
+    if (refinePolls < 3) payload = refineJob('running', 0.5, { label: 'photo-1.jpg', processed: 1, total: 2 });
+    else {
+      groups.forEach(item => item.photos.forEach(entry => { entry.preview_kind = 'refined'; entry.preview_url = '/preview/' + entry.id + '?v=0123456789abcdef-refined'; }));
+      payload = refineJob('succeeded', 1, { processed: 2, total: 2, result: { refined: 2, skipped: 0, failed: 0 } });
+    }
+  }
   else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
   else if (url === '/api/jobs/9') {
     importPolls += 1;
@@ -1362,6 +1437,47 @@ const regression = `
     element('#filter-text').value = 'zebra';
     await element('#filter-form').listeners.submit({ preventDefault() {} });
     assert.ok(tree(element('#contact-sheet')).some(node => node.textContent === 'No frames match these filters.'));
+    return;
+  }
+  if (scenario === 'refine') {
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const card = id => element('#contact-sheet').children.find(item => Number(item.dataset.id) === id);
+    const scopeSelect = element('#refine-scope');
+    scopeSelect.value = 'group';
+    darktableReady = false;
+    await load();
+    assert.equal(element('#refine-previews').disabled, true);
+    assert.equal(element('#refine-availability').textContent, 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.');
+    darktableReady = true;
+    await load();
+    assert.equal(element('#refine-availability').textContent, '');
+    assert.equal(element('#refine-previews').disabled, true, 'the selected-burst scope needs a selected burst');
+    assert.ok(!tree(card(1)).some(node => node.textContent === 'Refined'));
+    await inspect(state.groups[0].photos[1]);
+    assert.equal(element('#refine-previews').disabled, false);
+    assert.deepEqual(refinePayload(), { scope: 'group', group_id: 1 });
+    scopeSelect.value = 'all';
+    assert.deepEqual(refinePayload(), { scope: 'all' });
+    scopeSelect.value = 'filtered';
+    history.replaceState(null, '', '?min_rating=2&camera=ILCE-7M4%3A1');
+    await element('#refine-previews').listeners.click();
+    assert.deepEqual(refinePosts, [{ scope: 'filtered', min_rating: '2', camera: 'ILCE-7M4:1' }]);
+    assert.equal(state.job.kind, 'refine_previews');
+    assert.equal(element('#refine-previews').disabled, true, 'one heavy job at a time');
+    assert.equal(element('#job-strip').hidden, false);
+    assert.ok(element('#announcer').textContent.startsWith('Refine previews'));
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(state.job.status, 'succeeded');
+    assert.equal(element('#job-status').textContent, 'Refine previews finished. 2 refined, 0 skipped, 0 failed.');
+    assert.ok(tree(card(1)).some(node => node.textContent === 'Refined' && node.className === 'refined'));
+    assert.ok(card(2).getAttribute('aria-label').includes('refined'));
+    assert.ok(card(1).children[0].src.endsWith('-refined'));
+    darktableReady = false;  // the server's own check still answers when the page's status is stale
+    refineError = 'darktable-cli is unavailable';
+    scopeSelect.value = 'all';
+    await element('#refine-previews').listeners.click();
+    assert.equal(element('#refine-status').textContent, 'Refine previews could not start: darktable-cli is unavailable.');
+    assert.equal(element('#announcer').textContent, element('#refine-status').textContent);
     return;
   }
   if (scenario === 'all-rejected') {

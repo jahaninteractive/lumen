@@ -162,6 +162,25 @@ export. Install darktable as described above, add its executable directory to
 `PATH` if needed, restart Lumen, and reload the page. Check with
 `uv run lumen doctor --json`. Import and review remain usable.
 
+## Refine previews
+
+Import shows the camera's small embedded JPEG. **Refine previews** (beside the
+contact-sheet heading) re-renders frames from the RAW with darktable at 2048 px,
+then re-measures sharpness, exposure, astro, and face/eye signals and re-ranks
+each affected burst. Choose the scope — the selected burst, the frames matching
+the current filters, or the whole catalog — and follow progress in the job
+strip; refined frames carry a **Refined** mark. From the CLI:
+
+```sh
+uv run lumen refine-previews --group 3
+uv run lumen refine-previews --keepers --from 2026-10-21
+uv run lumen refine-previews --all
+```
+
+It needs `darktable-cli`; without it the control is disabled with the reason.
+Refining never changes a manual pick, decision, or rating, and never touches the
+original. Frames whose original changed since import are skipped and logged.
+
 ## Stack a night sky
 
 The **Astro** tab turns the selected batch into one managed Siril stack. Lumen

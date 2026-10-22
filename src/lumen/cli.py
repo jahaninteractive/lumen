@@ -35,16 +35,15 @@ def build_parser() -> argparse.ArgumentParser:
     ingester.add_argument("--json", action="store_true")
 
     groups = commands.add_parser("groups", help="list burst groups and scores")
-    groups.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="captured on or after this date")
-    groups.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="captured on or before this date")
-    groups.add_argument("--camera")
-    groups.add_argument("--decision", choices=("any", "flag", "reject", "none"), default="any")
-    groups.add_argument("--min-rating", type=int, choices=range(6), default=0)
-    groups.add_argument("--keepers", dest="keepers_only", action="store_true", help="only keepers (not rejected; flagged or best)")
-    groups.add_argument("--tagged", dest="tagged_only", action="store_true", help="only frames with local AI tags")
-    groups.add_argument("--text", help="match tag descriptions or subjects")
-    groups.add_argument("--show-rejected", action="store_true")
+    _add_filter_flags(groups)
     groups.add_argument("--json", action="store_true")
+
+    refine = commands.add_parser("refine-previews", help="replace embedded previews with darktable renders and re-rank")
+    selection = refine.add_mutually_exclusive_group()
+    selection.add_argument("--group", type=int, metavar="ID")
+    selection.add_argument("--all", action="store_true")
+    _add_filter_flags(refine)
+    refine.add_argument("--json", action="store_true")
 
     tag = commands.add_parser("tag", help="tag previews with the configured local oMLX model")
     selection = tag.add_mutually_exclusive_group(required=True)
@@ -124,6 +123,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="captured on or after this date")
+    parser.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="captured on or before this date")
+    parser.add_argument("--camera")
+    parser.add_argument("--decision", choices=("any", "flag", "reject", "none"), default="any")
+    parser.add_argument("--min-rating", type=int, choices=range(6), default=0)
+    parser.add_argument("--keepers", dest="keepers_only", action="store_true", help="only keepers (not rejected; flagged or best)")
+    parser.add_argument("--tagged", dest="tagged_only", action="store_true", help="only frames with local AI tags")
+    parser.add_argument("--text", help="match tag descriptions or subjects")
+    parser.add_argument("--show-rejected", action="store_true")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = Settings.from_environment()
@@ -152,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         verified = payload.get("status") == "succeeded" and payload.get("ingest", {}).get("card_verified_everywhere") is True
         return 0 if verified else 2
 
-    if args.command in {"import", "jobs", "cancel"} or (args.command == "tag" and args.all):
+    if args.command in {"import", "jobs", "cancel", "refine-previews"} or (args.command == "tag" and args.all):
         try:
             with Library(settings) as library:
                 if args.command == "jobs":
@@ -161,8 +172,17 @@ def main(argv: list[str] | None = None) -> int:
                     library.cancel_job(args.job_id)
                     payload = library.job_status(args.job_id)
                 else:
-                    job = (library.start_import_job(args.path) if args.command == "import" else
-                           library.start_tag_job(OmlxTagger(settings.omlx_url, settings.omlx_model), retag=args.retag))
+                    if args.command == "refine-previews":
+                        filters = GroupFilters(**{name: getattr(args, name) for name in GroupFilters.__dataclass_fields__})
+                        filtered = filters != GroupFilters()
+                        if (args.group is not None) + args.all + filtered != 1:
+                            raise ValueError("choose exactly one of --group, --all, or filter flags")
+                        job = library.start_refine_job(group_id=args.group, all_photos=args.all,
+                                                       filters=filters if filtered else None)
+                    elif args.command == "import":
+                        job = library.start_import_job(args.path)
+                    else:
+                        job = library.start_tag_job(OmlxTagger(settings.omlx_url, settings.omlx_model), retag=args.retag)
                     library.wait_for_job(job.id)
                     payload = library.job_status(job.id)
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
@@ -300,7 +320,7 @@ def _serializable_groups(groups: list[dict]) -> list[dict]:
         for photo in group["photos"]:
             item = dict(photo)
             item["name"] = Path(item["path"]).name
-            item["preview_url"] = f"/preview/{item['id']}?v={item['fingerprint'][:16]}"
+            item["preview_url"] = f"/preview/{item['id']}?v={item['fingerprint'][:16]}-{item['preview_kind']}"
             for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                 item.pop(key, None)
             item.pop("astro_json", None)

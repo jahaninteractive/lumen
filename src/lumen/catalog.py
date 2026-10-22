@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, Any
 
 from .composition import CropRect
-from .domain import DECISIONS, Artifact, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
+from .domain import DECISIONS, PREVIEW_KINDS, Artifact, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
 
 
 _UNCHANGED = object()
@@ -21,7 +21,8 @@ _JOB_TRANSITIONS = {
 # Columns added after a table first shipped: {table: {column: DDL}}; applied once to older catalogs.
 _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
-    "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT"},
+    "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT",
+               "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'"},
 }
 
 
@@ -219,13 +220,14 @@ class Catalog:
             """
             INSERT INTO photos
                 (path, fingerprint, captured_at, camera_id, preview_path, format,
-                 group_id, manual_pick, imported_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 group_id, manual_pick, imported_at, preview_kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 fingerprint=excluded.fingerprint,
                 captured_at=excluded.captured_at,
                 camera_id=excluded.camera_id,
                 preview_path=excluded.preview_path,
+                preview_kind=excluded.preview_kind,
                 format=excluded.format,
                 group_id=COALESCE(excluded.group_id, photos.group_id),
                 manual_pick=MAX(photos.manual_pick, excluded.manual_pick)
@@ -241,6 +243,7 @@ class Catalog:
                 photo.group_id,
                 int(photo.manual_pick),
                 now,
+                photo.preview_kind,
             ),
         ).fetchone()
         self.connection.commit()
@@ -731,6 +734,23 @@ class Catalog:
         self.connection.commit()
         return group_id
 
+    def update_preview(self, photo_id: int, preview_path: str, preview_kind: str) -> None:
+        if not isinstance(preview_kind, str) or preview_kind not in PREVIEW_KINDS:
+            raise ValueError("preview kind must be embedded or refined")
+        with self.connection:
+            if not self.connection.execute("UPDATE photos SET preview_path = ?, preview_kind = ? WHERE id = ?",
+                                            (preview_path, preview_kind, photo_id)).rowcount:
+                raise ValueError(f"unknown photo ID: {photo_id}")
+
+    def preview_references(self, preview_path: str) -> int:
+        return self.connection.execute("SELECT COUNT(*) FROM photos WHERE preview_path = ?", (preview_path,)).fetchone()[0]
+
+    def photos_for_filters(self, filters: GroupFilters) -> list[int]:
+        """IDs of grouped photos matching the contact-sheet filters, in catalog order."""
+        where, params = filters.where()
+        return [row[0] for row in self.connection.execute(
+            f"SELECT p.id FROM photos p JOIN photo_groups g ON g.id = p.group_id WHERE {where} ORDER BY p.id", params)]
+
     def set_mirror_path(self, photo_id: int, mirror_path: str | None) -> None:
         """Verified mirror copy of an ingested original; upserts never touch it."""
         with self.connection:
@@ -865,6 +885,7 @@ class Catalog:
             decision=row["decision"],
             rating=int(row["rating"]),
             mirror_path=row["mirror_path"],
+            preview_kind=row["preview_kind"],
         )
 
     @staticmethod

@@ -1,3 +1,5 @@
+import json
+import sys
 import tempfile
 import subprocess
 import unittest
@@ -6,7 +8,31 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from lumen.previews import ExifToolPreviewProvider, fingerprint_file, read_image_dimensions
+from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions
+
+
+def write_fake_darktable(directory: Path, sharp: tuple[str, ...] = ()) -> str:
+    """Executable stand-in for darktable-cli: renders the source at 2048 px (noise for names in `sharp`),
+    records its arguments beside itself, and exits 3 for sources whose name contains FAIL."""
+    script = directory / "darktable-cli"
+    script.write_text(f'''#!{sys.executable}
+import json, sys
+from pathlib import Path
+from PIL import Image
+source, output = sys.argv[1], sys.argv[2]
+with open({str(directory / "calls.jsonl")!r}, "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+if "FAIL" in Path(source).name:
+    sys.exit(3)
+if any(name in Path(source).name for name in {sharp!r}):
+    image = Image.effect_noise((2048, 1536), 64).convert("RGB")
+else:
+    with Image.open(source) as opened:
+        image = opened.convert("RGB").resize((2048, 1536))
+image.save(output, format="JPEG", quality=95)
+''')
+    script.chmod(0o755)
+    return str(script)
 
 
 class PreviewTests(unittest.TestCase):
@@ -90,6 +116,48 @@ class PreviewTests(unittest.TestCase):
                 result = provider.create_preview(source, destination)
 
         self.assertEqual(destination, result)
+
+    def test_refined_preview_uses_darktable_and_renames_atomically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC0001.jpg"
+            Image.new("RGB", (320, 240), (90, 90, 90)).save(source)
+            before = source.read_bytes()
+            darktable = write_fake_darktable(root)
+            destination = root / "previews" / "abc-2048.jpg"
+            destination.parent.mkdir()
+
+            result = ExifToolPreviewProvider().create_refined_preview(source, destination, darktable=darktable)
+
+            self.assertEqual(destination, result)
+            with Image.open(result) as preview:
+                self.assertEqual((2048, 1536), preview.size)
+            self.assertEqual([destination], list(destination.parent.iterdir()), "no temporary render or .tmp remains")
+            self.assertEqual(before, source.read_bytes())
+            arguments = json.loads((root / "calls.jsonl").read_text().splitlines()[0])
+            self.assertEqual(str(source), arguments[0])
+            self.assertEqual(destination.parent, Path(arguments[1]).parent.parent, "renders into a temporary beside the destination")
+            self.assertEqual(["--width", "2048", "--height", "2048", "--core", "--conf",
+                              "plugins/lighttable/export/metadata_flags=5"], arguments[2:])
+
+            failing = root / "FAIL.jpg"
+            failing.write_bytes(before)
+            with self.assertRaises(PreviewError) as raised:
+                ExifToolPreviewProvider().create_refined_preview(failing, root / "previews" / "def-2048.jpg", darktable=darktable)
+            self.assertNotIn(str(root), str(raised.exception))
+            self.assertEqual([destination], list(destination.parent.iterdir()))
+
+            def silent(command, **kwargs):  # exits 0 but writes nothing
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            def slow(command, **kwargs):
+                raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+
+            for runner in (silent, slow):
+                with self.subTest(runner=runner.__name__), self.assertRaises(PreviewError):
+                    ExifToolPreviewProvider().create_refined_preview(source, root / "previews" / "ghi-2048.jpg",
+                                                                     darktable=darktable, runner=runner)
+            self.assertEqual([destination], list(destination.parent.iterdir()))
 
 
 if __name__ == "__main__":

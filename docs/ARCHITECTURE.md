@@ -42,6 +42,21 @@ RAW/JPEG folder
 - `library.py` orchestrates imports while keeping domain modules independent.
 - `cli.py` and `web.py` are two interfaces over the same library facade.
 
+## Previews
+
+Imports cache the embedded camera JPEG as `previews/<fingerprint>.jpg`
+(`preview_kind = "embedded"`). The `refine_previews` job renders each selected
+original with `darktable-cli` (2048 px, `--core --conf
+plugins/lighttable/export/metadata_flags=5`) into a temporary folder beside the
+cache, normalises it to `previews/<fingerprint>-2048.jpg`, and renames it into
+place, so a preview is never half-written. It verifies the source fingerprint
+before and after the render, sets `preview_kind = "refined"`, re-runs the
+import measurements, records a `preview_refined` event, then re-ranks each
+affected group with the normal selection rule. It never writes `manual_pick`,
+`decision`, or `rating`. The old embedded file is removed only when no other
+photo references it. Preview URLs carry `?v=<fingerprint[:16]>-<preview_kind>`
+so browsers refetch after refinement.
+
 ## Managed astro stacking
 
 Everything a stack needs lives under `<library>/outputs/astro/<job-id>/`:
