@@ -238,6 +238,18 @@ class CatalogTests(unittest.TestCase):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     migrated.update_job(1, **bad)
 
+    def test_mirror_path_is_set_and_preserved_by_upsert(self):
+        photo = Photo(path="/primary/a.ARW", fingerprint="abc", captured_at=None, camera_id="cam")
+        photo_id = self.catalog.upsert_photo(photo)
+        self.assertIsNone(self.catalog.get_photo(photo_id).mirror_path)
+        self.catalog.set_mirror_path(photo_id, "/mirror/a.ARW")
+        self.assertEqual(photo_id, self.catalog.upsert_photo(photo))
+        self.assertEqual("/mirror/a.ARW", self.catalog.get_photo(photo_id).mirror_path)
+        self.catalog.set_mirror_path(photo_id, None)
+        self.assertIsNone(self.catalog.get_photo(photo_id).mirror_path)
+        columns = [row["name"] for row in self.catalog.connection.execute("PRAGMA table_info(photos)")]
+        self.assertEqual(1, columns.count("mirror_path"))
+
     def test_migration_adds_decision_and_rating_and_upsert_preserves_them(self):
         legacy_path = Path(self.tmp.name) / "pre-decision.sqlite3"
         with closing(sqlite3.connect(legacy_path)) as legacy:

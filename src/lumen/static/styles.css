@@ -204,3 +204,4 @@ button.danger { color: var(--danger); border-color: var(--danger); background: t
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+#ingest-verdict { font-weight: 700; color: var(--amber); }

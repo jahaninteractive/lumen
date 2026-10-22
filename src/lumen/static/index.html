@@ -47,6 +47,7 @@
           <button type="button" id="compose-tab" role="tab" aria-controls="compose-panel" aria-selected="true" tabindex="0">Compose</button>
           <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
           <button type="button" id="astro-tab" role="tab" aria-controls="astro-panel" aria-selected="false" tabindex="-1">Astro</button>
+          <button type="button" id="ingest-tab" role="tab" aria-controls="ingest-panel" aria-selected="false" tabindex="-1">Ingest</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
         <section id="compose-panel" role="tabpanel" aria-labelledby="compose-tab" tabindex="0">
@@ -138,6 +139,38 @@
           <p id="astro-status" role="status" aria-live="polite"></p>
           <div id="astro-paths" class="recovery" aria-label="Managed job files"></div>
           <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
+        </section>
+        <section id="ingest-panel" role="tabpanel" aria-labelledby="ingest-tab" tabindex="0" hidden>
+          <h2>Copy a card to verified destinations</h2>
+          <p class="quiet">Lumen only reads the card. Each photo is copied, re-read, and checked by SHA-256 on every destination, then Lumen imports the primary copies. Videos and other files stay on the card and are counted as not verified.</p>
+          <fieldset id="ingest-controls">
+            <legend>Card and destinations</legend>
+            <p id="ingest-card-label">Memory card folder</p>
+            <p id="ingest-card-path" class="path" aria-labelledby="ingest-card-label">None</p>
+            <div class="button-row">
+              <button type="button" id="browse-ingest-card" class="secondary">Choose card…</button>
+            </div>
+            <p id="ingest-primary-label">Primary destination (imported into Lumen)</p>
+            <p id="ingest-primary-path" class="path" aria-labelledby="ingest-primary-label">None</p>
+            <div class="button-row">
+              <button type="button" id="browse-ingest-primary" class="secondary">Choose primary…</button>
+            </div>
+            <p id="ingest-mirror-label">Mirror destination (optional second copy)</p>
+            <p id="ingest-mirror-path" class="path" aria-labelledby="ingest-mirror-label">No mirror</p>
+            <div class="button-row">
+              <button type="button" id="browse-ingest-mirror" class="secondary">Choose mirror…</button>
+              <button type="button" id="reset-ingest-mirror" class="secondary" disabled>No mirror</button>
+            </div>
+          </fieldset>
+          <div class="button-row">
+            <button type="button" id="start-ingest" disabled>Start ingest</button>
+          </div>
+          <p id="ingest-counts"></p>
+          <p id="ingest-manifest-label">Manifest</p>
+          <p id="ingest-manifest" class="path" aria-labelledby="ingest-manifest-label">Appears when an ingest starts</p>
+          <p id="ingest-snapshot" class="quiet"></p>
+          <p id="ingest-verdict"></p>
+          <p id="ingest-status" role="status" aria-live="polite"></p>
         </section>
         <section id="clear-panel" role="tabpanel" aria-labelledby="clear-tab" tabindex="0" hidden>
           <h2>Make room for the next shoot</h2>

@@ -1,5 +1,7 @@
 import tempfile
 import json
+import os
+from datetime import datetime
 import sqlite3
 import subprocess
 import unittest
@@ -12,6 +14,7 @@ from PIL import Image
 from lumen.config import Settings
 from lumen.library import Library
 from lumen import library as library_module
+from lumen import ingest as ingest_module
 from lumen.pipelines import DarktablePipeline
 from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
@@ -1271,6 +1274,148 @@ class LibraryTests(unittest.TestCase):
             for path in (self.source_dir / "missing.ARW", self.source_dir / "notes.txt"):
                 with self.subTest(path=path), self.assertRaises(ValueError):
                     library.start_import_job(path)
+            self.assertEqual([], library.catalog.list_jobs())
+
+    def make_card(self, count=2):
+        card = self.root / "CARD"
+        (card / "DCIM" / "100MSDCF").mkdir(parents=True)
+        for index in range(1, count + 1):
+            path = card / "DCIM" / "100MSDCF" / f"DSC0000{index}.JPG"
+            Image.new("RGB", (320, 240), (index * 70, 20, 20)).save(path)
+            os.utime(path, (datetime(2026, 10, 20, 12, 0, index).timestamp(),) * 2)
+        self.primary = self.root / "primary"
+        self.mirror = self.root / "mirror"
+        self.primary.mkdir()
+        self.mirror.mkdir()
+        return card
+
+    def failing_copy(self, root, name):
+        real = ingest_module.copy_verified
+
+        def copy(source, destination, **kwargs):
+            if destination.is_relative_to(root.resolve()) and source.name == name:
+                raise ingest_module.IngestVerifyError(f"copy of {source.name} did not verify")
+            return real(source, destination, **kwargs)
+        return patch("lumen.ingest.copy_verified", side_effect=copy)
+
+    def test_ingest_job_imports_primary_copies_not_card_and_records_mirror_path(self):
+        card = self.make_card()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            status = self.run_job(library, library.start_ingest_job(card, self.primary, self.mirror))
+            photos = library.catalog.list_photos()
+            job = library.catalog.get_job(status["job_id"])
+            events = {photo.id: library.catalog.events_for(photo.id) for photo in photos}
+            sidecars = {photo.id: [path.read_text() for path in library.sidecars.paths(photo)] for photo in photos}
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual("ingest", status["kind"])
+        snapshot = status["ingest"].pop("snapshot")
+        self.assertEqual({"copied": 2, "verified": 2, "already_present": 0, "failed": 0, "files": 2, "skipped": 0,
+                          "card_verified_everywhere": True, "manifest": "manifest.json"}, status["ingest"])
+        self.assertRegex(snapshot, r"^\d{8}T\d{6}Z\.sqlite3$")
+        job_dir = self.library_dir / "outputs" / "ingest" / str(job.id)
+        self.assertEqual(str(job_dir / "manifest.json"), job.result_path)
+        self.assertTrue((job_dir / "ingest.log").is_file())
+        self.assertEqual("DSC00002.JPG", status["label"])
+        relative = Path("2026-10-20") / "DCIM" / "100MSDCF"
+        self.assertEqual([str(self.primary.resolve() / relative / f"DSC0000{index}.JPG") for index in (1, 2)],
+                         sorted(photo.path for photo in photos))
+        for photo in photos:
+            name = Path(photo.path).name
+            self.assertEqual(str(self.mirror.resolve() / relative / name), photo.mirror_path)
+            kinds = [event.kind for event in events[photo.id]]
+            self.assertIn("imported", kinds)
+            ingested = next(event for event in events[photo.id] if event.kind == "ingested")
+            self.assertEqual({"job_id": job.id, "destination": "primary", "mirror": True}, {
+                key: ingested.details[key] for key in ("job_id", "destination", "mirror")})
+            sidecar, xmp = sidecars[photo.id]
+            self.assertEqual(photo.mirror_path, json.loads(sidecar)["source"]["mirror_path"])
+            self.assertIn("ingested", xmp)
+        manifest = json.loads((job_dir / "manifest.json").read_text())
+        self.assertEqual(1, manifest["schema_version"])
+        self.assertEqual(str(card.resolve()), manifest["card"])
+        self.assertEqual([str(self.primary.resolve()), str(self.mirror.resolve())], manifest["destinations"])
+        self.assertTrue(manifest["finished_at"])
+        self.assertEqual(snapshot, manifest["snapshot"])
+        self.assertEqual(2, len(manifest["files"]))
+        self.assertNotIn(str(self.root), json.dumps(status))
+
+    def test_ingest_job_cancel_between_files_leaves_no_partial_or_final_half_file(self):
+        card = self.make_card(3)
+        real = ingest_module.copy_verified
+        holder = {}
+
+        def copy_then_cancel(source, destination, **kwargs):
+            digest = real(source, destination, **kwargs)
+            holder["library"].cancel_job(holder["job"].id)
+            return digest
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            holder["library"] = library
+            with patch("lumen.ingest.copy_verified", side_effect=copy_then_cancel):
+                holder["job"] = library.start_ingest_job(card, self.primary, self.mirror)
+                status = self.run_job(library, holder["job"])
+            photo_count = library.photo_count()
+
+        self.assertEqual("cancelled", status["status"])
+        self.assertFalse(status["ingest"]["card_verified_everywhere"])
+        self.assertEqual(0, photo_count, "a cancelled ingest imports nothing")
+        copies = [path for root in (self.primary, self.mirror) for path in root.rglob("*") if path.is_file()]
+        self.assertEqual([], [path for path in copies if "lumen-partial" in path.name])
+        self.assertEqual(2, len(copies), "the file in progress finishes on every destination, then the job stops")
+        for path in copies:
+            self.assertEqual((card / path.relative_to(path.parents[3]).relative_to("2026-10-20")).read_bytes(), path.read_bytes())
+        self.assertFalse((self.primary / "lumen-catalog-backups").exists())
+        manifest = json.loads((self.library_dir / "outputs" / "ingest" / str(status["job_id"]) / "manifest.json").read_text())
+        self.assertEqual(1, len(manifest["files"]))
+        self.assertEqual(3, manifest["summary"]["files"])
+
+    def test_ingest_job_mirror_failure_blocks_card_verified_everywhere_but_still_imports_primary(self):
+        card = self.make_card()
+        with Library(Settings(library_dir=self.library_dir)) as library, self.failing_copy(self.mirror, "DSC00002.JPG"):
+            status = self.run_job(library, library.start_ingest_job(card, self.primary, self.mirror))
+            photos = {Path(photo.path).name: photo for photo in library.catalog.list_photos()}
+            second_ingested = next(event for event in library.catalog.events_for(photos["DSC00002.JPG"].id) if event.kind == "ingested")
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual((False, 1, 1), (status["ingest"]["card_verified_everywhere"], status["ingest"]["failed"], status["ingest"]["verified"]))
+        self.assertEqual(["DSC00001.JPG", "DSC00002.JPG"], sorted(photos))
+        self.assertIsNotNone(photos["DSC00001.JPG"].mirror_path)
+        self.assertIsNone(photos["DSC00002.JPG"].mirror_path)
+        self.assertFalse(second_ingested.details["mirror"])
+        self.assertTrue(any("did not verify" in line for line in status["log_tail"]))
+        self.assertIsNotNone(status["ingest"]["snapshot"])
+
+    def test_ingest_job_writes_catalog_snapshot_beside_primary_copies(self):
+        card = self.make_card()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            status = self.run_job(library, library.start_ingest_job(card, self.primary))
+        backups = self.primary / "lumen-catalog-backups"
+        self.assertEqual([status["ingest"]["snapshot"]], [path.name for path in backups.iterdir()])
+        with closing(sqlite3.connect(backups / status["ingest"]["snapshot"])) as snapshot:
+            self.assertEqual(2, snapshot.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
+        self.assertTrue(status["ingest"]["card_verified_everywhere"], "one destination is every requested destination")
+
+    def test_ingest_job_with_primary_failure_skips_import_and_snapshot(self):
+        card = self.make_card()
+        with Library(Settings(library_dir=self.library_dir)) as library, self.failing_copy(self.primary, "DSC00001.JPG"):
+            status = self.run_job(library, library.start_ingest_job(card, self.primary, self.mirror))
+            photo_count = library.photo_count()
+            job = library.catalog.get_job(status["job_id"])
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertFalse(status["ingest"]["card_verified_everywhere"])
+        self.assertIsNone(status["ingest"]["snapshot"])
+        self.assertEqual(0, photo_count)
+        self.assertFalse((self.primary / "lumen-catalog-backups").exists())
+        self.assertEqual(str(self.library_dir / "outputs" / "ingest" / str(job.id) / "manifest.json"), job.result_path)
+
+    def test_ingest_job_rejects_unsafe_destinations_before_creating_a_job(self):
+        card = self.make_card()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            for primary, mirror in ((self.library_dir, None), (self.primary, self.primary), (card / "DCIM", None)):
+                with self.subTest(primary=primary, mirror=mirror), self.assertRaises(ValueError):
+                    library.start_ingest_job(card, primary, mirror)
             self.assertEqual([], library.catalog.list_jobs())
 
 

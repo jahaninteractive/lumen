@@ -9,6 +9,7 @@ from typing import Any
 MAX_IMAGE_DIMENSION = 100_000
 MAX_IMAGE_PIXELS = 1_000_000_000
 DECISIONS = frozenset({"none", "flag", "reject"})
+SUPPORTED_EXTENSIONS = frozenset({".arw", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic"})
 JOB_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled", "interrupted"})
 MAX_JOB_ERROR_LENGTH = 1000
 
@@ -53,6 +54,7 @@ class Photo:
     manual_pick: bool = False
     decision: str = "none"
     rating: int = 0
+    mirror_path: str | None = None
 
 
 @dataclass(slots=True)

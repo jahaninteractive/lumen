@@ -149,6 +149,71 @@ class WebTests(unittest.TestCase):
                 self.assertNotIn(secret, text)
         self.assertEqual(3, json.load(urllib.request.urlopen(self.base + "/api/groups", timeout=3))["photo_count"])
 
+    def test_ingest_route_validates_fields_and_never_returns_paths_or_fingerprints(self):
+        card = self.root / "CARD" / "DCIM"
+        card.mkdir(parents=True)
+        for index in range(2):
+            Image.new("RGB", (60, 40), (index * 90, 20, 20)).save(card / f"DSC000{index}.JPG")
+        primary, mirror = self.root / "primary", self.root / "mirror"
+        primary.mkdir()
+        mirror.mkdir()
+        valid = {"card": str(self.root / "CARD"), "primary": str(primary), "mirror": str(mirror)}
+        for payload in ({}, {"card": valid["card"]}, {"card": "", "primary": str(primary)}, {"card": 5, "primary": str(primary)},
+                        {**valid, "extra": 1}, {**valid, "mirror": 5}, {**valid, "mirror": ""}, {**valid, "card": str(self.root / "missing")},
+                        {**valid, "primary": str(self.root / "library")}, {**valid, "mirror": str(primary)}):
+            with self.subTest(payload=payload):
+                code, body = self.post_json("/api/ingest", payload)
+                self.assertEqual(400, code)
+                self.assertNotIn(str(self.root), json.dumps(body))
+        self.assertEqual(403, self.post_json("/api/ingest", valid, headers={"Origin": "https://attacker.example"})[0])
+        code, started = self.post_json("/api/ingest", valid)
+        self.assertEqual((202, "ingest"), (code, started["kind"]))
+        finished = self.wait_job(started["job_id"])
+        self.assertEqual("succeeded", finished["status"])
+        self.assertEqual((True, 2, "manifest.json"), (finished["ingest"]["card_verified_everywhere"], finished["ingest"]["verified"], finished["ingest"]["manifest"]))
+        code, status = self.get_json("/api/status")
+        self.assertEqual(str((self.root / "library" / "outputs" / "ingest").resolve()), status["ingest_output_dir"])
+        _, groups = self.get_json("/api/groups")
+        photo_ids = [photo["id"] for group in groups["groups"] for photo in group["photos"]]
+        self.assertEqual(3, len(photo_ids))
+        photos = [self.get_json(f"/api/photos/{photo_id}")[1] for photo_id in photo_ids]
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            secrets = [str(self.root), str(self.root.resolve()), "mirror_path", "fingerprint", "manifest_path"]
+            secrets += [photo.fingerprint for photo in library.catalog.list_photos()]
+            self.assertEqual(2, sum(photo.mirror_path is not None for photo in library.catalog.list_photos()))
+        for body in (started, finished, groups, *photos, self.get_json("/api/jobs")[1]):
+            text = json.dumps(body)
+            for secret in secrets:
+                self.assertNotIn(secret, text)
+
+    def test_ingest_panel_has_labeled_pickers_and_honest_format_copy(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        panel = by_id["ingest-panel"]
+        self.assertEqual(("tabpanel", "ingest-tab"), (panel["attrs"].get("role"), panel["attrs"].get("aria-labelledby")))
+        for kind in ("card", "primary", "mirror"):
+            browse = by_id[f"browse-ingest-{kind}"]
+            self.assertEqual(("button", "button"), (browse["tag"], browse["attrs"].get("type")))
+            self.assertIn(panel, browse["parents"])
+            path = by_id[f"ingest-{kind}-path"]
+            self.assertEqual("path", path["attrs"].get("class"))
+            self.assertTrue(by_id[path["attrs"]["aria-labelledby"]]["text"].strip())
+        self.assertEqual(("button", "button"), (by_id["start-ingest"]["tag"], by_id["start-ingest"]["attrs"].get("type")))
+        self.assertEqual("Start ingest", by_id["start-ingest"]["text"].strip())
+        self.assertIn("disabled", by_id["start-ingest"]["attrs"])
+        self.assertEqual("polite", by_id["ingest-status"]["attrs"].get("aria-live"))
+        self.assertTrue(by_id[by_id["ingest-manifest"]["attrs"]["aria-labelledby"]]["text"].strip())
+        javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
+        self.assertIn("Every file verified on every destination.", javascript)
+        self.assertIn("Do not format the card: ", javascript)
+        self.assertNotRegex(javascript.lower(), r"safe to (format|erase|wipe)|card is safe")
+        self.assertNotRegex(javascript, r"ingest[^\n]*\.innerHTML")
+
+    def test_javascript_ingest_tab_starts_polls_and_reports_verification(self):
+        self.run_javascript_cleanup_regression("ingest")
+
     def test_tag_all_conflicts_with_active_job_and_cancel_is_same_origin_only(self):
         release = threading.Event()
         self.addCleanup(release.set)
@@ -436,7 +501,7 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab"]
-        self.assertEqual(["Compose", "Export", "Astro", "Clear"], [node["text"].strip() for node in tabs])
+        self.assertEqual(["Compose", "Export", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for index, tab in enumerate(tabs):
             self.assertEqual("button", tab["tag"])
@@ -685,7 +750,7 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['compose', 'export', 'astro', 'clear'].map((name, index) => {
+const tabElements = ['compose', 'export', 'astro', 'ingest', 'clear'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -724,6 +789,12 @@ const statusWrites = [];
 Object.defineProperty(element('#astro-status'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; statusWrites.push(value); } });
 const jobPayload = (status, progress, extra = {}) => ({ job_id: 7, kind: 'astro', status, progress, error: null, result: null, log_tail: ['log: Running command: register'], warnings: ['No flat frames supplied; stacking without flats.'], lights: 2, excluded_lights: 1, darks: 0, flats: 0, biases: 0, created_at: '', updated_at: '', ...extra });
 const importJob = (status, progress, extra = {}) => ({ job_id: 9, kind: 'import', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
+const browsePaths = scenario === 'ingest' ? ['/Volumes/CARD', '/Volumes/Primary', '/Volumes/Mirror'] : [];
+const ingestPosts = [];
+let ingestPolls = 0;
+let ingestOutcome = { copied: 3, already_present: 1, verified: 4, card_verified_everywhere: true, snapshot: '20261022T120000Z.sqlite3' };
+const ingestCounts = extra => ({ copied: 0, verified: 0, already_present: 0, failed: 0, files: 4, skipped: 0, card_verified_everywhere: false, manifest: 'manifest.json', snapshot: null, ...extra });
+const ingestJob = (status, progress, extra = {}) => ({ job_id: 11, kind: 'ingest', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ingest: ingestCounts(), ...extra });
 let groupLoads = 0;
 let lastGroupsUrl = null;
 let resumeJobs = [];
@@ -751,7 +822,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro' };
+  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (url === '/api/groups' || url === '/api/groups?show_rejected=1') { groupLoads += 1; lastGroupsUrl = url; payload = { groups, photo_count: groups.reduce((count, item) => count + item.frame_count, 0), rejected_count: groups.reduce((count, item) => count + item.rejected_count, 0) }; }
   else if (/^\/api\/photos\/\d+\/pick$/.test(url)) { assert.deepEqual(JSON.parse(options.body), {}); picks.push(url); payload = { photo_id: Number(url.split('/')[3]), manual_pick: true }; }
@@ -796,7 +867,13 @@ async function fetch(url, options = {}) {
     const removed = groups.find(item => item.id === id);
     groups = groups.filter(item => item.id !== id);
     payload = { photos_removed: removed.photos.length, files_removed: 3, trash_path: '/managed/trash/recovery', snapshot_path: '/managed/trash/recovery/catalog.sqlite3' };
-  } else if (url === '/api/browse') payload = { path: '/cal/darks', cancelled: false };
+  } else if (url === '/api/browse') payload = { path: browsePaths.shift() || '/cal/darks', cancelled: false };
+  else if (url === '/api/ingest') { ingestPosts.push(JSON.parse(options.body)); payload = ingestJob('queued', 0); }
+  else if (url === '/api/jobs/11') {
+    ingestPolls += 1;
+    payload = ingestPolls < 3 ? ingestJob('running', 0.25, { label: 'DSC00001.ARW', processed: 1, total: 4, ingest: ingestCounts({ copied: 1, verified: 1 }) })
+      : ingestJob('succeeded', 1, { label: 'DSC00004.ARW', processed: 4, total: 4, ingest: ingestCounts(ingestOutcome) });
+  }
   else if (url === '/api/astro/jobs') { assert.equal(options.method, 'POST'); astroPosts.push(JSON.parse(options.body)); payload = jobPayload('queued', 0); }
   else if (url === '/api/astro/jobs/7/run') { assert.deepEqual(JSON.parse(options.body), {}); runs += 1; payload = jobPayload('queued', 0); }
   else if (url === '/api/astro/jobs/7/cancel') { assert.deepEqual(JSON.parse(options.body), {}); cancels += 1; payload = jobPayload('cancelled', 0.5); }
@@ -968,6 +1045,49 @@ const regression = `
     assert.ok(texts(1).includes('Best') && !texts(1).includes('Rejected'));
     assert.equal(batches()[0].textContent, 'Burst 1 · 2 frames');
     assert.equal(element('#keeper-count').textContent, '2 keepers');
+    return;
+  }
+  if (scenario === 'ingest') {
+    await load();
+    element('#ingest-tab').listeners.click();
+    assert.equal(element('#start-ingest').disabled, true, 'a card and a primary destination are required');
+    await element('#browse-ingest-card').listeners.click();
+    assert.equal(element('#ingest-card-path').textContent, '/Volumes/CARD');
+    assert.equal(element('#start-ingest').disabled, true);
+    await element('#browse-ingest-primary').listeners.click();
+    assert.equal(element('#start-ingest').disabled, false);
+    await element('#browse-ingest-mirror').listeners.click();
+    assert.equal(element('#ingest-mirror-path').textContent, '/Volumes/Mirror');
+    await element('#start-ingest').listeners.click();
+    assert.deepEqual(ingestPosts, [{ card: '/Volumes/CARD', primary: '/Volumes/Primary', mirror: '/Volumes/Mirror' }]);
+    assert.ok(element('#announcer').textContent.includes('Ingest'), 'the start is announced');
+    assert.equal(element('#start-ingest').disabled, true, 'one ingest at a time');
+    assert.equal(element('#browse-ingest-card').disabled, true);
+    assert.equal(activeTimers, 1);
+    assert.equal(element('#ingest-verdict').textContent, '', 'no verdict while the copy runs');
+    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.ok(element('#ingest-counts').textContent.includes('1 copied'));
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(activeTimers, 0);
+    assert.equal(state.job.status, 'succeeded');
+    assert.ok(element('#ingest-counts').textContent.includes('3 copied'));
+    assert.ok(element('#ingest-counts').textContent.includes('1 already present'));
+    assert.ok(element('#ingest-counts').textContent.includes('4 of 4 files verified'));
+    assert.equal(element('#ingest-manifest').textContent, '/managed/outputs/ingest/11/manifest.json');
+    assert.ok(element('#ingest-snapshot').textContent.includes('20261022T120000Z.sqlite3'));
+    assert.equal(element('#ingest-verdict').textContent, 'Every file verified on every destination.');
+    assert.ok(element('#announcer').textContent.includes('Every file verified on every destination.'));
+    assert.equal(element('#start-ingest').disabled, false);
+    ingestPolls = 0;
+    ingestOutcome = { copied: 2, verified: 2, failed: 1, skipped: 1, card_verified_everywhere: false };
+    await element('#reset-ingest-mirror').listeners.click();
+    assert.equal(element('#ingest-mirror-path').textContent, 'No mirror');
+    await element('#start-ingest').listeners.click();
+    assert.deepEqual(ingestPosts[1], { card: '/Volumes/CARD', primary: '/Volumes/Primary', mirror: null });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(element('#ingest-verdict').textContent, 'Do not format the card: 3 files were not verified.');
+    assert.ok(element('#ingest-counts').textContent.includes('1 unsupported file left on the card'));
+    assert.ok(element('#announcer').textContent.includes('Do not format the card'));
     return;
   }
   const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');

@@ -44,6 +44,40 @@ class CliTests(unittest.TestCase):
             code = main(["--library", str(library_dir), *args, "--json"])
         return code, json.loads(output.getvalue())
 
+    def test_ingest_command_exit_code_follows_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            card = root / "CARD" / "DCIM"
+            card.mkdir(parents=True)
+            for index in range(2):
+                Image.new("RGB", (60, 40), (index * 90, 20, 20)).save(card / f"DSC000{index}.JPG")
+            primary, mirror = root / "primary", root / "mirror"
+            primary.mkdir()
+            mirror.mkdir()
+            code, verified = self.run_json(root / "library", "ingest", str(root / "CARD"), "--to", str(primary), "--mirror", str(mirror))
+            from lumen import ingest
+
+            def mirror_fails(source, destination, **kwargs):
+                if destination.is_relative_to(mirror.resolve()):
+                    raise ingest.IngestVerifyError("mirror copy did not verify")
+                return real(source, destination, **kwargs)
+
+            real = ingest.copy_verified
+            for path in list(mirror.rglob("*.JPG")):
+                path.unlink()
+            with patch("lumen.ingest.copy_verified", side_effect=mirror_fails):
+                failed_code, failed = self.run_json(root / "library", "ingest", str(root / "CARD"), "--to", str(primary), "--mirror", str(mirror))
+            missing_code, missing = self.run_json(root / "library", "ingest", str(root / "missing"), "--to", str(primary))
+
+        self.assertEqual((0, "succeeded", "ingest"), (code, verified["status"], verified["kind"]))
+        self.assertEqual((True, 2), (verified["ingest"]["card_verified_everywhere"], verified["ingest"]["verified"]))
+        self.assertEqual(2, failed_code)
+        self.assertEqual((False, 2, 0), (failed["ingest"]["card_verified_everywhere"], failed["ingest"]["failed"], failed["ingest"]["verified"]))
+        self.assertEqual(2, missing_code)
+        self.assertIn("error", missing)
+        for payload in (verified, failed, missing):
+            self.assertNotIn(str(root), json.dumps(payload))
+
     def test_import_waits_for_job_and_reports_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

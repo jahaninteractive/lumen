@@ -3,6 +3,7 @@ const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
   job: null, jobTimer: null, jobRequest: 0, details: null, showRejected: false, rejectedCount: 0,
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
+  ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
   get busy() { return this.acting || JOB_ACTIVE.includes(this.job?.status); },
   set busy(value) { this.acting = value; },
@@ -515,20 +516,21 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   }
 });
 
-const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack' };
+const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack', ingest: 'Ingest' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.` : '';
+  const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
   return {
     queued: `${name} queued.`,
     running: `${name} running.`,
-    succeeded: `${name} finished.${summary}`,
-    failed: `${name} failed: ${job.error || 'unknown error'}.`,
-    cancelled: `${name} cancelled. Finished items are kept.`,
-    interrupted: `${name} interrupted by a Lumen restart. Start it again to resume.`,
+    succeeded: `${name} finished.${summary}${verdict}`,
+    failed: `${name} failed: ${job.error || 'unknown error'}.${verdict}`,
+    cancelled: `${name} cancelled. Finished items are kept.${verdict}`,
+    interrupted: `${name} interrupted by a Lumen restart. Start it again to resume.${verdict}`,
   }[job.status] || `${name} status: ${job.status}.`;
 }
 
@@ -546,7 +548,10 @@ function watchJob(job) {
   if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
   document.querySelector('#job-strip').hidden = false;
   if (job.kind === 'astro') setAstroJob(job);
-  else if (job.status !== previous) announce(text);
+  else {
+    if (job.kind === 'ingest') renderIngest(job);
+    if (job.status !== previous) announce(text);
+  }
   if (JOB_ACTIVE.includes(job.status)) startJobPolling();
   else {
     stopJobPolling();
@@ -615,6 +620,58 @@ document.querySelector('#browse-path').addEventListener('click', async event => 
     button.disabled = false;
   }
 });
+
+// The only two verdicts Lumen gives about a card; nothing else may suggest it is safe to reuse.
+function ingestVerdict(job) {
+  const counts = job.ingest || {};
+  if (job.status === 'succeeded' && counts.card_verified_everywhere === true) return 'Every file verified on every destination.';
+  const missing = Math.max((counts.files || 0) - (counts.verified || 0), 0) + (counts.skipped || 0);
+  return `Do not format the card: ${missing} ${missing === 1 ? 'file was' : 'files were'} not verified.`;
+}
+
+function renderIngest(job) {
+  const counts = job.ingest || {};
+  const skipped = counts.skipped ? ` · ${counts.skipped} unsupported file${counts.skipped === 1 ? '' : 's'} left on the card` : '';
+  document.querySelector('#ingest-counts').textContent = `${counts.copied || 0} copied · ${counts.already_present || 0} already present · ${counts.failed || 0} failed · ${counts.verified || 0} of ${counts.files || 0} files verified on every destination${skipped}`;
+  document.querySelector('#ingest-manifest').textContent = `${state.status?.ingest_output_dir || '<library>/outputs/ingest'}/${job.job_id}/${counts.manifest || 'manifest.json'}`;
+  document.querySelector('#ingest-snapshot').textContent = counts.snapshot ? `Catalog snapshot: lumen-catalog-backups/${counts.snapshot} in the primary destination.` : '';
+  document.querySelector('#ingest-verdict').textContent = JOB_ACTIVE.includes(job.status) ? '' : ingestVerdict(job);
+}
+
+async function ingestAction(label, action) {
+  state.busy = true;
+  updateWorkflow();
+  try {
+    await action();
+  } catch (error) {
+    document.querySelector('#ingest-status').textContent = `${label} failed: ${error.message}`;
+    announce(document.querySelector('#ingest-status').textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+for (const kind of ['card', 'primary', 'mirror']) {
+  document.querySelector(`#browse-ingest-${kind}`).addEventListener('click', () => ingestAction(`Choose ${kind} folder`, async () => {
+    const result = await post('/api/browse');
+    if (!result.cancelled && result.path) {
+      state.ingest[kind] = result.path;
+      document.querySelector(`#ingest-${kind}-path`).textContent = result.path;
+      announce(`${kind} folder selected.`);
+    }
+  }));
+}
+document.querySelector('#reset-ingest-mirror').addEventListener('click', () => {
+  state.ingest.mirror = null;
+  document.querySelector('#ingest-mirror-path').textContent = 'No mirror';
+  updateWorkflow();
+});
+document.querySelector('#start-ingest').addEventListener('click', () => ingestAction('Start ingest', async () => {
+  document.querySelector('#ingest-status').textContent = 'Starting ingest…';
+  watchJob(await post('/api/ingest', { card: state.ingest.card, primary: state.ingest.primary, mirror: state.ingest.mirror }));
+  document.querySelector('#ingest-status').textContent = 'Ingest started. The card is only read; progress appears in the job strip.';
+}));
 
 const ASTRO_WORDS = { queued: 'Stack prepared and queued.', running: 'Stack running.', succeeded: 'Stack finished.', failed: 'Stack failed.', cancelled: 'Stack cancelled.', interrupted: 'Stack interrupted.' };
 
@@ -778,6 +835,9 @@ function updateWorkflow() {
   document.querySelector('#cancel-astro').disabled = state.acting || !activeJob;
   document.querySelector('#cancel-job').disabled = state.acting || !JOB_ACTIVE.includes(state.job?.status);
   document.querySelector('#reveal-astro').disabled = state.busy || !job;
+  for (const kind of ['card', 'primary', 'mirror']) document.querySelector(`#browse-ingest-${kind}`).disabled = state.busy;
+  document.querySelector('#reset-ingest-mirror').disabled = state.busy || !state.ingest.mirror;
+  document.querySelector('#start-ingest').disabled = state.busy || !state.ingest.card || !state.ingest.primary;
   for (const kind of ['darks', 'flats', 'biases']) {
     document.querySelector(`#browse-astro-${kind}`).disabled = state.busy || activeJob;
     document.querySelector(`#reset-astro-${kind}`).disabled = state.busy || activeJob || !state.astro.folders[kind];

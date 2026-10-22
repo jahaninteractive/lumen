@@ -27,6 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     importer.add_argument("path", type=Path)
     importer.add_argument("--json", action="store_true")
 
+    ingester = commands.add_parser("ingest", help="copy a card to verified destinations, then import the primary copies")
+    ingester.add_argument("card", type=Path)
+    ingester.add_argument("--to", type=Path, required=True, dest="primary", help="primary destination folder")
+    ingester.add_argument("--mirror", type=Path, help="optional second destination folder")
+    ingester.add_argument("--json", action="store_true")
+
     groups = commands.add_parser("groups", help="list burst groups and scores")
     groups.add_argument("--json", action="store_true")
 
@@ -121,6 +127,18 @@ def main(argv: list[str] | None = None) -> int:
         report = doctor_report(settings)
         _print(report, args.json)
         return 0 if report["tools"]["exiftool"]["available"] and report["omlx_model"]["complete"] else 2
+
+    if args.command == "ingest":
+        try:
+            with Library(settings) as library:
+                job = library.start_ingest_job(args.card, args.primary, args.mirror)
+                library.wait_for_job(job.id)
+                payload = library.job_status(job.id)
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            payload = {"error": public_message(str(error))}
+        _print(payload, args.json)
+        verified = payload.get("status") == "succeeded" and payload.get("ingest", {}).get("card_verified_everywhere") is True
+        return 0 if verified else 2
 
     if args.command in {"import", "jobs", "cancel"} or (args.command == "tag" and args.all):
         try:
@@ -266,9 +284,8 @@ def _serializable_groups(groups: list[dict]) -> list[dict]:
             item = dict(photo)
             item["name"] = Path(item["path"]).name
             item["preview_url"] = f"/preview/{item['id']}?v={item['fingerprint'][:16]}"
-            item.pop("path", None)
-            item.pop("fingerprint", None)
-            item.pop("preview_path", None)
+            for key in ("path", "fingerprint", "preview_path", "mirror_path"):
+                item.pop(key, None)
             item.pop("astro_json", None)
             serialized["photos"].append(item)
         result.append(serialized)

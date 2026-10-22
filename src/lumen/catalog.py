@@ -20,7 +20,7 @@ _JOB_TRANSITIONS = {
 # Columns added after a table first shipped: {table: {column: DDL}}; applied once to older catalogs.
 _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
-    "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0"},
+    "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT"},
 }
 
 
@@ -660,6 +660,11 @@ class Catalog:
         self.connection.commit()
         return group_id
 
+    def set_mirror_path(self, photo_id: int, mirror_path: str | None) -> None:
+        """Verified mirror copy of an ingested original; upserts never touch it."""
+        with self.connection:
+            self.connection.execute("UPDATE photos SET mirror_path = ? WHERE id = ?", (mirror_path, photo_id))
+
     def set_decision(self, photo_id: int, decision: str, *, reason: str | None = None) -> Photo:
         if not isinstance(decision, str) or decision not in DECISIONS:
             raise ValueError("decision must be none, flag, or reject")
@@ -769,6 +774,7 @@ class Catalog:
             manual_pick=bool(row["manual_pick"]),
             decision=row["decision"],
             rating=int(row["rating"]),
+            mirror_path=row["mirror_path"],
         )
 
     @staticmethod

@@ -152,6 +152,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_json(doctor_report(settings) | {
                     "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
                     "astro_output_dir": str((settings.output_dir / "astro").resolve()),
+                    "ingest_output_dir": str((settings.output_dir / "ingest").resolve()),
                 })
                 return
             if path == "/api/groups":
@@ -207,8 +208,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 photo = asdict(item["photo"])
                 preview_version = photo["fingerprint"][:16]
-                photo.pop("path", None)
-                photo.pop("fingerprint", None)
+                for key in ("path", "fingerprint", "preview_path", "mirror_path"):
+                    photo.pop(key, None)
                 photo["preview_url"] = f"/preview/{photo['id']}?v={preview_version}"
                 self._send_json({"photo": photo, "metrics": asdict(item["metrics"]), "tags": item["tags"]})
                 return
@@ -260,6 +261,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("path is required")
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         job = library.start_import_job(Path(source))
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/ingest":
+                    if payload.keys() - {"card", "primary", "mirror"}:
+                        raise ValueError("unexpected ingest fields")
+                    for field in ("card", "primary", "mirror"):
+                        value = payload.get(field)
+                        if (value is not None or field != "mirror") and (not isinstance(value, str) or not value.strip()):
+                            raise ValueError(f"{field} must be a folder path string")
+                    mirror = payload.get("mirror")
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        job = library.start_ingest_job(Path(payload["card"]), Path(payload["primary"]),
+                                                       Path(mirror) if mirror is not None else None)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/tag-all":
@@ -408,7 +422,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if isinstance(error, RuntimeError) and "another heavy job" in str(error):
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
-                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/photos/tag-all"))
+                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag-all"))
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 

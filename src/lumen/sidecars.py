@@ -35,7 +35,7 @@ class SidecarWriter:
         payload = {
             "schema_version": 1,
             "photo_id": photo.id,
-            "source": {"path": photo.path, "fingerprint": photo.fingerprint},
+            "source": {"path": photo.path, "fingerprint": photo.fingerprint, "mirror_path": photo.mirror_path},
             "capture": {
                 "captured_at": photo.captured_at.isoformat() if photo.captured_at else None,
                 "camera_id": photo.camera_id,
@@ -71,6 +71,10 @@ class SidecarWriter:
                  "details": event.details}
                 for event in events if event.kind.startswith("crop_")
             ],
+            ingest_provenance=[
+                {"id": event.id, "created_at": event.created_at.isoformat(), "details": event.details}
+                for event in events if event.kind == "ingested"
+            ],
         ))
         return json_path, xmp_path
 
@@ -94,12 +98,14 @@ class SidecarWriter:
 
     @staticmethod
     def _xmp(description: str, keywords: list[str], *, rating: int, provenance: dict | None = None, crop: dict | None = None,
-             crop_provenance: list[dict] | None = None) -> str:
+             crop_provenance: list[dict] | None = None, ingest_provenance: list[dict] | None = None) -> str:
         keyword_items = "".join(f"<rdf:li>{escape(keyword)}</rdf:li>" for keyword in keywords)
         export = f'<lumen:export>{escape(json.dumps(provenance, sort_keys=True))}</lumen:export>' if provenance else ""
         crop_payload = f'<lumen:crop>{escape(json.dumps(crop, sort_keys=True))}</lumen:crop>' if crop else ""
         crop_history = (f'<lumen:cropProvenance>{escape(json.dumps(crop_provenance, sort_keys=True))}'
                         f'</lumen:cropProvenance>' if crop_provenance else "")
+        ingest_history = (f'<lumen:ingested>{escape(json.dumps(ingest_provenance, sort_keys=True))}</lumen:ingested>'
+                          if ingest_provenance else "")
         return f'''<?xml version="1.0" encoding="UTF-8"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -109,6 +115,7 @@ class SidecarWriter:
       {export}
       {crop_payload}
       {crop_history}
+      {ingest_history}
     </rdf:Description>
   </rdf:RDF>
 </x:xmpmeta>

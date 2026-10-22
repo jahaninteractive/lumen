@@ -12,7 +12,7 @@ import threading
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import wraps
 from pathlib import Path
 
@@ -22,7 +22,8 @@ from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, app
 from .catalog import Catalog
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
-from .domain import Artifact, Job, Photo, PhotoEdit
+from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
+from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
 from .omlx import OmlxError
@@ -33,8 +34,6 @@ from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, r
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
 
-
-SUPPORTED_EXTENSIONS = {".arw", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic"}
 
 _MUTATION_LOCKS = {}
 _MUTATION_GUARD = threading.Lock()
@@ -280,6 +279,105 @@ class Library:
 
         self._submit_job(runner, job, work)
         return job
+
+    def start_ingest_job(self, card: Path, primary: Path, mirror: Path | None = None) -> Job:
+        """Copy a card to primary (and mirror), verify every copy, then import only the primary copies."""
+        card, roots = ingest.validate_ingest(card, [primary] if mirror is None else [primary, mirror],
+                                             library_dir=self.settings.library_dir)
+        runner = self.job_runner
+        manifest = {"schema_version": 1, "card": str(card), "destinations": [str(root) for root in roots],
+                    "started_at": None, "finished_at": None, "snapshot": None, "files": [], "summary": None}
+
+        def prepare(job_id: int) -> tuple[str, str]:
+            job_dir = self.settings.output_dir / "ingest" / str(job_id)
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "ingest.log").touch()
+            ingest.write_manifest(job_dir / "manifest.json", manifest)
+            return str(job_dir / "manifest.json"), str(job_dir / "ingest.log")
+
+        job = self.catalog.create_prepared_job("ingest", prepare)
+        manifest_path = Path(job.manifest_path)
+
+        def work(context) -> None:
+            with Library(self.settings, job_runner=runner) as worker:
+                manifest["started_at"] = datetime.now(timezone.utc).isoformat()
+                # ponytail: one exiftool call per file while planning; batch it if large cards plan too slowly.
+                items = ingest.plan_ingest(card, roots, library_dir=self.settings.library_dir, today=date.today())
+                skipped = ingest.unplanned_files(card)
+                for relative in skipped:
+                    worker._log_job(job, f"{relative}: not a supported photo; left on the card and not verified")
+                files = manifest["files"]
+
+                def save() -> None:  # Rewritten after every file so an interrupted ingest can be resumed by a rerun.
+                    manifest["summary"] = ingest.summarize(files, roots, planned=len(items), skipped=len(skipped))
+                    ingest.write_manifest(manifest_path, manifest)
+
+                save()
+                for index, item in enumerate(items, 1):
+                    if context.cancelled:
+                        break
+                    files.append(ingest.ingest_item(item, roots))
+                    if "error" in files[-1]:
+                        worker._log_job(job, f"{item.relative}: {files[-1]['error']}")
+                    save()
+                    context.update_progress(index / len(items) / 2, label=item.source.name[:200],
+                                            processed=index, total=len(items))
+                primary_verified = len(files) == len(items) and all(
+                    entry["outcomes"][str(roots[0])] in ingest.VERIFIED for entry in files)
+                if not context.cancelled and primary_verified and items:
+                    manifest["import"] = worker._import_ingested(context, job, items, files, roots)
+                    if not context.cancelled:
+                        with worker._mutation():
+                            manifest["snapshot"] = worker._snapshot_catalog(roots[0])
+                elif not context.cancelled and not primary_verified:
+                    worker._log_job(job, "Primary copies did not all verify; nothing was imported.")
+                manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
+                save()
+                if not context.cancelled:
+                    worker.catalog.update_job(job.id, result_path=str(manifest_path))
+
+        self._submit_job(runner, job, work)
+        return job
+
+    def _import_ingested(self, context, job: Job, items: list, files: list[dict], roots: tuple[Path, ...]) -> dict:
+        """Import each verified primary copy (never the card) with the per-file job rule, then regroup once."""
+        summary = ImportSummary(discovered=len(items))
+        for index, (item, entry) in enumerate(zip(items, files), 1):
+            if context.cancelled:
+                break
+            mirrored = len(roots) > 1 and entry["outcomes"][str(roots[1])] in ingest.VERIFIED
+            with self._mutation():
+                self._import_candidate(item.destinations[0], summary, skip_unchanged=True, job_id=job.id)
+                if photo := self.catalog.photo_by_path(str(item.destinations[0])):
+                    self.catalog.set_mirror_path(photo.id, str(item.destinations[1]) if mirrored else None)
+                    self.catalog.append_event(photo.id, "ingested", {
+                        "job_id": job.id, "destination": "primary", "mirror": mirrored,
+                        "card_relative": item.relative, "sha256": entry["sha256"],
+                    })
+            for error in summary.errors:
+                self._log_job(job, error)
+            summary.errors.clear()
+            context.update_progress(0.5 + index / len(items) / 2, label=item.source.name[:200],
+                                    processed=index, total=len(items))
+        with self._mutation():
+            self._regroup_and_write_sidecars()
+        return {key: getattr(summary, key) for key in ("discovered", "imported", "updated", "skipped", "failed")}
+
+    def _snapshot_catalog(self, primary: Path) -> str:
+        """Catalog copy beside the primary originals, written to a temporary name and renamed into place."""
+        backups = primary / "lumen-catalog-backups"
+        backups.mkdir(exist_ok=True)
+        name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".sqlite3"
+        temporary = backups / f".{name}.partial"
+        try:
+            temporary.unlink(missing_ok=True)
+            self.catalog.backup(temporary)
+            with temporary.open("rb") as handle:
+                os.fsync(handle.fileno())
+            temporary.replace(backups / name)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return name
 
     def _write_job_files(self, job_id: int, manifest: dict) -> tuple[str, str]:
         job_dir = self.settings.output_dir / "jobs" / str(job_id)
@@ -728,10 +826,20 @@ class Library:
                               "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
                               "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames)}
         elif job.manifest_path != "pending":
-            try:  # Import and tag jobs record their counts in the manifest when they finish.
-                result = json.loads(Path(job.manifest_path).read_text(encoding="utf-8")).get("summary")
-            except (ValueError, OSError, AttributeError):
-                pass
+            try:  # Import, tag, and ingest jobs record their counts in the manifest.
+                manifest = json.loads(Path(job.manifest_path).read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                manifest = None
+            manifest = manifest if isinstance(manifest, dict) else {}
+            summary = manifest.get("summary")
+            if job.kind != "ingest":
+                result = summary
+            else:
+                summary = summary if isinstance(summary, dict) else {}
+                counts = {"ingest": {key: summary.get(key, 0) for key in (
+                    "copied", "verified", "already_present", "failed", "files", "skipped")} | {
+                    "card_verified_everywhere": summary.get("card_verified_everywhere") is True,
+                    "manifest": "manifest.json", "snapshot": manifest.get("snapshot")}}
         tail: list[str] = []
         log = Path(job.log_path)
         if job.log_path != "pending" and log.is_file():
