@@ -1,27 +1,31 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-22 (Africa/Johannesburg) — astro plan complete and approved; travel/culling plan written, no tasks started
+Last updated: 2026-10-22 (Africa/Johannesburg) — travel volume / culling plan complete on branch `travel-volume-culling`, final review clean, not yet merged
 
 ## Resume here
 
-**Next plan: `docs/superpowers/plans/2026-10-22-travel-volume-culling.md`** (spec: `docs/superpowers/specs/2026-10-22-travel-volume-culling-design.md`). The astro plan is complete and approved. No travel/culling task has been started; begin with Task 1 (background jobs for import and tagging). Two plan decisions to keep in mind: keepers are frames that are not rejected and are either flagged or best in group, so single frames stay keepers unless rejected (user decision, overrides the spec sentence about single-frame groups); and Task 7 keeps GPS in `full` exports and drops it only in `share`, pending user confirmation.
+**Branch `travel-volume-culling` (13 commits, `6236e7a..1f8a8a3`) implements the whole of `docs/superpowers/plans/2026-10-22-travel-volume-culling.md`** (spec: `docs/superpowers/specs/2026-10-22-travel-volume-culling-design.md`). Every task had an independent review and fix round; the whole-branch final review came back "ready with fixes", the single fix wave (`1f8a8a3`) was re-reviewed clean. The branch is **not merged into `main`**; merging is the user's call. The warning-strict suite passes **360 tests** at `1f8a8a3` (`env -u LUMEN_OMLX_MODEL`), `node --check src/lumen/static/app.js` passes, and `lumen doctor` reports darktable-cli, siril-cli, and exiftool available. The old astro plan is complete and committed as `0923f08`.
 
-The active repository is `/Users/nasir/Developer/localimagemanip`. The project is runnable and its complete warning-strict test suite currently passes **284 tests** (run with `env -u LUMEN_OMLX_MODEL`; the user's shell override fails the doctor default-model assertion in `test_cli`). `node --check src/lumen/static/app.js` also passes.
+Rulings made during execution (all recorded in `.superpowers/sdd/2026-10-22-travel-volume-culling/progress.md`, which is local audit material):
 
-The composition implementation is complete through Task 5 and its independent re-review is approved with no open findings. Read:
+- Keepers = not rejected AND (flagged OR best in group); single frames stay keepers unless rejected (user decision, overrides the spec sentence).
+- `full` export keeps GPS; only `share` drops it (user decision).
+- Ingest copies and verifies every visible regular file on the card regardless of extension (videos, Sony housekeeping files) and imports only supported image types; dot-prefixed entries are `skipped` and do not block the verdict. `card_verified_everywhere` requires planned > 0 and zero read errors; destinations on the card's own volume are rejected.
+- `/api/groups` keeps all-rejected bursts (empty `photos` by default) with per-group `frame_count`/`rejected_count` and a library-wide `keeper_count`; a burst emptied only by a filter is omitted.
+- Decisions, ratings, picks, and Compare work during `import`/`ingest` jobs; they pause during `tag`, `refine_previews`, and `astro` jobs.
+- Per-photo `imported`/`tagged`/`tag_failed`/`import_failed`/`ingested`/`preview_refined` events carry `job_id`.
 
-- `.superpowers/sdd/2026-10-21-composition-crops/progress.md`
-- `.superpowers/sdd/2026-10-21-composition-crops/task-5-report.md`
-- `.superpowers/sdd/2026-10-21-composition-crops/task-5-review.md`
-- `.superpowers/sdd/2026-10-21-composition-crops/task-5-rereview.md` if present
-- `.superpowers/sdd/2026-10-21-composition-crops/plan-final-rereview-2.md`
-
-The composition plan is complete. Its final independent re-review is approved with 0 Critical, 0 Important, and 0 Minor findings. Astro Task 1 is the active next milestone.
-
-Astro Task 1 is complete and independently approved with no open findings. It adds validated persisted jobs, strict transitions/recovery, exclusive per-catalog runner ownership across local processes, one heavy worker, and owned-process cancellation/reaping with retryable shutdown. Read `.superpowers/sdd/2026-10-21-astro-stacking/task-1-rereview-2.md`; Astro Task 2 (Siril preparation) is committed (`deab8bd`). Astro Task 3 (execute/cancel/import) is committed (`4bed50d`). Astro Task 4 (CLI and protected API) and Task 5 (Astro web tab, docs, end-to-end verification) are complete in the working tree and **uncommitted** unless `git log` shows a commit after `4bed50d` (the plan's intended checkpoint is `feat: add guided local astro stacking`). See "Astro Task 4" and "Astro Task 5" below. The astro plan is finished; the next candidate spec is `docs/superpowers/specs/2026-10-22-travel-volume-culling-design.md`. Sample Sony astro lights live in `test-image/astro/DSC03234–DSC03258.ARW` (untracked); **no real-ARW stack has been run yet** — only synthetic fixtures.
+Deferred minors worth picking up after merge (full list in the ledger): tag and refine jobs hold the mutation lock during the oMLX call / darktable render; a cancelled job keeps the runner slot until its current item and regroup finish (409 in that gap); `list_job_status` loads every job row; `Catalog.delete_photos` re-pick ignores the selection rule (unreachable today); text filter misses non-ASCII tags (`ensure_ascii` JSON); `#contact-sheet` is `aria-live="polite"` and may double-announce in-place refills; ingest rerun after a date/timezone change lands no-EXIF files in a new date folder; refined render is renamed before the post-render fingerprint check; synchronous `Library.import_path` (tests only) reverts refined previews; README feature list still says quality-92 only; `library.py` (~1,180 lines) and `app.js` (~1,400 lines) deserve a split, starting with the job workers.
 
 ## Working features
 
+- Background jobs (`import`, `tag`, `ingest`, `refine_previews`, `astro`) through one `LocalJobRunner` slot with a job strip, progress labels (basenames only), cancel, `GET /api/jobs`, and CLI `jobs`/`cancel`.
+- Decisions (`none`/`flag`/`reject`) and ratings 0–5 in catalog, JSON and XMP sidecars (`xmp:Rating` −1 for rejected), provenance; keeper rule shared by `keeper_ids`, SQL filters, the client, and export.
+- Verified card ingest (`lumen ingest`, Ingest tab): per-file SHA-256, `.lumen-partial` temporaries, `F_FULLFSYNC` + `F_NOCACHE` verify, one retry, resumable manifest under `outputs/ingest/<job>/`, mirror provenance, catalog snapshot beside the primary copies, and exactly two verdict sentences.
+- Keyboard culling with roving focus and a Shortcuts legend; Compare (two panes, synced panning) and loupe dialogs.
+- Filters (date, camera, decision, rating, keepers, tagged, text) in the URL query, day headings in the batch rail, 200-frame paging.
+- Export presets `full` and `share` (2048 px, q85, no GPS) with preset recorded in artifact settings and provenance.
+- Refined previews: a `refine_previews` job renders 2048 px previews through darktable-cli, recomputes metrics, re-ranks, and never changes picks, decisions, or ratings.
 - Non-destructive Sony `.ARW`/image import, managed previews, SQLite catalog, JSON/XMP sidecars, and provenance.
 - Camera/time burst grouping, explainable best-shot ranking, manual keeper override, sharpness/exposure/face/eye metrics, and basic astro screening.
 - Truthful live oMLX model status plus local preview tagging.
