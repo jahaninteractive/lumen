@@ -32,7 +32,7 @@ class PipelineTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
-                Image.new("RGB", (80, 60), "red").save(command[-5], format="TIFF", tiffinfo={700: xmp_packet}, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF", tiffinfo={700: xmp_packet}, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             for overrides, description, keywords, rating in (
@@ -50,9 +50,7 @@ class PipelineTests(unittest.TestCase):
                         self.assertEqual(keywords, stored_keywords.split(";") if stored_keywords else [])
                         self.assertEqual(rating, exif[18246])
                         packet = image.info["xmp"]
-                        self.assertNotIn(b"GPSLatitude", packet)
                         self.assertNotIn(b"private processing", packet)
-                        self.assertNotIn(34853, exif)
                         parsed = ElementTree.fromstring(packet)
                         ns = {"rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "dc": "http://purl.org/dc/elements/1.1/"}
                         self.assertEqual(str(rating), parsed.find(".//rdf:Description", ns).attrib["{http://ns.adobe.com/xap/1.0/}Rating"])
@@ -76,13 +74,18 @@ class PipelineTests(unittest.TestCase):
                 commands.append(command)
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0] == "/usr/bin/exiftool":
+                    work = Path(command[-1]).parent
+                    self.assertEqual(["/usr/bin/exiftool", "-q", "-overwrite_original", "-TagsFromFile", str(work / "render.tif"), "-MakerNotes", str(work / "finished.jpg")], command)
+                    self.assertTrue(Path(command[-1]).is_file())
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 staged_source = Path(command[1])
                 self.assertNotEqual(source, staged_source)
                 self.assertTrue(staged_source.is_relative_to((root / "outputs" / "jpeg").resolve()))
                 self.assertEqual(b"original RAW", staged_source.read_bytes())
                 self.assertFalse(staged_source.with_suffix(".ARW.xmp").exists())
                 self.assertEqual(str(profile.resolve()), command[2])
-                self.assertEqual(["--width", "0", "--height", "0"], command[-4:])
+                self.assertEqual(["--width", "0", "--height", "0", "--core", "--conf", "plugins/lighttable/export/metadata_flags=5"], command[-7:])
                 exif = Image.Exif()
                 exif[271] = "Sony"
                 exif[272] = "ILCE-7M4"
@@ -90,16 +93,18 @@ class PipelineTests(unittest.TestCase):
                 exif[315] = "Photographer"
                 exif[33432] = "Copyright photographer"
                 exif[18246] = 3
-                exif[34665] = {36867: "2026:10:21 10:00:00", 42036: "FE 50mm"}
-                exif[34853] = {1: "N", 2: (1, 2, 3)}
+                exif[34665] = {36867: "2026:10:21 10:00:00", 42036: "FE 50mm", 34864: 2, 37500: b"SONY DSC makernote", 40962: 7032, 40963: 4688}
+                exif[34853] = {1: "N", 2: (1.0, 2.0, 3.0), 5: 0, 6: 12.0}
                 Image.new("RGB", (80, 60), "red").save(
-                    command[-5], format="TIFF", exif=exif.tobytes(),
+                    command[-8], format="TIFF", exif=exif.tobytes(),
                     icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
                 )
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            first = pipeline.export_jpeg(source, profile, description="A red bird", keywords=["bird"], rating=5, runner=render)
-            second = pipeline.export_jpeg(source, profile, runner=render)
+            with patch("lumen.pipelines.find_tool", return_value="/usr/bin/exiftool"):
+                first = pipeline.export_jpeg(source, profile, description="A red bird", keywords=["bird"], rating=5, runner=render)
+                second = pipeline.export_jpeg(source, profile, runner=render)
+            self.assertEqual(2, sum(command[0] == "/usr/bin/exiftool" for command in commands))
             self.assertTrue(first.success, first.message)
             self.assertEqual((root / "outputs" / "jpeg" / "source-lumen.jpg").resolve(), first.output)
             self.assertEqual((root / "outputs" / "jpeg" / "source-lumen-1.jpg").resolve(), second.output)
@@ -109,7 +114,10 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual([3, 2, 2, 3, 4, 6, 8, 10], image.quantization[0][:8])
                 self.assertIn("sRGB", ImageCms.getProfileDescription(ImageCms.ImageCmsProfile(io.BytesIO(image.info["icc_profile"]))))
                 exif = image.getexif()
-                self.assertNotIn(34853, exif)
+                self.assertEqual({1: "N", 2: (1.0, 2.0, 3.0), 5: b"\x00", 6: 12.0}, dict(exif.get_ifd(34853)))
+                self.assertEqual(2, exif.get_ifd(34665)[34864])
+                self.assertEqual((80, 60), (exif.get_ifd(34665)[40962], exif.get_ifd(34665)[40963]))
+                self.assertEqual(b"SONY DSC makernote", exif.get_ifd(34665)[37500])
                 self.assertEqual("Sony", exif[271])
                 self.assertEqual("ILCE-7M4", exif[272])
                 self.assertEqual("Copyright photographer", exif[33432])
@@ -122,15 +130,41 @@ class PipelineTests(unittest.TestCase):
                 provenance = json.loads(xmp.find(".//{https://lumen.local/ns/1.0/}export").text)
                 self.assertEqual(92, provenance["quality"])
                 self.assertEqual("darktable 5.2", provenance["tool_version"])
-                self.assertEqual(str(profile.resolve()), provenance["profile"])
-                self.assertEqual(64, len(provenance["source_fingerprint"]))
+                self.assertEqual("explicit.xmp", provenance["profile"])
+                self.assertNotIn("source_fingerprint", provenance)
+                self.assertNotIn("command", provenance)
                 self.assertTrue(provenance["created_at"])
+                self.assertNotIn(str(root.resolve()).encode(), image.info["xmp"])
+            self.assertEqual(str(profile.resolve()), first.settings["profile"])
+            self.assertEqual(64, len(first.settings["source_fingerprint"]))
             self.assertEqual(before, (source.read_bytes(), source.stat().st_mtime_ns))
             with Image.open(second.output) as image:
                 self.assertEqual(3, image.getexif()[18246])
                 xmp = ElementTree.fromstring(image.info["xmp"])
                 self.assertEqual("3", xmp.find(".//{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Description").attrib["{http://ns.adobe.com/xap/1.0/}Rating"])
             self.assertEqual(2, len(list((root / "outputs" / "jpeg").iterdir())))
+
+    def test_makernote_transplant_failure_or_missing_exiftool_fails_export(self):
+        for exiftool, outcome in (("/usr/bin/exiftool", 1), (None, None)):
+            with self.subTest(exiftool=exiftool), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source.ARW"
+                source.write_bytes(b"raw")
+                pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+                def render(command, **kwargs):
+                    if command[1:] == ["--version"]:
+                        return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                    if command[0] == "/usr/bin/exiftool":
+                        return subprocess.CompletedProcess(command, outcome, "", "bad maker notes")
+                    exif = Image.Exif()
+                    exif[34665] = {37500: b"SONY DSC makernote"}
+                    Image.new("RGB", (8, 6), "red").save(command[-8], format="TIFF", exif=exif.tobytes(), icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                with patch("lumen.pipelines.find_tool", return_value=exiftool):
+                    result = pipeline.export_jpeg(source, runner=render)
+                self.assertFalse(result.success)
+                self.assertIn("MakerNote", result.message)
+                self.assertEqual([], list((root / "outputs" / "jpeg").iterdir()))
 
     def test_jpeg_export_runner_failure_leaves_no_final_or_temporary_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -141,7 +175,7 @@ class PipelineTests(unittest.TestCase):
             def fail(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
-                Path(command[-5]).write_bytes(b"partial")
+                Path(command[-8]).write_bytes(b"partial")
                 raise OSError("runner unavailable")
             result = pipeline.export_jpeg(source, runner=fail)
             self.assertFalse(result.success)
@@ -156,7 +190,7 @@ class PipelineTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
-                Image.new("RGB", (80, 60), "red").save(command[-5], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(source, crop={"left": .25, "top": 0, "width": .5, "height": 1}, runner=render)
             self.assertTrue(result.success, result.message)
@@ -176,7 +210,7 @@ class PipelineTests(unittest.TestCase):
                 for x in range(20, 60):
                     for y in range(0, 60):
                         image.putpixel((x, y), (0, 255, 0))
-                image.save(command[-5], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                image.save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
@@ -198,7 +232,7 @@ class PipelineTests(unittest.TestCase):
                 def render(command, **kwargs):
                     if command[1:] == ["--version"]:
                         return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
-                    Image.new("RGB", (80, 60), "red").save(command[-5], format="TIFF", icc_profile=icc)
+                    Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF", icc_profile=icc)
                     return subprocess.CompletedProcess(command, 0, "", "")
                 result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(source, runner=render)
                 self.assertFalse(result.success)
@@ -247,6 +281,9 @@ class PipelineTests(unittest.TestCase):
                 "0",
                 "--height",
                 "0",
+                "--core",
+                "--conf",
+                "plugins/lighttable/export/metadata_flags=5",
             ],
             command,
         )
@@ -309,7 +346,7 @@ class PipelineTests(unittest.TestCase):
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
 
             def partial_runner(command, **kwargs):
-                Path(command[-5]).write_bytes(b"partial")
+                Path(command[-8]).write_bytes(b"partial")
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="failed")
 
             result = pipeline.run(source, destination, runner=partial_runner)

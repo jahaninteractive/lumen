@@ -19,6 +19,14 @@ from .sidecars import SidecarWriter
 from .tools import find_tool
 
 
+def _public_provenance(settings: dict) -> dict:
+    """Export record embedded in shareable JPEGs: no absolute paths or source fingerprint."""
+    public = {key: value for key, value in settings.items() if key not in ("command", "source_fingerprint")}
+    if public.get("profile"):
+        public["profile"] = Path(public["profile"]).name
+    return public
+
+
 def _descriptive_xmp(packet: bytes | str | None) -> dict:
     """Read the sharing fields only; never copy the original XMP packet."""
     if not packet:
@@ -99,7 +107,7 @@ class DarktablePipeline:
         destination = directory / f"{source.stem}-lumen.jpg"
         reserved = {path.resolve() for path in reserved_paths or ()}
         settings = {
-            "quality": 92, "color_space": "sRGB", "include_gps": False,
+            "quality": 92, "color_space": "sRGB", "include_gps": True,
             "profile": str(profile.resolve()) if profile else None,
             "crop": crop, "source_fingerprint": "", "tool_version": "unknown",
             "command": [],
@@ -140,10 +148,11 @@ class DarktablePipeline:
                     for tag in (270, 271, 272, 305, 306, 315, 33432, 18246, 18249, 40091, 40092, 40093, 40094, 40095):
                         if tag in source_exif:
                             exif[tag] = source_exif[tag]
-                    capture = source_exif.get_ifd(34665)
-                    approved = {tag: capture[tag] for tag in (33434, 33437, 34850, 34855, 36864, 36867, 36868, 36880, 36881, 36882, 37377, 37378, 37380, 37381, 37383, 37385, 37386, 37521, 37522, 41986, 41987, 41988, 41989, 42032, 42033, 42034, 42035, 42036, 42037) if tag in capture}
-                    approved[40961] = 1  # EXIF sRGB
-                    exif[34665] = approved
+                    capture = dict(source_exif.get_ifd(34665))
+                    capture.pop(40965, None)  # Interop IFD offset is meaningless in the new file.
+                    capture[40961] = 1  # EXIF sRGB
+                    if gps := source_exif.get_ifd(34853):
+                        exif[34853] = dict(gps)
                     exif[274] = 1  # Pixels are transposed below.
                     effective_description = description if description is not None else descriptive.get("description", source_exif.get(270, ""))
                     raw_keywords = source_exif.get(40094, b"")
@@ -160,13 +169,24 @@ class DarktablePipeline:
                         raise ValueError("darktable render has no ICC profile; cannot guarantee sRGB")
                     if crop is not None:
                         image = image.crop((round(left * image.width), round(top * image.height), round((left + width) * image.width), round((top + height) * image.height)))
+                    capture[40962], capture[40963] = image.size  # After any crop.
+                    exif[34665] = capture
                     temporary = work / "finished.jpg"
                     image.save(temporary, format="JPEG", quality=92,
                                exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
                                xmp=SidecarWriter._xmp(
                                    effective_description, effective_keywords, effective_rating == 5,
-                                   rating=effective_rating, provenance=settings, crop=crop,
+                                   rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
                                ).encode("utf-8"))
+                if 37500 in capture:
+                    # Pillow copies MakerNote bytes but not their absolute offsets; exiftool rebases them.
+                    exiftool = find_tool("exiftool")
+                    if not exiftool:
+                        raise RuntimeError("exiftool is required to preserve the camera MakerNote")
+                    copied = runner([exiftool, "-q", "-overwrite_original", "-TagsFromFile", str(rendered.output), "-MakerNotes", str(temporary)],
+                                    capture_output=True, text=True, timeout=120, check=False)
+                    if copied.returncode != 0:
+                        raise RuntimeError(f"MakerNote copy failed: {(copied.stderr or copied.stdout).strip()[:200]}")
                 fingerprint = fingerprint_file(temporary)
                 # A hard link publishes the complete file atomically and fails if
                 # another export claimed this name in the meantime.
@@ -205,7 +225,9 @@ class DarktablePipeline:
         arguments = [self.executable, str(source.resolve())]
         if profile is not None:
             arguments.append(str(profile.resolve()))
-        arguments.extend([str(destination), "--width", "0", "--height", "0"])
+        # Pin EXIF (1) + geotag (4) export so renders don't depend on the user's darktablerc.
+        arguments.extend([str(destination), "--width", "0", "--height", "0",
+                          "--core", "--conf", "plugins/lighttable/export/metadata_flags=5"])
         return arguments
 
     def run(

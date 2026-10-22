@@ -59,9 +59,9 @@ version, output fingerprint, and timestamp in the catalog, source sidecar, and
 derived artifact metadata.
 
 Finished JPEGs preserve capture time, camera/lens details, orientation,
-copyright, rating, Lumen description, and keywords. GPS is omitted by default
-to make ordinary sharing safer. A future export preset may expose a deliberate
-“include location” choice.
+copyright, rating, Lumen description, keywords, and all darktable-rendered
+EXIF including GPS. (Amended 2026-10-22 at the photographer's request; GPS was
+previously omitted.)
 
 ### Re-export behavior
 
@@ -283,8 +283,8 @@ surface area.
   crop editor.
 - An XMP profile is always selected explicitly and reused as a remembered
   default; adjacent XMP files are not adopted implicitly.
-- Sharing-oriented JPEG metadata omits GPS by default while preserving useful
-  photographic and descriptive metadata.
+- JPEG metadata preserves EXIF including GPS (amended 2026-10-22) alongside
+  descriptive metadata.
 - General-subject crop protection uses padded saliency evidence and honest
   fallback behavior rather than promising semantic body-part detection.
 - Lumen-managed trash is used for recoverability and has no automatic expiry.

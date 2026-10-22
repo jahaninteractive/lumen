@@ -4,7 +4,7 @@ Last updated: 2026-10-22 (Africa/Johannesburg)
 
 ## Resume here
 
-The active repository is `/Users/nasir/Developer/localimagemanip`. The project is runnable and its complete warning-strict test suite currently passes **223 tests** (run with `env -u LUMEN_OMLX_MODEL`; the user's shell override fails the doctor default-model assertion in `test_cli`). `node --check src/lumen/static/app.js` also passes.
+The active repository is `/Users/nasir/Developer/localimagemanip`. The project is runnable and its complete warning-strict test suite currently passes **224 tests** (run with `env -u LUMEN_OMLX_MODEL`; the user's shell override fails the doctor default-model assertion in `test_cli`). `node --check src/lumen/static/app.js` also passes.
 
 The composition implementation is complete through Task 5 and its independent re-review is approved with no open findings. Read:
 
@@ -47,7 +47,7 @@ Verification commands last run:
 ```sh
 uv run python -W error -m unittest tests.test_web -v       # 37 passed
 node --check src/lumen/static/app.js                       # exit 0
-env -u LUMEN_OMLX_MODEL uv run python -W error -m unittest discover -s tests -v   # 223 passed (2026-10-22)
+env -u LUMEN_OMLX_MODEL uv run python -W error -m unittest discover -s tests -v   # 224 passed (2026-10-22)
 ```
 
 The latest whole-plan fixes prove the default candidates include one contextual and one tighter crop, source replacement invalidates an old crop before the fingerprint-upsert failure boundary, and every export rejects source bytes not successfully cataloged after an interrupted replacement. See `.superpowers/sdd/2026-10-21-composition-crops/plan-final-fix-report.md`.
@@ -60,8 +60,7 @@ No manual Safari/VoiceOver pass, real Sony RAW crop visual check, Apple Vision h
 
 - Original unchanged: sha256 `21a7428d…ac3d8`, mtime `1792167197.79`, size 34263040 identical before/after; no sidecar written beside it.
 - JPEG 7032×4688 (darktable's full uncropped-border render, `--width 0 --height 0`; raw 7040×4688), embedded sRGB ICC + EXIF ColorSpace sRGB, quantization tables exactly Pillow quality 92.
-- No GPS tags in the JPEG — but the source has no GPS either, so GPS stripping was not exercised by this file.
-- No camera EXIF in the JPEG (see known limitations).
+- No camera EXIF in that first JPEG; fixed afterwards (see known limitations). The source has no GPS, so GPS was verified on a scratch copy with injected coordinates.
 
 ## Next milestone: managed Siril astro stacking
 
@@ -101,7 +100,10 @@ Before generating Siril scripts, inspect the installed 1.4.4 help/resources and 
 - The folder is not a Git repository yet. The user intends to push it eventually, but Git initialization still requires explicit approval.
 - `vendor/apps/`, `.superpowers/`, local environments, and build outputs are ignored. Do not remove the project-local Siril bundle.
 - darktable 5.6.2 is present at `vendor/apps/darktable.app` and `lumen doctor` reports `darktable-cli` available (on `PATH` and via the project-local fallback).
-- Known export gap (unfixed, awaiting user approval): darktable-cli uses the user's `~/.config/darktable/darktablerc`, whose `plugins/lighttable/export/metadata_flags=` is empty, so the render TIFF carries no camera EXIF and Lumen JPEGs have no Make/Model/exposure/capture date. The JPEG XMP `lumen:Export` provenance also embeds absolute library/vendor paths and the source fingerprint.
+- JPEG metadata (user decision 2026-10-22): keep all EXIF including GPS. darktable-cli read the user's `~/.config/darktable/darktablerc` (empty `metadata_flags`), which stripped all EXIF; Lumen now pins `metadata_flags=5` (EXIF + geotag) and copies the full EXIF and GPS IFDs. Verified on a scratch ARW with injected GPS: every ExifIFD/GPS value identical to darktable's render.
+- MakerNote: Pillow alone breaks Sony's absolute MakerNote offsets, so export runs `exiftool -TagsFromFile render.tif -MakerNotes` on the finished JPEG when the render has one; missing/failed exiftool fails the export and publishes nothing. Real export: all 117 Sony tags (shutter count 554), no MakerNote warnings.
+- The JPEG's XMP `lumen:export` record omits `command` and `source_fingerprint` and keeps only the profile file name; the catalog and sidecars keep the full settings.
+- Sony IFD0 lens-correction params (0x7032/0x7035/0x7037) are deliberately not copied; they describe the RAW, and applying them to a corrected render would double-correct.
 - There are historical directories named `-p` and `mkdir` at the project root. They were not removed because their ownership/purpose was not established; do not delete them without checking with the user.
 - Do not trust README phrases such as “already-installed model” over live diagnostics; update documentation if implementation changes the truth.
 

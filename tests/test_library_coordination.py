@@ -31,7 +31,7 @@ class LibraryCoordinationTests(unittest.TestCase):
     def runner(self, command, **kwargs):
         if command[1:] == ["--version"]:
             return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
-        Image.new("RGB", (40, 30), "red").save(command[-5], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+        Image.new("RGB", (40, 30), "red").save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
         return subprocess.CompletedProcess(command, 0, "", "")
 
     def pipeline(self, output_root):
@@ -52,7 +52,8 @@ class LibraryCoordinationTests(unittest.TestCase):
             with Image.open(result.output) as image:
                 xmp = ElementTree.fromstring(image.info["xmp"])
                 jpeg_settings = json.loads(xmp.find(".//{https://lumen.local/ns/1.0/}export").text)
-            self.assertEqual(jpeg_settings, result.artifact.settings)
+            public = {key: value for key, value in result.artifact.settings.items() if key not in ("command", "source_fingerprint")}
+            self.assertEqual(public, jpeg_settings)
 
     def test_insertion_failure_does_not_attempt_catalog_history_compensation(self):
         with Library(self.settings) as library, patch("lumen.library.PipelineRegistry.darktable", side_effect=self.pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.runner):

@@ -130,8 +130,8 @@ export.
 Next use the **Export** tab. Choose **Current photo**
 or **All keepers**; the latter exports the chosen best frame from every batch.
 Export uses full available resolution, quality 92, and sRGB. Capture time,
-camera/lens details, copyright, ratings, descriptions, and keywords are retained
-when available; GPS is omitted.
+camera/lens details, copyright, ratings, descriptions, keywords, and GPS
+location are retained when available.
 
 **Choose XMP…** opens the macOS file picker for an existing `.xmp` processing
 profile. The browser remembers your explicit selection for the next export.

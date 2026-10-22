@@ -640,7 +640,7 @@ class LibraryTests(unittest.TestCase):
                 if command[1:] == ["--version"]:
                     return self.export_runner(command, **kwargs)
                 packet = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">Rendered caption</rdf:li></rdf:Alt></dc:description><dc:subject><rdf:Bag><rdf:li>bird</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF>'
-                Image.new("RGB", (30, 20), "blue").save(command[-5], format="TIFF", tiffinfo={700: packet}, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                Image.new("RGB", (30, 20), "blue").save(command[-8], format="TIFF", tiffinfo={700: packet}, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=render):
                 result = library.export_jpegs(library_module.ExportRequest((photo_id,), None))[0]
@@ -682,7 +682,7 @@ class LibraryTests(unittest.TestCase):
     def export_runner(self, command, **kwargs):
         if command[1:] == ["--version"]:
             return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
-        Image.new("RGB", (320, 240), "red").save(command[-5], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+        Image.new("RGB", (320, 240), "red").save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
         return subprocess.CompletedProcess(command, 0, "", "")
 
     def test_export_records_artifact_and_sidecar_provenance(self):
@@ -704,7 +704,7 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(photo.fingerprint, artifact.source_fingerprint)
             self.assertEqual(92, artifact.settings["quality"])
             self.assertEqual("sRGB", artifact.settings["color_space"])
-            self.assertFalse(artifact.settings["include_gps"])
+            self.assertTrue(artifact.settings["include_gps"])
             self.assertEqual("darktable 5.2", artifact.settings["tool_version"])
             self.assertEqual(64, len(artifact.output_fingerprint))
             sidecar = json.loads(next(library.settings.sidecar_dir.glob("*.lumen.json")).read_text())
@@ -735,7 +735,7 @@ class LibraryTests(unittest.TestCase):
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             def runner(command, **kwargs):
                 if command[1:] != ["--version"] and Path(command[1]).name == "DSC0001.jpg":
-                    Path(command[-5]).write_bytes(b"partial")
+                    Path(command[-8]).write_bytes(b"partial")
                     return subprocess.CompletedProcess(command, 3, "", "bad render")
                 return self.export_runner(command, **kwargs)
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=runner):

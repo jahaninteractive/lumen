@@ -145,7 +145,7 @@ class ExportCleanupCliTests(unittest.TestCase):
         if command[1:] == ["--version"]:
             return subprocess.CompletedProcess(command, 0, "darktable test", "")
         Image.new("RGB", (40, 30), "red").save(
-            command[-5], format="TIFF",
+            command[-8], format="TIFF",
             icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
         )
         return subprocess.CompletedProcess(command, 0, "", "")
