@@ -471,6 +471,9 @@ class WebTests(unittest.TestCase):
             library.catalog.append_event(1, "imported", {"raw_warning": "Sony reduced-size lossless raw; darktable cannot decode it"})
         self.assertEqual(["Sony reduced-size lossless raw; darktable cannot decode it"], self.get_json("/api/photos/1")[1]["warnings"])
 
+    def test_javascript_inspector_explains_rank_within_burst(self):
+        self.run_javascript_cleanup_regression("rank-explain")
+
     def test_javascript_inspector_shows_import_warnings(self):
         self.run_javascript_cleanup_regression("raw-warning")
 
@@ -1729,6 +1732,18 @@ const regression = `
     assert.equal(element('#prepare-astro').disabled, false, 'a finished job frees the form');
     assert.equal(lights[0].disabled, false);
     assert.equal(confirm.disabled, false);
+    return;
+  }
+  if (scenario === 'rank-explain') {
+    groups[0].photos[0].sharpness = 0.62; groups[0].photos[0].exposure = 0.9; groups[0].photos[0].total_score = 0.69;
+    groups[0].photos[1].sharpness = 0.4; groups[0].photos[1].exposure = 0.95; groups[0].photos[1].total_score = 0.54;
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const ranking = () => tree(element('#inspection')).find(node => node.className === 'ranking')?.textContent;
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(ranking(), 'Ranked 1 of 2 in this burst: sharpness 62% (highest), exposure 90%, overall 69%. Overall weighs sharpness 50% and exposure 25%, plus faces and eyes 25% when detected.');
+    await inspect(state.groups[0].photos[1]);
+    assert.equal(ranking(), 'Ranked 2 of 2 in this burst: sharpness 40%, exposure 95% (highest), overall 54%. Overall weighs sharpness 50% and exposure 25%, plus faces and eyes 25% when detected.');
     return;
   }
   if (scenario === 'raw-warning') {

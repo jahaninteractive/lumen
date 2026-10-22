@@ -351,6 +351,18 @@ async function inspect(photo) {
   if (compositionLoad) await compositionLoad;
 }
 
+// Plain-language reason for the frame's place in its burst, from the same numbers the meters show.
+function rankingExplanation(photo, group) {
+  const pct = value => `${Math.round(Math.max(0, Math.min(1, value || 0)) * 100)}%`;
+  const highest = key => group.photos.every(item => item.id === photo.id || !(Number(item[key]) > Number(photo[key])));
+  const part = (label, key) => `${label} ${pct(photo[key])}${group.photos.length > 1 && highest(key) ? ' (highest)' : ''}`;
+  const rank = group.photos.findIndex(item => item.id === photo.id) + 1;
+  const paragraph = document.createElement('p');
+  paragraph.className = 'ranking';
+  paragraph.textContent = `Ranked ${rank} of ${group.photos.length} in this burst: ${part('sharpness', 'sharpness')}, ${part('exposure', 'exposure')}, overall ${pct(photo.total_score)}. Overall weighs sharpness 50% and exposure 25%, plus faces and eyes 25% when detected.`;
+  return paragraph;
+}
+
 function renderInspector(photo) {
   const details = state.details;
   inspection.replaceChildren();
@@ -361,7 +373,9 @@ function renderInspector(photo) {
   const group = state.groups.find(item => item.photos.includes(photo));
   verdict.textContent = group && allRejected(group) ? NO_KEEPER
     : photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
-  inspection.append(heading, verdict, decisionControls(photo));
+  inspection.append(heading, verdict);
+  if (group) inspection.append(rankingExplanation(photo, group));
+  inspection.append(decisionControls(photo));
   for (const text of details.warnings || []) {
     const warning = document.createElement('p');
     warning.className = 'warning';
