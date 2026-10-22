@@ -283,6 +283,13 @@ class SirilPipeline:
             raise ValueError("Siril hook requires an .ssf or .siril script")
         return [self.executable, "-s", str(script)]
 
+    def job_command(self, job_dir: Path) -> list[str]:
+        """Managed astro batch run: job-local cwd and config, offline, argument array only."""
+        job_dir = job_dir.resolve()
+        if job_dir.parent != self.output_root / "astro":
+            raise ValueError("Siril jobs must run inside the managed astro output directory")
+        return [self.executable, "-d", str(job_dir), "-i", str(job_dir / "siril.config"), "-o", "-s", str(job_dir / "stack.ssf")]
+
     def run(
         self,
         script: Path,

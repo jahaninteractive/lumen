@@ -1,10 +1,10 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-22 (Africa/Johannesburg)
+Last updated: 2026-10-22 (Africa/Johannesburg) — astro Task 2 complete
 
 ## Resume here
 
-The active repository is `/Users/nasir/Developer/localimagemanip`. The project is runnable and its complete warning-strict test suite currently passes **224 tests** (run with `env -u LUMEN_OMLX_MODEL`; the user's shell override fails the doctor default-model assertion in `test_cli`). `node --check src/lumen/static/app.js` also passes.
+The active repository is `/Users/nasir/Developer/localimagemanip`. The project is runnable and its complete warning-strict test suite currently passes **250 tests** (run with `env -u LUMEN_OMLX_MODEL`; the user's shell override fails the doctor default-model assertion in `test_cli`). `node --check src/lumen/static/app.js` also passes.
 
 The composition implementation is complete through Task 5 and its independent re-review is approved with no open findings. Read:
 
@@ -16,7 +16,7 @@ The composition implementation is complete through Task 5 and its independent re
 
 The composition plan is complete. Its final independent re-review is approved with 0 Critical, 0 Important, and 0 Minor findings. Astro Task 1 is the active next milestone.
 
-Astro Task 1 is complete and independently approved with no open findings. It adds validated persisted jobs, strict transitions/recovery, exclusive per-catalog runner ownership across local processes, one heavy worker, and owned-process cancellation/reaping with retryable shutdown. Read `.superpowers/sdd/2026-10-21-astro-stacking/task-1-rereview-2.md`; Task 2 Siril preparation is now the active milestone.
+Astro Task 1 is complete and independently approved with no open findings. It adds validated persisted jobs, strict transitions/recovery, exclusive per-catalog runner ownership across local processes, one heavy worker, and owned-process cancellation/reaping with retryable shutdown. Read `.superpowers/sdd/2026-10-21-astro-stacking/task-1-rereview-2.md`; Astro Task 2 (Siril preparation) is complete and independently re-reviewed with 0 Critical / 0 Important open (two final Minor type checks also fixed). **Task 3 (execute/cancel/import) is the next milestone.** Task 2 is not yet committed unless `git log` shows it.
 
 ## Working features
 
@@ -47,7 +47,7 @@ Verification commands last run:
 ```sh
 uv run python -W error -m unittest tests.test_web -v       # 37 passed
 node --check src/lumen/static/app.js                       # exit 0
-env -u LUMEN_OMLX_MODEL uv run python -W error -m unittest discover -s tests -v   # 224 passed (2026-10-22)
+env -u LUMEN_OMLX_MODEL uv run python -W error -m unittest discover -s tests -v   # 250 passed (2026-10-22)
 ```
 
 The latest whole-plan fixes prove the default candidates include one contextual and one tighter crop, source replacement invalidates an old crop before the fingerprint-upsert failure boundary, and every export rejects source bytes not successfully cataloged after an interrupted replacement. See `.superpowers/sdd/2026-10-21-composition-crops/plan-final-fix-report.md`.
@@ -67,7 +67,7 @@ No manual Safari/VoiceOver pass, real Sony RAW crop visual check, Apple Vision h
 Use `docs/superpowers/plans/2026-10-21-astro-stacking.md` task by task. Do not jump straight to the UI.
 
 1. **Job catalog and single-worker lifecycle** — complete and independently approved.
-2. **Reproducible Siril preparation** — add immutable frame sets/manifests, safe job paths, fingerprints, warnings, capability probing, and Siril 1.4.4 script generation validated against the local executable.
+2. **Reproducible Siril preparation** — complete; see "Astro Task 2" below.
 3. **Execute/cancel/import** — revalidate fingerprints before launch, stream logs, require declared 16-bit TIFF even on exit 0, catalog the result artifact, and never mutate sources.
 4. **CLI and protected API** — explicit group confirmation, selection/exclusion, calibration folders, status/log tail, run, and cancellation.
 5. **Astro web workflow** — explicit confirmation, per-light inclusion, calibration folder pickers, warnings, progress/cancel, retained failure context, and finish/export action.
@@ -81,7 +81,24 @@ siril 1.4.4
 
 It currently prints `Siril is started as macOS application` followed by the version. `lumen.tools.find_tool` (used by doctor, `PipelineRegistry`, and the darktable preview fallback) checks `PATH` first, then `vendor/apps/<Bundle>.app/Contents/MacOS/<tool>` for `darktable-cli`/`siril-cli`, and rejects any resolved executable outside that bundle. Covered by `tests/test_tools.py`; verified with vendor dirs stripped from `PATH`.
 
-Before generating Siril scripts, inspect the installed 1.4.4 help/resources and validate the exact batch invocation and script commands locally. Use argument arrays only; never shell-concatenate user paths. Source paths with spaces and non-ASCII characters need regression coverage.
+### Astro Task 2 — what exists (2026-10-22)
+
+Evidence (exact `--version`/`--help`, help sources, per-branch dry runs): `.superpowers/sdd/2026-10-21-astro-stacking/task-2-siril-validation.md`.
+
+- `src/lumen/astro.py`: `probe_siril` (parses the macOS banner; argument array), frozen `SirilCapabilities`/`AstroFrame`/`AstroFrameSet`/`AstroManifest`, `siril_script` (gated to Siril `>=1.4.0,<1.5.0`; the script also starts `requires 1.4.0 1.5.0`), `prepare_siril_job`, `load_manifest(path, output_root)`.
+- Job layout `outputs/astro/<job-id>/`: `lights|darks|flats|biases/<kind>_NNNNN.<ext>` read-only-source symlinks with fixed ASCII names (source paths never enter the script), empty `siril.config`, `stack.ssf` and `manifest.json` written once and chmod 0444. The job dir is created exclusively; a mid-prep failure removes only that dir.
+- Batch command (`SirilPipeline.job_command`): `[siril-cli, -d <job>, -i <job>/siril.config, -o, -s <job>/stack.ssf]`. `-i` needs an existing file (missing → exit 1); `-o` is offline; without `-i` Siril writes `~/Library/Application Support/org.siril.Siril` (created once by a `help` probe on 2026-10-22, not by jobs).
+- Script: optional bias/flat/dark masters, light calibration (`-dark` preferred over `-bias`, `-cc=dark -cfa` only with darks, `-equalize_cfa` only with flats), `register` (global star alignment), `stack ... rej w 3 3 -norm=addscale -output_norm -rgb_equal -filter-wfwhm=3k -filter-round=3k -out=result`, `mirrorx -bottomup`, `savetif ../result` (16-bit).
+- Rules: ≥2 selected lights; excluded lights recorded, not linked, and cannot reappear as calibration; calibration folders non-recursive, hidden files skipped, `.arw/.fit(s)/.fts/.tif(f)` only; missing, empty, or single-frame calibration sets warn and are skipped (Siril 1.4.4 builds no sequence from one frame); trailing warnings only for selected lights; full sha256 + size + mtime_ns, rejected if the source changes during hashing.
+- `lumen doctor` reports Siril `version: "1.4.4"`, `supported: true` (was the banner line).
+- Dry-validated with the installed 1.4.4 on synthetic RGGB CFA FITS (no user photos), library path with space/non-ASCII: every calibration branch exit 0 with 16-bit RGB `result.tif`; sources unchanged. **Not yet run on real Sony ARW lights.**
+
+### Task 3 must handle (from Task 2 review)
+
+- Revalidate every frame's size/mtime_ns/sha256 from `load_manifest(path, settings.output_dir)` immediately before launch; `load_manifest` raises `ValueError` for tampered/foreign manifests and may raise `OSError` for unreadable files.
+- Refuse to launch if `result.tif` (or stale `process/`) already exists so a rerun can't mistake an old TIFF for success; exit 0 without the TIFF is failure.
+- Write the log to `<job>/siril.log`; `prepare_siril_job` raises `FileExistsError` for a reused job ID — map it to a job-conflict error.
+- Task 4: never serialize the raw manifest to the browser (it holds absolute source paths and fingerprints).
 
 ## Safety and data rules
 

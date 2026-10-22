@@ -337,6 +337,22 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pipeline.command(root / "outside.ssf")
 
+    def test_siril_job_command_is_an_offline_argument_array_inside_managed_astro(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output_root = root / "Lumen Library ✨" / "outputs"
+            job = output_root / "astro" / "12"
+            job.mkdir(parents=True)
+            (output_root / "astro" / "linked").symlink_to(root, target_is_directory=True)
+            pipeline = SirilPipeline(executable="/Apps/siril-cli", output_root=output_root)
+            self.assertEqual(
+                ["/Apps/siril-cli", "-d", str(job), "-i", str(job / "siril.config"), "-o", "-s", str(job / "stack.ssf")],
+                pipeline.job_command(job),
+            )
+            for outside in (output_root, output_root / "astro", output_root / "jpeg" / "12", job / "nested", root / "12", output_root / "astro" / "linked"):
+                with self.subTest(outside=outside), self.assertRaises(ValueError):
+                    pipeline.job_command(outside)
+
     def test_failed_darktable_run_removes_partial_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

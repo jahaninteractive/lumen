@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import Settings
 from .omlx import OmlxError, get_server_status
+from .astro import probe_siril
 from .tools import tool_status
 
 
@@ -27,6 +28,12 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
             "version": status.version,
             "required": name in {"exiftool"},
         }
+        if name == "siril-cli" and status.path:
+            try:
+                siril = probe_siril(status.path)
+                tools[name] |= {"version": siril.version_text, "supported": siril.supported}
+            except RuntimeError:
+                tools[name]["supported"] = False
     model_path = _find_model(settings.omlx_model)
     vision = False
     complete = False
