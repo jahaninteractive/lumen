@@ -35,8 +35,76 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(0, code)
         payload = json.loads(output.getvalue())
-        self.assertEqual(1, payload["imported"])
-        self.assertEqual(0, payload["failed"])
+        self.assertEqual(1, payload["result"]["imported"])
+        self.assertEqual(0, payload["result"]["failed"])
+
+    def run_json(self, library_dir, *args):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = main(["--library", str(library_dir), *args, "--json"])
+        return code, json.loads(output.getvalue())
+
+    def test_import_waits_for_job_and_reports_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / "Card"
+            folder.mkdir()
+            for index in range(2):
+                Image.new("RGB", (60, 40), (index * 90, 20, 20)).save(folder / f"DSC000{index}.jpg")
+            code, first = self.run_json(root / "library", "import", str(folder))
+            again_code, again = self.run_json(root / "library", "import", str(folder))
+            missing_code, missing = self.run_json(root / "library", "import", str(root / "missing"))
+
+        self.assertEqual((0, "succeeded", "import"), (code, first["status"], first["kind"]))
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0}, first["result"])
+        self.assertEqual((2, 2), (first["processed"], first["total"]))
+        self.assertEqual((0, 2), (again_code, again["result"]["skipped"]))
+        self.assertEqual(2, missing_code)
+        self.assertIn("does not exist", missing["error"])
+        for payload in (first, again, missing):
+            self.assertNotIn(str(root), json.dumps(payload))
+
+    def test_tag_all_retag_jobs_and_cancel_commands(self):
+        from lumen.omlx import TagResult
+
+        class FakeTagger:
+            calls = 0
+
+            def __init__(self, *args):
+                self.model = "test-vlm"
+
+            def tag(self, preview):
+                FakeTagger.calls += 1
+                return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library_dir = root / "library"
+            source = root / "photo.jpg"
+            Image.new("RGB", (60, 40), (1, 2, 3)).save(source)
+            self.run_json(library_dir, "import", str(source))
+            with patch("lumen.cli.OmlxTagger", FakeTagger):
+                tag_code, tagged = self.run_json(library_dir, "tag", "--all")
+                skip_code, skipped = self.run_json(library_dir, "tag", "--all")
+                retag_code, retagged = self.run_json(library_dir, "tag", "--all", "--retag")
+            jobs_code, jobs = self.run_json(library_dir, "jobs")
+            with Library(Settings(library_dir=library_dir)) as library:
+                queued = library.catalog.create_job(kind="tag", manifest_path="/q/manifest.json", log_path="/q/job.log")
+            cancel_code, cancelled = self.run_json(library_dir, "cancel", str(queued.id))
+            done_code, done = self.run_json(library_dir, "cancel", str(tagged["job_id"]))
+            missing_code, missing = self.run_json(library_dir, "cancel", "999")
+
+        self.assertEqual((0, "tag", {"tagged": 1, "skipped": 0, "failed": 0}), (tag_code, tagged["kind"], tagged["result"]))
+        self.assertEqual((0, {"tagged": 0, "skipped": 1, "failed": 0}), (skip_code, skipped["result"]))
+        self.assertEqual((0, {"tagged": 1, "skipped": 0, "failed": 0}), (retag_code, retagged["result"]))
+        self.assertEqual(2, FakeTagger.calls)
+        self.assertEqual(0, jobs_code)
+        self.assertEqual([retagged["job_id"], skipped["job_id"], tagged["job_id"]], [job["job_id"] for job in jobs["jobs"][:3]])
+        self.assertEqual((0, "cancelled"), (cancel_code, cancelled["status"]))
+        self.assertEqual((2, "succeeded"), (done_code, done["status"]))
+        self.assertEqual(2, missing_code)
+        self.assertIn("error", missing)
+        self.assertNotIn(str(root), json.dumps(jobs))
 
     def test_doctor_reports_required_and_optional_capabilities(self):
         with tempfile.TemporaryDirectory() as directory:

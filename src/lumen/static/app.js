@@ -1,4 +1,12 @@
-const state = { groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, busy: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0, astro: { job: null, timer: null, request: 0, folders: { darks: null, flats: null, biases: null }, lightsKey: null } };
+const JOB_ACTIVE = ['queued', 'running'];
+const state = {
+  groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
+  job: null, jobTimer: null, jobRequest: 0,
+  astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
+  // Busy while a request is in flight or a background job is queued/running.
+  get busy() { return this.acting || JOB_ACTIVE.includes(this.job?.status); },
+  set busy(value) { this.acting = value; },
+};
 const sheet = document.querySelector('#contact-sheet');
 const inspection = document.querySelector('#inspection');
 const announcer = document.querySelector('#announcer');
@@ -352,30 +360,108 @@ async function load() {
   if (!state.astro.job) {
     let remembered = null;
     try { remembered = localStorage.getItem('lumen-astro-job'); } catch { /* per-visit only */ }
-    if (remembered) await request(`/api/astro/jobs/${remembered}`).then(setAstroJob).catch(() => localStorage.removeItem('lumen-astro-job'));
+    if (remembered) await request(`/api/astro/jobs/${remembered}`).then(job => (job.status === 'running' ? watchJob(job) : setAstroJob(job))).catch(() => localStorage.removeItem('lumen-astro-job'));
+  }
+  if (!state.job) {
+    const running = (await request('/api/jobs')).jobs.find(job => job.status === 'running');
+    if (running) watchJob(running);
   }
   if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
 }
 
 document.querySelector('#import-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]');
   state.busy = true;
   updateWorkflow();
-  button.disabled = true;
-  document.querySelector('#import-status').textContent = 'Importing originals…';
+  document.querySelector('#import-status').textContent = 'Starting import…';
   try {
-    const path = document.querySelector('#import-path').value;
-    const result = await request('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
-    document.querySelector('#import-status').textContent = `Import complete: ${result.imported} new, ${result.updated} updated, ${result.failed} failed. ${result.errors.join(' ')}`;
-    await load();
+    watchJob(await post('/api/import', { path: document.querySelector('#import-path').value }));
+    document.querySelector('#import-status').textContent = 'Import started. Progress and results appear in the job strip at the top.';
   } catch (error) {
     document.querySelector('#import-status').textContent = error.message;
     announce(error.message);
   } finally {
     state.busy = false;
     updateWorkflow();
-    button.disabled = false;
+  }
+});
+
+const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack' };
+
+function jobText(job) {
+  const name = JOB_NAMES[job.kind] || 'Job';
+  const result = job.result || {};
+  const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
+    : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.` : '';
+  return {
+    queued: `${name} queued.`,
+    running: `${name} running.`,
+    succeeded: `${name} finished.${summary}`,
+    failed: `${name} failed: ${job.error || 'unknown error'}.`,
+    cancelled: `${name} cancelled. Finished items are kept.`,
+    interrupted: `${name} interrupted by a Lumen restart. Start it again to resume.`,
+  }[job.status] || `${name} status: ${job.status}.`;
+}
+
+function watchJob(job) {
+  const previous = state.job?.job_id === job.job_id ? state.job.status : null;
+  state.job = job;
+  state.jobRequest += 1;  // any newer state invalidates polls already in flight
+  const percent = Math.round((job.progress || 0) * 100);
+  const progress = document.querySelector('#job-progress');
+  progress.value = percent;
+  progress.setAttribute('aria-valuetext', `${percent}% complete`);
+  document.querySelector('#job-label').textContent = `${JOB_NAMES[job.kind] || 'Job'} ${job.job_id}${job.total ? ` · ${job.processed} of ${job.total}` : ''}${job.label ? ` · ${job.label}` : ''}`;
+  const status = document.querySelector('#job-status');
+  const text = jobText(job);
+  if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
+  document.querySelector('#job-strip').hidden = false;
+  if (job.kind === 'astro') setAstroJob(job);
+  else if (job.status !== previous) announce(text);
+  if (JOB_ACTIVE.includes(job.status)) startJobPolling();
+  else {
+    stopJobPolling();
+    if (JOB_ACTIVE.includes(previous)) load().catch(error => announce(error.message));
+  }
+  updateWorkflow();
+}
+
+function startJobPolling() {
+  if (state.jobTimer !== null) return;
+  state.jobTimer = window.setInterval(pollJob, 1000);
+}
+
+function stopJobPolling() {
+  if (state.jobTimer === null) return;
+  window.clearInterval(state.jobTimer);
+  state.jobTimer = null;
+}
+
+async function pollJob() {
+  const job = state.job;
+  if (!job) return stopJobPolling();
+  const requestId = state.jobRequest;
+  try {
+    const latest = await request(`/api/jobs/${job.job_id}`);
+    if (requestId === state.jobRequest) watchJob(latest);
+  } catch (error) {
+    stopJobPolling();
+    document.querySelector('#job-status').textContent = `${error.message}. Reload this page to resume watching the job.`;
+    announce(document.querySelector('#job-status').textContent);
+  }
+}
+
+document.querySelector('#cancel-job').addEventListener('click', async () => {
+  state.busy = true;
+  updateWorkflow();
+  try {
+    watchJob(await post(`/api/jobs/${state.job.job_id}/cancel`));
+  } catch (error) {
+    document.querySelector('#job-status').textContent = `Cancel failed: ${error.message}`;
+    announce(document.querySelector('#job-status').textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
   }
 });
 
@@ -401,7 +487,6 @@ document.querySelector('#browse-path').addEventListener('click', async event => 
   }
 });
 
-const ASTRO_ACTIVE = ['queued', 'running'];
 const ASTRO_WORDS = { queued: 'Stack prepared and queued.', running: 'Stack running.', succeeded: 'Stack finished.', failed: 'Stack failed.', cancelled: 'Stack cancelled.', interrupted: 'Stack interrupted.' };
 
 function renderAstroLights(group) {
@@ -434,9 +519,8 @@ function astroPath(name) {
 }
 
 function setAstroJob(job) {
-  const previous = state.astro.job?.status;
+  const previous = state.astro.job?.job_id === job.job_id ? state.astro.job.status : null;
   state.astro.job = job;
-  state.astro.request += 1;  // any newer state invalidates polls already in flight
   const status = document.querySelector('#astro-status');
   const progress = document.querySelector('#astro-progress');
   const percent = Math.round((job.progress || 0) * 100);
@@ -474,37 +558,10 @@ function setAstroJob(job) {
   if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
   if (job.status !== previous) announce(ASTRO_WORDS[job.status] || `Stack ${job.status}.`);
   try {
-    if (ASTRO_ACTIVE.includes(job.status)) localStorage.setItem('lumen-astro-job', String(job.job_id));
+    if (JOB_ACTIVE.includes(job.status)) localStorage.setItem('lumen-astro-job', String(job.job_id));
     else localStorage.removeItem('lumen-astro-job');
   } catch { /* per-visit only */ }
-  if (!ASTRO_ACTIVE.includes(job.status)) stopAstroPolling();
-  else if (job.status === 'running') startAstroPolling();
   updateWorkflow();
-}
-
-function startAstroPolling() {
-  if (state.astro.timer !== null) return;
-  state.astro.timer = window.setInterval(pollAstro, 1000);
-}
-
-function stopAstroPolling() {
-  if (state.astro.timer === null) return;
-  window.clearInterval(state.astro.timer);
-  state.astro.timer = null;
-}
-
-async function pollAstro() {
-  const job = state.astro.job;
-  if (!job) return stopAstroPolling();
-  const requestId = state.astro.request;
-  try {
-    const latest = await request(`/api/astro/jobs/${job.job_id}`);
-    if (requestId === state.astro.request) setAstroJob(latest);
-  } catch (error) {
-    stopAstroPolling();
-    document.querySelector('#astro-status').textContent = `${error.message}. Reload this page to resume watching the job.`;
-    announce(document.querySelector('#astro-status').textContent);
-  }
 }
 
 async function astroAction(label, action) {
@@ -526,11 +583,10 @@ document.querySelector('#prepare-astro').addEventListener('click', () => astroAc
   setAstroJob(await post('/api/astro/jobs', { group_id: state.selectedGroupId, confirmed: true, excluded_photo_ids: excluded, ...state.astro.folders }));
 }));
 document.querySelector('#run-astro').addEventListener('click', () => astroAction('Run stack', async () => {
-  setAstroJob(await post(`/api/astro/jobs/${state.astro.job.job_id}/run`));  // the server answers before the worker flips the row to running
-  startAstroPolling();
+  watchJob(await post(`/api/astro/jobs/${state.astro.job.job_id}/run`));  // queued until the worker flips the row; polling starts now
 }));
 document.querySelector('#cancel-astro').addEventListener('click', () => astroAction('Cancel stack', async () => {
-  setAstroJob(await post(`/api/astro/jobs/${state.astro.job.job_id}/cancel`));
+  watchJob(await post(`/api/astro/jobs/${state.astro.job.job_id}/cancel`));
 }));
 document.querySelector('#reveal-astro').addEventListener('click', () => astroAction('Finder reveal', async () => {
   const result = await post(`/api/astro/jobs/${state.astro.job.job_id}/reveal`);
@@ -579,14 +635,15 @@ function updateWorkflow() {
   renderAstroLights(group);
   const siril = state.status?.tools?.['siril-cli']?.available === true;
   const job = state.astro.job;
-  const activeJob = ASTRO_ACTIVE.includes(job?.status);
+  const activeJob = JOB_ACTIVE.includes(job?.status);
   document.querySelector('#astro-group-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.photos.length)}` : 'No batch selected';
   document.querySelector('#astro-availability').textContent = siril ? 'Siril is ready. One stack runs at a time; everything is written below the library outputs folder.' : 'siril-cli is unavailable. Install Siril or add it to PATH, restart Lumen, then reload this page.';
   document.querySelector('#prepare-astro').disabled = state.busy || !siril || !group || !document.querySelector('#astro-confirm').checked || astroLights().included < 2 || activeJob;
-  document.querySelector('#run-astro').disabled = state.busy || job?.status !== 'queued' || state.astro.timer !== null;
+  document.querySelector('#run-astro').disabled = state.busy || job?.status !== 'queued';
   document.querySelectorAll('#astro-lights input').forEach(input => { input.disabled = activeJob; });
   document.querySelector('#astro-confirm').disabled = activeJob;
-  document.querySelector('#cancel-astro').disabled = state.busy || !activeJob;
+  document.querySelector('#cancel-astro').disabled = state.acting || !activeJob;
+  document.querySelector('#cancel-job').disabled = state.acting || !JOB_ACTIVE.includes(state.job?.status);
   document.querySelector('#reveal-astro').disabled = state.busy || !job;
   for (const kind of ['darks', 'flats', 'biases']) {
     document.querySelector(`#browse-astro-${kind}`).disabled = state.busy || activeJob;

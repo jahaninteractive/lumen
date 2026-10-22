@@ -63,6 +63,7 @@ class ImportSummary:
     updated: int = 0
     failed: int = 0
     errors: list[str] = field(default_factory=list)
+    skipped: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,25 +173,120 @@ class Library:
             return summary
         summary.discovered = len(candidates)
         for source in candidates:
-            existed = self.catalog.photo_by_path(str(source)) is not None
-            try:
-                self._import_one(source)
-                if existed:
-                    summary.updated += 1
-                else:
-                    summary.imported += 1
-            except (OSError, PreviewError, ValueError, subprocess.SubprocessError) as error:
-                summary.failed += 1
-                summary.errors.append(f"{source.name}: {error}")
-                failed_photo = self.catalog.photo_by_path(str(source))
-                details = {"source": str(source), "error": str(error)}
-                try:
-                    details["source_fingerprint"] = fingerprint_file(source)
-                except OSError:
-                    pass
-                self.catalog.append_event(failed_photo.id if failed_photo else None, "import_failed", details)
+            self._import_candidate(source, summary)
         self._regroup_and_write_sidecars()
         return summary
+
+    def _import_candidate(self, source: Path, summary: ImportSummary, *, skip_unchanged: bool = False) -> None:
+        previous = self.catalog.photo_by_path(str(source))
+        try:
+            fingerprint = fingerprint_file(source)
+            if (skip_unchanged and previous and previous.fingerprint == fingerprint
+                    and previous.preview_path and Path(previous.preview_path).is_file()):
+                summary.skipped += 1
+                return
+            self._import_one(source, fingerprint)
+            if previous:
+                summary.updated += 1
+            else:
+                summary.imported += 1
+        except (OSError, PreviewError, ValueError, subprocess.SubprocessError) as error:
+            summary.failed += 1
+            summary.errors.append(f"{source.name}: {error}")
+            failed_photo = self.catalog.photo_by_path(str(source))
+            details = {"source": str(source), "error": str(error)}
+            try:
+                details["source_fingerprint"] = fingerprint_file(source)
+            except OSError:
+                pass
+            self.catalog.append_event(failed_photo.id if failed_photo else None, "import_failed", details)
+
+    def start_import_job(self, requested: Path) -> Job:
+        requested = requested.expanduser().resolve()
+        if not requested.exists():
+            raise ValueError(f"Path does not exist: {requested}")
+        if requested.is_file() and requested.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise ValueError(f"Unsupported image type: {requested.name}")
+        runner = self.job_runner
+        job = self.catalog.create_prepared_job(
+            "import", lambda job_id: self._write_job_files(job_id, {"kind": "import", "path": str(requested)}))
+
+        def work(context) -> None:
+            with Library(self.settings, job_runner=runner) as worker:
+                candidates = worker._candidates(requested)
+                summary = ImportSummary(discovered=len(candidates))
+                for index, source in enumerate(candidates, 1):
+                    if context.cancelled:
+                        break
+                    with worker._mutation():
+                        worker._import_candidate(source, summary, skip_unchanged=True)
+                    for error in summary.errors:
+                        worker._log_job(job, error)
+                    summary.errors.clear()
+                    context.update_progress(index / len(candidates), label=source.name[:200], processed=index, total=len(candidates))
+                with worker._mutation():
+                    worker._regroup_and_write_sidecars()
+                counts = {key: getattr(summary, key) for key in ("discovered", "imported", "updated", "skipped", "failed")}
+                worker._write_job_files(job.id, {"kind": "import", "path": str(requested), "summary": counts})
+
+        self._submit_job(runner, job, work)
+        return job
+
+    def start_tag_job(self, tagger, *, retag: bool = False) -> Job:
+        if type(retag) is not bool:
+            raise ValueError("retag must be true or false")
+        runner = self.job_runner
+        job = self.catalog.create_prepared_job(
+            "tag", lambda job_id: self._write_job_files(job_id, {"kind": "tag", "retag": retag}))
+
+        def work(context) -> None:
+            with Library(self.settings, job_runner=runner) as worker:
+                photos = worker.catalog.list_photos()
+                counts = {"tagged": 0, "skipped": 0, "failed": 0}
+                failed_photo_ids = []
+                for index, photo in enumerate(photos, 1):
+                    if context.cancelled:
+                        break
+                    with worker._mutation():
+                        if not retag and worker.catalog.get_tags(photo.id) is not None:
+                            counts["skipped"] += 1
+                        else:
+                            try:
+                                worker.tag_photo(photo.id, tagger)  # A model failure appends tag_failed itself.
+                                counts["tagged"] += 1
+                            except Exception as error:
+                                counts["failed"] += 1
+                                failed_photo_ids.append(photo.id)
+                                worker._log_job(job, f"{Path(photo.path).name}: {type(error).__name__}: {error}")
+                    context.update_progress(index / len(photos), label=Path(photo.path).name[:200],
+                                            processed=index, total=len(photos))
+                with worker._mutation():
+                    worker._regroup_and_write_sidecars()
+                worker._write_job_files(job.id, {"kind": "tag", "retag": retag,
+                                                 "failed_photo_ids": failed_photo_ids, "summary": counts})
+
+        self._submit_job(runner, job, work)
+        return job
+
+    def _write_job_files(self, job_id: int, manifest: dict) -> tuple[str, str]:
+        job_dir = self.settings.output_dir / "jobs" / str(job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        log = job_dir / "job.log"
+        log.touch()
+        SidecarWriter._atomic_write(job_dir / "manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        return str(job_dir / "manifest.json"), str(log)
+
+    @staticmethod
+    def _log_job(job: Job, line: str) -> None:
+        with open(job.log_path, "a", encoding="utf-8") as handle:
+            handle.write(public_message(line).replace("\n", " ") + "\n")
+
+    def _submit_job(self, runner: LocalJobRunner, job: Job, work) -> None:
+        try:
+            runner.submit(job.id, work)
+        except RuntimeError:
+            self.catalog.update_job(job.id, status="cancelled")  # Never leave a queued row nothing will run.
+            raise
 
     def list_groups(self) -> list[dict]:
         return self.catalog.list_groups()
@@ -571,31 +667,42 @@ class Library:
     def wait_for_job(self, job_id: int, timeout: float | None = None) -> bool:
         return self._runner is not None and self._runner.wait(job_id, timeout)
 
+    def list_job_status(self, limit: int = 50) -> list[dict]:
+        return [self.job_status(job.id) for job in reversed(self.catalog.list_jobs()[-limit:])]
+
     def job_status(self, job_id: int, *, log_lines: int = 40) -> dict:
         """Browser/CLI-safe view of a job: no manifest, paths, fingerprints, or launch command."""
         job = self.catalog.get_job(job_id)
-        counts = {"warnings": [], "lights": 0, "excluded_lights": 0, "darks": 0, "flats": 0, "biases": 0}
-        if job.manifest_path != "pending":
-            try:
-                manifest = load_manifest(Path(job.manifest_path), self.settings.output_dir)
-            except (ValueError, OSError):  # Deleted or tampered job files: the catalog row still has a status.
-                counts["warnings"] = ["Job manifest is unavailable; this job cannot run."]
-            else:
-                counts = {"warnings": list(manifest.warnings), "lights": len(manifest.lights.frames),
-                          "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
-                          "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames)}
+        counts = {}
+        result = None
+        if job.kind == "astro":
+            counts = {"warnings": [], "lights": 0, "excluded_lights": 0, "darks": 0, "flats": 0, "biases": 0}
+            if job.manifest_path != "pending":
+                try:
+                    manifest = load_manifest(Path(job.manifest_path), self.settings.output_dir)
+                except (ValueError, OSError):  # Deleted or tampered job files: the catalog row still has a status.
+                    counts["warnings"] = ["Job manifest is unavailable; this job cannot run."]
+                else:
+                    counts = {"warnings": list(manifest.warnings), "lights": len(manifest.lights.frames),
+                              "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
+                              "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames)}
+        elif job.manifest_path != "pending":
+            try:  # Import and tag jobs record their counts in the manifest when they finish.
+                result = json.loads(Path(job.manifest_path).read_text(encoding="utf-8")).get("summary")
+            except (ValueError, OSError, AttributeError):
+                pass
         tail: list[str] = []
         log = Path(job.log_path)
         if job.log_path != "pending" and log.is_file():
             lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
             tail = [line.replace(str(self.settings.library_dir.resolve()), "<library>") for line in lines
                     if not line.startswith("lumen: command ")][-log_lines:]
-        result = None
-        if job.result_path is not None:
+        if job.kind == "astro" and job.result_path is not None:
             for artifact in self.catalog.list_artifacts():
                 if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id:
                     result = {"artifact_id": artifact.id, "name": Path(artifact.path).name}
         return {"job_id": job.id, "kind": job.kind, "status": job.status, "progress": job.progress,
+                "label": job.label, "processed": job.processed, "total": job.total,
                 "error": public_message(job.error), "result": result, "log_tail": tail,
                 "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat(), **counts}
 
@@ -708,8 +815,8 @@ class Library:
             if not (resolved := path.resolve()).is_relative_to(library_dir)
         )
 
-    def _import_one(self, source: Path) -> int:
-        fingerprint = fingerprint_file(source)
+    def _import_one(self, source: Path, fingerprint: str | None = None) -> int:
+        fingerprint = fingerprint or fingerprint_file(source)
         previous = self.catalog.photo_by_path(str(source))
         metadata = read_metadata(source)
         captured = datetime.fromisoformat(metadata["captured_at"]) if metadata["captured_at"] else None

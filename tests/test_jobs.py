@@ -85,6 +85,18 @@ class LocalJobRunnerTests(unittest.TestCase):
         self.runner_under_test.shutdown()
         self.assertFalse(self.runner_under_test.is_alive)
 
+    def test_update_progress_records_label_and_counts(self):
+        job = self.job("labelled")
+        self.runner_under_test = self.runner()
+
+        def work(context):
+            context.update_progress(0.5, label="DSC0001.ARW", processed=1, total=2)
+            context.update_progress(0.75)
+
+        self.runner_under_test.submit(job.id, work)
+        saved = self.wait_status(job.id, "succeeded")
+        self.assertEqual(("DSC0001.ARW", 1, 2), (saved.label, saved.processed, saved.total))
+
     def test_recorded_result_is_never_undone_by_a_late_cancel(self):
         job = self.job("result")
         self.runner_under_test = self.runner()

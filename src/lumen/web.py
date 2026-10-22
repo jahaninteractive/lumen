@@ -158,13 +158,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 with Library(settings) as library:
                     self._send_json({"groups": _serializable_groups(library.list_groups()), "photo_count": library.photo_count()})
                 return
-            match = re.fullmatch(r"/api/astro/jobs/(\d+)", path)
+            if path == "/api/jobs":
+                with Library(settings) as library:
+                    self._send_json({"jobs": library.list_job_status()})
+                return
+            match = re.fullmatch(r"/api/(astro/)?jobs/(\d+)", path)
             if match:
                 try:
                     with Library(settings) as library:
-                        self._send_json(library.job_status(int(match.group(1))))
+                        self._send_json(library.job_status(int(match.group(2))))
                 except (ValueError, OverflowError, OSError, RuntimeError):
-                    self._send_json({"error": "astro job is unavailable"}, status=HTTPStatus.NOT_FOUND)
+                    self._send_json({"error": "astro job is unavailable" if match.group(1) else "job is unavailable"}, status=HTTPStatus.NOT_FOUND)
                 return
             match = re.fullmatch(r"/api/photos/(\d+)/crops", path)
             if match:
@@ -240,12 +244,35 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json({"path": reveal_outputs(settings)})
                     return
                 if path == "/api/import":
+                    if payload.keys() - {"path"}:
+                        raise ValueError("unexpected import fields")
                     source = payload.get("path")
                     if not isinstance(source, str) or not source.strip():
                         raise ValueError("path is required")
-                    with Library(settings) as library:
-                        result = library.import_path(Path(source))
-                    self._send_json(asdict(result), status=HTTPStatus.CREATED)
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        job = library.start_import_job(Path(source))
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/photos/tag-all":
+                    if payload.keys() - {"retag"}:
+                        raise ValueError("unexpected tag fields")
+                    retag = payload.get("retag", False)
+                    if type(retag) is not bool:
+                        raise ValueError("retag must be true or false")
+                    tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        job = library.start_tag_job(tagger, retag=retag)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                match = re.fullmatch(r"/api/jobs/(\d+)/cancel", path)
+                if match:
+                    if payload:
+                        raise ValueError("cancel requires an empty JSON object")
+                    job_id = int(match.group(1))
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        if library.catalog.get_job(job_id).status not in {"queued", "running"} or not library.cancel_job(job_id):
+                            raise ValueError("job is no longer queued or running")
+                        self._send_json(library.job_status(job_id))
                     return
                 if path == "/api/export":
                     scope = payload.get("scope")
@@ -342,28 +369,27 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     if payload:
                         raise ValueError("this action requires an empty JSON object")
                     job_id, action = int(match.group(1)), match.group(2)
-                    try:
-                        if action == "reveal":
-                            self._send_json({"path": reveal_astro_job(settings, job_id)})
-                        elif action == "run":
-                            with Library(settings, job_runner=self.server.job_runner()) as library:
-                                library.run_astro_job(job_id)
-                                self._send_json(library.job_status(job_id), status=HTTPStatus.ACCEPTED)
-                        else:
-                            with Library(settings, job_runner=self.server.job_runner()) as library:
-                                if not library.cancel_job(job_id):
-                                    raise ValueError("job is no longer queued or running")
-                                self._send_json(library.job_status(job_id))
-                    except RuntimeError as error:
-                        if "another heavy job" not in str(error):
-                            raise
-                        self._send_json({"error": str(error)}, status=HTTPStatus.CONFLICT)
+                    if action == "reveal":
+                        self._send_json({"path": reveal_astro_job(settings, job_id)})
+                    elif action == "run":
+                        with Library(settings, job_runner=self.server.job_runner()) as library:
+                            library.run_astro_job(job_id)
+                            self._send_json(library.job_status(job_id), status=HTTPStatus.ACCEPTED)
+                    else:
+                        with Library(settings, job_runner=self.server.job_runner()) as library:
+                            if not library.cancel_job(job_id):
+                                raise ValueError("job is no longer queued or running")
+                            self._send_json(library.job_status(job_id))
                     return
                 self.send_error(HTTPStatus.NOT_FOUND)
             except CleanupError as error:
                 self._send_json(_cleanup_error_payload(error), status=HTTPStatus.BAD_REQUEST)
             except (ValueError, OverflowError, OSError, RuntimeError) as error:
-                message = public_message(str(error)) if path.startswith("/api/astro/") else str(error)
+                if isinstance(error, RuntimeError) and "another heavy job" in str(error):
+                    self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
+                    return
+                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/photos/tag-all"))
+                message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 
         def _prepare_astro(self, payload: dict) -> dict:

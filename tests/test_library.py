@@ -904,10 +904,10 @@ class LibraryTests(unittest.TestCase):
         Image.new("RGB", (320, 240), (20, 20, 20)).save(second)
         original = Library._import_one
 
-        def timeout_second(library, source):
+        def timeout_second(library, source, *args):
             if source.name == "DSC0002.jpg":
                 raise subprocess.TimeoutExpired("exiftool", 30)
-            return original(library, source)
+            return original(library, source, *args)
 
         with patch.object(Library, "_import_one", timeout_second):
             with Library(Settings(library_dir=self.library_dir)) as library:
@@ -982,6 +982,188 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(2, library.photo_count())
             self.assertEqual(2, library.clear_workspace("CLEAR").photos_removed)
             self.assertEqual(0, library.photo_count())
+
+    def run_job(self, library, job):
+        self.assertTrue(library.wait_for_job(job.id, 10))
+        return library.job_status(job.id)
+
+    def test_import_job_skips_cataloged_matching_photos_without_preview_work(self):
+        second = self.source_dir / "DSC0002.jpg"
+        Image.new("RGB", (320, 240), (20, 20, 20)).save(second)
+        settings = Settings(library_dir=self.library_dir)
+        with Library(settings) as library:
+            library.import_path(self.source_dir)
+            events_before = len(library.catalog.events_for(library.catalog.list_photos()[0].id))
+            added = self.source_dir / "DSC0003.jpg"
+            Image.new("RGB", (320, 240), (200, 20, 20)).save(added)
+            real = library_module.ExifToolPreviewProvider.create_preview
+            with patch.object(library_module.ExifToolPreviewProvider, "create_preview", autospec=True, side_effect=real) as preview, \
+                    patch("lumen.library.measure_image", wraps=library_module.measure_image) as measure:
+                status = self.run_job(library, library.start_import_job(self.source_dir))
+            photos = library.catalog.list_photos()
+            events_after = len(library.catalog.events_for(photos[0].id))
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual("import", status["kind"])
+        self.assertEqual([added.resolve()], [call.args[1] for call in preview.call_args_list])
+        self.assertEqual(1, measure.call_count)
+        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 2, "failed": 0}, status["result"])
+        self.assertEqual((3, 3), (status["processed"], status["total"]))
+        self.assertEqual(3, len(photos))
+        self.assertEqual(events_before, events_after)
+        manifest = json.loads((self.library_dir / "outputs" / "jobs" / str(status["job_id"]) / "manifest.json").read_text())
+        self.assertEqual(("import", str(self.source_dir.resolve())), (manifest["kind"], manifest["path"]))
+        self.assertTrue((self.library_dir / "outputs" / "jobs" / str(status["job_id"]) / "job.log").is_file())
+
+    def test_import_job_cancel_between_files_regroups_and_keeps_imported_rows(self):
+        for index in (2, 3):
+            Image.new("RGB", (320, 240), (index * 40, 20, 20)).save(self.source_dir / f"DSC000{index}.jpg")
+        original = Library._import_one
+        holder = {}
+
+        def import_then_cancel(library, source, *args, **kwargs):
+            photo_id = original(library, source, *args, **kwargs)
+            holder["library"].cancel_job(holder["job"].id)
+            return photo_id
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            holder["library"] = library
+            with patch.object(Library, "_import_one", import_then_cancel):
+                holder["job"] = library.start_import_job(self.source_dir)
+                status = self.run_job(library, holder["job"])
+            photos = library.catalog.list_photos()
+            groups = library.list_groups()
+
+        self.assertEqual("cancelled", status["status"])
+        self.assertEqual(["DSC0001.jpg"], [Path(photo.path).name for photo in photos])
+        self.assertIsNotNone(photos[0].group_id)
+        self.assertEqual(1, len(groups))
+        self.assertEqual(1, len(list((self.library_dir / "sidecars").glob("*.lumen.json"))))
+
+    def test_import_job_records_source_replaced_mid_job_and_continues(self):
+        second = self.source_dir / "DSC0002.jpg"
+        Image.new("RGB", (320, 240), (20, 20, 20)).save(second)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            Image.new("RGB", (320, 240), (90, 20, 20)).save(self.source_dir / "DSC0003.jpg")
+            real = library_module.fingerprint_file
+            replaced = []
+
+            def replace_second_while_first_is_checked(path):
+                if path.name == "DSC0001.jpg" and not replaced:
+                    Image.new("RGB", (320, 240), (5, 200, 5)).save(second)
+                    replaced.append(path)
+                return real(path)
+
+            with patch("lumen.library.fingerprint_file", side_effect=replace_second_while_first_is_checked):
+                status = self.run_job(library, library.start_import_job(self.source_dir))
+            changed = library.catalog.photo_by_path(str(second.resolve()))
+            kinds = [event.kind for event in library.catalog.events_for(changed.id)]
+            photo_count = library.photo_count()
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual({"discovered": 3, "imported": 1, "updated": 1, "skipped": 1, "failed": 0}, status["result"])
+        self.assertEqual("source_replaced", kinds[-2])
+        self.assertEqual("imported", kinds[-1])
+        self.assertEqual(3, photo_count)
+
+    def test_import_job_label_is_basename_only(self):
+        nested = self.source_dir / "private trip folder"
+        nested.mkdir()
+        long_name = "a" * 226 + ".jpg"
+        Image.new("RGB", (320, 240), (20, 20, 20)).save(nested / long_name)
+        self.image_path.unlink()
+        Image.new("RGB", (320, 240), (20, 90, 20)).save(nested / "zz.jpg")
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            labels = []
+            original = Library._import_one
+
+            def record_label(worker, source, *args, **kwargs):
+                labels.append(worker.catalog.get_job(job_ids[0]).label)
+                return original(worker, source, *args, **kwargs)
+
+            job_ids = []
+            with patch.object(Library, "_import_one", record_label):
+                job = library.start_import_job(self.source_dir)
+                job_ids.append(job.id)
+                status = self.run_job(library, job)
+            job = library.catalog.get_job(job.id)
+
+        self.assertEqual([None, long_name[:200]], labels)
+        self.assertEqual("zz.jpg", job.label)
+        self.assertEqual("zz.jpg", status["label"])
+        text = json.dumps(status)
+        self.assertNotIn("private trip folder", text)
+        self.assertNotIn(str(self.root), text)
+
+    def test_tag_job_skips_tagged_unless_retag_and_records_failures_without_stopping(self):
+        for index in (2, 3):
+            Image.new("RGB", (320, 240), (index * 40, 20, 20)).save(self.source_dir / f"DSC000{index}.jpg")
+
+        class FlakyTagger:
+            model = "test-vlm"
+
+            def __init__(self, failing):
+                self.failing = failing
+                self.calls = []
+
+            def tag(self, preview):
+                self.calls.append(preview)
+                if preview == self.failing:
+                    raise TagResponseError(f"bad response for {preview}")
+                return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            first, second, third = library.catalog.list_photos()
+            library.tag_photo(first.id, FlakyTagger(None))
+            tagger = FlakyTagger(Path(second.preview_path))
+            status = self.run_job(library, library.start_tag_job(tagger))
+            manifest = json.loads((self.library_dir / "outputs" / "jobs" / str(status["job_id"]) / "manifest.json").read_text())
+            second_kinds = [event.kind for event in library.catalog.events_for(second.id)]
+            third_tags = library.catalog.get_tags(third.id)
+            retagger = FlakyTagger(None)
+            retag_status = self.run_job(library, library.start_tag_job(retagger, retag=True))
+            with self.assertRaises(ValueError):
+                library.start_tag_job(retagger, retag="yes")
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual("tag", status["kind"])
+        self.assertEqual([Path(second.preview_path), Path(third.preview_path)], tagger.calls)
+        self.assertEqual({"kind": "tag", "retag": False, "failed_photo_ids": [second.id]}, {key: manifest[key] for key in ("kind", "retag", "failed_photo_ids")})
+        self.assertEqual({"tagged": 1, "skipped": 1, "failed": 1}, status["result"])
+        self.assertEqual("tag_failed", second_kinds[-1])
+        self.assertEqual("A frame", third_tags["data"]["description"])
+        self.assertTrue(status["log_tail"])
+        self.assertNotIn(str(self.root), json.dumps(status))
+        self.assertEqual(3, len(retagger.calls))
+        self.assertEqual({"tagged": 3, "skipped": 0, "failed": 0}, retag_status["result"])
+
+    def test_interrupted_import_job_completes_on_rerun_of_same_folder(self):
+        for index in (2, 3):
+            Image.new("RGB", (320, 240), (index * 40, 20, 20)).save(self.source_dir / f"DSC000{index}.jpg")
+        settings = Settings(library_dir=self.library_dir)
+        with Library(settings) as library:
+            library.import_path(self.image_path)
+            stale = library.catalog.create_job(kind="import", manifest_path="/stale/manifest.json", log_path="/stale/job.log")
+            library.catalog.update_job(stale.id, status="running", label="DSC0001.jpg", processed=1, total=3)
+        with Library(settings) as library:
+            library.job_runner
+            self.assertEqual("interrupted", library.job_status(stale.id)["status"])
+            status = self.run_job(library, library.start_import_job(self.source_dir))
+            paths = [photo.path for photo in library.catalog.list_photos()]
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual({"discovered": 3, "imported": 2, "updated": 0, "skipped": 1, "failed": 0}, status["result"])
+        self.assertEqual(3, len(paths))
+        self.assertEqual(len(paths), len(set(paths)))
+
+    def test_import_job_rejects_missing_and_unsupported_paths_before_creating_a_job(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            for path in (self.source_dir / "missing.ARW", self.source_dir / "notes.txt"):
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    library.start_import_job(path)
+            self.assertEqual([], library.catalog.list_jobs())
 
 
 if __name__ == "__main__":

@@ -17,6 +17,10 @@ _JOB_TRANSITIONS = {
     "queued": frozenset({"running", "cancelled"}),
     "running": frozenset({"succeeded", "failed", "cancelled", "interrupted"}),
 }
+# Columns added after a table first shipped: {table: {column: DDL}}; applied once to older catalogs.
+_MIGRATIONS = {
+    "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
+}
 
 
 class Catalog:
@@ -113,6 +117,15 @@ class Catalog:
             """
         )
         self.connection.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        with self.connection:
+            for table, columns in _MIGRATIONS.items():
+                existing = {row["name"] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+                for column, ddl in columns.items():
+                    if column not in existing:
+                        self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def close(self) -> None:
         self.connection.close()
@@ -247,6 +260,9 @@ class Catalog:
         progress: float | None = None,
         result_path: str | None | object = _UNCHANGED,
         error: str | None | object = _UNCHANGED,
+        label: str | None | object = _UNCHANGED,
+        processed: int | None = None,
+        total: int | None = None,
     ) -> Job:
         if type(job_id) is not int or job_id <= 0:
             raise ValueError("job ID must be a positive integer")
@@ -273,12 +289,15 @@ class Catalog:
                 manifest_path=current.manifest_path, log_path=current.log_path,
                 result_path=next_result, error=next_error,
                 created_at=current.created_at, updated_at=datetime.now(timezone.utc),
+                label=current.label if label is _UNCHANGED else label,
+                processed=current.processed if processed is None else processed,
+                total=current.total if total is None else total,
             )
             self.connection.execute(
                 """UPDATE jobs SET status = ?, progress = ?, result_path = ?, error = ?,
-                updated_at = ? WHERE id = ?""",
+                updated_at = ?, label = ?, processed = ?, total = ? WHERE id = ?""",
                 (updated.status, updated.progress, updated.result_path, updated.error,
-                 updated.updated_at.isoformat(), updated.id),
+                 updated.updated_at.isoformat(), updated.label, updated.processed, updated.total, updated.id),
             )
         return updated
 
@@ -741,4 +760,5 @@ class Catalog:
             log_path=row["log_path"], result_path=row["result_path"], error=row["error"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            label=row["label"], processed=row["processed"], total=row["total"],
         )

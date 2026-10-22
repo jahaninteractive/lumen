@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from .catalog import Catalog
+from .catalog import _UNCHANGED, Catalog
 from .domain import MAX_JOB_ERROR_LENGTH
 
 
@@ -26,11 +26,13 @@ class JobContext:
     def wait_for_cancel(self, timeout: float | None = None) -> bool:
         return self._cancelled.wait(timeout)
 
-    def update_progress(self, progress: float) -> None:
+    def update_progress(self, progress: float, *, label: str | None = None,
+                        processed: int | None = None, total: int | None = None) -> None:
         if self.cancelled:
             return
         with Catalog(self._runner.database_path) as catalog:
-            catalog.update_job(self._job_id, progress=progress)
+            catalog.update_job(self._job_id, progress=progress, label=_UNCHANGED if label is None else label,
+                               processed=processed, total=total)
 
     def register_process(self, process: Any) -> None:
         self._runner._register_process(self._job_id, process)

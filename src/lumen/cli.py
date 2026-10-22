@@ -34,7 +34,15 @@ def build_parser() -> argparse.ArgumentParser:
     selection = tag.add_mutually_exclusive_group(required=True)
     selection.add_argument("--photo", type=int)
     selection.add_argument("--all", action="store_true")
+    tag.add_argument("--retag", action="store_true", help="with --all, also re-tag photos that already have tags")
     tag.add_argument("--json", action="store_true")
+
+    jobs = commands.add_parser("jobs", help="list recent background jobs")
+    jobs.add_argument("--json", action="store_true")
+
+    cancel = commands.add_parser("cancel", help="cancel a queued job, or a running job owned by this process")
+    cancel.add_argument("job_id", type=int)
+    cancel.add_argument("--json", action="store_true")
 
     pick = commands.add_parser("pick", help="make a frame the manual best shot for its group")
     pick.add_argument("photo_id", type=int)
@@ -102,11 +110,27 @@ def main(argv: list[str] | None = None) -> int:
         _print(report, args.json)
         return 0 if report["tools"]["exiftool"]["available"] and report["omlx_model"]["complete"] else 2
 
-    if args.command == "import":
-        with Library(settings) as library:
-            result = library.import_path(args.path)
-        _print(asdict(result), args.json)
-        return 0 if result.failed == 0 else 2
+    if args.command in {"import", "jobs", "cancel"} or (args.command == "tag" and args.all):
+        try:
+            with Library(settings) as library:
+                if args.command == "jobs":
+                    payload = {"jobs": library.list_job_status()}
+                elif args.command == "cancel":
+                    library.cancel_job(args.job_id)
+                    payload = library.job_status(args.job_id)
+                else:
+                    job = (library.start_import_job(args.path) if args.command == "import" else
+                           library.start_tag_job(OmlxTagger(settings.omlx_url, settings.omlx_model), retag=args.retag))
+                    library.wait_for_job(job.id)
+                    payload = library.job_status(job.id)
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            payload = {"error": public_message(str(error))}
+        _print(payload, args.json)
+        if args.command == "jobs":
+            return 0
+        if args.command == "cancel":
+            return 0 if payload.get("status") == "cancelled" else 2
+        return 0 if payload.get("status") == "succeeded" and not (payload.get("result") or {}).get("failed") else 2
 
     if args.command == "groups":
         with Library(settings) as library:
@@ -115,14 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "tag":
-        tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
-        results = []
         with Library(settings) as library:
-            ids = [args.photo] if args.photo else [photo.id for photo in library.catalog.list_photos() if photo.id]
-            for photo_id in ids:
-                result = library.tag_photo(photo_id, tagger)
-                results.append({"photo_id": photo_id, **asdict(result)})
-        _print({"tagged": results}, args.json)
+            result = library.tag_photo(args.photo, OmlxTagger(settings.omlx_url, settings.omlx_model))
+        _print({"tagged": [{"photo_id": args.photo, **asdict(result)}]}, args.json)
         return 0
 
     if args.command == "pick":

@@ -61,6 +61,10 @@ button:focus-visible, input:focus-visible, [role="tabpanel"]:focus-visible {
 .mark { display: inline-block; width: .8rem; height: .8rem; margin-right: .55rem; border-radius: 50%; background: var(--amber); }
 .subtitle { margin-left: .65rem; color: var(--muted); }
 #system-status { margin: 0; color: var(--cyan); font-size: .9rem; }
+.job-strip { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--graphite); }
+.job-strip p { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+#job-progress { flex: 1 1 12rem; height: 12px; accent-color: var(--amber); }
+#cancel-job { min-width: 44px; min-height: 44px; }
 
 .workspace {
   min-height: calc(100vh - 65px);

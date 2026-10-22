@@ -96,10 +96,20 @@ class Job:
     error: str | None
     created_at: datetime
     updated_at: datetime
+    label: str | None = None
+    processed: int | None = None
+    total: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.id) is not int or self.id <= 0:
             raise ValueError("job ID must be a positive integer")
+        if self.label is not None and (not isinstance(self.label, str) or not 1 <= len(self.label) <= 200):
+            raise ValueError("job label must contain 1 to 200 characters")
+        for name, count in (("processed", self.processed), ("total", self.total)):
+            if count is not None and (type(count) is not int or count < 0):
+                raise ValueError(f"job {name} count must be a non-negative integer")
+        if self.processed is not None and self.total is not None and self.processed > self.total:
+            raise ValueError("job processed count cannot exceed its total")
         if not isinstance(self.kind, str) or not self.kind.strip():
             raise ValueError("job kind must not be empty")
         if not isinstance(self.status, str) or self.status not in JOB_STATUSES:

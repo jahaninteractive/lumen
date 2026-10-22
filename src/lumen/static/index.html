@@ -17,6 +17,13 @@
     <p id="system-status" role="status" aria-live="polite">Checking local tools…</p>
   </header>
 
+  <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
+    <p id="job-label">No background job</p>
+    <progress id="job-progress" aria-labelledby="job-label" max="100" value="0"></progress>
+    <p id="job-status" role="status" aria-live="polite"></p>
+    <button type="button" id="cancel-job" class="danger" disabled>Cancel job</button>
+  </section>
+
   <div class="workspace">
     <nav aria-label="Photo batches" class="batch-rail">
       <h2>Batches</h2>

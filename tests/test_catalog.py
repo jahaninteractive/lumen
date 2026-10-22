@@ -209,6 +209,35 @@ class CatalogTests(unittest.TestCase):
         finally:
             migrated.close()
 
+    def test_migration_adds_job_label_and_counts_to_existing_database(self):
+        legacy_path = Path(self.tmp.name) / "pre-migration.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE jobs (
+                    id INTEGER PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
+                    progress REAL NOT NULL, manifest_path TEXT NOT NULL, log_path TEXT NOT NULL,
+                    result_path TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                INSERT INTO jobs VALUES (1, 'astro', 'queued', 0, '/m.json', '/j.log', NULL, NULL,
+                    '2026-10-21T10:00:00+00:00', '2026-10-21T10:00:00+00:00');
+                """
+            )
+        for _ in range(2):
+            with Catalog(legacy_path) as migrated:
+                columns = [row["name"] for row in migrated.connection.execute("PRAGMA table_info(jobs)")]
+                job = migrated.get_job(1)
+        for column in ("label", "processed", "total"):
+            self.assertEqual(1, columns.count(column))
+        self.assertEqual(("astro", "/m.json", None, None, None), (job.kind, job.manifest_path, job.label, job.processed, job.total))
+        with Catalog(legacy_path) as migrated:
+            updated = migrated.update_job(1, status="running", label="DSC0001.ARW", processed=1, total=3)
+            self.assertEqual(updated, migrated.get_job(1))
+            self.assertEqual("DSC0001.ARW", migrated.update_job(1, progress=0.5).label)
+            for bad in ({"processed": -1}, {"processed": 4}, {"total": 0}, {"label": ""}, {"label": "x" * 201}, {"processed": True}):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    migrated.update_job(1, **bad)
+
     def test_job_round_trip_preserves_paths_and_creation_order(self):
         first = self.catalog.create_job(
             kind="siril-stack",

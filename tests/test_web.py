@@ -96,6 +96,132 @@ class WebTests(unittest.TestCase):
         )
         return subprocess.CompletedProcess(command, 0, "", "")
 
+    def get_json(self, path, headers=None):
+        try:
+            response = urllib.request.urlopen(urllib.request.Request(self.base + path, headers=headers or {}), timeout=3)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            self.assertIn("application/json", response.headers.get("Content-Type", ""))
+            return response.code, json.load(response)
+
+    def wait_job(self, job_id, timeout=10):
+        import time
+        deadline = time.monotonic() + timeout
+        while True:
+            code, payload = self.get_json(f"/api/jobs/{job_id}")
+            self.assertEqual(200, code, payload)
+            if payload["status"] not in ("queued", "running"):
+                return payload
+            self.assertLess(time.monotonic(), deadline, f"job stayed {payload['status']}")
+            time.sleep(0.05)
+
+    def test_import_returns_job_and_jobs_routes_never_expose_paths_or_fingerprints(self):
+        folder = self.root / "Card Folder"
+        folder.mkdir()
+        for index in range(2):
+            Image.new("RGB", (60, 40), (index * 90, 20, 20)).save(folder / f"DSC000{index}.jpg")
+        (self.root / "notes.txt").write_text("not a photo")
+        for payload in ({}, {"path": ""}, {"path": 5}, {"path": str(folder), "extra": 1},
+                        {"path": str(self.root / "missing")}, {"path": str(self.root / "notes.txt")}):
+            with self.subTest(payload=payload):
+                code, body = self.post_json("/api/import", payload)
+                self.assertEqual(400, code)
+                self.assertNotIn(str(self.root), json.dumps(body))
+        code, started = self.post_json("/api/import", {"path": str(folder)})
+        self.assertEqual(202, code)
+        self.assertEqual(("import", None), (started["kind"], started["result"]))
+        self.assertIn(started["status"], ("queued", "running", "succeeded"))
+        finished = self.wait_job(started["job_id"])
+        self.assertEqual("succeeded", finished["status"])
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0}, finished["result"])
+        self.assertEqual((2, 2, "DSC0001.jpg"), (finished["processed"], finished["total"], finished["label"]))
+        code, listing = self.get_json("/api/jobs")
+        self.assertEqual(200, code)
+        self.assertEqual(finished, listing["jobs"][0])
+        self.assertEqual((404, True), (self.get_json("/api/jobs/999")[0], "error" in self.get_json("/api/jobs/999")[1]))
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            secrets = [str(self.root), "fingerprint", "manifest_path", "log_path", "result_path"]
+            secrets += [photo.fingerprint for photo in library.catalog.list_photos()]
+        for body in (started, finished, listing):
+            text = json.dumps(body)
+            for secret in secrets:
+                self.assertNotIn(secret, text)
+        self.assertEqual(3, json.load(urllib.request.urlopen(self.base + "/api/groups", timeout=3))["photo_count"])
+
+    def test_tag_all_conflicts_with_active_job_and_cancel_is_same_origin_only(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        original = Library._import_one
+
+        def held(library, source, *args, **kwargs):
+            release.wait(5)
+            return original(library, source, *args, **kwargs)
+
+        class FakeTagger:
+            model = "test-vlm"
+
+            def __init__(self, *args):
+                pass
+
+            def tag(self, preview):
+                from lumen.omlx import TagResult
+                return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
+
+        changed = self.root / "photo.jpg"
+        Image.new("RGB", (120, 90), (1, 2, 3)).save(changed)
+        with patch.object(Library, "_import_one", held), patch("lumen.web.OmlxTagger", FakeTagger):
+            code, started = self.post_json("/api/import", {"path": str(changed)})
+            self.assertEqual(202, code)
+            code, body = self.post_json("/api/photos/tag-all", {})
+            self.assertEqual((409, {"error": "another heavy job is already active"}), (code, body))
+            code, body = self.post_json("/api/import", {"path": str(changed)})
+            self.assertEqual(409, code)
+            for payload in ({"retag": "yes"}, {"retag": 1}, {"all": True}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/tag-all", payload)[0])
+            cancel = f"/api/jobs/{started['job_id']}/cancel"
+            for header in ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"}):
+                with self.subTest(header=header):
+                    self.assertEqual(403, self.post_json(cancel, {}, headers=header)[0])
+            self.assertEqual(400, self.post_json(cancel, {"why": "x"})[0])
+            self.assertIn(self.get_json(f"/api/jobs/{started['job_id']}")[1]["status"], ("queued", "running"))
+            code, cancelled = self.post_json(cancel, {})
+            self.assertEqual((200, "cancelled"), (code, cancelled["status"]))
+            release.set()
+            self.assertTrue(self.server.job_runner().wait(started["job_id"], 5), "the worker finishes its current item")
+            self.assertEqual("cancelled", self.wait_job(started["job_id"])["status"])
+            self.assertEqual(400, self.post_json(cancel, {})[0])
+            code, tagging = self.post_json("/api/photos/tag-all", {"retag": True})
+            self.assertEqual((202, "tag"), (code, tagging["kind"]))
+            finished = self.wait_job(tagging["job_id"])
+        self.assertEqual(("succeeded", {"tagged": 1, "skipped": 0, "failed": 0}), (finished["status"], finished["result"]))
+        self.assertNotIn(str(self.root), json.dumps(finished))
+
+    def test_job_strip_has_progress_status_and_cancel_controls(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        strip = by_id["job-strip"]
+        self.assertTrue(strip["attrs"].get("aria-label"))
+        self.assertEqual("progress", by_id["job-progress"]["tag"])
+        self.assertEqual("job-label", by_id["job-progress"]["attrs"].get("aria-labelledby"))
+        self.assertEqual(("status", "polite"), (by_id["job-status"]["attrs"].get("role"), by_id["job-status"]["attrs"].get("aria-live")))
+        self.assertEqual(("button", "button"), (by_id["cancel-job"]["tag"], by_id["cancel-job"]["attrs"].get("type")))
+        for name in ("job-label", "job-progress", "job-status", "cancel-job"):
+            self.assertIn(strip, by_id[name]["parents"])
+            self.assertNotIn(by_id["main-content"], by_id[name]["parents"])
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"#cancel-job\s*\{[^}]*min-width:\s*44px")
+        javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
+        for word in ("finished", "failed", "cancelled", "interrupted"):
+            self.assertIn(word, javascript)
+        self.assertNotRegex(javascript, r"job[^\n]*\.innerHTML")
+
+    def test_javascript_job_strip_polls_import_disables_actions_and_refreshes_once(self):
+        self.run_javascript_cleanup_regression("job-strip")
+
     def test_export_current_and_keepers_return_artifacts_without_overwrite(self):
         profile = self.root / "profile.xmp"
         profile.write_text("<xmp/>")
@@ -277,6 +403,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -295,6 +422,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -576,6 +704,9 @@ let runs = 0;
 const statusWrites = [];
 Object.defineProperty(element('#astro-status'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; statusWrites.push(value); } });
 const jobPayload = (status, progress, extra = {}) => ({ job_id: 7, kind: 'astro', status, progress, error: null, result: null, log_tail: ['log: Running command: register'], warnings: ['No flat frames supplied; stacking without flats.'], lights: 2, excluded_lights: 1, darks: 0, flats: 0, biases: 0, created_at: '', updated_at: '', ...extra });
+const importJob = (status, progress, extra = {}) => ({ job_id: 9, kind: 'import', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
+let groupLoads = 0;
+let importPolls = 0;
 const removals = [];
 const compositionReviews = [];
 const cropMutations = [];
@@ -601,7 +732,14 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
-  else if (url === '/api/groups') payload = { groups, photo_count: groups.reduce((count, item) => count + item.photos.length, 0) };
+  else if (url === '/api/groups') { groupLoads += 1; payload = { groups, photo_count: groups.reduce((count, item) => count + item.photos.length, 0) }; }
+  else if (url === '/api/jobs') payload = { jobs: [] };
+  else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
+  else if (url === '/api/jobs/9') {
+    importPolls += 1;
+    payload = importPolls < 3 ? importJob('running', 0.5, { label: 'DSC0001.ARW', processed: 1, total: 2 })
+      : importJob('succeeded', 1, { label: 'DSC0002.ARW', processed: 2, total: 2, result: { discovered: 2, imported: 1, updated: 0, skipped: 1, failed: 0 } });
+  }
   else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null };
   else if (url === '/api/photos/2/crops') {
     cropLoads += 1;
@@ -633,7 +771,7 @@ async function fetch(url, options = {}) {
   else if (url === '/api/astro/jobs/7/run') { assert.deepEqual(JSON.parse(options.body), {}); runs += 1; payload = jobPayload('queued', 0); }
   else if (url === '/api/astro/jobs/7/cancel') { assert.deepEqual(JSON.parse(options.body), {}); cancels += 1; payload = jobPayload('cancelled', 0.5); }
   else if (url === '/api/astro/jobs/7/reveal') { assert.deepEqual(JSON.parse(options.body), {}); payload = { path: '/managed/outputs/astro/7' }; }
-  else if (url === '/api/astro/jobs/7') {
+  else if (url === '/api/astro/jobs/7' || url === '/api/jobs/7') {
     polls += 1;
     if (polls < 3 || scenario === 'astro-cancel') payload = jobPayload('running', polls === 1 ? 0.1 : 0.12);
     else if (scenario === 'astro-fail') payload = jobPayload('failed', 0.5, { error: 'Siril exited with exit code 3' });
@@ -670,6 +808,37 @@ const regression = `
     assert.equal(confirmation.value, '');
     assert.equal(state.selectedId, null);
     assert.equal(state.selectedGroupId, null);
+    return;
+  }
+  if (scenario === 'job-strip') {
+    await load();
+    const loadsBefore = groupLoads;
+    element('#import-path').value = '/Volumes/Card';
+    await element('#import-form').listeners.submit({ preventDefault() {}, currentTarget: element('#import-form') });
+    assert.equal(state.job.status, 'queued');
+    assert.equal(state.busy, true, 'a queued job keeps the workspace busy');
+    assert.equal(activeTimers, 1, 'polling starts as soon as the import is accepted');
+    assert.equal(element('#job-strip').hidden, false);
+    assert.ok(element('#announcer').textContent.includes('Import'));
+    for (const name of ['#import-form button[type="submit"]', '#browse-path', '#remove-group', '#browse-xmp']) assert.equal(element(name).disabled, true, name + ' is disabled during a job');
+    assert.equal(element('#cancel-job').disabled, false);
+    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.equal(state.job.status, 'running');
+    assert.ok(element('#job-label').textContent.includes('1 of 2'));
+    assert.ok(element('#job-label').textContent.includes('DSC0001.ARW'));
+    assert.equal(element('#job-progress').value, 50);
+    assert.equal(element('#import-form button[type="submit"]').disabled, true);
+    assert.equal(groupLoads, loadsBefore, 'groups are not refreshed while the job runs');
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(activeTimers, 0, 'polling stops on a terminal state');
+    assert.equal(state.job.status, 'succeeded');
+    assert.equal(state.busy, false);
+    assert.ok(element('#job-status').textContent.includes('finished'));
+    assert.ok(element('#job-status').textContent.includes('1 skipped'));
+    assert.ok(element('#announcer').textContent.includes('finished'));
+    assert.equal(groupLoads, loadsBefore + 1, 'load() runs once when the job ends');
+    assert.equal(element('#import-form button[type="submit"]').disabled, false);
+    assert.equal(element('#cancel-job').disabled, true);
     return;
   }
   const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');
@@ -892,8 +1061,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         Image.new("RGB", (40, 30), "red").save(failed)
         with patch("lumen.library.measure_image", side_effect=ValueError("analysis failed after upsert")):
             code, result = self.post_json("/api/import", {"path": str(failed)})
-        self.assertEqual(201, code)
-        self.assertEqual(1, result["failed"])
+            self.assertEqual(202, code)
+            result = self.wait_job(result["job_id"])
+        self.assertEqual(1, result["result"]["failed"])
         with Library(Settings(library_dir=self.root / "library")) as library:
             ungrouped = library.catalog.photo_by_path(str(failed.resolve()))
             self.assertIsNotNone(ungrouped)
@@ -1098,7 +1268,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        urllib.request.urlopen(request, timeout=3).close()
+        with urllib.request.urlopen(request, timeout=3) as response:
+            self.wait_job(json.load(response)["job_id"])
         second = json.load(urllib.request.urlopen(self.base + "/api/groups", timeout=3))["groups"][0]["photos"][0]
 
         self.assertEqual(first["id"], second["id"])
