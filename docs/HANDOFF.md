@@ -1,8 +1,10 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-22 (Africa/Johannesburg) — full-height workbench layout with burst sections landed on `main`
+Last updated: 2026-10-22 (Africa/Johannesburg) — Local AI Assist plan written; full-height workbench layout on `main`
 
 ## Resume here
+
+**Next: Local AI Assist (planned 2026-10-22, no tasks started).** Spec `docs/superpowers/specs/2026-10-22-local-ai-assist-design.md`; plan `docs/superpowers/plans/2026-10-22-local-ai-assist.md` (7 tasks in the spec's delivery order: roles + live gating + vocabulary + keeper tagging; reject review panel; burst critique; astro triage; captions/alt text; daily digest; natural-language find). The travel-volume plan it builds on is fully landed on `main` (jobs, decisions, filters, share export), so nothing blocks Task 1. Rules to carry: every model output is advisory until a button press; every call goes through `Library.tagger_for(role)`, which reads live `/api/status` and refuses an unloaded model; tests use fake taggers and patch `lumen.library.get_server_status`, never oMLX. New env vars once Task 1 lands: `LUMEN_OMLX_FAST_MODEL`, `LUMEN_OMLX_REVIEW_MODEL`.
 
 **Full-height layout + bursts on the sheet (2026-10-22, UI only).** `body` is a non-scrolling 100 vh flex column; the masthead is sticky, and the batch rail, `main`, and inspector each scroll independently (`.batch-rail, main, .inspector { overflow-y: auto }`). Below 680 px the workspace itself scrolls instead.
 
