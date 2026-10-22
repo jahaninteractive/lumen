@@ -18,6 +18,11 @@ from lumen.omlx import CompositionReview, OmlxError
 from lumen.pipelines import DarktablePipeline
 from lumen.web import make_server
 
+try:
+    from tests.test_astro import FAKE_SIRIL, SIRIL
+except ModuleNotFoundError:  # discovered with -s tests
+    from test_astro import FAKE_SIRIL, SIRIL
+
 
 class LandmarkParser(HTMLParser):
     def __init__(self):
@@ -271,7 +276,7 @@ class WebTests(unittest.TestCase):
         routes = (
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
-            "/api/photos/1/composition-review",
+            "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -289,7 +294,7 @@ class WebTests(unittest.TestCase):
         for route in (
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
-            "/api/photos/1/composition-review",
+            "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -303,7 +308,7 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab"]
-        self.assertEqual(["Compose", "Export", "Clear"], [node["text"].strip() for node in tabs])
+        self.assertEqual(["Compose", "Export", "Astro", "Clear"], [node["text"].strip() for node in tabs])
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for index, tab in enumerate(tabs):
             self.assertEqual("button", tab["tag"])
@@ -320,7 +325,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual("input", field["tag"])
         self.assertTrue(any(node["tag"] == "label" and node["attrs"].get("for") == "clear-confirmation" and node["text"].strip() for node in parser.nodes))
         self.assertTrue(by_id[field["attrs"]["aria-describedby"]]["text"].strip())
-        for name in ("system-status", "compose-status", "export-status", "clear-status", "import-status"):
+        for name in ("system-status", "compose-status", "export-status", "astro-status", "clear-status", "import-status"):
             self.assertEqual("polite", by_id[name]["attrs"].get("aria-live"))
         self.assertEqual("assertive", by_id["announcer"]["attrs"].get("aria-live"))
         export = by_id["export-controls"]
@@ -538,7 +543,7 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['compose', 'export', 'clear'].map((name, index) => {
+const tabElements = ['compose', 'export', 'astro', 'clear'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -553,15 +558,24 @@ const document = {
     if (selector === '.frame') return element('#contact-sheet').children.filter(item => item.className === 'frame');
     if (selector === '.batch-button') return element('#batch-list').children;
     if (selector === '[role="tab"]') return tabElements;
+    if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
     return [];
   },
 };
-const window = { setTimeout: callback => callback() };
-const localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+let activeTimers = 0;
+const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; return setInterval(callback, 5); }, clearInterval: id => { activeTimers -= 1; clearInterval(id); } };
+const localStorage = { getItem: key => (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : null), setItem() {}, removeItem() {} };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id });
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], photos: ids.map(photo) });
-let groups = scenario === 'merge' ? [group(1, [1]), group(2, [2])] : [group(1, [1, 2])];
+let groups = scenario === 'merge' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+const astroPosts = [];
+let polls = 0;
+let cancels = 0;
+let runs = 0;
+const statusWrites = [];
+Object.defineProperty(element('#astro-status'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; statusWrites.push(value); } });
+const jobPayload = (status, progress, extra = {}) => ({ job_id: 7, kind: 'astro', status, progress, error: null, result: null, log_tail: ['log: Running command: register'], warnings: ['No flat frames supplied; stacking without flats.'], lights: 2, excluded_lights: 1, darks: 0, flats: 0, biases: 0, created_at: '', updated_at: '', ...extra });
 const removals = [];
 const compositionReviews = [];
 const cropMutations = [];
@@ -585,10 +599,10 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg' };
+  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (url === '/api/groups') payload = { groups, photo_count: groups.reduce((count, item) => count + item.photos.length, 0) };
-  else if (/^\/api\/photos\/[12]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null };
+  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null };
   else if (url === '/api/photos/2/crops') {
     cropLoads += 1;
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
@@ -614,6 +628,16 @@ async function fetch(url, options = {}) {
     const removed = groups.find(item => item.id === id);
     groups = groups.filter(item => item.id !== id);
     payload = { photos_removed: removed.photos.length, files_removed: 3, trash_path: '/managed/trash/recovery', snapshot_path: '/managed/trash/recovery/catalog.sqlite3' };
+  } else if (url === '/api/browse') payload = { path: '/cal/darks', cancelled: false };
+  else if (url === '/api/astro/jobs') { assert.equal(options.method, 'POST'); astroPosts.push(JSON.parse(options.body)); payload = jobPayload('queued', 0); }
+  else if (url === '/api/astro/jobs/7/run') { assert.deepEqual(JSON.parse(options.body), {}); runs += 1; payload = jobPayload('queued', 0); }
+  else if (url === '/api/astro/jobs/7/cancel') { assert.deepEqual(JSON.parse(options.body), {}); cancels += 1; payload = jobPayload('cancelled', 0.5); }
+  else if (url === '/api/astro/jobs/7/reveal') { assert.deepEqual(JSON.parse(options.body), {}); payload = { path: '/managed/outputs/astro/7' }; }
+  else if (url === '/api/astro/jobs/7') {
+    polls += 1;
+    if (polls < 3 || scenario === 'astro-cancel') payload = jobPayload('running', polls === 1 ? 0.1 : 0.12);
+    else if (scenario === 'astro-fail') payload = jobPayload('failed', 0.5, { error: 'Siril exited with exit code 3' });
+    else payload = jobPayload('succeeded', 1, { result: { artifact_id: 1, name: 'result.tif' } });
   } else throw new Error('Unexpected request: ' + url);
   return { ok, json: async () => payload };
 }
@@ -646,6 +670,94 @@ const regression = `
     assert.equal(confirmation.value, '');
     assert.equal(state.selectedId, null);
     assert.equal(state.selectedGroupId, null);
+    return;
+  }
+  const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');
+  if (scenario === 'astro-resume') {
+    await load();
+    assert.equal(state.astro.job.status, 'running', 'a remembered job is refetched on load');
+    assert.equal(activeTimers, 1, 'a remembered running job resumes polling');
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(activeTimers, 0);
+    assert.equal(state.astro.job.status, 'succeeded');
+    return;
+  }
+  if (scenario.startsWith('astro')) {
+    await load();
+    assert.equal(element('#astro-group-count').textContent, 'No batch selected');
+    await inspect(state.groups[0].photos[0]);
+    element('#astro-tab').listeners.click();
+    assert.equal(element('#astro-group-count').textContent, 'Burst 1 · 3 frames');
+    const lights = document.querySelectorAll('#astro-lights input');
+    assert.equal(lights.length, 3);
+    assert.ok(lights.every(input => input.checked), 'every light starts included');
+    assert.equal(element('#prepare-astro').disabled, true, 'prepare requires explicit confirmation');
+    const confirm = element('#astro-confirm');
+    confirm.checked = true;
+    confirm.listeners.change();
+    assert.equal(element('#prepare-astro').disabled, false);
+    lights[1].checked = false; lights[1].listeners.change();
+    lights[2].checked = false; lights[2].listeners.change();
+    assert.equal(element('#prepare-astro').disabled, true, 'fewer than two lights cannot be stacked');
+    lights[1].checked = true; lights[1].listeners.change();
+    await element('#browse-astro-darks').listeners.click();
+    assert.equal(element('#astro-darks-path').textContent, '/cal/darks');
+    await element('#prepare-astro').listeners.click();
+    assert.deepEqual(astroPosts, [{ group_id: 1, confirmed: true, excluded_photo_ids: [3], darks: '/cal/darks', flats: null, biases: null }]);
+    assert.ok(element('#astro-warnings').children[0].textContent.startsWith('Warning: No flat frames'));
+    assert.ok(element('#astro-summary').textContent.includes('2 lights'));
+    assert.ok(pathsText().includes('/managed/outputs/astro/7/manifest.json'));
+    assert.equal(element('#run-astro').disabled, false);
+    assert.equal(element('#prepare-astro').disabled, true, 'one managed job at a time');
+    assert.equal(element('#cancel-astro').disabled, false);
+    assert.equal(lights[0].disabled, true, 'a prepared job locks the light selection');
+    assert.equal(confirm.disabled, true);
+    assert.equal(element('#browse-astro-darks').disabled, true);
+    assert.ok(element('#astro-status').textContent.includes('Cancel this stack to change'));
+    await element('#run-astro').listeners.click();
+    assert.equal(runs, 1);
+    assert.equal(state.astro.job.status, 'queued', 'the server answers run with the still-queued row');
+    assert.equal(activeTimers, 1, 'polling starts as soon as run is accepted');
+    assert.equal(element('#run-astro').disabled, true, 'run cannot be submitted twice');
+    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.equal(state.astro.job.status, 'running');
+    assert.ok(element('#astro-progress').value >= 10);
+    assert.ok(element('#announcer').textContent.includes('running'));
+    if (scenario === 'astro-cancel') {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.equal(activeTimers, 1, 'a running job keeps polling');
+      await element('#cancel-astro').listeners.click();
+      assert.equal(cancels, 1);
+      assert.equal(activeTimers, 0, 'cancellation stops polling');
+      assert.equal(state.astro.job.status, 'cancelled');
+      assert.ok(element('#announcer').textContent.includes('cancelled'));
+      assert.ok(pathsText().includes('siril.log'), 'logs stay reachable after cancel');
+    } else {
+      await new Promise(resolve => setTimeout(resolve, 80));
+      assert.equal(activeTimers, 0, 'polling stops on a terminal state');
+      assert.ok(polls >= 3, 'the job was polled while running');
+      assert.equal(state.astro.job.status, scenario === 'astro-fail' ? 'failed' : 'succeeded');
+      statusWrites.forEach((text, index) => assert.notEqual(text, statusWrites[index - 1], 'the live region must not be rewritten with identical text'));
+      assert.ok(pathsText().includes('/managed/outputs/astro/7/manifest.json'));
+      assert.ok(pathsText().includes('/managed/outputs/astro/7/siril.log'));
+      assert.ok(element('#astro-log').textContent.includes('Running command: register'));
+      if (scenario === 'astro-fail') {
+        assert.ok(element('#astro-status').textContent.includes('exit code 3'));
+        assert.ok(element('#announcer').textContent.includes('failed'));
+        assert.equal(element('#reveal-astro').disabled, false, 'failed jobs keep their folder reachable');
+      } else {
+        assert.ok(pathsText().includes('/managed/outputs/astro/7/result.tif'));
+        assert.ok(element('#announcer').textContent.includes('finished'));
+        assert.equal(element('#astro-progress').value, 100);
+        await element('#reveal-astro').listeners.click();
+        assert.ok(element('#astro-status').textContent.includes('/managed/outputs/astro/7'));
+      }
+    }
+    assert.equal(element('#cancel-astro').disabled, true);
+    assert.equal(element('#run-astro').disabled, true);
+    assert.equal(element('#prepare-astro').disabled, false, 'a finished job frees the form');
+    assert.equal(lights[0].disabled, false);
+    assert.equal(confirm.disabled, false);
     return;
   }
   await inspect(state.groups.flatMap(item => item.photos).find(item => item.id === 2));
@@ -756,12 +868,17 @@ const regression = `
 })()
 `;
 vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regression, {
-  assert: require('node:assert/strict'), setImmediate, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
+  assert: require('node:assert/strict'), setImmediate, setInterval, clearInterval, setTimeout, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
 }).catch(error => { console.error(error); process.exitCode = 1; });
 """
         app = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js"
         result = subprocess.run(["node", "-e", script, str(app), scenario, self.base], capture_output=True, text=True, timeout=10)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_javascript_astro_tab_confirms_includes_polls_and_retains_failure_context(self):
+        for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume"):
+            with self.subTest(scenario=scenario):
+                self.run_javascript_cleanup_regression(scenario)
 
     def test_javascript_cleanup_selection_follows_photo_after_group_refresh(self):
         for scenario in ("split", "merge", "missing"):
@@ -866,6 +983,37 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             with urllib.request.urlopen(self.base + "/api/status", timeout=3) as response:
                 payload = json.load(response)
         self.assertEqual(str((self.root / "library" / "outputs" / "jpeg").resolve()), payload.get("jpeg_output_dir"))
+        self.assertEqual(str((self.root / "library" / "outputs" / "astro").resolve()), payload.get("astro_output_dir"))
+
+    def test_astro_panel_has_explicit_confirmation_and_labeled_controls(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        panel = by_id["astro-panel"]
+        confirm = by_id["astro-confirm"]
+        self.assertEqual(("input", "checkbox"), (confirm["tag"], confirm["attrs"].get("type")))
+        self.assertIn(panel, confirm["parents"])
+        self.assertTrue(any(node["tag"] == "label" and node["attrs"].get("for") == "astro-confirm" and "confirm" in node["text"].lower() for node in parser.nodes))
+        self.assertEqual("fieldset", by_id["astro-lights-group"]["tag"])
+        self.assertIn("legend", [child["tag"] for child in parser.nodes if by_id["astro-lights-group"] in child["parents"]])
+        for kind in ("darks", "flats", "biases"):
+            browse = by_id[f"browse-astro-{kind}"]
+            self.assertEqual(("button", "button"), (browse["tag"], browse["attrs"].get("type")))
+            self.assertIn(kind[:-1], browse["text"].lower())
+            self.assertEqual("path", by_id[f"astro-{kind}-path"]["attrs"].get("class"))
+            self.assertTrue(by_id[f"astro-{kind}-path"]["attrs"].get("aria-labelledby"))
+        for name in ("prepare-astro", "run-astro", "cancel-astro", "reveal-astro"):
+            self.assertEqual("button", by_id[name]["tag"])
+            self.assertIn(panel, by_id[name]["parents"])
+        self.assertEqual("progress", by_id["astro-progress"]["tag"])
+        self.assertTrue(by_id["astro-progress"]["attrs"].get("aria-labelledby"))
+        self.assertTrue(by_id["astro-warnings"]["attrs"].get("aria-label"))
+        self.assertIn("originals", panel["text"].lower())
+        javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
+        self.assertIn("Warning: ", javascript)  # non-colour warning cue
+        self.assertIn("clearInterval", javascript)  # polling stops on terminal states
+        self.assertNotRegex(javascript, r"astro[^\n]*\.innerHTML")
 
     def test_index_has_semantic_landmarks_and_labeled_import_control(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
@@ -959,3 +1107,235 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AstroWebTests(unittest.TestCase):
+    def setUp(self):
+        import sys
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.night = self.root / "Night ✨"
+        self.night.mkdir()
+        for index in range(3):
+            exif = Image.Exif()
+            exif[34665] = {36867: f"2026:10:21 22:00:0{index}"}
+            Image.new("RGB", (64, 48), (index, 0, 0)).save(self.night / f"light {index} é.tif", exif=exif.tobytes())
+        self.settings = Settings(library_dir=self.root / "Lumen Library ✨")
+        with Library(self.settings) as library:
+            library.import_path(self.night)
+            self.group = library.list_groups()[0]
+        self.photo_ids = [photo["id"] for photo in self.group["photos"]]
+        self.scenario = "success"
+        real_popen = subprocess.Popen
+        for target, kwargs in (
+            ("lumen.library.find_tool", {"return_value": SIRIL.executable}),
+            ("lumen.library.probe_siril", {"return_value": SIRIL}),
+            ("lumen.astro.subprocess.Popen", {"side_effect": lambda command, **kw: real_popen(
+                [sys.executable, "-c", FAKE_SIRIL, self.scenario], **kw)}),
+        ):
+            patcher = patch(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.server = make_server(self.settings, port=0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.tmp.cleanup()
+
+    post_json = WebTests.post_json
+
+    def get_json(self, path):
+        try:
+            response = urllib.request.urlopen(self.base + path, timeout=3)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            self.assertIn("application/json", response.headers.get("Content-Type", ""))
+            return response.code, json.load(response)
+
+    def prepare(self, **extra):
+        return self.post_json("/api/astro/jobs", {"group_id": self.group["id"], "confirmed": True, **extra})
+
+    def poll(self, job_id, until, timeout=10):
+        import time
+        deadline = time.monotonic() + timeout
+        while True:
+            code, payload = self.get_json(f"/api/astro/jobs/{job_id}")
+            self.assertEqual(200, code)
+            if payload["status"] in until:
+                return payload
+            self.assertLess(time.monotonic(), deadline, f"job stayed {payload['status']}")
+            time.sleep(0.05)
+
+    def assert_safe(self, payload):
+        text = json.dumps(payload)
+        for secret in (str(self.root), str(self.night), "fingerprint", "manifest_path", "result_path", SIRIL.executable, "lumen: command"):
+            self.assertNotIn(secret, text)
+
+    def test_prepare_requires_explicit_confirmation_and_strict_fields(self):
+        bad = (
+            {"group_id": self.group["id"]},
+            {"group_id": self.group["id"], "confirmed": "yes"},
+            {"group_id": self.group["id"], "confirmed": 1},
+            {"group_id": str(self.group["id"]), "confirmed": True},
+            {"group_id": self.group["id"], "confirmed": True, "excluded_photo_ids": "1"},
+            {"group_id": self.group["id"], "confirmed": True, "excluded_photo_ids": [True]},
+            {"group_id": self.group["id"], "confirmed": True, "darks": 5},
+            {"group_id": self.group["id"], "confirmed": True, "extra": 1},
+            {"group_id": 999, "confirmed": True},
+        )
+        for payload in bad:
+            with self.subTest(payload=payload):
+                code, body = self.post_json("/api/astro/jobs", payload)
+                self.assertEqual(400, code)
+                self.assertIn("error", body)
+                self.assert_safe(body)
+        with Library(self.settings) as library:
+            self.assertEqual([], library.catalog.list_jobs())
+            self.assertFalse((self.settings.output_dir / "astro").exists())
+
+    def test_prepare_reports_warnings_and_selection_without_paths(self):
+        empty = self.root / "Darks Folder"
+        empty.mkdir()
+        code, payload = self.prepare(excluded_photo_ids=[self.photo_ids[2]], darks=str(empty), flats=None)
+        self.assertEqual(201, code)
+        self.assertEqual(("astro", "queued", 0.0, None, None), (
+            payload["kind"], payload["status"], payload["progress"], payload["result"], payload["error"]))
+        self.assertEqual(2, payload["lights"])
+        self.assertEqual(1, payload["excluded_lights"])
+        self.assertTrue(any("Darks Folder" in warning for warning in payload["warnings"]))
+        self.assertTrue(any("flat" in warning.lower() for warning in payload["warnings"]))
+        self.assertEqual([], payload["log_tail"])
+        self.assert_safe(payload)
+        code, status = self.get_json(f"/api/astro/jobs/{payload['job_id']}")
+        self.assertEqual((200, payload), (code, status))
+
+    def test_run_then_poll_reports_progress_log_tail_and_result_artifact(self):
+        code, prepared = self.prepare()
+        job_id = prepared["job_id"]
+        code, started = self.post_json(f"/api/astro/jobs/{job_id}/run", {})
+        self.assertEqual(202, code)
+        self.assertIn(started["status"], ("queued", "running"))
+        finished = self.poll(job_id, {"succeeded", "failed", "cancelled"})
+        self.assertEqual("succeeded", finished["status"])
+        self.assertEqual(1.0, finished["progress"])
+        self.assertTrue(any("savetif" in line for line in finished["log_tail"]))
+        self.assertFalse(any(line.startswith("lumen: command") for line in finished["log_tail"]))
+        self.assert_safe(finished)
+        with Library(self.settings) as library:
+            [artifact] = library.catalog.list_artifacts()
+        self.assertEqual({"artifact_id": artifact.id, "name": "result.tif"}, finished["result"])
+        code, body = self.post_json(f"/api/astro/jobs/{job_id}/run", {})
+        self.assertEqual(400, code)
+        code, body = self.post_json(f"/api/astro/jobs/{job_id}/run", {"force": True})
+        self.assertEqual(400, code)
+
+    def test_second_heavy_job_conflicts_until_first_is_cancelled(self):
+        self.scenario = "hang"
+        _, first = self.prepare()
+        _, second = self.prepare()
+        self.assertEqual(202, self.post_json(f"/api/astro/jobs/{first['job_id']}/run", {})[0])
+        self.poll(first["job_id"], {"running"})
+        code, body = self.post_json(f"/api/astro/jobs/{second['job_id']}/run", {})
+        self.assertEqual(409, code)
+        self.assertIn("another heavy job", body["error"])
+        self.assertEqual("queued", self.get_json(f"/api/astro/jobs/{second['job_id']}")[1]["status"])
+        code, cancelled = self.post_json(f"/api/astro/jobs/{first['job_id']}/cancel", {})
+        self.assertEqual(200, code)
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertIsNone(cancelled["result"])
+        self.assert_safe(cancelled)
+        self.poll(first["job_id"], {"cancelled"})
+        self.scenario = "success"
+        self.assertEqual(202, self.post_json(f"/api/astro/jobs/{second['job_id']}/run", {})[0])
+        self.assertEqual("succeeded", self.poll(second["job_id"], {"succeeded", "failed"})["status"])
+        code, body = self.post_json(f"/api/astro/jobs/{second['job_id']}/cancel", {"why": "x"})
+        self.assertEqual(400, code)
+        code, body = self.post_json(f"/api/astro/jobs/{second['job_id']}/cancel", {})
+        self.assertEqual(400, code)
+        self.assertEqual("succeeded", self.get_json(f"/api/astro/jobs/{second['job_id']}")[1]["status"])
+
+    def test_missing_siril_and_unknown_jobs_are_safe_json_errors(self):
+        with patch("lumen.library.find_tool", return_value=None):
+            code, body = self.prepare()
+        self.assertEqual(400, code)
+        self.assertIn("siril-cli", body["error"])
+        for method, route in (("GET", "/api/astro/jobs/42"), ("POST", "/api/astro/jobs/42/run"), ("POST", "/api/astro/jobs/42/cancel")):
+            with self.subTest(route=route):
+                code, body = self.get_json(route) if method == "GET" else self.post_json(route, {})
+                self.assertEqual(404 if method == "GET" else 400, code)
+                self.assertIn("error", body)
+                self.assert_safe(body)
+
+    def test_deleted_job_directory_still_reports_status_and_safe_errors(self):
+        import shutil
+        _, prepared = self.prepare()
+        job_id = prepared["job_id"]
+        shutil.rmtree(self.settings.output_dir / "astro" / str(job_id))
+        code, status = self.get_json(f"/api/astro/jobs/{job_id}")
+        self.assertEqual((200, "queued", []), (code, status["status"], status["log_tail"]))
+        self.assertTrue(any("unavailable" in warning for warning in status["warnings"]))
+        self.assert_safe(status)
+        code, body = self.post_json(f"/api/astro/jobs/{job_id}/run", {})
+        self.assertEqual(400, code)
+        self.assert_safe(body)
+        code, cancelled = self.post_json(f"/api/astro/jobs/{job_id}/cancel", {})
+        self.assertEqual((200, "cancelled"), (code, cancelled["status"]))
+        self.assert_safe(cancelled)
+        (self.settings.output_dir / "astro" / str(job_id + 1)).mkdir(parents=True)
+        code, body = self.prepare()
+        self.assertEqual(400, code)
+        self.assert_safe(body)
+
+    def test_worker_errors_never_expose_executable_or_library_paths(self):
+        _, prepared = self.prepare()
+        with patch("lumen.astro.subprocess.Popen", side_effect=FileNotFoundError(2, "No such file or directory", SIRIL.executable)):
+            self.post_json(f"/api/astro/jobs/{prepared['job_id']}/run", {})
+            finished = self.poll(prepared["job_id"], {"failed", "succeeded", "cancelled"})
+        self.assertEqual("failed", finished["status"])
+        self.assertIn("No such file", finished["error"])
+        self.assert_safe(finished)
+
+    def test_stale_running_job_from_a_crashed_server_is_recovered_on_start(self):
+        _, prepared = self.prepare()
+        self.server.shutdown()
+        self.server.server_close()  # Simulate the serving process going away mid-job.
+        with Library(self.settings) as library:
+            library.catalog.update_job(prepared["job_id"], status="running")
+        self.server = make_server(self.settings, port=0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        with Library(self.settings) as library:
+            self.assertEqual("interrupted", library.catalog.get_job(prepared["job_id"]).status)
+
+    def test_reveal_opens_only_an_existing_managed_job_folder(self):
+        _, prepared = self.prepare()
+        job_dir = (self.settings.output_dir / "astro" / str(prepared["job_id"])).resolve()
+        with patch("lumen.web.sys.platform", "darwin"), patch("lumen.web.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            code, payload = self.post_json(f"/api/astro/jobs/{prepared['job_id']}/reveal", {})
+            self.assertEqual((200, str(job_dir)), (code, payload["path"]))
+            self.assertEqual(["/usr/bin/open", str(job_dir)], run.call_args.args[0])
+            run.reset_mock()
+            for route, body in ((f"/api/astro/jobs/{prepared['job_id']}/reveal", {"path": "x"}), ("/api/astro/jobs/42/reveal", {})):
+                code, payload = self.post_json(route, body)
+                self.assertEqual(400, code)
+                self.assert_safe(payload)
+            run.assert_not_called()
+            self.assertFalse((self.settings.output_dir / "astro" / "42").exists())
+
+    def test_failed_job_status_keeps_error_and_log_without_paths(self):
+        self.scenario = "nonzero"
+        _, prepared = self.prepare()
+        self.post_json(f"/api/astro/jobs/{prepared['job_id']}/run", {})
+        finished = self.poll(prepared["job_id"], {"failed", "succeeded", "cancelled"})
+        self.assertEqual("failed", finished["status"])
+        self.assertIn("exit code 3", finished["error"])
+        self.assertTrue(any("invalid arguments" in line for line in finished["log_tail"]))
+        self.assertIsNone(finished["result"])
+        self.assert_safe(finished)

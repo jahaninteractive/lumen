@@ -24,6 +24,8 @@ The included defaults target a 48 GB M4 Mac and the already-installed
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
 - Quality-92, full-resolution sRGB JPEG export for the current photo or all
   group keepers, with an optional darktable XMP profile.
+- Guided, reproducible Siril stacking of a confirmed night-sky batch with
+  optional darks/flats/biases, progress, cancellation, and retained job logs.
 - Recoverable batch removal and workspace clearing that retain completed exports.
 - Keyboard-friendly local contact-sheet UI and JSON-capable CLI.
 
@@ -58,8 +60,10 @@ Optional processors:
   application bundle does not put it on `PATH`, add
   `/Applications/darktable.app/Contents/MacOS` to `PATH`.
 - Install the Apple Silicon build of Siril from <https://siril.org/download/>.
-  Lumen runs only reviewed scripts that you place in its managed outputs
-  directory; recipe generation remains an extension point.
+  Lumen looks for `siril-cli` on `PATH`, then inside a project-local
+  `vendor/apps/Siril.app`. The managed stacking workflow is validated against
+  Siril 1.4.x only (`lumen doctor` reports `supported`); other versions can still
+  run reviewed scripts through the legacy hook below.
 
 ## First run
 
@@ -158,6 +162,56 @@ export. Install darktable as described above, add its executable directory to
 `PATH` if needed, restart Lumen, and reload the page. Check with
 `uv run lumen doctor --json`. Import and review remain usable.
 
+## Stack a night sky
+
+The **Astro** tab turns the selected batch into one managed Siril stack. Lumen
+never changes the originals: it links the chosen lights into
+`<library>/outputs/astro/<job-id>/`, writes a fixed `stack.ssf` script plus a
+`manifest.json` that records every frame's size, modification time, and SHA-256,
+and runs the vendored or installed `siril-cli` with that folder as its only
+working directory.
+
+1. Select a frame from the night's batch and open **Astro**. Every light in the
+   batch is listed with a checkbox; untick frames with trails or clouds. At
+   least two lights must remain.
+2. Optionally choose dark, flat, and bias folders with the macOS folder picker.
+   Folders are read non-recursively; missing, empty, or single-frame sets add a
+   warning but never block the stack (Siril 1.4 cannot build a sequence from one
+   frame). Warnings always start with the word *Warning*, so they do not rely on
+   colour.
+3. Tick the confirmation checkbox, then **Prepare stack**. The panel shows the
+   job number, counts of lights, excluded lights, and calibration frames, the
+   warnings, and the managed manifest and log paths. Nothing runs yet.
+4. **Run stack** starts Siril. One heavy job runs at a time; a second run
+   returns a clear conflict. Progress is announced and polled only while the job
+   is queued or running. **Cancel stack** stops only this job's Siril process and
+   can never produce a result.
+5. On success the panel shows `result.tif` (16-bit RGB, star-aligned, sigma
+   rejection, `-rgb_equal`), and **Show job folder in Finder** opens that job's
+   folder. Provenance (`astro_stacked`) is recorded for every light and in each
+   light's sidecar.
+
+Failed, cancelled, and interrupted jobs keep their `manifest.json` and
+`siril.log` in the job folder so you can review the exact command and Siril
+output; the log tail is shown in the panel. If Lumen restarts mid-job the job is
+marked *interrupted*; prepare a new one. The browser remembers an active job
+number so reloading the page resumes watching it.
+
+Equivalent CLI commands:
+
+```sh
+uv run lumen astro prepare 3 --confirm --exclude 41 --darks "/Volumes/CAL/darks" --json
+uv run lumen astro run 1 --json       # blocks until the job ends
+uv run lumen astro status 1 --json
+uv run lumen astro cancel 1 --json
+```
+
+While `lumen serve` is running it owns the job runner, so run and cancel jobs
+from the web page rather than from a second CLI process. To recover a job's
+files, look under `~/Pictures/Lumen Library/outputs/astro/<job-id>/`; the
+`lights/` entries there are read-only links to your originals, never copies or
+moves.
+
 The separate **Clear** tab states the exact selected-batch and whole-workspace
 frame counts. **Remove batch from Lumen** removes the selected batch;
 **Clear workspace** requires the exact typed word `CLEAR`. Both retain camera
@@ -244,8 +298,9 @@ user-session access to Apple's Vision model service.
   photographer's aesthetic preference. Manual picks are authoritative.
 - Star counts and trailing warnings are screening signals, not scientific
   photometry.
-- Siril stack execution, perceptual near-duplicate grouping, and full historical
-  one-click rollback are explicit extension points, not pretend-complete stubs.
+- Managed stacking uses one fixed Siril recipe; per-job recipe editing,
+  perceptual near-duplicate grouping, and full historical one-click rollback are
+  explicit extension points, not pretend-complete stubs.
 - The web server is local-only and has no authentication; do not modify it to
   bind to a LAN address without adding authentication and transport security.
 

@@ -39,6 +39,7 @@
         <div class="tab-rail" role="tablist" aria-label="Finishing workflow">
           <button type="button" id="compose-tab" role="tab" aria-controls="compose-panel" aria-selected="true" tabindex="0">Compose</button>
           <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
+          <button type="button" id="astro-tab" role="tab" aria-controls="astro-panel" aria-selected="false" tabindex="-1">Astro</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
         <section id="compose-panel" role="tabpanel" aria-labelledby="compose-tab" tabindex="0">
@@ -83,6 +84,52 @@
           </fieldset>
           <p id="export-status" role="status" aria-live="polite"></p>
           <ul id="export-results" aria-label="Export result paths"></ul>
+        </section>
+        <section id="astro-panel" role="tabpanel" aria-labelledby="astro-tab" tabindex="0" hidden>
+          <h2>Stack a night-sky batch with Siril</h2>
+          <p class="quiet">Lumen links the selected batch into its own library folder and runs one reviewed Siril script. Camera originals are never changed. Darks, flats, and biases are optional; missing sets only add a warning.</p>
+          <p id="astro-availability" class="quiet">Checking Siril…</p>
+          <fieldset id="astro-lights-group">
+            <legend>Lights to include <span id="astro-group-count" class="quiet">No batch selected</span></legend>
+            <div id="astro-lights" class="scope-options"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Calibration folders (optional)</legend>
+            <p id="astro-darks-label">Dark frames</p>
+            <p id="astro-darks-path" class="path" aria-labelledby="astro-darks-label">None</p>
+            <div class="button-row">
+              <button type="button" id="browse-astro-darks" class="secondary">Choose darks folder…</button>
+              <button type="button" id="reset-astro-darks" class="secondary" disabled>No darks</button>
+            </div>
+            <p id="astro-flats-label">Flat frames</p>
+            <p id="astro-flats-path" class="path" aria-labelledby="astro-flats-label">None</p>
+            <div class="button-row">
+              <button type="button" id="browse-astro-flats" class="secondary">Choose flats folder…</button>
+              <button type="button" id="reset-astro-flats" class="secondary" disabled>No flats</button>
+            </div>
+            <p id="astro-biases-label">Bias frames</p>
+            <p id="astro-biases-path" class="path" aria-labelledby="astro-biases-label">None</p>
+            <div class="button-row">
+              <button type="button" id="browse-astro-biases" class="secondary">Choose biases folder…</button>
+              <button type="button" id="reset-astro-biases" class="secondary" disabled>No biases</button>
+            </div>
+          </fieldset>
+          <div class="scope-options">
+            <label for="astro-confirm"><input type="checkbox" id="astro-confirm"> I confirm these lights are one astro sequence and Lumen may prepare a managed Siril stack</label>
+          </div>
+          <div class="button-row">
+            <button type="button" id="prepare-astro" disabled>Prepare stack</button>
+            <button type="button" id="run-astro" disabled>Run stack</button>
+            <button type="button" id="cancel-astro" class="danger" disabled>Cancel stack</button>
+            <button type="button" id="reveal-astro" class="secondary" disabled>Show job folder in Finder</button>
+          </div>
+          <p id="astro-summary"></p>
+          <ul id="astro-warnings" aria-label="Stacking warnings"></ul>
+          <p id="astro-progress-label">Stack progress</p>
+          <progress id="astro-progress" aria-labelledby="astro-progress-label" max="100" value="0"></progress>
+          <p id="astro-status" role="status" aria-live="polite"></p>
+          <div id="astro-paths" class="recovery" aria-label="Managed job files"></div>
+          <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
         </section>
         <section id="clear-panel" role="tabpanel" aria-labelledby="clear-tab" tabindex="0" hidden>
           <h2>Make room for the next shoot</h2>

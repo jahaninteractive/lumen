@@ -167,10 +167,10 @@ def prepare_siril_job(
     for kind in CALIBRATION_KINDS:
         sources[kind] = _calibration_frames(kind, folders[kind])
         if folders[kind] is not None and not sources[kind]:
-            warnings.append(f"{kind.capitalize()} folder {folders[kind]} contains no supported frames.")
+            warnings.append(f"{kind.capitalize()} folder {Path(folders[kind]).name} contains no supported frames.")
         elif len(sources[kind]) == 1:
             # Siril 1.4.4 builds no sequence from one converted frame, so the master stack would fail.
-            warnings.append(f"{kind.capitalize()} folder {folders[kind]} has only one frame; at least two are needed to build a master.")
+            warnings.append(f"{kind.capitalize()} folder {Path(folders[kind]).name} has only one frame; at least two are needed to build a master.")
             sources[kind] = []
         if not sources[kind]:
             warnings.append(MISSING_WARNINGS[kind])
@@ -290,7 +290,7 @@ def _calibration_frames(kind: str, folder: Path | None) -> list[Path]:
     if folder is None:
         return []
     if not Path(folder).is_dir():
-        raise ValueError(f"{kind} folder does not exist: {folder}")
+        raise ValueError(f"{kind} folder does not exist: {Path(folder).name}")
     return sorted((path.resolve() for path in Path(folder).iterdir()
                    if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in ASTRO_SUFFIXES),
                   key=lambda path: path.name)

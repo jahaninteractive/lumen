@@ -101,6 +101,7 @@ class LocalJobRunner:
                 self._pending[2].set()
         stopped = process is None or self._stop_process(process)
         if stopped and process is not None:
+            self.wait(job_id, 2.0)  # Let the worker release the heavy slot so a follow-up submit is not refused.
             with self._condition:
                 done = self._done.get(job_id)
                 if self._process is process and done is not None and done.is_set():

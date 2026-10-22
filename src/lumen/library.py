@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import fcntl
 import json
 import os
@@ -45,6 +46,14 @@ def _coordinated(method):
         with self._mutation():
             return method(self, *args, **kwargs)
     return coordinated
+
+
+_ABSOLUTE_PATH = re.compile(r"'?/[^\s'\"]+'?")
+
+
+def public_message(text: str | None) -> str | None:
+    """Strip absolute paths (sources, library, executables) from a message bound for the browser or CLI."""
+    return None if text is None else _ABSOLUTE_PATH.sub("<path>", text)
 
 
 @dataclass(slots=True)
@@ -95,13 +104,15 @@ class CleanupError(RuntimeError):
 
 
 class Library:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, job_runner: LocalJobRunner | None = None):
         self.settings = settings
         settings.ensure_directories()
         self.catalog = Catalog(settings.database_path)
         self.previews = ExifToolPreviewProvider()
         self.sidecars = SidecarWriter(settings.sidecar_dir)
-        self._runner: LocalJobRunner | None = None
+        # An injected runner outlives this Library (the web server shares one across requests).
+        self._runner: LocalJobRunner | None = job_runner
+        self._owns_runner = job_runner is None
 
     @property
     def job_runner(self) -> LocalJobRunner:
@@ -112,9 +123,9 @@ class Library:
 
     def close(self) -> None:
         try:
-            if self._runner is not None:
+            if self._runner is not None and self._owns_runner:
                 self._runner.shutdown()
-                self._runner = None
+            self._runner = None
         finally:
             self.catalog.close()
 
@@ -559,6 +570,34 @@ class Library:
 
     def wait_for_job(self, job_id: int, timeout: float | None = None) -> bool:
         return self._runner is not None and self._runner.wait(job_id, timeout)
+
+    def job_status(self, job_id: int, *, log_lines: int = 40) -> dict:
+        """Browser/CLI-safe view of a job: no manifest, paths, fingerprints, or launch command."""
+        job = self.catalog.get_job(job_id)
+        counts = {"warnings": [], "lights": 0, "excluded_lights": 0, "darks": 0, "flats": 0, "biases": 0}
+        if job.manifest_path != "pending":
+            try:
+                manifest = load_manifest(Path(job.manifest_path), self.settings.output_dir)
+            except (ValueError, OSError):  # Deleted or tampered job files: the catalog row still has a status.
+                counts["warnings"] = ["Job manifest is unavailable; this job cannot run."]
+            else:
+                counts = {"warnings": list(manifest.warnings), "lights": len(manifest.lights.frames),
+                          "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
+                          "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames)}
+        tail: list[str] = []
+        log = Path(job.log_path)
+        if job.log_path != "pending" and log.is_file():
+            lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = [line.replace(str(self.settings.library_dir.resolve()), "<library>") for line in lines
+                    if not line.startswith("lumen: command ")][-log_lines:]
+        result = None
+        if job.result_path is not None:
+            for artifact in self.catalog.list_artifacts():
+                if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id:
+                    result = {"artifact_id": artifact.id, "name": Path(artifact.path).name}
+        return {"job_id": job.id, "kind": job.kind, "status": job.status, "progress": job.progress,
+                "error": public_message(job.error), "result": result, "log_tail": tail,
+                "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat(), **counts}
 
     def _record_astro_result(self, context, job_id: int, manifest, execution) -> None:
         """Worker-thread bookkeeping after a verified stack: artifact, provenance, sidecars, job result."""

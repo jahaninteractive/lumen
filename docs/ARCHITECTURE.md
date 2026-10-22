@@ -18,7 +18,8 @@ RAW/JPEG folder
     │
     ├─ JSON + XMP sidecars
     ├─ oMLX loopback vision tags
-    └─ managed exports ── darktable now; Siril and other hooks next
+    ├─ managed JPEG exports ── darktable-cli (crop applied at export)
+    └─ managed astro stacks ── jobs table + one worker ── siril-cli
 ```
 
 ## Modules
@@ -32,8 +33,42 @@ RAW/JPEG folder
 - `sidecars.py` atomically writes portable JSON/XMP metadata.
 - `omlx.py` is the strict local VLM adapter and response validator.
 - `pipelines.py` runs allow-listed processors with argument arrays.
+- `composition.py` derives deterministic, non-destructive crop candidates.
+- `jobs.py` is the persisted job lifecycle: validated transitions, restart
+  recovery, one exclusive runner per catalog, one heavy worker, and
+  owned-process cancellation.
+- `astro.py` probes Siril, builds frozen frame sets and a fingerprinted
+  manifest, writes the version-gated `stack.ssf`, and executes/verifies a job.
 - `library.py` orchestrates imports while keeping domain modules independent.
 - `cli.py` and `web.py` are two interfaces over the same library facade.
+
+## Managed astro stacking
+
+Everything a stack needs lives under `<library>/outputs/astro/<job-id>/`:
+read-only symlinks to the lights and calibration frames (fixed ASCII names, so
+no source path enters the script), an empty `siril.config`, `stack.ssf`,
+`manifest.json`, `siril.log`, Siril's `process/` scratch, and `result.tif`.
+`manifest.json` and `stack.ssf` are written once and made read-only.
+
+Flow: `Library.prepare_astro_job` requires `confirmed=True`, re-fingerprints
+every selected light against the catalog, probes Siril (`>=1.4.0,<1.5.0`),
+inserts a `pending` job row, prepares the folder with no SQLite lock held, then
+stores the paths. `Library.run_astro_job` re-loads the manifest and submits it
+to the `LocalJobRunner`; the worker revalidates size/mtime/sha256 of every
+frame, refuses stale `result.tif`/`process/`, launches the argument array with
+the job folder as cwd, streams the log, and requires a 16-bit TIFF even on
+exit 0. Success records an `astro_tiff` artifact plus `astro_stacked`
+provenance and sidecars; any bookkeeping failure discards the artifact.
+
+Exactly one `LocalJobRunner` may own a catalog: the web server creates it
+eagerly (recovering stale `running` rows as `interrupted`) and every request
+`Library` borrows it, so a CLI `astro run` against a served library fails
+honestly. `Library.job_status` is the only view the CLI and browser see: a
+whitelist of status, progress, counts, warnings, a path-scrubbed log tail, and
+`{artifact_id, name}`; never the manifest, absolute paths, fingerprints, or the
+launch command. The Astro tab polls that view only while a job is queued or
+running and keeps the manifest/log locations visible after failure or
+cancellation.
 
 ## Add a feature
 

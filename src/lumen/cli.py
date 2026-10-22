@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import Settings
 from .diagnostics import doctor_report
-from .library import CleanupError, ExportRequest, Library
+from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxTagger
 from .pipelines import PipelineRegistry
 
@@ -64,6 +64,21 @@ def build_parser() -> argparse.ArgumentParser:
     siril = commands.add_parser("siril", help="run a reviewed Siril script from the managed outputs folder")
     siril.add_argument("script", type=Path)
     siril.add_argument("--json", action="store_true")
+
+    astro = commands.add_parser("astro", help="prepare, run, inspect, or cancel a managed Siril stacking job")
+    actions = astro.add_subparsers(dest="action", required=True)
+    prepare = actions.add_parser("prepare", help="prepare a confirmed astro group as a queued job")
+    prepare.add_argument("group_id", type=int)
+    prepare.add_argument("--confirm", action="store_true", help="explicitly confirm this group is an astro stack")
+    prepare.add_argument("--exclude", type=int, action="append", default=[], metavar="PHOTO_ID")
+    for kind in ("darks", "flats", "biases"):
+        prepare.add_argument(f"--{kind}", type=Path, help=f"folder of {kind[:-1]} calibration frames")
+    prepare.add_argument("--json", action="store_true")
+    for action, help_text in (("run", "run a queued job and wait for it"), ("status", "show a job's progress"),
+                              ("cancel", "cancel a queued or running job owned by this process")):
+        sub = actions.add_parser(action, help=help_text)
+        sub.add_argument("job_id", type=int)
+        sub.add_argument("--json", action="store_true")
 
     serve = commands.add_parser("serve", help="start the local contact-sheet UI")
     serve.add_argument("--port", type=int, default=8765)
@@ -157,6 +172,30 @@ def main(argv: list[str] | None = None) -> int:
             code = 2
         _print(payload, args.json)
         return code
+
+    if args.command == "astro":
+        try:
+            with Library(settings) as library:
+                if args.action == "prepare":
+                    if not args.confirm:
+                        raise ValueError("astro stacking requires explicit photographer confirmation (--confirm)")
+                    job_id = library.prepare_astro_job(
+                        args.group_id, confirmed=True, excluded_photo_ids=args.exclude,
+                        darks=args.darks, flats=args.flats, biases=args.biases,
+                    ).id
+                elif args.action == "run":
+                    job_id = library.run_astro_job(args.job_id).id
+                    library.wait_for_job(job_id)
+                elif args.action == "cancel":
+                    library.cancel_job(args.job_id)
+                    job_id = args.job_id
+                else:
+                    job_id = args.job_id
+                payload = library.job_status(job_id)
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            payload = {"error": public_message(str(error))}
+        _print(payload, args.json)
+        return 0 if payload.get("status") in {"queued", "running", "succeeded", "cancelled"} else 2
 
     if args.command == "serve":
         from .web import make_server

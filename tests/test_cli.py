@@ -17,6 +17,11 @@ from lumen.library import Library
 from lumen.pipelines import DarktablePipeline, PipelineResult
 from lumen.tools import ToolStatus
 
+try:
+    from tests.test_astro import FAKE_SIRIL, SIRIL
+except ModuleNotFoundError:  # discovered with -s tests
+    from test_astro import FAKE_SIRIL, SIRIL
+
 
 class CliTests(unittest.TestCase):
     def test_import_command_returns_machine_readable_summary(self):
@@ -312,3 +317,81 @@ class ExportCleanupCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AstroCliTests(unittest.TestCase):
+    def setUp(self):
+        import sys
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.addCleanup(self.tmp.cleanup)
+        night = self.root / "Night"
+        night.mkdir()
+        for index in range(3):
+            exif = Image.Exif()
+            exif[34665] = {36867: f"2026:10:21 22:00:0{index}"}
+            Image.new("RGB", (64, 48), (index, 0, 0)).save(night / f"light{index}.tif", exif=exif.tobytes())
+        self.library_dir = self.root / "library"
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(night)
+            self.group = library.list_groups()[0]
+        self.scenario = "success"
+        real_popen = subprocess.Popen
+        for target, kwargs in (
+            ("lumen.library.find_tool", {"return_value": SIRIL.executable}),
+            ("lumen.library.probe_siril", {"return_value": SIRIL}),
+            ("lumen.astro.subprocess.Popen", {"side_effect": lambda command, **kw: real_popen(
+                [sys.executable, "-c", FAKE_SIRIL, self.scenario], **kw)}),
+        ):
+            patcher = patch(target, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_cli(self, *args):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = main(["--library", str(self.library_dir), "astro", *args, "--json"])
+        return code, json.loads(output.getvalue())
+
+    def test_prepare_requires_confirm_flag_and_reports_safe_status(self):
+        code, payload = self.run_cli("prepare", str(self.group["id"]))
+        self.assertEqual(2, code)
+        self.assertIn("confirmation", payload["error"])
+        empty = self.root / "darks"
+        empty.mkdir()
+        photo_id = self.group["photos"][0]["id"]
+        code, payload = self.run_cli("prepare", str(self.group["id"]), "--confirm", "--exclude", str(photo_id), "--darks", str(empty))
+        self.assertEqual(0, code)
+        self.assertEqual(("queued", 2, 1), (payload["status"], payload["lights"], payload["excluded_lights"]))
+        self.assertTrue(any("darks" in warning for warning in payload["warnings"]))
+        self.assertNotIn(str(self.root), json.dumps(payload))
+        code, status = self.run_cli("status", str(payload["job_id"]))
+        self.assertEqual((0, payload), (code, status))
+
+    def test_run_waits_for_completion_and_status_reports_result(self):
+        _, prepared = self.run_cli("prepare", str(self.group["id"]), "--confirm")
+        code, finished = self.run_cli("run", str(prepared["job_id"]))
+        self.assertEqual(0, code)
+        self.assertEqual(("succeeded", 1.0, "result.tif"), (finished["status"], finished["progress"], finished["result"]["name"]))
+        self.assertNotIn(str(self.root), json.dumps(finished))
+        code, again = self.run_cli("run", str(prepared["job_id"]))
+        self.assertEqual(2, code)
+        self.assertIn("error", again)
+
+    def test_failed_run_exits_two_and_cancel_handles_queued_jobs(self):
+        self.scenario = "nonzero"
+        _, prepared = self.run_cli("prepare", str(self.group["id"]), "--confirm")
+        code, finished = self.run_cli("run", str(prepared["job_id"]))
+        self.assertEqual(2, code)
+        self.assertEqual("failed", finished["status"])
+        self.assertIn("exit code 3", finished["error"])
+        _, queued = self.run_cli("prepare", str(self.group["id"]), "--confirm")
+        code, cancelled = self.run_cli("cancel", str(queued["job_id"]))
+        self.assertEqual((0, "cancelled"), (code, cancelled["status"]))
+        code, missing = self.run_cli("cancel", "999")
+        self.assertEqual(2, code)
+        self.assertIn("error", missing)
+        with patch("lumen.library.find_tool", return_value=None):
+            code, payload = self.run_cli("prepare", str(self.group["id"]), "--confirm")
+        self.assertEqual(2, code)
+        self.assertIn("siril-cli", payload["error"])

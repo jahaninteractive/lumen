@@ -165,7 +165,7 @@ class AstroPreparationTests(unittest.TestCase):
         self.assertEqual(
             (
                 "No dark frames: thermal noise and hot pixels will not be subtracted.",
-                f"Flat folder {empty} contains no supported frames.",
+                f"Flat folder {empty.name} contains no supported frames.",
                 "No flat frames: vignetting and dust shadows will not be corrected.",
                 "No bias frames: read-noise offset will not be subtracted.",
             ),
@@ -180,7 +180,7 @@ class AstroPreparationTests(unittest.TestCase):
         darks = self.calibration("dark", 1)
         manifest = self.prepare(darks=darks, flats=self.calibration("flat", 2), biases=self.calibration("bias", 2))
         self.assertEqual(
-            (f"Dark folder {darks} has only one frame; at least two are needed to build a master.",
+            (f"Dark folder {darks.name} has only one frame; at least two are needed to build a master.",
              "No dark frames: thermal noise and hot pixels will not be subtracted."),
             manifest.warnings,
         )

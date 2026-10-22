@@ -1,4 +1,4 @@
-const state = { groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, busy: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0 };
+const state = { groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, busy: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0, astro: { job: null, timer: null, request: 0, folders: { darks: null, flats: null, biases: null }, lightsKey: null } };
 const sheet = document.querySelector('#contact-sheet');
 const inspection = document.querySelector('#inspection');
 const announcer = document.querySelector('#announcer');
@@ -349,6 +349,11 @@ async function load() {
   document.querySelector('#system-status').textContent = status.omlx_live.summary;
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
+  if (!state.astro.job) {
+    let remembered = null;
+    try { remembered = localStorage.getItem('lumen-astro-job'); } catch { /* per-visit only */ }
+    if (remembered) await request(`/api/astro/jobs/${remembered}`).then(setAstroJob).catch(() => localStorage.removeItem('lumen-astro-job'));
+  }
   if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
 }
 
@@ -396,6 +401,152 @@ document.querySelector('#browse-path').addEventListener('click', async event => 
   }
 });
 
+const ASTRO_ACTIVE = ['queued', 'running'];
+const ASTRO_WORDS = { queued: 'Stack prepared and queued.', running: 'Stack running.', succeeded: 'Stack finished.', failed: 'Stack failed.', cancelled: 'Stack cancelled.', interrupted: 'Stack interrupted.' };
+
+function renderAstroLights(group) {
+  const key = group ? group.photos.map(photo => photo.id).join(',') : null;
+  if (key === state.astro.lightsKey) return;
+  state.astro.lightsKey = key;
+  const list = document.querySelector('#astro-lights');
+  list.replaceChildren();
+  (group?.photos || []).forEach(photo => {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = true;
+    input.dataset.id = photo.id;
+    input.addEventListener('change', updateWorkflow);
+    const name = document.createElement('span');
+    name.textContent = photo.name;
+    label.append(input, name);
+    list.append(label);
+  });
+}
+
+function astroLights() {
+  const inputs = Array.from(document.querySelectorAll('#astro-lights input'));
+  return { included: inputs.filter(input => input.checked).length, excluded: inputs.filter(input => !input.checked).map(input => Number(input.dataset.id)) };
+}
+
+function astroPath(name) {
+  return `${state.status?.astro_output_dir || '<library>/outputs/astro'}/${state.astro.job.job_id}/${name}`;
+}
+
+function setAstroJob(job) {
+  const previous = state.astro.job?.status;
+  state.astro.job = job;
+  state.astro.request += 1;  // any newer state invalidates polls already in flight
+  const status = document.querySelector('#astro-status');
+  const progress = document.querySelector('#astro-progress');
+  const percent = Math.round((job.progress || 0) * 100);
+  progress.value = percent;
+  progress.setAttribute('aria-valuetext', `${percent}% complete`);
+  document.querySelector('#astro-summary').textContent = `Job ${job.job_id} · ${job.lights} lights, ${job.excluded_lights} excluded · ${job.darks} darks · ${job.flats} flats · ${job.biases} biases`;
+  const warnings = document.querySelector('#astro-warnings');
+  warnings.replaceChildren();
+  job.warnings.forEach(text => {
+    const item = document.createElement('li');
+    item.textContent = `Warning: ${text}`;
+    warnings.append(item);
+  });
+  document.querySelector('#astro-log').textContent = job.log_tail.join('\n');
+  const paths = document.querySelector('#astro-paths');
+  paths.replaceChildren();
+  const files = [['Manifest', 'manifest.json'], ['Siril log', 'siril.log']];
+  if (job.result) files.push(['Result (16-bit TIFF)', job.result.name]);
+  for (const [label, name] of files) {
+    const caption = document.createElement('p');
+    caption.textContent = label;
+    const value = document.createElement('p');
+    value.className = 'path';
+    value.textContent = astroPath(name);
+    paths.append(caption, value);
+  }
+  const text = {
+    queued: 'Stack prepared and queued. Review the warnings, then choose Run stack. Cancel this stack to change the selection.',
+    running: `Stacking… about ${Math.floor(percent / 10) * 10}% complete. Cancel stack stops only this job's Siril process.`,
+    succeeded: 'Stack finished. The 16-bit result TIFF and provenance are recorded; open the job folder to develop it further.',
+    failed: `Stack failed: ${job.error || 'unknown error'}. The manifest and Siril log remain in the job folder for review.`,
+    cancelled: 'Stack cancelled. No result was recorded; the manifest and log remain in the job folder.',
+    interrupted: 'Stack was interrupted by a Lumen restart. Prepare a new stack; the manifest and log remain for review.',
+  }[job.status] || `Stack status: ${job.status}.`;
+  if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
+  if (job.status !== previous) announce(ASTRO_WORDS[job.status] || `Stack ${job.status}.`);
+  try {
+    if (ASTRO_ACTIVE.includes(job.status)) localStorage.setItem('lumen-astro-job', String(job.job_id));
+    else localStorage.removeItem('lumen-astro-job');
+  } catch { /* per-visit only */ }
+  if (!ASTRO_ACTIVE.includes(job.status)) stopAstroPolling();
+  else if (job.status === 'running') startAstroPolling();
+  updateWorkflow();
+}
+
+function startAstroPolling() {
+  if (state.astro.timer !== null) return;
+  state.astro.timer = window.setInterval(pollAstro, 1000);
+}
+
+function stopAstroPolling() {
+  if (state.astro.timer === null) return;
+  window.clearInterval(state.astro.timer);
+  state.astro.timer = null;
+}
+
+async function pollAstro() {
+  const job = state.astro.job;
+  if (!job) return stopAstroPolling();
+  const requestId = state.astro.request;
+  try {
+    const latest = await request(`/api/astro/jobs/${job.job_id}`);
+    if (requestId === state.astro.request) setAstroJob(latest);
+  } catch (error) {
+    stopAstroPolling();
+    document.querySelector('#astro-status').textContent = `${error.message}. Reload this page to resume watching the job.`;
+    announce(document.querySelector('#astro-status').textContent);
+  }
+}
+
+async function astroAction(label, action) {
+  state.busy = true;
+  updateWorkflow();
+  try {
+    await action();
+  } catch (error) {
+    document.querySelector('#astro-status').textContent = `${label} failed: ${error.message}`;
+    announce(document.querySelector('#astro-status').textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+document.querySelector('#prepare-astro').addEventListener('click', () => astroAction('Prepare stack', async () => {
+  const { excluded } = astroLights();
+  setAstroJob(await post('/api/astro/jobs', { group_id: state.selectedGroupId, confirmed: true, excluded_photo_ids: excluded, ...state.astro.folders }));
+}));
+document.querySelector('#run-astro').addEventListener('click', () => astroAction('Run stack', async () => {
+  setAstroJob(await post(`/api/astro/jobs/${state.astro.job.job_id}/run`));  // the server answers before the worker flips the row to running
+  startAstroPolling();
+}));
+document.querySelector('#cancel-astro').addEventListener('click', () => astroAction('Cancel stack', async () => {
+  setAstroJob(await post(`/api/astro/jobs/${state.astro.job.job_id}/cancel`));
+}));
+document.querySelector('#reveal-astro').addEventListener('click', () => astroAction('Finder reveal', async () => {
+  const result = await post(`/api/astro/jobs/${state.astro.job.job_id}/reveal`);
+  document.querySelector('#astro-status').textContent = `Opened job folder in Finder: ${result.path}`;
+}));
+document.querySelector('#astro-confirm').addEventListener('change', updateWorkflow);
+for (const kind of ['darks', 'flats', 'biases']) {
+  const show = () => { document.querySelector(`#astro-${kind}-path`).textContent = state.astro.folders[kind] || 'None'; updateWorkflow(); };
+  document.querySelector(`#browse-astro-${kind}`).addEventListener('click', () => astroAction(`Choose ${kind} folder`, async () => {
+    const result = await post('/api/browse');
+    if (!result.cancelled && result.path) { state.astro.folders[kind] = result.path; announce(`${kind} folder selected.`); }
+    show();
+  }));
+  document.querySelector(`#reset-astro-${kind}`).addEventListener('click', () => { state.astro.folders[kind] = null; show(); });
+}
+
 function frameCount(count) {
   return `${count} frame${count === 1 ? '' : 's'}`;
 }
@@ -424,6 +575,23 @@ function updateWorkflow() {
   document.querySelector('#ask-composition-ai').disabled = state.busy || !state.composition || state.composition.photo_id !== state.selectedId;
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
+
+  renderAstroLights(group);
+  const siril = state.status?.tools?.['siril-cli']?.available === true;
+  const job = state.astro.job;
+  const activeJob = ASTRO_ACTIVE.includes(job?.status);
+  document.querySelector('#astro-group-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.photos.length)}` : 'No batch selected';
+  document.querySelector('#astro-availability').textContent = siril ? 'Siril is ready. One stack runs at a time; everything is written below the library outputs folder.' : 'siril-cli is unavailable. Install Siril or add it to PATH, restart Lumen, then reload this page.';
+  document.querySelector('#prepare-astro').disabled = state.busy || !siril || !group || !document.querySelector('#astro-confirm').checked || astroLights().included < 2 || activeJob;
+  document.querySelector('#run-astro').disabled = state.busy || job?.status !== 'queued' || state.astro.timer !== null;
+  document.querySelectorAll('#astro-lights input').forEach(input => { input.disabled = activeJob; });
+  document.querySelector('#astro-confirm').disabled = activeJob;
+  document.querySelector('#cancel-astro').disabled = state.busy || !activeJob;
+  document.querySelector('#reveal-astro').disabled = state.busy || !job;
+  for (const kind of ['darks', 'flats', 'biases']) {
+    document.querySelector(`#browse-astro-${kind}`).disabled = state.busy || activeJob;
+    document.querySelector(`#reset-astro-${kind}`).disabled = state.busy || activeJob || !state.astro.folders[kind];
+  }
 }
 
 const tabs = Array.from(document.querySelectorAll('[role="tab"]'));

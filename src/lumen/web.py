@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,7 +14,8 @@ from urllib.parse import urlparse, urlsplit
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups
 from .config import Settings
 from .diagnostics import doctor_report
-from .library import CleanupError, ExportRequest, Library
+from .jobs import LocalJobRunner
+from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxTagger
 
 
@@ -72,9 +74,9 @@ def choose_macos_xmp() -> str | None:
     raise RuntimeError(f"Could not open the XMP picker: {result.stderr.strip() or 'unknown macOS error'}")
 
 
-def reveal_outputs(settings: Settings) -> str:
+def reveal_outputs(settings: Settings, destination: Path | None = None) -> str:
     root = settings.output_dir.resolve()
-    destination = settings.jpeg_output_dir.resolve()
+    destination = (destination or settings.jpeg_output_dir).resolve()
     if not root.is_relative_to(settings.library_dir.resolve()) or destination == root or not destination.is_relative_to(root):
         raise ValueError("JPEG directory must stay inside managed outputs")
     if sys.platform != "darwin":
@@ -89,6 +91,46 @@ def reveal_outputs(settings: Settings) -> str:
     if result.returncode:
         raise RuntimeError(f"Could not show outputs in Finder: {result.stderr.strip() or 'unknown macOS error'}")
     return str(destination)
+
+
+def reveal_astro_job(settings: Settings, job_id: int) -> str:
+    """Finder reveal of one existing managed job folder; never creates folders for unknown jobs."""
+    with Library(settings) as library:
+        library.catalog.get_job(job_id)
+    job_dir = settings.output_dir / "astro" / str(job_id)
+    if not job_dir.is_dir():
+        raise ValueError("astro job folder is unavailable")
+    return reveal_outputs(settings, job_dir)
+
+
+class LumenServer(ThreadingHTTPServer):
+    """Loopback server that owns the single heavy-job runner shared by every per-request Library."""
+
+    def __init__(self, address, handler, settings: Settings):
+        super().__init__(address, handler)
+        self.settings = settings
+        self._runner_lock = threading.Lock()
+        # Eager: takes the catalog's runner lock for the server's lifetime and recovers stale running jobs now.
+        try:
+            self._runner: LocalJobRunner | None = LocalJobRunner(settings.database_path)
+        except BaseException:
+            super().server_close()
+            raise
+
+    def job_runner(self) -> LocalJobRunner:
+        with self._runner_lock:
+            if self._runner is None:
+                raise RuntimeError("the job runner is shut down")
+            return self._runner
+
+    def server_close(self) -> None:
+        try:
+            with self._runner_lock:
+                runner, self._runner = self._runner, None
+            if runner is not None:
+                runner.shutdown()
+        finally:
+            super().server_close()
 
 
 def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
@@ -107,11 +149,22 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_bytes((static_dir / name).read_bytes(), content_type)
                 return
             if path == "/api/status":
-                self._send_json(doctor_report(settings) | {"jpeg_output_dir": str(settings.jpeg_output_dir.resolve())})
+                self._send_json(doctor_report(settings) | {
+                    "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
+                    "astro_output_dir": str((settings.output_dir / "astro").resolve()),
+                })
                 return
             if path == "/api/groups":
                 with Library(settings) as library:
                     self._send_json({"groups": _serializable_groups(library.list_groups()), "photo_count": library.photo_count()})
+                return
+            match = re.fullmatch(r"/api/astro/jobs/(\d+)", path)
+            if match:
+                try:
+                    with Library(settings) as library:
+                        self._send_json(library.job_status(int(match.group(1))))
+                except (ValueError, OverflowError, OSError, RuntimeError):
+                    self._send_json({"error": "astro job is unavailable"}, status=HTTPStatus.NOT_FOUND)
                 return
             match = re.fullmatch(r"/api/photos/(\d+)/crops", path)
             if match:
@@ -281,11 +334,58 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         library.set_pick(photo_id)
                     self._send_json({"photo_id": photo_id, "manual_pick": True})
                     return
+                if path == "/api/astro/jobs":
+                    self._send_json(self._prepare_astro(payload), status=HTTPStatus.CREATED)
+                    return
+                match = re.fullmatch(r"/api/astro/jobs/(\d+)/(run|cancel|reveal)", path)
+                if match:
+                    if payload:
+                        raise ValueError("this action requires an empty JSON object")
+                    job_id, action = int(match.group(1)), match.group(2)
+                    try:
+                        if action == "reveal":
+                            self._send_json({"path": reveal_astro_job(settings, job_id)})
+                        elif action == "run":
+                            with Library(settings, job_runner=self.server.job_runner()) as library:
+                                library.run_astro_job(job_id)
+                                self._send_json(library.job_status(job_id), status=HTTPStatus.ACCEPTED)
+                        else:
+                            with Library(settings, job_runner=self.server.job_runner()) as library:
+                                if not library.cancel_job(job_id):
+                                    raise ValueError("job is no longer queued or running")
+                                self._send_json(library.job_status(job_id))
+                    except RuntimeError as error:
+                        if "another heavy job" not in str(error):
+                            raise
+                        self._send_json({"error": str(error)}, status=HTTPStatus.CONFLICT)
+                    return
                 self.send_error(HTTPStatus.NOT_FOUND)
             except CleanupError as error:
                 self._send_json(_cleanup_error_payload(error), status=HTTPStatus.BAD_REQUEST)
             except (ValueError, OverflowError, OSError, RuntimeError) as error:
-                self._send_json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                message = public_message(str(error)) if path.startswith("/api/astro/") else str(error)
+                self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
+
+        def _prepare_astro(self, payload: dict) -> dict:
+            allowed = {"group_id", "confirmed", "excluded_photo_ids", "darks", "flats", "biases"}
+            if payload.keys() - allowed:
+                raise ValueError("unexpected astro fields")
+            if payload.get("confirmed") is not True:
+                raise ValueError("astro stacking requires explicit photographer confirmation")
+            if type(payload.get("group_id")) is not int:
+                raise ValueError("group_id must be an integer")
+            excluded = payload.get("excluded_photo_ids", [])
+            if not isinstance(excluded, list) or any(type(item) is not int for item in excluded):
+                raise ValueError("excluded_photo_ids must be a list of integers")
+            folders = {}
+            for kind in ("darks", "flats", "biases"):
+                folder = payload.get(kind)
+                if folder is not None and (not isinstance(folder, str) or not folder.strip()):
+                    raise ValueError(f"{kind} must be a folder path string or null")
+                folders[kind] = Path(folder) if folder is not None else None
+            with Library(settings) as library:
+                job = library.prepare_astro_job(payload["group_id"], confirmed=True, excluded_photo_ids=excluded, **folders)
+                return library.job_status(job.id)
 
         def _trusted_mutation(self) -> bool:
             if not self._trusted_host():
@@ -347,5 +447,5 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
         def log_message(self, format: str, *args: object) -> None:
             return
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return LumenServer((host, port), Handler, settings)
 
