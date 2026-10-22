@@ -625,13 +625,14 @@ document.querySelector('#browse-path').addEventListener('click', async event => 
 function ingestVerdict(job) {
   const counts = job.ingest || {};
   if (job.status === 'succeeded' && counts.card_verified_everywhere === true) return 'Every file verified on every destination.';
-  const missing = Math.max((counts.files || 0) - (counts.verified || 0), 0) + (counts.skipped || 0);
+  const missing = Math.max((counts.files || 0) - (counts.verified || 0), 0) + (counts.unreadable || 0);
   return `Do not format the card: ${missing} ${missing === 1 ? 'file was' : 'files were'} not verified.`;
 }
 
 function renderIngest(job) {
   const counts = job.ingest || {};
-  const skipped = counts.skipped ? ` · ${counts.skipped} unsupported file${counts.skipped === 1 ? '' : 's'} left on the card` : '';
+  const skipped = (counts.unreadable ? ` · ${counts.unreadable} ${counts.unreadable === 1 ? 'entry' : 'entries'} on the card could not be read` : '')
+    + (counts.skipped ? ` · ${counts.skipped} hidden ${counts.skipped === 1 ? 'entry' : 'entries'} skipped` : '');
   document.querySelector('#ingest-counts').textContent = `${counts.copied || 0} copied · ${counts.already_present || 0} already present · ${counts.failed || 0} failed · ${counts.verified || 0} of ${counts.files || 0} files verified on every destination${skipped}`;
   document.querySelector('#ingest-manifest').textContent = `${state.status?.ingest_output_dir || '<library>/outputs/ingest'}/${job.job_id}/${counts.manifest || 'manifest.json'}`;
   document.querySelector('#ingest-snapshot').textContent = counts.snapshot ? `Catalog snapshot: lumen-catalog-backups/${counts.snapshot} in the primary destination.` : '';

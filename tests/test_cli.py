@@ -54,6 +54,9 @@ class CliTests(unittest.TestCase):
             primary, mirror = root / "primary", root / "mirror"
             primary.mkdir()
             mirror.mkdir()
+            separate_volumes = patch("lumen.ingest._device", side_effect=str)  # tests share one temp volume
+            separate_volumes.start()
+            self.addCleanup(separate_volumes.stop)
             code, verified = self.run_json(root / "library", "ingest", str(root / "CARD"), "--to", str(primary), "--mirror", str(mirror))
             from lumen import ingest
 

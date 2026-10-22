@@ -1,3 +1,4 @@
+import fcntl
 import hashlib
 import json
 import os
@@ -10,7 +11,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from lumen import ingest
-from lumen.ingest import IngestVerifyError, classify_existing, copy_verified, ingest_item, plan_ingest, write_manifest
+from lumen.ingest import IngestVerifyError, classify_existing, copy_verified, ingest_item, plan_ingest, scan_card, write_manifest
 
 
 def snapshot_tree(root: Path) -> dict:
@@ -37,9 +38,12 @@ class IngestTests(unittest.TestCase):
         self.mirror.mkdir()
         self.no_exif = patch("lumen.ingest.read_metadata", return_value={"captured_at": None, "camera_id": "unknown"})
         self.no_exif.start()
+        self.separate_volumes = patch("lumen.ingest._device", side_effect=str)  # tests share one temp volume
+        self.separate_volumes.start()
 
     def tearDown(self):
         self.no_exif.stop()
+        self.separate_volumes.stop()
         for path in self.root.rglob("*"):
             if not path.is_symlink():
                 path.chmod(0o755)
@@ -87,7 +91,8 @@ class IngestTests(unittest.TestCase):
             items = self.plan()
 
         by_name = {item.source.name: item for item in items}
-        self.assertEqual(["DSC00001.JPG", "DSC00002.JPG", "DSC00003.ARW"], sorted(by_name))
+        self.assertEqual(["DSC00001.JPG", "DSC00002.JPG", "DSC00003.ARW", "notes.txt"], sorted(by_name),
+                         "every visible regular file is planned, whatever its extension; links and dot-files are not")
         self.assertEqual("2025-01-02", by_name["DSC00001.JPG"].captured_date)
         self.assertEqual("2026-10-20", by_name["DSC00002.JPG"].captured_date)
         self.assertEqual("2026-10-22", by_name["DSC00003.ARW"].captured_date)
@@ -96,25 +101,29 @@ class IngestTests(unittest.TestCase):
         self.assertEqual(first.stat().st_size, item.size)
         self.assertEqual((self.primary / "2025-01-02" / "DCIM/100MSDCF/DSC00001.JPG",
                           self.mirror / "2025-01-02" / "DCIM/100MSDCF/DSC00001.JPG"), item.destinations)
-        self.assertEqual(["notes.txt"], ingest.unplanned_files(self.card))
+        scan = scan_card(self.card)
+        self.assertEqual((("._DSC00001.JPG",), ()), (scan.hidden, scan.unreadable))
 
     def test_copy_verified_writes_partial_fsyncs_and_renames_into_place(self):
         source = next((self.card / "DCIM" / "100MSDCF").iterdir())
         destination = self.primary / "2026-10-20" / "DCIM" / source.name
-        seen = []
-        real_fsync = os.fsync
+        requests = []
+        real_fcntl = fcntl.fcntl
 
-        def record_fsync(descriptor):
-            seen.append(sorted(path.name for path in destination.parent.iterdir()))
-            return real_fsync(descriptor)
+        def record(descriptor, command, *args):
+            path = real_fcntl(descriptor, fcntl.F_GETPATH, bytes(1024)).rstrip(b"\0").decode()
+            requests.append((command, Path(path).name, sorted(item.name for item in destination.parent.iterdir())))
+            return real_fcntl(descriptor, command, *args)
 
-        with patch("lumen.ingest.os.fsync", side_effect=record_fsync) as fsync:
+        with patch("lumen.ingest.fcntl.fcntl", side_effect=record):
             digest = copy_verified(source, destination, chunk_size=7)
 
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), digest)
         self.assertEqual(source.read_bytes(), destination.read_bytes())
-        self.assertGreaterEqual(fsync.call_count, 2, "the file and its directory are both fsynced")
-        self.assertEqual([f".{source.name}.lumen-partial"], seen[0], "bytes land in the partial before the rename")
+        partial = f".{source.name}.lumen-partial"
+        self.assertEqual([(fcntl.F_FULLFSYNC, partial, [partial]), (fcntl.F_FULLFSYNC, destination.parent.name, [partial]),
+                          (fcntl.F_NOCACHE, partial, [partial]), (fcntl.F_FULLFSYNC, destination.parent.name, [source.name])],
+                         requests, "flush the partial and its folder to the media, verify uncached, flush the rename")
         self.assertEqual([source.name], sorted(path.name for path in destination.parent.iterdir()))
 
     def test_copy_verified_retries_once_then_fails_without_final_file(self):
@@ -169,6 +178,7 @@ class IngestTests(unittest.TestCase):
 
     def test_rerun_reports_already_present_and_copies_only_missing_files(self):
         roots = (self.primary, self.mirror)
+        (self.card / "notes.txt").unlink()
         first = [ingest_item(item, roots) for item in self.plan()]
         self.assertEqual([{str(self.primary): "copied", str(self.mirror): "copied"}] * 2, [entry["outcomes"] for entry in first])
         removed = self.mirror / "2026-10-20" / first[1]["relative"]
@@ -184,10 +194,12 @@ class IngestTests(unittest.TestCase):
         self.assertEqual({str(self.primary): "already_present", str(self.mirror): "copied"}, second[1]["outcomes"])
         self.assertEqual(first[1]["sha256"], second[1]["sha256"])
         self.assertEqual({"copied": 1, "verified": 2, "already_present": 1, "failed": 0, "files": 2, "skipped": 0,
-                          "card_verified_everywhere": True}, ingest.summarize(second, roots, planned=2))
-        self.assertEqual(1, ingest.summarize(second, roots, planned=2, skipped=1)["skipped"])
-        self.assertFalse(ingest.summarize(second, roots, planned=2, skipped=1)["card_verified_everywhere"])
+                          "unreadable": 0, "card_verified_everywhere": True}, ingest.summarize(second, roots, planned=2))
+        self.assertTrue(ingest.summarize(second, roots, planned=2, skipped=3)["card_verified_everywhere"],
+                        "hidden entries are reported but never block the verdict")
+        self.assertFalse(ingest.summarize(second, roots, planned=2, unreadable=1)["card_verified_everywhere"])
         self.assertFalse(ingest.summarize(second[:1], roots, planned=2)["card_verified_everywhere"])
+        self.assertFalse(ingest.summarize([], roots, planned=0)["card_verified_everywhere"], "an empty plan is never verified")
 
         clash.write_bytes(b"another camera's DSC00001")
         third = ingest_item(self.plan()[0], roots)
@@ -211,6 +223,35 @@ class IngestTests(unittest.TestCase):
         self.assertTrue(all(outcome == "copied" for entry in entries for outcome in entry["outcomes"].values()))
         self.assertEqual(before, snapshot_tree(self.card))
         self.assertEqual(listing, sorted(str(path.relative_to(self.card)) for path in self.card.rglob("*")))
+
+
+    def test_unreadable_card_folder_is_reported_and_blocks_the_verdict(self):
+        locked = self.card / "DCIM" / "100MSDCF"
+        locked.chmod(0o000)
+        try:
+            scan = scan_card(self.card)
+            items = self.plan()
+            entries = [ingest_item(item, (self.primary, self.mirror)) for item in items]
+            self.card.chmod(0o000)
+            whole = scan_card(self.card)
+        finally:
+            self.card.chmod(0o755)
+            locked.chmod(0o755)
+        self.assertEqual(("DCIM/100MSDCF",), scan.unreadable)
+        self.assertEqual(["notes.txt"], [item.relative for item in items])
+        summary = ingest.summarize(entries, (self.primary, self.mirror), planned=len(items), unreadable=len(scan.unreadable))
+        self.assertEqual((1, 1), (summary["verified"], summary["unreadable"]))
+        self.assertFalse(summary["card_verified_everywhere"])
+        self.assertEqual(((), (".",)), (whole.files, whole.unreadable), "an unreadable card is a failure, not an empty card")
+
+    def test_destination_on_the_card_volume_is_rejected(self):
+        self.separate_volumes.stop()
+        try:
+            with self.assertRaisesRegex(ValueError, "same volume as the card"):
+                self.plan()
+            self.assertEqual([], list(self.primary.iterdir()))
+        finally:
+            self.separate_volumes.start()
 
 
 if __name__ == "__main__":

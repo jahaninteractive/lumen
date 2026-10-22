@@ -158,6 +158,10 @@ class WebTests(unittest.TestCase):
         primary.mkdir()
         mirror.mkdir()
         valid = {"card": str(self.root / "CARD"), "primary": str(primary), "mirror": str(mirror)}
+        self.assertEqual(400, self.post_json("/api/ingest", valid)[0], "one temp volume: destinations share the card's volume")
+        separate_volumes = patch("lumen.ingest._device", side_effect=str)
+        separate_volumes.start()
+        self.addCleanup(separate_volumes.stop)
         for payload in ({}, {"card": valid["card"]}, {"card": "", "primary": str(primary)}, {"card": 5, "primary": str(primary)},
                         {**valid, "extra": 1}, {**valid, "mirror": 5}, {**valid, "mirror": ""}, {**valid, "card": str(self.root / "missing")},
                         {**valid, "primary": str(self.root / "library")}, {**valid, "mirror": str(primary)}):
@@ -185,6 +189,38 @@ class WebTests(unittest.TestCase):
             text = json.dumps(body)
             for secret in secrets:
                 self.assertNotIn(secret, text)
+
+    def test_ingest_log_tail_never_shows_destination_paths_after_failures(self):
+        card = self.root / "CARD" / "DCIM"
+        card.mkdir(parents=True)
+        for index in range(2):
+            Image.new("RGB", (60, 40), (index * 90, 20, 20)).save(card / f"DSC000{index}.JPG")
+        primary, mirror = self.root / "primary drive", self.root / "mirror drive"
+        primary.mkdir()
+        mirror.mkdir()
+        from lumen import ingest
+        real_copy = ingest.copy_verified
+
+        def mirror_full(source, destination, **kwargs):
+            if "mirror drive" in str(destination):
+                raise OSError(28, "No space left on device", str(destination))
+            return real_copy(source, destination, **kwargs)
+
+        def import_fails(library, source, *args, **kwargs):
+            raise OSError(5, f"Input/output error: '{source}'")
+
+        with patch("lumen.ingest._device", side_effect=str), patch("lumen.ingest.copy_verified", side_effect=mirror_full), \
+                patch.object(Library, "_import_one", import_fails):
+            code, started = self.post_json("/api/ingest", {"card": str(self.root / "CARD"), "primary": str(primary), "mirror": str(mirror)})
+            self.assertEqual(202, code)
+            finished = self.wait_job(started["job_id"])
+        self.assertEqual("succeeded", finished["status"])
+        self.assertFalse(finished["ingest"]["card_verified_everywhere"])
+        tail = "\n".join(finished["log_tail"])
+        self.assertIn("No space left on device", tail)
+        self.assertIn("[Errno 5]", tail)
+        for secret in (str(self.root), str(self.root.resolve()), "primary drive", "mirror drive", "/2026-"):
+            self.assertNotIn(secret, tail)
 
     def test_ingest_panel_has_labeled_pickers_and_honest_format_copy(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
@@ -792,8 +828,8 @@ const importJob = (status, progress, extra = {}) => ({ job_id: 9, kind: 'import'
 const browsePaths = scenario === 'ingest' ? ['/Volumes/CARD', '/Volumes/Primary', '/Volumes/Mirror'] : [];
 const ingestPosts = [];
 let ingestPolls = 0;
-let ingestOutcome = { copied: 3, already_present: 1, verified: 4, card_verified_everywhere: true, snapshot: '20261022T120000Z.sqlite3' };
-const ingestCounts = extra => ({ copied: 0, verified: 0, already_present: 0, failed: 0, files: 4, skipped: 0, card_verified_everywhere: false, manifest: 'manifest.json', snapshot: null, ...extra });
+let ingestOutcome = { copied: 3, already_present: 1, verified: 4, skipped: 2, card_verified_everywhere: true, snapshot: '20261022T120000Z.sqlite3' };
+const ingestCounts = extra => ({ copied: 0, verified: 0, already_present: 0, failed: 0, files: 4, skipped: 0, unreadable: 0, card_verified_everywhere: false, manifest: 'manifest.json', snapshot: null, ...extra });
 const ingestJob = (status, progress, extra = {}) => ({ job_id: 11, kind: 'ingest', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ingest: ingestCounts(), ...extra });
 let groupLoads = 0;
 let lastGroupsUrl = null;
@@ -1073,20 +1109,21 @@ const regression = `
     assert.ok(element('#ingest-counts').textContent.includes('3 copied'));
     assert.ok(element('#ingest-counts').textContent.includes('1 already present'));
     assert.ok(element('#ingest-counts').textContent.includes('4 of 4 files verified'));
+    assert.ok(element('#ingest-counts').textContent.includes('2 hidden entries skipped'));
     assert.equal(element('#ingest-manifest').textContent, '/managed/outputs/ingest/11/manifest.json');
     assert.ok(element('#ingest-snapshot').textContent.includes('20261022T120000Z.sqlite3'));
     assert.equal(element('#ingest-verdict').textContent, 'Every file verified on every destination.');
     assert.ok(element('#announcer').textContent.includes('Every file verified on every destination.'));
     assert.equal(element('#start-ingest').disabled, false);
     ingestPolls = 0;
-    ingestOutcome = { copied: 2, verified: 2, failed: 1, skipped: 1, card_verified_everywhere: false };
+    ingestOutcome = { copied: 2, verified: 2, failed: 1, unreadable: 1, card_verified_everywhere: false };
     await element('#reset-ingest-mirror').listeners.click();
     assert.equal(element('#ingest-mirror-path').textContent, 'No mirror');
     await element('#start-ingest').listeners.click();
     assert.deepEqual(ingestPosts[1], { card: '/Volumes/CARD', primary: '/Volumes/Primary', mirror: null });
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(element('#ingest-verdict').textContent, 'Do not format the card: 3 files were not verified.');
-    assert.ok(element('#ingest-counts').textContent.includes('1 unsupported file left on the card'));
+    assert.ok(element('#ingest-counts').textContent.includes('1 entry on the card could not be read'));
     assert.ok(element('#announcer').textContent.includes('Do not format the card'));
     return;
   }

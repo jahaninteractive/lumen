@@ -1,4 +1,5 @@
 import tempfile
+import fcntl
 import json
 import os
 from datetime import datetime
@@ -1276,9 +1277,17 @@ class LibraryTests(unittest.TestCase):
                     library.start_import_job(path)
             self.assertEqual([], library.catalog.list_jobs())
 
-    def make_card(self, count=2):
+    def make_card(self, count=2, video=False):
+        separate_volumes = patch("lumen.ingest._device", side_effect=str)  # tests share one temp volume
+        separate_volumes.start()
+        self.addCleanup(separate_volumes.stop)
         card = self.root / "CARD"
         (card / "DCIM" / "100MSDCF").mkdir(parents=True)
+        if video:
+            clip = card / "PRIVATE" / "M4ROOT" / "CLIP" / "C0001.MP4"
+            clip.parent.mkdir(parents=True)
+            clip.write_bytes(b"\x00\x00\x00\x18ftypXAVC video bytes")
+            os.utime(clip, (datetime(2026, 10, 20, 12).timestamp(),) * 2)
         for index in range(1, count + 1):
             path = card / "DCIM" / "100MSDCF" / f"DSC0000{index}.JPG"
             Image.new("RGB", (320, 240), (index * 70, 20, 20)).save(path)
@@ -1299,7 +1308,7 @@ class LibraryTests(unittest.TestCase):
         return patch("lumen.ingest.copy_verified", side_effect=copy)
 
     def test_ingest_job_imports_primary_copies_not_card_and_records_mirror_path(self):
-        card = self.make_card()
+        card = self.make_card(video=True)
         with Library(Settings(library_dir=self.library_dir)) as library:
             status = self.run_job(library, library.start_ingest_job(card, self.primary, self.mirror))
             photos = library.catalog.list_photos()
@@ -1310,8 +1319,12 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("succeeded", status["status"])
         self.assertEqual("ingest", status["kind"])
         snapshot = status["ingest"].pop("snapshot")
-        self.assertEqual({"copied": 2, "verified": 2, "already_present": 0, "failed": 0, "files": 2, "skipped": 0,
-                          "card_verified_everywhere": True, "manifest": "manifest.json"}, status["ingest"])
+        self.assertEqual({"copied": 3, "verified": 3, "already_present": 0, "failed": 0, "files": 3, "skipped": 0,
+                          "unreadable": 0, "card_verified_everywhere": True, "manifest": "manifest.json"}, status["ingest"])
+        for root in (self.primary, self.mirror):
+            clip = root / "2026-10-20" / "PRIVATE" / "M4ROOT" / "CLIP" / "C0001.MP4"
+            self.assertEqual((card / "PRIVATE" / "M4ROOT" / "CLIP" / "C0001.MP4").read_bytes(), clip.read_bytes(),
+                             "videos are copied and verified, though never imported")
         self.assertRegex(snapshot, r"^\d{8}T\d{6}Z\.sqlite3$")
         job_dir = self.library_dir / "outputs" / "ingest" / str(job.id)
         self.assertEqual(str(job_dir / "manifest.json"), job.result_path)
@@ -1337,7 +1350,8 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual([str(self.primary.resolve()), str(self.mirror.resolve())], manifest["destinations"])
         self.assertTrue(manifest["finished_at"])
         self.assertEqual(snapshot, manifest["snapshot"])
-        self.assertEqual(2, len(manifest["files"]))
+        self.assertEqual(3, len(manifest["files"]))
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0}, manifest["import"])
         self.assertNotIn(str(self.root), json.dumps(status))
 
     def test_ingest_job_cancel_between_files_leaves_no_partial_or_final_half_file(self):
@@ -1388,9 +1402,19 @@ class LibraryTests(unittest.TestCase):
 
     def test_ingest_job_writes_catalog_snapshot_beside_primary_copies(self):
         card = self.make_card()
-        with Library(Settings(library_dir=self.library_dir)) as library:
+        real_fcntl = fcntl.fcntl
+        synced = []
+
+        def record(descriptor, command, *args):
+            if command == fcntl.F_FULLFSYNC:
+                synced.append(Path(real_fcntl(descriptor, fcntl.F_GETPATH, bytes(1024)).rstrip(b"\0").decode()).name)
+            return real_fcntl(descriptor, command, *args)
+
+        with Library(Settings(library_dir=self.library_dir)) as library, patch("lumen.ingest.fcntl.fcntl", side_effect=record):
             status = self.run_job(library, library.start_ingest_job(card, self.primary))
         backups = self.primary / "lumen-catalog-backups"
+        self.assertIn(f".{status['ingest']['snapshot']}.partial", synced, "the snapshot is flushed to the media before its rename")
+        self.assertEqual("lumen-catalog-backups", synced[-1])
         self.assertEqual([status["ingest"]["snapshot"]], [path.name for path in backups.iterdir()])
         with closing(sqlite3.connect(backups / status["ingest"]["snapshot"])) as snapshot:
             self.assertEqual(2, snapshot.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
