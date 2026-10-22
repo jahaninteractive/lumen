@@ -10,6 +10,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
+from .tools import find_tool
+
 
 class PreviewError(RuntimeError):
     pass
@@ -102,7 +104,7 @@ class ExifToolPreviewProvider:
                 if result and result.returncode == 0 and candidate.exists():
                     return self._normalize(candidate, destination)
 
-        darktable = shutil.which("darktable-cli")
+        darktable = find_tool("darktable-cli")
         if darktable:
             with tempfile.TemporaryDirectory() as directory:
                 candidate = Path(directory) / "preview.jpg"

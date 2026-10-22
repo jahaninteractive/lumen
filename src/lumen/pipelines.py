@@ -16,6 +16,7 @@ from PIL import Image, ImageCms, ImageOps
 
 from .previews import fingerprint_file
 from .sidecars import SidecarWriter
+from .tools import find_tool
 
 
 def _descriptive_xmp(packet: bytes | str | None) -> dict:
@@ -277,8 +278,8 @@ class SirilPipeline:
 
 class PipelineRegistry:
     def capabilities(self) -> dict[str, Capability]:
-        darktable = shutil.which("darktable-cli")
-        siril = shutil.which("siril-cli")
+        darktable = find_tool("darktable-cli")
+        siril = find_tool("siril-cli")
         return {
             "darktable": Capability(
                 "darktable",
@@ -295,13 +296,13 @@ class PipelineRegistry:
         }
 
     def darktable(self, output_root: Path) -> DarktablePipeline:
-        executable = shutil.which("darktable-cli")
+        executable = find_tool("darktable-cli")
         if not executable:
             raise RuntimeError("darktable-cli is not installed")
         return DarktablePipeline(executable, output_root)
 
     def siril(self, output_root: Path) -> SirilPipeline:
-        executable = shutil.which("siril-cli")
+        executable = find_tool("siril-cli")
         if not executable:
             raise RuntimeError("siril-cli is not installed")
         return SirilPipeline(executable, output_root)

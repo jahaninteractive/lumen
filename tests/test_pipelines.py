@@ -218,7 +218,9 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual([], list(outside.iterdir()))
 
     def test_missing_tools_are_reported_as_unavailable(self):
-        with patch("lumen.pipelines.shutil.which", return_value=None):
+        with tempfile.TemporaryDirectory() as empty, patch("lumen.tools.shutil.which", return_value=None), patch(
+            "lumen.tools.VENDOR_APPS", Path(empty)
+        ):
             capabilities = PipelineRegistry().capabilities()
         self.assertFalse(capabilities["darktable"].available)
         self.assertFalse(capabilities["siril"].available)
