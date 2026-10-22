@@ -902,8 +902,12 @@ class Element {
     return null;
   }
   focus() { focused = this; }
+  scrollIntoView(options) { scrolled.push([this, options]); }
+  scrollTo(options) { scrolled.push([this, options]); }
 }
 let focused = null;
+const scrolled = [];
+const stored = {};
 function inspectorRating() {
   const tree = node => [node, ...(node.children || []).flatMap(tree)];
   return tree(element('#inspection')).find(node => node.id === 'rating') || null;
@@ -935,7 +939,7 @@ const document = {
   querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
-    if (selector === '.frame') return element('#contact-sheet').children.filter(item => item.className === 'frame');
+    if (selector === '.frame') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).filter(item => item.className === 'frame'); }
     if (selector === '.batch-button' || selector === '.batch-select') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === selector.slice(1)); }
     if (selector === '[role="tab"]') return tabElements;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
@@ -947,13 +951,13 @@ const document = {
 let activeTimers = 0;
 let nextTimer = 0;
 const timers = new Map();
-const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; } };
+const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
 // pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
 async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : null), setItem() {}, removeItem() {} };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -1210,7 +1214,7 @@ const regression = `
     element('#export-tab').listeners.click();
     const loadsBefore = groupLoads;
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
-    const card = id => element('#contact-sheet').children.find(item => Number(item.dataset.id) === id);
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const texts = id => tree(card(id)).map(node => node.textContent);
     const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
     assert.equal(element('#keeper-count').textContent, '1 keeper');
@@ -1224,13 +1228,13 @@ const regression = `
     state.busy = true;
     updateWorkflow();
     assert.equal(control('reject').disabled, true, 'decision controls are disabled while busy');
-    assert.ok(element('#contact-sheet').children.every(item => item.disabled !== true), 'frame cards stay usable while busy');
+    assert.ok(document.querySelectorAll('.frame').every(item => item.disabled !== true), 'frame cards stay usable while busy');
     state.busy = false;
     updateWorkflow();
     await control('reject').listeners.click();
     assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/decision', body: { decision: 'reject' } });
     assert.equal(focused, control('reject'), 'focus returns to the re-rendered Reject control, not a frame card');
-    assert.ok(element('#contact-sheet').children.every(item => item.disabled !== true));
+    assert.ok(document.querySelectorAll('.frame').every(item => item.disabled !== true));
     assert.equal(groupLoads, loadsBefore, 'a decision updates cards in place without load()');
     assert.ok(texts(1).includes('Rejected'));
     assert.ok(card(1).getAttribute('aria-label').includes('rejected'));
@@ -1264,9 +1268,9 @@ const regression = `
     const loadsBefore = groupLoads;
     const sheetNode = element('#contact-sheet');
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
-    const card = id => sheetNode.children.find(item => Number(item.dataset.id) === id);
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const texts = id => tree(card(id)).map(node => node.textContent);
-    const tabindexes = () => sheetNode.children.map(item => item.getAttribute('tabindex'));
+    const tabindexes = () => document.querySelectorAll('.frame').map(item => item.getAttribute('tabindex'));
     let prevented = 0;
     const key = (name, extra = {}) => sheetNode.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target: card(state.focusedId), preventDefault() { prevented += 1; }, ...extra });
     assert.equal(state.focusedId, 1);
@@ -1339,7 +1343,7 @@ const regression = `
     await load();
     const sheetNode = element('#contact-sheet');
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
-    const card = id => sheetNode.children.find(item => Number(item.dataset.id) === id);
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const texts = node => tree(node).map(item => item.textContent);
     let prevented = 0;
     let stopped = 0;
@@ -1527,7 +1531,7 @@ const regression = `
   }
   if (scenario === 'refine') {
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
-    const card = id => element('#contact-sheet').children.find(item => Number(item.dataset.id) === id);
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const scopeSelect = element('#refine-scope');
     scopeSelect.value = 'group';
     darktableReady = false;
@@ -1585,7 +1589,7 @@ const regression = `
     groups = [{ id: 1, automatic_pick_id: 1, frame_count: 2, rejected_count: 2, photos: [rejected(1), rejected(2)] }, group(2, [3])];
     element('#show-rejected').checked = true;
     await element('#show-rejected').listeners.change();
-    const card = id => element('#contact-sheet').children.find(item => Number(item.dataset.id) === id);
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const texts = id => tree(card(id)).map(node => node.textContent);
     assert.ok(texts(1).includes('Rejected'));
     assert.ok(!texts(1).includes('Best'), 'a rejected pick never shows the Best badge');
@@ -1754,6 +1758,77 @@ const regression = `
     await inspect(state.groups[0].photos[1]);
     const warning = tree(element('#inspection')).find(node => node.className === 'warning');
     assert.equal(warning?.textContent, 'Warning: Sony reduced-size lossless raw; darktable cannot decode it');
+    return;
+  }
+  if (scenario === 'bursts') {
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const texts = node => tree(node).map(item => item.textContent);
+    groups = [{ ...group(1, [1, 2]), started_at: '2026-10-21T08:00:00+00:00' }, { ...group(2, [3]), started_at: '2026-10-21T09:30:00+00:00' }];
+    await load();
+    const sections = () => element('#contact-sheet').children;
+    assert.deepEqual(sections().map(section => [section.tagName, section.className, section.dataset.burst]), [['SECTION', 'burst', 1], ['SECTION', 'burst', 2]]);
+    for (const section of sections()) {
+      const heading = tree(section).find(node => node.tagName === 'H3');
+      assert.equal(section.getAttribute('aria-labelledby'), heading.id, 'each burst section is labelled by its heading');
+    }
+    const headerText = texts(sections()[0]).join(' ');
+    for (const text of ['Burst 1', '2 frames', 'best photo-1.jpg']) assert.ok(headerText.includes(text), headerText);
+    assert.ok(headerText.includes(new Date(groups[0].started_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })), 'the header shows the local start time: ' + headerText);
+    assert.equal(document.querySelectorAll('.frame').length, 3, 'frames stay as buttons inside their burst sections');
+    assert.ok(document.querySelectorAll('.frame').every(card => card.parent.parent === sections()[Number(card.dataset.group) - 1]));
+    const rows = tree(element('#batch-list')).filter(node => node.className === 'batch-row');
+    assert.deepEqual(rows.map(row => row.children.map(child => child.tagName)), [['IMG', 'INPUT', 'BUTTON'], ['IMG', 'INPUT', 'BUTTON']]);
+    assert.deepEqual(rows.map(row => [row.children[0].src, row.children[0].alt, row.children[0].loading]), [['/preview/1', '', 'lazy'], ['/preview/3', '', 'lazy']]);
+    assert.ok(rows[0].children[2].textContent.startsWith('Burst 1 · 2 frames · '), rows[0].children[2].textContent);
+    assert.equal(element('#merge-count').textContent, '0 batches selected');
+
+    const sheetBoxes = () => document.querySelectorAll('[data-merge-group]').filter(box => box.className === 'burst-select');
+    const railBoxes = () => document.querySelectorAll('.batch-select');
+    assert.equal(sheetBoxes().length, 2);
+    assert.ok(sheetBoxes().every(box => box.getAttribute('aria-label').startsWith('Select Burst')));
+    sheetBoxes()[0].checked = true; sheetBoxes()[0].listeners.change();
+    assert.equal(railBoxes()[0].checked, true, 'the rail checkbox follows the burst header');
+    assert.equal(element('#merge-count').textContent, '1 batch selected');
+    railBoxes()[1].checked = true; railBoxes()[1].listeners.change();
+    assert.equal(sheetBoxes()[1].checked, true, 'the burst header follows the rail checkbox');
+    assert.equal(element('#merge-count').textContent, '2 batches selected');
+    assert.equal(element('#merge-batches').disabled, false);
+
+    const batches = () => document.querySelectorAll('.batch-button');
+    focused = batches()[1];
+    await batches()[1].listeners.click();
+    assert.equal(state.selectedGroupId, 2);
+    assert.deepEqual(scrolled.at(-1), [sections()[1], { behavior: 'auto', block: 'start' }], 'a rail click scrolls the burst into view, honouring reduced motion');
+    assert.equal(focused, batches()[1], 'keyboard focus stays on the rail');
+    assert.deepEqual(sections().map(section => section.dataset.selected), ['false', 'true']);
+    assert.ok(texts(sections()[1]).includes('Selected') && !texts(sections()[0]).includes('Selected'), 'the selected burst has a text cue');
+
+    element('#jump-selected').listeners.click();
+    assert.deepEqual(scrolled.at(-1), [sections()[1], { behavior: 'auto', block: 'start' }]);
+    assert.ok(element('#announcer').textContent.includes('Burst 2'));
+    element('#back-to-top').listeners.click();
+    assert.deepEqual(scrolled.at(-1), [element('#main-content'), { top: 0, behavior: 'auto' }]);
+    assert.ok(element('#announcer').textContent.includes('workflow tabs'));
+
+    const collapse = element('#collapse-panel');
+    collapse.listeners.click();
+    assert.equal(element('#workflow-panels').hidden, true);
+    assert.equal(collapse.getAttribute('aria-pressed'), 'true');
+    assert.equal(stored['lumen-panel-collapsed'], '1');
+    collapse.listeners.click();
+    assert.equal(element('#workflow-panels').hidden, false);
+    assert.equal(stored['lumen-panel-collapsed'], undefined);
+    collapse.listeners.click();
+
+    const astro = tree(sections()[0]).find(node => node.tagName === 'BUTTON' && node.textContent === 'Astro');
+    await astro.listeners.click();
+    assert.equal(state.selectedGroupId, 1);
+    assert.equal(element('#astro-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(element('#workflow-panels').hidden, false, 'choosing a tab expands a collapsed panel');
+    const remove = tree(sections()[1]).find(node => node.tagName === 'BUTTON' && node.textContent === 'Remove batch');
+    await remove.listeners.click();
+    assert.deepEqual(removals, ['/api/groups/2/remove']);
+    assert.equal(sections().length, 1);
     return;
   }
   if (scenario === 'merge-batches') {
@@ -2271,6 +2346,47 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn("Warning: ", javascript)  # non-colour warning cue
         self.assertIn("clearInterval", javascript)  # polling stops on terminal states
         self.assertNotRegex(javascript, r"astro[^\n]*\.innerHTML")
+
+    def test_javascript_contact_sheet_groups_frames_into_burst_sections(self):
+        self.run_javascript_cleanup_regression("bursts")
+
+    def test_layout_is_full_height_with_collapse_toggle_burst_sections_and_rail_merge_controls(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        tablist = next(node for node in parser.nodes if node["attrs"].get("role") == "tablist")
+        collapse = by_id["collapse-panel"]
+        self.assertEqual(("button", "button", "false"), (collapse["tag"], collapse["attrs"].get("type"), collapse["attrs"].get("aria-pressed")))
+        self.assertEqual("Collapse panel", collapse["text"].strip())
+        self.assertEqual(tablist["parents"][-1], collapse["parents"][-1], "the toggle sits next to the tab rail")
+        self.assertEqual("tabpanel", by_id["compose-panel"]["attrs"]["role"])
+        self.assertIn(by_id[collapse["attrs"]["aria-controls"]], by_id["compose-panel"]["parents"])
+        nav = next(node for node in parser.nodes if node["tag"] == "nav")
+        aside = next(node for node in parser.nodes if node["tag"] == "aside")
+        header = by_id["rail-header"]
+        self.assertIn(nav, header["parents"])
+        for name in ("merge-batches", "merge-count", "jump-selected"):
+            self.assertIn(header, by_id[name]["parents"], f"{name} lives in the sticky rail header")
+        self.assertIn(aside, by_id["back-to-top"]["parents"])
+        for name in ("collapse-panel", "merge-batches", "jump-selected", "back-to-top"):
+            node = by_id[name]
+            self.assertEqual(("button", "button"), (node["tag"], node["attrs"].get("type")))
+            self.assertTrue(node["text"].strip() or node["attrs"].get("aria-label"), f"{name} needs an accessible name")
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\nbody \{[^}]*overflow: hidden")
+        self.assertRegex(styles, r"\.masthead \{[^}]*position: sticky")
+        self.assertRegex(styles, r"\.batch-rail, main, \.inspector \{[^}]*overflow-y: auto")
+        self.assertRegex(styles, r"\.main-top \{[^}]*position: sticky")
+        self.assertRegex(styles, r"\.rail-header \{[^}]*position: sticky")
+        self.assertRegex(styles, r'\.burst\[data-selected="true"\] \{[^}]*outline: 2px solid var\(--amber\)')
+        self.assertRegex(styles, r"\.batch-thumb \{[^}]*width: 44px")
+        self.assertIn("prefers-reduced-motion", styles)
+        javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
+        for text in ("createElement('section')", "className = 'burst'", "'aria-labelledby'", "block: 'start'", "prefers-reduced-motion",
+                     "lumen-panel-collapsed", "'Selected'", "'Select for merge'", "'Remove batch'", "'Astro'", "toLocaleTimeString", "toLocaleString"):
+            self.assertIn(text, javascript)
+        self.assertNotRegex(javascript, r"burst[^\n]*\.innerHTML")
 
     def test_index_has_semantic_landmarks_and_labeled_import_control(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()

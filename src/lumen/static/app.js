@@ -229,8 +229,97 @@ function allRejected(group) {
   return group.frame_count > 0 && group.rejected_count === group.frame_count;
 }
 
+function startTime(group, withDate = false) {
+  if (!group.started_at) return null;
+  const date = new Date(group.started_at);
+  return withDate ? date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function batchText(group, index) {
-  return `Burst ${index + 1} · ${frameCount(group.frame_count)}${allRejected(group) ? ` · ${NO_KEEPER}` : ''}`;
+  const time = startTime(group);
+  return `Burst ${index + 1} · ${frameCount(group.frame_count)}${time ? ` · ${time}` : ''}${allRejected(group) ? ` · ${NO_KEEPER}` : ''}`;
+}
+
+function bestFrame(group) {
+  return group.photos.find(photo => photo.id === group.automatic_pick_id) || group.photos[0] || null;
+}
+
+// Scrolling never moves keyboard focus; reduced motion makes every scroll instant.
+function scrollMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+
+function scrollToGroup(groupId) {
+  const section = document.querySelector(`[data-burst="${groupId}"]`);
+  section?.scrollIntoView({ behavior: scrollMotion(), block: 'start' });
+  return Boolean(section);
+}
+
+function setMergeSelection(groupId, selected) {
+  state.mergeSelection[selected ? 'add' : 'delete'](groupId);
+  updateWorkflow();
+}
+
+function mergeCheckbox(group, groupIndex, className) {
+  const select = document.createElement('input');
+  select.type = 'checkbox';
+  select.className = className;
+  select.dataset.mergeGroup = group.id;
+  select.checked = state.mergeSelection.has(group.id);
+  select.setAttribute('aria-label', `Select ${batchText(group, groupIndex)} for merging`);
+  select.addEventListener('change', () => setMergeSelection(group.id, select.checked));
+  return select;
+}
+
+function selectGroup(group) {
+  const first = group.photos[0];
+  if (first) return inspect(first);
+  // An all-rejected burst with its frames hidden can still be selected, e.g. to remove it.
+  state.selectedId = null;
+  state.selectedGroupId = group.id;
+  inspection.textContent = NO_KEEPER;
+  updateWorkflow();
+  return Promise.resolve();
+}
+
+function burstSection(group, groupIndex, frames) {
+  const section = document.createElement('section');
+  section.className = 'burst';
+  section.dataset.burst = group.id;
+  section.setAttribute('aria-labelledby', `burst-${group.id}-heading`);
+  const header = document.createElement('div');
+  header.className = 'burst-header';
+  const heading = document.createElement('h3');
+  heading.id = `burst-${group.id}-heading`;
+  heading.textContent = `Burst ${groupIndex + 1}`;
+  const facts = document.createElement('span');
+  facts.className = 'quiet';
+  facts.textContent = [frameCount(group.frame_count), startTime(group, true), bestFrame(group) ? `best ${bestFrame(group).name}` : null].filter(Boolean).join(' · ');
+  const selected = document.createElement('span');
+  selected.className = 'burst-selected';
+  const toggle = document.createElement('label');
+  toggle.className = 'toggle';
+  const text = document.createElement('span');
+  text.textContent = 'Select for merge';
+  toggle.append(mergeCheckbox(group, groupIndex, 'burst-select'), text);
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'danger';
+  remove.textContent = 'Remove batch';
+  remove.setAttribute('aria-label', `Remove Burst ${groupIndex + 1} from Lumen`);
+  remove.addEventListener('click', () => cleanup(`/api/groups/${group.id}/remove`, {}));
+  const astro = document.createElement('button');
+  astro.type = 'button';
+  astro.className = 'secondary';
+  astro.textContent = 'Astro';
+  astro.setAttribute('aria-label', `Stack Burst ${groupIndex + 1} in the Astro tab`);
+  astro.addEventListener('click', () => selectGroup(group).then(() => selectTab(document.querySelector('#astro-tab'))).catch(error => announce(error.message)));
+  header.append(heading, facts, selected, toggle, remove, astro);
+  const grid = document.createElement('div');
+  grid.className = 'burst-frames';
+  grid.append(...frames);
+  section.append(header, grid);
+  return section;
 }
 
 // Same rule as Library.keeper_ids: not rejected, and flagged or the group's best frame.
@@ -528,7 +617,7 @@ function photoById(id) {
 function handleCullingKey(event) {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target;
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || (target?.tagName === 'BUTTON' && target.closest?.('dialog form'))) return;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || (target?.tagName === 'BUTTON' && target.className !== 'frame')) return;  // only frame cards cull; burst and dialog buttons do not
   const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
   const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
   const index = ids.indexOf(state.focusedId);
@@ -593,43 +682,35 @@ function renderGroups() {
       dayHeadings.push(heading);
     }
     heading.groups.push(group);
-    const select = document.createElement('input');
-    select.type = 'checkbox';
-    select.className = 'batch-select';
-    select.checked = state.mergeSelection.has(group.id);
-    select.setAttribute('aria-label', `Select ${batchText(group, groupIndex)} for merging`);
-    select.addEventListener('change', () => {
-      state.mergeSelection[select.checked ? 'add' : 'delete'](group.id);
-      updateWorkflow();
-    });
+    const thumb = document.createElement('img');
+    thumb.className = 'batch-thumb';
+    thumb.src = bestFrame(group)?.preview_url || '';
+    thumb.alt = '';
+    thumb.loading = 'lazy';
     const batch = document.createElement('button');
     batch.type = 'button';
     batch.className = 'batch-button';
     batch.textContent = batchText(group, groupIndex);
     batch.setAttribute('aria-pressed', String(group.id === state.selectedGroupId));
-    batch.addEventListener('click', () => {
+    batch.addEventListener('click', () => {  // selects and scrolls the burst into view; focus stays on the rail
       const first = group.photos[0];
       if (first && !frameCard(first.id)) {  // reveal the pages up to this burst
         state.shown = Math.ceil((photos.findIndex(([photo]) => photo === first) + 1) / PAGE) * PAGE;
         renderGroups();
       }
-      document.querySelector(`[data-group="${group.id}"]`)?.focus();
-      if (first) inspect(first).catch(error => announce(error.message));
-      else {  // An all-rejected burst with its frames hidden can still be selected, e.g. to remove it.
-        state.selectedId = null;
-        state.selectedGroupId = group.id;
-        inspection.textContent = NO_KEEPER;
-        updateWorkflow();
-        announce(batch.textContent);
-      }
+      selectGroup(group).then(() => { if (!first) announce(batchText(group, groupIndex)); }).catch(error => announce(error.message));
+      scrollToGroup(group.id);
     });
     const row = document.createElement('div');
     row.className = 'batch-row';
-    row.append(select, batch);
+    row.append(thumb, mergeCheckbox(group, groupIndex, 'batch-select'), batch);
     heading.details.append(row);
   });
   refreshDays();
-  visible.forEach(([photo, group]) => sheet.append(renderFrame(photo, group)));
+  state.groups.forEach((group, groupIndex) => {  // one section per burst with frames on this page
+    const frames = visible.filter(([, owner]) => owner === group).map(([photo]) => renderFrame(photo, group));
+    if (frames.length) sheet.append(burstSection(group, groupIndex, frames));
+  });
   const remaining = photos.length - visible.length;
   const more = document.querySelector('#show-more');
   more.hidden = remaining <= 0;
@@ -1067,6 +1148,13 @@ function updateWorkflow() {
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
   document.querySelector('#merge-batches').disabled = state.busy || state.mergeSelection.size < 2;
+  document.querySelector('#merge-count').textContent = `${state.mergeSelection.size} batch${state.mergeSelection.size === 1 ? '' : 'es'} selected`;
+  document.querySelectorAll('[data-merge-group]').forEach(box => { box.checked = state.mergeSelection.has(Number(box.dataset.mergeGroup)); });
+  document.querySelectorAll('[data-burst]').forEach(section => {
+    const selected = Number(section.dataset.burst) === state.selectedGroupId;
+    section.dataset.selected = String(selected);
+    section.children[0].children[2].textContent = selected ? 'Selected' : '';
+  });
   document.querySelector('#clear-workspace').disabled = state.busy || !state.photoCount || document.querySelector('#clear-confirmation').value !== 'CLEAR';
   document.querySelector('#browse-xmp').disabled = state.busy;
   document.querySelector('#reset-xmp').disabled = state.busy || !state.profile;
@@ -1109,7 +1197,40 @@ function selectTab(tab) {
     item.tabIndex = selected ? 0 : -1;
     document.querySelector(`#${item.getAttribute('aria-controls')}`).hidden = !selected;
   });
+  collapsePanel(false);  // choosing a tab always shows its panel
   if (tab.id === 'compose-tab') loadComposition();
+}
+
+function collapsePanel(collapsed) {
+  document.querySelector('#workflow-panels').hidden = collapsed;
+  document.querySelector('#collapse-panel').setAttribute('aria-pressed', String(collapsed));
+  try {
+    if (collapsed) localStorage.setItem('lumen-panel-collapsed', '1');
+    else localStorage.removeItem('lumen-panel-collapsed');
+  } catch { /* per-visit only */ }
+}
+document.querySelector('#collapse-panel').addEventListener('click', () => {
+  const collapsed = document.querySelector('#collapse-panel').getAttribute('aria-pressed') !== 'true';
+  collapsePanel(collapsed);
+  announce(collapsed ? 'Workflow panel collapsed; the contact sheet has the space.' : 'Workflow panel shown.');
+});
+try {
+  if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
+} catch { /* per-visit only */ }
+
+document.querySelector('#jump-selected').addEventListener('click', () => {
+  const index = state.groups.findIndex(group => group.id === state.selectedGroupId);
+  if (index < 0) return announce('No burst is selected.');
+  announce(scrollToGroup(state.selectedGroupId) ? `Burst ${index + 1} shown.` : `Burst ${index + 1} has no frames on the contact sheet.`);
+});
+document.querySelector('#back-to-top').addEventListener('click', () => {
+  document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });
+  announce('Scrolled to the workflow tabs.');
+});
+// Keep scroll-into-view clear of the sticky import bar and tab rail.
+if (window.ResizeObserver) {
+  const top = document.querySelector('.main-top');
+  new ResizeObserver(() => document.documentElement.style.setProperty('--sticky-top', `${top.offsetHeight}px`)).observe(top);
 }
 tabs.forEach((tab, index) => {
   tab.addEventListener('click', () => selectTab(tab));
@@ -1443,6 +1564,7 @@ async function mergeBatches() {
     const index = state.groups.findIndex(group => group.id === result.group_id);
     const first = state.groups[index]?.photos[0];
     if (first) await inspect(first);
+    scrollToGroup(result.group_id);
     announce(`Merged ${groupIds.length} batches into ${index < 0 ? 'one batch' : batchText(state.groups[index], index)}.`);
   } catch (error) {
     announce(`Could not merge batches: ${error.message}`);

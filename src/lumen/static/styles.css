@@ -12,9 +12,14 @@
 
 * { box-sizing: border-box; }
 
+html { height: 100%; }
+
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   color: var(--paper);
   background: var(--black);
   font-family: "Avenir Next", Avenir, "Helvetica Neue", system-ui, sans-serif;
@@ -47,6 +52,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 }
 
 .masthead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
   min-height: 64px;
   display: flex;
   align-items: center;
@@ -61,22 +70,42 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .mark { display: inline-block; width: .8rem; height: .8rem; margin-right: .55rem; border-radius: 50%; background: var(--amber); }
 .subtitle { margin-left: .65rem; color: var(--muted); }
 #system-status { margin: 0; color: var(--cyan); font-size: .9rem; }
-.job-strip { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--graphite); }
+.job-strip { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .5rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--graphite); }
 .job-strip p { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 #job-progress { flex: 1 1 12rem; height: 12px; accent-color: var(--amber); }
 #cancel-job { min-width: 44px; min-height: 44px; }
 
+/* The page never scrolls: rail, main column, and inspector each scroll on their own below the masthead. */
 .workspace {
-  min-height: calc(100vh - 65px);
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr) 300px;
 }
+.batch-rail, main, .inspector { min-height: 0; overflow-y: auto; }
 
-.batch-rail, .inspector { padding: 1.25rem; background: var(--charcoal); }
+.batch-rail, .inspector { background: var(--charcoal); }
+.inspector, #batch-list { padding: 1.25rem; }
 .batch-rail { border-right: 1px solid var(--line); }
 .inspector { border-left: 1px solid var(--line); }
 .batch-rail h2, .inspector h2 { margin-top: 0; font-size: 1rem; }
+.rail-header { position: sticky; top: 0; z-index: 1; display: grid; gap: .5rem; padding: 1.25rem 1.25rem .75rem; border-bottom: 1px solid var(--line); background: var(--charcoal); }
+.rail-header h2, .rail-header p { margin: 0; }
+#back-to-top { width: 100%; margin-bottom: 1rem; }
 main { min-width: 0; }
+.main-top { position: sticky; top: 0; z-index: 1; background: var(--black); }
+.tab-row { display: flex; align-items: center; gap: 1rem; padding-right: 1.25rem; border-bottom: 1px solid var(--line); }
+.tab-row .tab-rail { flex: 1 1 auto; border-bottom: 0; }
+#collapse-panel { flex: none; }
+.burst { scroll-margin-top: var(--sticky-top, 0px); margin-bottom: 1.5rem; padding: .25rem; border-radius: 6px; outline-offset: 2px; }
+.burst[data-selected="true"] { outline: 2px solid var(--amber); }
+.burst-header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .75rem; }
+.burst-header h3 { margin: 0; font-size: 1.05rem; }
+.burst-header .quiet { font-variant-numeric: tabular-nums; }
+.burst-selected { color: var(--amber); font-weight: 700; }
+.burst-selected:empty { display: none; }
+.burst-header .toggle { margin-left: auto; }
+.burst-frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
 
 .import-bar { padding: 1.25rem; border-bottom: 1px solid var(--line); }
 .import-bar label { display: block; margin-bottom: .35rem; font-weight: 700; }
@@ -155,7 +184,6 @@ button.danger { color: var(--danger); border-color: var(--danger); background: t
 .section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
 .section-heading h1 { margin: 0 0 1rem; font-size: 1.5rem; }
 .section-heading span { color: var(--muted); }
-.contact-sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
 
 .frame {
   position: relative;
@@ -219,7 +247,8 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .day summary { min-height: 44px; padding: .6rem 0; color: var(--cyan); cursor: pointer; font-weight: 700; font-variant-numeric: tabular-nums; }
 .batch-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .55rem; }
 .batch-row .batch-select { flex: 0 0 auto; }
-#merge-batches { width: 100%; margin-bottom: .75rem; }
+.batch-thumb { width: 44px; flex: none; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 3px; background: #08090a; }
+#merge-batches, #jump-selected { width: 100%; }
 .batch-button { display: block; width: 100%; flex: 1 1 auto; color: var(--paper); background: transparent; text-align: left; font-weight: 600; }
 .batch-button:hover { border-color: var(--amber); }
 .quiet { color: var(--muted); }
@@ -232,17 +261,19 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 980px) {
-  .workspace { grid-template-columns: 180px minmax(0, 1fr); }
-  .inspector { grid-column: 1 / -1; border-top: 1px solid var(--line); border-left: 0; }
+  .workspace { grid-template-columns: 180px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .inspector { grid-column: 1 / -1; max-height: 40vh; border-top: 1px solid var(--line); border-left: 0; }
 }
 
 @media (max-width: 680px) {
   .masthead { align-items: flex-start; flex-direction: column; }
   .subtitle { display: block; margin: .15rem 0 0 1.65rem; }
-  .workspace { display: block; }
+  .workspace { display: block; overflow-y: auto; }
+  .batch-rail, main, .inspector { overflow: visible; }
+  .inspector { max-height: none; }
   .batch-rail { border-right: 0; border-bottom: 1px solid var(--line); }
   .input-row { align-items: stretch; flex-direction: column; }
-  .contact-sheet { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .burst-frames { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .compare-grid { grid-template-columns: 1fr; }
   .loupe-viewport { height: 40vh; }
 }

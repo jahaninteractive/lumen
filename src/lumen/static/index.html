@@ -26,12 +26,17 @@
 
   <div class="workspace">
     <nav aria-label="Photo batches" class="batch-rail">
-      <h2>Batches</h2>
-      <button type="button" id="merge-batches" class="secondary" disabled>Merge selected batches</button>
+      <div id="rail-header" class="rail-header">
+        <h2>Batches</h2>
+        <p id="merge-count" class="quiet">0 batches selected</p>
+        <button type="button" id="merge-batches" class="secondary" disabled>Merge selected batches</button>
+        <button type="button" id="jump-selected" class="secondary">Jump to selected</button>
+      </div>
       <div id="batch-list"><p class="quiet">No imported batches yet.</p></div>
     </nav>
 
     <main id="main-content" tabindex="-1">
+      <div class="main-top">
       <form id="import-form" class="import-bar">
         <label for="import-path">Folder or photo path</label>
         <div class="input-row">
@@ -49,8 +54,7 @@
         </div>
         <p>Tags come from the local oMLX model. Progress appears in the job strip at the top.</p>
       </div>
-
-      <section class="workflow" aria-label="Finish this shoot">
+      <div class="tab-row">
         <div class="tab-rail" role="tablist" aria-label="Finishing workflow">
           <button type="button" id="compose-tab" role="tab" aria-controls="compose-panel" aria-selected="true" tabindex="0">Compose</button>
           <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
@@ -58,6 +62,11 @@
           <button type="button" id="ingest-tab" role="tab" aria-controls="ingest-panel" aria-selected="false" tabindex="-1">Ingest</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
+        <button type="button" id="collapse-panel" class="secondary" aria-pressed="false" aria-controls="workflow-panels">Collapse panel</button>
+      </div>
+      </div>
+
+      <section id="workflow-panels" class="workflow" aria-label="Finish this shoot">
         <section id="compose-panel" role="tabpanel" aria-labelledby="compose-tab" tabindex="0">
           <h2>Compose without changing the original</h2>
           <p class="quiet">Select a photo, then compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
@@ -264,6 +273,7 @@
 
     <aside aria-labelledby="inspect-heading" class="inspector">
       <h2 id="inspect-heading">Inspect</h2>
+      <button type="button" id="back-to-top" class="secondary">Back to top</button>
       <div id="inspection">
         <p class="quiet">Select a frame to see why it ranked where it did.</p>
       </div>
