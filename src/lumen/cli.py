@@ -135,6 +135,13 @@ def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--show-rejected", action="store_true")
 
 
+def _job_error(error: Exception) -> str:
+    """Public CLI error for a job command; a held runner lock means `lumen serve` owns the catalog."""
+    if str(error) == "catalog already has a job runner":
+        return "the catalog is in use by lumen serve: stop the server or use the web page"
+    return public_message(str(error))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = Settings.from_environment()
@@ -158,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
                 library.wait_for_job(job.id)
                 payload = library.job_status(job.id)
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
-            payload = {"error": public_message(str(error))}
+            payload = {"error": _job_error(error)}
         _print(payload, args.json)
         verified = payload.get("status") == "succeeded" and payload.get("ingest", {}).get("card_verified_everywhere") is True
         return 0 if verified else 2
@@ -186,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
                     library.wait_for_job(job.id)
                     payload = library.job_status(job.id)
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
-            payload = {"error": public_message(str(error))}
+            payload = {"error": _job_error(error)}
         _print(payload, args.json)
         if args.command == "jobs":
             return 0
@@ -290,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
                     job_id = args.job_id
                 payload = library.job_status(job_id)
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
-            payload = {"error": public_message(str(error))}
+            payload = {"error": _job_error(error)}
         _print(payload, args.json)
         return 0 if payload.get("status") in {"queued", "running", "succeeded", "cancelled"} else 2
 

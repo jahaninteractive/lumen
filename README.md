@@ -91,6 +91,78 @@ The server listens only on `127.0.0.1:8765`. To use another library:
 uv run lumen --library "/Volumes/Photo Catalog/Lumen" serve --open
 ```
 
+## Ingest a card
+
+Ingest copies a card to a primary destination and an optional mirror, verifies
+every copy by SHA-256, then imports the primary copies. The card is only read.
+
+```sh
+uv run lumen ingest "/Volumes/PHOTO_CARD" --to "/Volumes/Travel SSD/2026-10" --mirror "/Volumes/Backup/2026-10"
+```
+
+In the UI, open the **Ingest** tab, choose the card, primary, and optional
+mirror folders, and start. The panel ends with one of two verdicts:
+*Every file verified on every destination.* or *Do not format the card: N files
+were not verified.* The CLI exits 0 only in the first case. Never format a card
+until every file is verified on every destination.
+
+Each run writes `<library>/outputs/ingest/<job-id>/manifest.json` and
+`ingest.log`. After a verified import, a catalog snapshot is saved beside the
+primary originals in `lumen-catalog-backups/<UTC-timestamp>.sqlite3`. Rerunning
+the same ingest skips files that are already present and verified.
+
+## Jobs
+
+Import, ingest, tag-all, preview refinement, and astro stacks run as background
+jobs, one at a time. The web page shows progress in the job strip at the top
+with a **Cancel job** button. From the CLI:
+
+```sh
+uv run lumen jobs --json
+uv run lumen cancel 12 --json
+```
+
+While `lumen serve` is running it owns the job runner; job commands from a
+second CLI process exit 2 and say the catalog is in use. Stop the server or use
+the web page.
+
+## Cull
+
+Each frame can be flagged, rejected, or cleared, and rated 0 to 5 stars.
+Rejecting is a decision, never a deletion. From the CLI:
+
+```sh
+uv run lumen decide 42 --flag      # or --reject, --clear
+uv run lumen rate 42 4             # 0 clears the rating
+```
+
+In the contact sheet, with a frame focused (**Shortcuts** lists these):
+
+- Arrow keys move between frames; Up/Down and Page Up/Page Down move by row;
+  Home and End jump to the first or last frame.
+- `P` chooses the frame as best in its burst; `X` rejects; `F` flags; `U`
+  clears the decision; `0`–`5` set the rating.
+- `C` marks or unmarks a frame for compare (two at most); **Compare marked** opens
+  both at 100 percent with panes that pan together.
+- `Enter` opens the loupe at 100 percent; `Esc` closes compare or loupe.
+
+Culling keeps working while an import or ingest runs. It pauses while tagging,
+preview refinement, or a stack runs.
+
+## Filters and paging
+
+The filter bar narrows the sheet by date range, camera, decision, minimum
+rating, keepers only, tagged only, and tag text; rejected frames are hidden
+unless **Show rejected** is ticked. Filters live in the page URL, so a reload or
+bookmark keeps them. Frames are grouped by capture day and shown 200 at a time;
+the button after the last frame shows the next page. `groups` and `refine-previews` take the same
+filters:
+
+```sh
+uv run lumen groups --from 2026-10-21 --to 2026-10-22 --camera ILCE-7M4:123 --min-rating 3 --json
+uv run lumen groups --keepers --tagged --text heron --json
+```
+
 ## Local vision tags
 
 Start oMLX, then tag one frame or the whole catalog:
@@ -99,7 +171,12 @@ Start oMLX, then tag one frame or the whole catalog:
 omlx start
 uv run lumen tag --photo 1
 uv run lumen tag --all
+uv run lumen tag --all --retag
 ```
+
+`tag --all` skips photos that already have tags unless `--retag` is given. In
+the UI, **Tag all untagged** (below the import bar) does the same; tick
+**Re-tag already tagged** to include tagged photos.
 
 Lumen reads the local oMLX API key from `LUMEN_OMLX_API_KEY`, or from the local
 `~/.omlx/settings.json` written by oMLX. It rejects non-loopback model URLs.
@@ -132,10 +209,13 @@ an approved crop to the full-resolution developed image only during JPEG
 export.
 
 Next use the **Export** tab. Choose **Current photo**
-or **All keepers**; the latter exports the chosen best frame from every batch.
-Export uses full available resolution, quality 92, and sRGB. Capture time,
-camera/lens details, copyright, ratings, descriptions, keywords, and GPS
-location are retained when available.
+or **All keepers**. A keeper is any frame that is not rejected and is either
+flagged or the best frame in its burst, so a single frame stays a keeper unless
+you reject it. Pick a preset: **Full resolution** exports at full available
+resolution, quality 92, sRGB; **Share** resizes to a 2048 px long edge at
+quality 85. Capture time, camera/lens details, copyright, ratings,
+descriptions, and keywords are retained when available. Full keeps GPS
+location; Share drops it.
 
 **Choose XMP…** opens the macOS file picker for an existing `.xmp` processing
 profile. The browser remembers your explicit selection for the next export.
@@ -155,6 +235,7 @@ Equivalent CLI commands:
 ```sh
 uv run lumen export --photo 42 --profile "/path/to/sony-high-iso.xmp" --json
 uv run lumen export --keepers --json
+uv run lumen export --keepers --preset share --json
 ```
 
 If `darktable-cli` is unavailable, the Export panel explains why and disables

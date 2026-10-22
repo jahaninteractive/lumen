@@ -1,4 +1,5 @@
 const JOB_ACTIVE = ['queued', 'running'];
+const CULLING_JOBS = ['import', 'ingest'];  // jobs that only add frames, so culling may continue alongside them
 const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
   job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
@@ -7,6 +8,8 @@ const state = {
   // Busy while a request is in flight or a background job is queued/running.
   get busy() { return this.acting || JOB_ACTIVE.includes(this.job?.status); },
   set busy(value) { this.acting = value; },
+  // Decisions, ratings, picks, compare, and loupe wait only for a request in flight, or for a job that rewrites what frames show.
+  get cullingBlocked() { return this.acting || (JOB_ACTIVE.includes(this.job?.status) && !CULLING_JOBS.includes(this.job.kind)); },
 };
 const sheet = document.querySelector('#contact-sheet');
 const inspection = document.querySelector('#inspection');
@@ -240,8 +243,12 @@ function keepersIn(group) {
 
 // The one decision path for the inspector and the keyboard: field is 'decision', 'rating', or 'pick'.
 // focusAfter (inspector only) returns focus to the re-rendered control; keyboard focus stays on the frame.
+function cullingBlockedText() {
+  return state.acting ? 'Wait for the current change to finish.' : `Culling is paused while ${(JOB_NAMES[state.job.kind] || 'a job').toLowerCase()} runs.`;
+}
+
 async function decide(photo, field, value, focusAfter = null) {
-  if (state.busy) return announce('Wait for the current change or job to finish.');
+  if (state.cullingBlocked) return announce(cullingBlockedText());
   const previous = photo.decision;
   const owner = state.groups.find(item => item.photos.includes(photo));
   const keepersBefore = owner ? keepersIn(owner) : 0;
@@ -711,6 +718,19 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   }
 });
 
+document.querySelector('#tag-all').addEventListener('click', async () => {
+  state.busy = true;
+  updateWorkflow();
+  try {
+    watchJob(await post('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+});
+
 const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
@@ -1000,9 +1020,9 @@ function updateWorkflow() {
   document.querySelector('#current-export-name').textContent = photo?.name || 'No photo selected';
   document.querySelector('#keeper-count').textContent = `${keepers} keeper${keepers === 1 ? '' : 's'}`;
   document.querySelector('#rejected-count').textContent = `(${state.rejectedCount})`;
-  document.querySelectorAll('[data-decision-control]').forEach(button => { button.disabled = state.busy; });
+  document.querySelectorAll('[data-decision-control]').forEach(button => { button.disabled = state.cullingBlocked; });
   const rating = document.querySelector('#rating');
-  if (rating) rating.disabled = state.busy;
+  if (rating) rating.disabled = state.cullingBlocked;
   document.querySelector('#group-cleanup-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.frame_count)}` : 'No batch selected · 0 frames';
   document.querySelector('#workspace-cleanup-count').textContent = `${state.groups.length} batch${state.groups.length === 1 ? '' : 'es'} · ${frameCount(state.photoCount)}`;
   document.querySelector('#clear-help').textContent = `Use the exact uppercase word CLEAR. This removes all ${frameCount(state.photoCount)} from Lumen, including photos outside visible batches.`;
@@ -1017,7 +1037,9 @@ function updateWorkflow() {
   document.querySelector('#reset-xmp').disabled = state.busy || !state.profile;
   document.querySelector('#import-form button[type="submit"]').disabled = state.busy;
   document.querySelector('#browse-path').disabled = state.busy;
-  document.querySelector('#open-compare').disabled = state.busy || state.compare.length !== 2;
+  document.querySelector('#open-compare').disabled = state.cullingBlocked || state.compare.length !== 2;
+  document.querySelector('#tag-all').disabled = state.busy;
+  document.querySelector('#retag-all').disabled = state.busy;
   document.querySelector('#ask-composition-ai').disabled = state.busy || !state.composition || state.composition.photo_id !== state.selectedId;
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
@@ -1206,7 +1228,8 @@ function fillPanes() {
 }
 
 async function openCompare() {
-  if (state.busy || state.compare.length !== 2 || openView) return;
+  if (state.compare.length !== 2 || openView) return;
+  if (state.cullingBlocked) return announce(cullingBlockedText());
   const ids = [...state.compare];
   try {
     await Promise.all(ids.map(async id => paneMetrics.set(id, (await request(`/api/photos/${id}`)).metrics)));
@@ -1223,6 +1246,7 @@ async function openCompare() {
 function openLoupe(photoId) {
   const photo = photoById(photoId);
   if (openView || !photo) return;
+  if (state.cullingBlocked) return announce(cullingBlockedText());
   document.querySelector('#loupe-heading').textContent = photo.name;
   const viewport = document.querySelector('#loupe-viewport');
   showPreview(viewport, photo);

@@ -318,6 +318,10 @@ class WebTests(unittest.TestCase):
         for name in ("job-label", "job-progress", "job-status", "cancel-job"):
             self.assertIn(strip, by_id[name]["parents"])
             self.assertNotIn(by_id["main-content"], by_id[name]["parents"])
+        self.assertEqual(("button", "button", "Tag all untagged"), (by_id["tag-all"]["tag"], by_id["tag-all"]["attrs"].get("type"), by_id["tag-all"]["text"].strip()))
+        self.assertEqual(("input", "checkbox"), (by_id["retag-all"]["tag"], by_id["retag-all"]["attrs"].get("type")))
+        retag_label = next(node for node in parser.nodes if node["tag"] == "label" and node["attrs"].get("for") == "retag-all")
+        self.assertEqual("Re-tag already tagged", retag_label["text"].strip())
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
         self.assertRegex(styles, r"#cancel-job\s*\{[^}]*min-width:\s*44px")
         javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
@@ -905,8 +909,14 @@ const document = {
     return byData(selector) || [];
   },
 };
+// Intervals are recorded, never scheduled: scenarios advance them deterministically with tick().
 let activeTimers = 0;
-const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; return setInterval(callback, 5); }, clearInterval: id => { activeTimers -= 1; clearInterval(id); } };
+let nextTimer = 0;
+const timers = new Map();
+const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; } };
+// pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
+async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
+async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
 const localStorage = { getItem: key => (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : null), setItem() {}, removeItem() {} };
@@ -942,6 +952,9 @@ let keeperOverride = null;
 let groupsError = null;
 let resumeJobs = [];
 let importPolls = 0;
+const tagPosts = [];
+let tagPolls = 0;
+const tagJob = (status, progress, extra = {}) => ({ job_id: 15, kind: 'tag', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const removals = [];
 const compositionReviews = [];
 const cropMutations = [];
@@ -989,6 +1002,11 @@ async function fetch(url, options = {}) {
     }
   }
   else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
+  else if (url === '/api/photos/tag-all') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
+  else if (url === '/api/jobs/15') {
+    tagPolls += 1;
+    payload = tagPolls < 2 ? tagJob('running', 0.5) : tagJob('succeeded', 1, { result: { tagged: 2, skipped: 0, failed: 0 } });
+  }
   else if (url === '/api/jobs/9') {
     importPolls += 1;
     payload = importPolls < 3 ? importJob('running', 0.5, { label: 'DSC0001.ARW', processed: 1, total: 2 })
@@ -1090,14 +1108,21 @@ const regression = `
     assert.ok(element('#announcer').textContent.includes('Import'));
     for (const name of ['#import-form button[type="submit"]', '#browse-path', '#remove-group', '#browse-xmp']) assert.equal(element(name).disabled, true, name + ' is disabled during a job');
     assert.equal(element('#cancel-job').disabled, false);
-    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.equal(element('#tag-all').disabled, true, 'tag-all is structural: one job at a time');
+    assert.equal(state.cullingBlocked, false, 'culling continues while an import runs');
+    assert.equal(element('#open-compare').disabled, true, 'compare still needs two marked frames');
+    await decide(state.groups[0].photos[1], 'decision', 'reject');
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/decision', body: { decision: 'reject' } }, 'a reject posts during an import');
+    assert.ok(element('#announcer').textContent.includes('rejected'));
+    assert.equal(state.busy, true, 'the import still holds structural actions');
+    await tick();
     assert.equal(state.job.status, 'running');
     assert.ok(element('#job-label').textContent.includes('1 of 2'));
     assert.ok(element('#job-label').textContent.includes('DSC0001.ARW'));
     assert.equal(element('#job-progress').value, 50);
     assert.equal(element('#import-form button[type="submit"]').disabled, true);
     assert.equal(groupLoads, loadsBefore, 'groups are not refreshed while the job runs');
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await settle();
     assert.equal(activeTimers, 0, 'polling stops on a terminal state');
     assert.equal(state.job.status, 'succeeded');
     assert.equal(state.busy, false);
@@ -1114,9 +1139,29 @@ const regression = `
     assert.equal(state.job.status, 'queued');
     assert.equal(activeTimers, 1);
     resumeJobs = [];
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await settle();
     assert.equal(activeTimers, 0);
     assert.equal(state.job.status, 'succeeded');
+    assert.equal(element('#tag-all').disabled, false);
+    element('#retag-all').checked = true;
+    await element('#tag-all').listeners.click();
+    assert.deepEqual(tagPosts, [{ retag: true }]);
+    assert.equal(state.job.kind, 'tag');
+    assert.equal(activeTimers, 1, 'the accepted tag job is watched');
+    assert.equal(element('#announcer').textContent, 'Tagging queued.');
+    assert.equal(element('#tag-all').disabled, true);
+    assert.equal(element('#retag-all').disabled, true);
+    const posted = decisionPosts.length;
+    await decide(state.groups[0].photos[1], 'decision', 'none');
+    assert.equal(decisionPosts.length, posted, 'culling is refused while tagging runs');
+    assert.equal(element('#announcer').textContent, 'Culling is paused while tagging runs.');
+    assert.equal(element('#open-compare').disabled, true);
+    await settle();
+    assert.equal(state.job.status, 'succeeded');
+    assert.equal(element('#job-status').textContent, 'Tagging finished. 2 tagged, 0 skipped, 0 failed.');
+    assert.equal(element('#tag-all').disabled, false);
+    await decide(state.groups[0].photos[1], 'decision', 'none');
+    assert.equal(decisionPosts.length, posted + 1, 'culling resumes when the tag job ends');
     return;
   }
   if (scenario === 'decisions') {
@@ -1466,7 +1511,7 @@ const regression = `
     assert.equal(element('#refine-previews').disabled, true, 'one heavy job at a time');
     assert.equal(element('#job-strip').hidden, false);
     assert.ok(element('#announcer').textContent.startsWith('Refine previews'));
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await settle();
     assert.equal(state.job.status, 'succeeded');
     assert.equal(element('#job-status').textContent, 'Refine previews finished. 2 refined, 0 skipped, 0 failed.');
     assert.ok(tree(card(1)).some(node => node.textContent === 'Refined' && node.className === 'refined'));
@@ -1534,9 +1579,9 @@ const regression = `
     assert.equal(element('#browse-ingest-card').disabled, true);
     assert.equal(activeTimers, 1);
     assert.equal(element('#ingest-verdict').textContent, '', 'no verdict while the copy runs');
-    await new Promise(resolve => setTimeout(resolve, 15));
+    await tick();
     assert.ok(element('#ingest-counts').textContent.includes('1 copied'));
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await settle();
     assert.equal(activeTimers, 0);
     assert.equal(state.job.status, 'succeeded');
     assert.ok(element('#ingest-counts').textContent.includes('3 copied'));
@@ -1554,7 +1599,7 @@ const regression = `
     assert.equal(element('#ingest-mirror-path').textContent, 'No mirror');
     await element('#start-ingest').listeners.click();
     assert.deepEqual(ingestPosts[1], { card: '/Volumes/CARD', primary: '/Volumes/Primary', mirror: null });
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await settle();
     assert.equal(element('#ingest-verdict').textContent, 'Do not format the card: 3 files were not verified.');
     assert.ok(element('#ingest-counts').textContent.includes('1 entry on the card could not be read'));
     assert.ok(element('#announcer').textContent.includes('Do not format the card'));
@@ -1565,7 +1610,7 @@ const regression = `
     await load();
     assert.equal(state.astro.job.status, 'running', 'a remembered job is refetched on load');
     assert.equal(activeTimers, 1, 'a remembered running job resumes polling');
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await settle();
     assert.equal(activeTimers, 0);
     assert.equal(state.astro.job.status, 'succeeded');
     return;
@@ -1607,12 +1652,12 @@ const regression = `
     assert.equal(state.astro.job.status, 'queued', 'the server answers run with the still-queued row');
     assert.equal(activeTimers, 1, 'polling starts as soon as run is accepted');
     assert.equal(element('#run-astro').disabled, true, 'run cannot be submitted twice');
-    await new Promise(resolve => setTimeout(resolve, 15));
+    await tick();
     assert.equal(state.astro.job.status, 'running');
     assert.ok(element('#astro-progress').value >= 10);
     assert.ok(element('#announcer').textContent.includes('running'));
     if (scenario === 'astro-cancel') {
-      await new Promise(resolve => setTimeout(resolve, 30));
+      await tick();
       assert.equal(activeTimers, 1, 'a running job keeps polling');
       await element('#cancel-astro').listeners.click();
       assert.equal(cancels, 1);
@@ -1621,7 +1666,7 @@ const regression = `
       assert.ok(element('#announcer').textContent.includes('cancelled'));
       assert.ok(pathsText().includes('siril.log'), 'logs stay reachable after cancel');
     } else {
-      await new Promise(resolve => setTimeout(resolve, 80));
+      await settle();
       assert.equal(activeTimers, 0, 'polling stops on a terminal state');
       assert.ok(polls >= 3, 'the job was polled while running');
       assert.equal(state.astro.job.status, scenario === 'astro-fail' ? 'failed' : 'succeeded');
@@ -1756,7 +1801,7 @@ const regression = `
 })()
 `;
 vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regression, {
-  assert: require('node:assert/strict'), URLSearchParams, setImmediate, setInterval, clearInterval, setTimeout, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
+  assert: require('node:assert/strict'), URLSearchParams, setImmediate, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
 }).catch(error => { console.error(error); process.exitCode = 1; });
 """
         app = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js"
@@ -1918,8 +1963,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(4, payload["keeper_count"], "keeper_count is library-wide, as export uses it")
         payload, top_rated = shown("?min_rating=5")
         self.assertEqual([], top_rated)
-        self.assertEqual([(ids["a1"], 3, 1, [])], [(group["automatic_pick_id"], group["frame_count"], group["rejected_count"], group["photos"])
-                                                    for group in payload["groups"]], "a burst with keepers is not labelled all-rejected")
+        self.assertEqual([], payload["groups"], "a burst whose only match (a3) is rejected but has unrejected frames is omitted, "
+                                                "never shown as all-rejected")
         self.assertEqual((4, 1), (payload["keeper_count"], payload["rejected_count"]))
         self.assertEqual(["a1", "a2", "c1", "original"], shown("?keepers_only=1")[1])
         self.assertEqual(["a3", "b1"], shown("?decision=reject")[1])

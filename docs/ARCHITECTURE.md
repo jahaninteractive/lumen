@@ -39,6 +39,8 @@ RAW/JPEG folder
   owned-process cancellation.
 - `astro.py` probes Siril, builds frozen frame sets and a fingerprinted
   manifest, writes the version-gated `stack.ssf`, and executes/verifies a job.
+- `ingest.py` plans a card copy, copies with SHA-256 verification to each
+  destination, classifies reruns, and writes the resumable manifest.
 - `library.py` orchestrates imports while keeping domain modules independent.
 - `cli.py` and `web.py` are two interfaces over the same library facade.
 
@@ -84,6 +86,11 @@ whitelist of status, progress, counts, warnings, a path-scrubbed log tail, and
 launch command. The Astro tab polls that view only while a job is queued or
 running and keeps the manifest/log locations visible after failure or
 cancellation.
+
+The same runner carries the generic job kinds `import`, `ingest`, `tag`, and
+`refine_previews`. Each job's work opens its own `Library` on the worker thread
+and takes `_mutation()` around every catalog write, so request handlers only
+create the job and return its ID.
 
 ## Add a feature
 

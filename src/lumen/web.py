@@ -219,6 +219,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     rejected_count += sum(photo["decision"] == "reject" for photo in group["photos"])
                     if hide_rejected:
                         group["photos"] = [photo for photo in group["photos"] if photo["decision"] != "reject"]
+                # An emptied burst stays listed only when every frame is rejected; otherwise the filter just missed it.
+                groups = [group for group in groups if group["photos"] or group["rejected_count"] == group["frame_count"]]
                 self._send_json({"groups": groups, "rejected_count": rejected_count, **payload})
                 return
             if path == "/api/jobs":

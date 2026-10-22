@@ -81,6 +81,11 @@ main { min-width: 0; }
 .import-bar { padding: 1.25rem; border-bottom: 1px solid var(--line); }
 .import-bar label { display: block; margin-bottom: .35rem; font-weight: 700; }
 .import-bar p { max-width: 70ch; margin: .5rem 0 0; color: var(--muted); font-size: .9rem; }
+.tag-bar { padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); }
+.tag-bar .input-row { align-items: center; flex-wrap: wrap; }
+.tag-bar .toggle { margin-left: 0; }
+.tag-bar .toggle input { flex: none; padding: 0; }
+.tag-bar p { max-width: 70ch; margin: .5rem 0 0; color: var(--muted); font-size: .9rem; }
 .input-row { display: flex; gap: .6rem; }
 .input-row input { flex: 1; padding: .6rem .75rem; color: var(--paper); background: var(--graphite); }
 

@@ -85,6 +85,26 @@ class CliTests(unittest.TestCase):
         for payload in (verified, failed, missing):
             self.assertNotIn(str(root), json.dumps(payload))
 
+    def test_job_commands_explain_a_catalog_held_by_lumen_serve(self):
+        from lumen.jobs import LocalJobRunner
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "library"
+            (root / "CARD").mkdir()
+            (root / "primary").mkdir()
+            runner = LocalJobRunner(Settings(library_dir=library).database_path)  # what `lumen serve` holds
+            self.addCleanup(runner.shutdown)
+            separate_volumes = patch("lumen.ingest._device", side_effect=str)  # tests share one temp volume
+            separate_volumes.start()
+            self.addCleanup(separate_volumes.stop)
+            for args in (["import", str(root / "CARD")], ["tag", "--all"], ["refine-previews", "--all"],
+                         ["ingest", str(root / "CARD"), "--to", str(root / "primary")]):
+                with self.subTest(command=args[0]):
+                    code, payload = self.run_json(library, *args)
+                    self.assertEqual(2, code)
+                    self.assertEqual({"error": "the catalog is in use by lumen serve: stop the server or use the web page"}, payload)
+
     def test_import_waits_for_job_and_reports_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

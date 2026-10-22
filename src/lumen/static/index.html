@@ -41,6 +41,13 @@
         <p>Files stay where they are. Lumen writes previews and sidecars to its own library.</p>
         <p id="import-status" role="status" aria-live="polite"></p>
       </form>
+      <div class="tag-bar">
+        <div class="input-row">
+          <button type="button" id="tag-all" class="secondary">Tag all untagged</button>
+          <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
+        </div>
+        <p>Tags come from the local oMLX model. Progress appears in the job strip at the top.</p>
+      </div>
 
       <section class="workflow" aria-label="Finish this shoot">
         <div class="tab-rail" role="tablist" aria-label="Finishing workflow">
@@ -265,7 +272,7 @@
   <dialog id="shortcuts" aria-labelledby="shortcuts-heading">
     <form method="dialog">
       <h2 id="shortcuts-heading">Keyboard shortcuts</h2>
-      <p>Use these single keys while a frame on the contact sheet has focus. They do nothing while you type in a text field.</p>
+      <p>Use these single keys while a frame on the contact sheet has focus. They do nothing while you type in a text field. Culling keeps working during an import or ingest; it pauses while tagging, preview refinement, or a stack runs.</p>
       <dl>
         <dt><kbd>&larr;</kbd> <kbd>&rarr;</kbd></dt><dd>Previous or next frame</dd>
         <dt><kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>Page Up</kbd> <kbd>Page Down</kbd></dt><dd>Previous or next row</dd>
