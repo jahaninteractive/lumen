@@ -8,6 +8,7 @@ from typing import Any
 
 MAX_IMAGE_DIMENSION = 100_000
 MAX_IMAGE_PIXELS = 1_000_000_000
+DECISIONS = frozenset({"none", "flag", "reject"})
 JOB_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled", "interrupted"})
 MAX_JOB_ERROR_LENGTH = 1000
 
@@ -50,6 +51,8 @@ class Photo:
     format: str = "ARW"
     group_id: int | None = None
     manual_pick: bool = False
+    decision: str = "none"
+    rating: int = 0
 
 
 @dataclass(slots=True)

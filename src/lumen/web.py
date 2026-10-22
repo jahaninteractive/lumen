@@ -9,7 +9,7 @@ from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups
 from .config import Settings
@@ -155,8 +155,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 })
                 return
             if path == "/api/groups":
+                show_rejected = parse_qs(urlparse(self.path).query).get("show_rejected") == ["1"]
                 with Library(settings) as library:
-                    self._send_json({"groups": _serializable_groups(library.list_groups()), "photo_count": library.photo_count()})
+                    groups = _serializable_groups(library.list_groups())
+                    photo_count = library.photo_count()
+                rejected_count = sum(photo["decision"] == "reject" for group in groups for photo in group["photos"])
+                if not show_rejected:
+                    for group in groups:
+                        group["photos"] = [photo for photo in group["photos"] if photo["decision"] != "reject"]
+                    groups = [group for group in groups if group["photos"]]
+                self._send_json({"groups": groups, "photo_count": photo_count, "rejected_count": rejected_count})
                 return
             if path == "/api/jobs":
                 with Library(settings) as library:
@@ -353,6 +361,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "rationale": review.rationale,
                         "confidence": review.confidence,
                     })
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/(decision|rating)", path)
+                if match:
+                    field = match.group(2)
+                    if set(payload) != {field}:
+                        raise ValueError(f"{field} requires exactly one {field} field")
+                    if field == "rating" and type(payload["rating"]) is not int:
+                        raise ValueError("rating must be an integer from 0 through 5")
+                    with Library(settings) as library:
+                        change = library.set_decision if field == "decision" else library.set_rating
+                        self._send_json(change(int(match.group(1)), payload[field]))
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/pick", path)
                 if match:

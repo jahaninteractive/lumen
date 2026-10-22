@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Any
 
 from .composition import CropRect
-from .domain import Artifact, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
+from .domain import DECISIONS, Artifact, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
 
 
 _UNCHANGED = object()
@@ -20,6 +20,7 @@ _JOB_TRANSITIONS = {
 # Columns added after a table first shipped: {table: {column: DDL}}; applied once to older catalogs.
 _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
+    "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0"},
 }
 
 
@@ -659,6 +660,36 @@ class Catalog:
         self.connection.commit()
         return group_id
 
+    def set_decision(self, photo_id: int, decision: str, *, reason: str | None = None) -> Photo:
+        if not isinstance(decision, str) or decision not in DECISIONS:
+            raise ValueError("decision must be none, flag, or reject")
+        return self._change_photo(photo_id, "decision", decision, {"reason": reason} if reason else {})
+
+    def set_rating(self, photo_id: int, rating: int) -> Photo:
+        if type(rating) is not int or not 0 <= rating <= 5:
+            raise ValueError("rating must be an integer from 0 through 5")
+        return self._change_photo(photo_id, "rating", rating, {})
+
+    def _change_photo(self, photo_id: int, column: str, value: str | int, details: dict[str, Any]) -> Photo:
+        """Set decision or rating and record a `<column>_changed` event in one transaction; no-ops record nothing."""
+        photo = self.get_photo(photo_id) if type(photo_id) is int else None
+        if photo is None:
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        previous = getattr(photo, column)
+        if previous != value:
+            with self.connection:
+                self.connection.execute(f"UPDATE photos SET {column} = ? WHERE id = ?", (value, photo_id))
+                self._insert_event(photo_id, f"{column}_changed", {"previous": previous, "next": value, **details})
+            setattr(photo, column, value)
+        return photo
+
+    def rerank_group(self, group_id: int, automatic_pick_id: int, scores: dict[int, float]) -> None:
+        with self.connection:
+            self.connection.execute("UPDATE photo_groups SET automatic_pick_id = ? WHERE id = ?", (automatic_pick_id, group_id))
+            self.connection.executemany(
+                "UPDATE metrics SET total_score = ? WHERE photo_id = ?", ((score, photo_id) for photo_id, score in scores.items())
+            )
+
     def list_groups(self) -> list[dict[str, Any]]:
         groups = self.connection.execute(
             """
@@ -736,6 +767,8 @@ class Catalog:
             format=row["format"],
             group_id=row["group_id"],
             manual_pick=bool(row["manual_pick"]),
+            decision=row["decision"],
+            rating=int(row["rating"]),
         )
 
     @staticmethod

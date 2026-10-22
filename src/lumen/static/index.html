@@ -69,6 +69,7 @@
         <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
           <h2>Finish as JPEG</h2>
           <p class="quiet">Quality 92 · sRGB · Full resolution. Camera EXIF and GPS location are kept.</p>
+          <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
           <fieldset id="export-controls">
             <legend>Choose what to export</legend>
             <div class="scope-options">
@@ -164,6 +165,7 @@
       <section aria-labelledby="contact-heading" class="contact-area">
         <div class="section-heading">
           <h1 id="contact-heading">Contact sheet</h1>
+          <label for="show-rejected" class="toggle"><input type="checkbox" id="show-rejected"> Show rejected <span id="rejected-count">(0)</span></label>
           <span id="photo-count">0 frames</span>
         </div>
         <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>

@@ -238,6 +238,60 @@ class CatalogTests(unittest.TestCase):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     migrated.update_job(1, **bad)
 
+    def test_migration_adds_decision_and_rating_and_upsert_preserves_them(self):
+        legacy_path = Path(self.tmp.name) / "pre-decision.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE photos (
+                    id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL,
+                    captured_at TEXT, camera_id TEXT NOT NULL, preview_path TEXT,
+                    format TEXT NOT NULL DEFAULT 'ARW', group_id INTEGER,
+                    manual_pick INTEGER NOT NULL DEFAULT 0, imported_at TEXT NOT NULL
+                );
+                INSERT INTO photos (id, path, fingerprint, camera_id, imported_at)
+                    VALUES (1, '/photos/a.ARW', 'abc', 'A1', '2026-10-21T10:00:00+00:00');
+                """
+            )
+        for _ in range(2):
+            with Catalog(legacy_path) as migrated:
+                columns = [row["name"] for row in migrated.connection.execute("PRAGMA table_info(photos)")]
+                photo = migrated.get_photo(1)
+        self.assertEqual((1, 1), (columns.count("decision"), columns.count("rating")))
+        self.assertEqual(("none", 0), (photo.decision, photo.rating))
+        with Catalog(legacy_path) as migrated:
+            migrated.set_decision(1, "flag")
+            migrated.set_rating(1, 4)
+            migrated.upsert_photo(Photo(path="/photos/a.ARW", fingerprint="def", captured_at=None, camera_id="A1"))
+            photo = migrated.get_photo(1)
+            self.assertEqual(("def", "flag", 4), (photo.fingerprint, photo.decision, photo.rating))
+
+    def test_set_decision_and_rating_validate_and_record_events(self):
+        photo_id = self.catalog.upsert_photo(Photo(path="/photos/a.ARW", fingerprint="abc", captured_at=None, camera_id="A1"))
+        rejected = self.catalog.set_decision(photo_id, "reject")
+        self.assertEqual(("reject", 0), (rejected.decision, rejected.rating))
+        rated = self.catalog.set_rating(photo_id, 3)
+        self.assertEqual(("reject", 3), (rated.decision, rated.rating))
+        self.assertEqual(rated, self.catalog.get_photo(photo_id))
+        events = [(event.kind, event.details) for event in self.catalog.events_for(photo_id)]
+        self.assertEqual([
+            ("decision_changed", {"previous": "none", "next": "reject"}),
+            ("rating_changed", {"previous": 0, "next": 3}),
+        ], events)
+        for bad in ("maybe", "", None, 1, "FLAG"):
+            with self.subTest(decision=bad), self.assertRaises(ValueError):
+                self.catalog.set_decision(photo_id, bad)
+        for bad in (-1, 6, True, 2.0, "3", None):
+            with self.subTest(rating=bad), self.assertRaises(ValueError):
+                self.catalog.set_rating(photo_id, bad)
+        for unknown in (999, "1", True):
+            with self.subTest(photo_id=unknown), self.assertRaisesRegex(ValueError, "unknown photo ID"):
+                self.catalog.set_decision(unknown, "flag")
+            with self.subTest(photo_id=unknown), self.assertRaisesRegex(ValueError, "unknown photo ID"):
+                self.catalog.set_rating(unknown, 1)
+        self.assertEqual(2, len(self.catalog.events_for(photo_id)))
+        self.assertEqual(("reject", 3), (self.catalog.get_photo(photo_id).decision, self.catalog.get_photo(photo_id).rating))
+
     def test_job_round_trip_preserves_paths_and_creation_order(self):
         first = self.catalog.create_job(
             kind="siril-stack",

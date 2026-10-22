@@ -3,7 +3,7 @@ import json
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -297,6 +297,26 @@ class ExportCleanupCliTests(unittest.TestCase):
         self.assertIsNone(payload["results"][0]["output"])
         self.assertIsNone(payload["results"][0]["artifact"])
         self.assertTrue(Path(payload["results"][1]["output"]).is_file())
+
+    def test_decide_and_rate_commands_persist_and_report_json(self):
+        photo, group = self.photo_id, self.group_id
+        self.assertEqual((0, {"photo_id": photo, "decision": "reject", "rating": 0, "group_id": group, "automatic_pick_id": photo}),
+                         self.run_command("decide", str(photo), "--reject"))
+        self.assertEqual((0, {"photo_id": photo, "decision": "reject", "rating": 4, "group_id": group, "automatic_pick_id": photo}),
+                         self.run_command("rate", str(photo), "4"))
+        self.assertEqual("flag", self.run_command("decide", str(photo), "--flag")[1]["decision"])
+        self.assertEqual("none", self.run_command("decide", str(photo), "--clear")[1]["decision"])
+        with Library(self.settings) as library:
+            stored = library.catalog.get_photo(photo)
+            kinds = [event.kind for event in library.catalog.events_for(photo) if event.kind.endswith("_changed")]
+        self.assertEqual(("none", 4), (stored.decision, stored.rating))
+        self.assertEqual(["decision_changed", "rating_changed", "decision_changed", "decision_changed"], kinds)
+        code, payload = self.run_command("decide", "99999", "--flag")
+        self.assertEqual((2, {"error": "unknown photo ID: 99999"}), (code, payload))
+        for arguments in (("decide", str(photo)), ("decide", str(photo), "--flag", "--reject"), ("rate", str(photo), "6"), ("rate", str(photo), "-1")):
+            with self.subTest(arguments=arguments), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                self.run_command(*arguments)
+            self.assertEqual(2, caught.exception.code)
 
     def test_remove_reports_recovery_paths_and_preserves_original(self):
         before = self.source.read_bytes()

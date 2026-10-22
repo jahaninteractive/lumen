@@ -694,7 +694,10 @@ const document = {
 let activeTimers = 0;
 const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; return setInterval(callback, 5); }, clearInterval: id => { activeTimers -= 1; clearInterval(id); } };
 const localStorage = { getItem: key => (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : null), setItem() {}, removeItem() {} };
-const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id });
+const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
+const decisionPosts = [];
+const decisions = { 1: 'none', 2: 'none' };
+const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], photos: ids.map(photo) });
 let groups = scenario === 'merge' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 const astroPosts = [];
@@ -706,6 +709,7 @@ Object.defineProperty(element('#astro-status'), 'textContent', { get() { return 
 const jobPayload = (status, progress, extra = {}) => ({ job_id: 7, kind: 'astro', status, progress, error: null, result: null, log_tail: ['log: Running command: register'], warnings: ['No flat frames supplied; stacking without flats.'], lights: 2, excluded_lights: 1, darks: 0, flats: 0, biases: 0, created_at: '', updated_at: '', ...extra });
 const importJob = (status, progress, extra = {}) => ({ job_id: 9, kind: 'import', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 let groupLoads = 0;
+let lastGroupsUrl = null;
 let resumeJobs = [];
 let importPolls = 0;
 const removals = [];
@@ -733,13 +737,21 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
-  else if (url === '/api/groups') { groupLoads += 1; payload = { groups, photo_count: groups.reduce((count, item) => count + item.photos.length, 0) }; }
+  else if (url === '/api/groups' || url === '/api/groups?show_rejected=1') { groupLoads += 1; lastGroupsUrl = url; payload = { groups, photo_count: groups.reduce((count, item) => count + item.photos.length, 0) }; }
   else if (url === '/api/jobs') payload = { jobs: resumeJobs };
   else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
   else if (url === '/api/jobs/9') {
     importPolls += 1;
     payload = importPolls < 3 ? importJob('running', 0.5, { label: 'DSC0001.ARW', processed: 1, total: 2 })
       : importJob('succeeded', 1, { label: 'DSC0002.ARW', processed: 2, total: 2, result: { discovered: 2, imported: 1, updated: 0, skipped: 1, failed: 0 } });
+  }
+  else if (/^\/api\/photos\/[12]\/(decision|rating)$/.test(url)) {
+    assert.equal(options.method, 'POST');
+    const id = Number(url.split('/')[3]);
+    const body = JSON.parse(options.body);
+    decisionPosts.push({ url, body });
+    if ('decision' in body) decisions[id] = body.decision; else ratings[id] = body.rating;
+    payload = { photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 };
   }
   else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null };
   else if (url === '/api/photos/2/crops') {
@@ -850,6 +862,50 @@ const regression = `
     await new Promise(resolve => setTimeout(resolve, 80));
     assert.equal(activeTimers, 0);
     assert.equal(state.job.status, 'succeeded');
+    return;
+  }
+  if (scenario === 'decisions') {
+    await load();
+    element('#export-tab').listeners.click();
+    const loadsBefore = groupLoads;
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const card = id => element('#contact-sheet').children.find(item => Number(item.dataset.id) === id);
+    const texts = id => tree(card(id)).map(node => node.textContent);
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decision === value);
+    assert.equal(element('#keeper-count').textContent, '1 keeper');
+    await inspect(state.groups[0].photos[1]);
+    await control('flag').listeners.click();
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/decision', body: { decision: 'flag' } });
+    assert.ok(texts(2).includes('Flagged'));
+    assert.equal(element('#keeper-count').textContent, '2 keepers', 'a flagged alternate is a keeper');
+    assert.equal(element('#announcer').textContent, 'photo-2 flagged');
+    await inspect(state.groups[0].photos[0]);
+    await control('reject').listeners.click();
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/decision', body: { decision: 'reject' } });
+    assert.equal(groupLoads, loadsBefore, 'a decision updates cards in place without load()');
+    assert.ok(texts(1).includes('Rejected'));
+    assert.ok(card(1).getAttribute('aria-label').includes('rejected'));
+    assert.ok(!texts(1).includes('Best'), 'the rejected pick loses its Best mark');
+    assert.ok(texts(2).includes('Best'), 'the next frame is promoted in place');
+    assert.equal(element('#keeper-count').textContent, '1 keeper');
+    assert.equal(element('#announcer').textContent, 'photo-1 rejected');
+    assert.ok(tree(element('#inspection')).some(node => node.textContent === 'Decision: Rejected · Rating 0'));
+    const rating = tree(element('#inspection')).find(node => node.id === 'rating');
+    assert.equal(rating.children.length, 6);
+    rating.value = '3';
+    await rating.listeners.change();
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/rating', body: { rating: 3 } });
+    assert.ok(texts(1).includes('Rating 3'));
+    assert.equal(element('#announcer').textContent, 'Rating 3 set for photo-1');
+    await control('none').listeners.click();
+    assert.equal(element('#announcer').textContent, 'photo-1 decision cleared');
+    assert.ok(texts(2).includes('Flagged') && !texts(2).includes('Best'));
+    assert.ok(texts(1).includes('Best') && !texts(1).includes('Rejected'));
+    assert.equal(groupLoads, loadsBefore);
+    element('#show-rejected').checked = true;
+    await element('#show-rejected').listeners.change();
+    assert.equal(groupLoads, loadsBefore + 1, 'the hide-rejected toggle reloads with the rejected frames');
+    assert.equal(lastGroupsUrl, '/api/groups?show_rejected=1');
     return;
   }
   const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');
@@ -1055,6 +1111,74 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         result = subprocess.run(["node", "-e", script, str(app), scenario, self.base], capture_output=True, text=True, timeout=10)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def test_javascript_decisions_update_cards_in_place_and_keeper_count(self):
+        self.run_javascript_cleanup_regression("decisions")
+
+    def test_decision_and_rating_routes_validate_strictly_and_hide_rejected_by_default(self):
+        def photo_state():
+            code, payload = self.get_json("/api/photos/1")
+            self.assertEqual(200, code)
+            return payload["photo"]["decision"], payload["photo"]["rating"]
+
+        invalid = [
+            ("decision", {}), ("decision", {"decision": "maybe"}), ("decision", {"decision": None}),
+            ("decision", {"decision": "FLAG"}), ("decision", {"decision": "flag", "rating": 1}), ("decision", {"rating": 3}),
+            ("rating", {}), ("rating", {"rating": True}), ("rating", {"rating": 6}), ("rating", {"rating": -1}),
+            ("rating", {"rating": 2.0}), ("rating", {"rating": "3"}), ("rating", {"rating": 3, "decision": "flag"}),
+        ]
+        for route, payload in invalid:
+            with self.subTest(route=route, payload=payload):
+                code, body = self.post_json(f"/api/photos/1/{route}", payload)
+                self.assertEqual(400, code)
+                self.assertIsInstance(body["error"], str)
+                self.assertEqual(("none", 0), photo_state())
+        for route, payload in (("decision", {"decision": "flag"}), ("rating", {"rating": 2})):
+            code, body = self.post_json(f"/api/photos/99999/{route}", payload)
+            self.assertEqual((400, {"error": "unknown photo ID: 99999"}), (code, body))
+            code, _ = self.post_json(f"/api/photos/1/{route}", payload, headers={"Origin": "http://evil.example"})
+            self.assertEqual(403, code)
+        self.assertEqual(("none", 0), photo_state())
+
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            group_id = library.list_groups()[0]["id"]
+        code, body = self.post_json("/api/photos/1/decision", {"decision": "reject"})
+        self.assertEqual((200, {"photo_id": 1, "decision": "reject", "rating": 0, "group_id": group_id, "automatic_pick_id": 1}), (code, body))
+        code, body = self.post_json("/api/photos/1/rating", {"rating": 3})
+        self.assertEqual((200, 3), (code, body["rating"]))
+        self.assertEqual(("reject", 3), photo_state())
+
+        code, hidden = self.get_json("/api/groups")
+        self.assertEqual((200, [], 1, 1), (code, hidden["groups"], hidden["rejected_count"], hidden["photo_count"]))
+        code, shown = self.get_json("/api/groups?show_rejected=1")
+        self.assertEqual(200, code)
+        photo = shown["groups"][0]["photos"][0]
+        self.assertEqual(("reject", 3, 1), (photo["decision"], photo["rating"], shown["rejected_count"]))
+        self.assertFalse({"path", "fingerprint", "preview_path"} & photo.keys())
+        self.assertNotIn(str(self.root), json.dumps(shown))
+        self.post_json("/api/photos/1/decision", {"decision": "none"})
+        code, restored = self.get_json("/api/groups")
+        self.assertEqual((1, 0), (len(restored["groups"][0]["photos"]), restored["rejected_count"]))
+
+    def test_export_panel_states_keeper_definition_and_inspector_has_native_decision_controls(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        copy = ("Keepers are frames that are not rejected and are either flagged or best in their burst. "
+                "A single frame is best in its own burst, so it stays a keeper unless you reject it.")
+        self.assertIn(copy, " ".join(by_id["export-panel"]["text"].split()))
+        toggle = by_id["show-rejected"]
+        self.assertEqual(("input", "checkbox"), (toggle["tag"], toggle["attrs"].get("type")))
+        self.assertTrue(any(node["tag"] == "label" and "Show rejected" in node["text"] for node in toggle["parents"]))
+        javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
+        for text in ("'Flag'", "'Reject'", "'Clear decision'", "'Flagged'", "'Rejected'", "`Rating ${", "createElement('select')",
+                     "id = 'rating'", "htmlFor = 'rating'", "`Rating ${result.rating} set for ${", "show_rejected=1"):
+            self.assertIn(text, javascript)
+        self.assertNotRegex(javascript, r"decision[^\n]*\.innerHTML")
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"button, input, select \{[^}]*min-height: 44px")
+        self.assertRegex(styles, r"select:focus-visible")
+
     def test_javascript_astro_tab_confirms_includes_polls_and_retains_failure_context(self):
         for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume"):
             with self.subTest(scenario=scenario):
@@ -1086,7 +1210,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(1 if retain_success else 0, sum(len(group["photos"]) for group in payload["groups"]))
         self.run_javascript_cleanup_regression("workspace-mixed" if retain_success else "workspace-ungrouped")
         with urllib.request.urlopen(self.base + "/api/groups", timeout=3) as response:
-            self.assertEqual({"groups": [], "photo_count": 0}, json.load(response))
+            self.assertEqual({"groups": [], "photo_count": 0, "rejected_count": 0}, json.load(response))
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual([], library.catalog.list_photos())
 

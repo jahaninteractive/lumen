@@ -47,6 +47,18 @@ def build_parser() -> argparse.ArgumentParser:
     pick = commands.add_parser("pick", help="make a frame the manual best shot for its group")
     pick.add_argument("photo_id", type=int)
 
+    decide = commands.add_parser("decide", help="flag, reject, or clear a frame's culling decision")
+    decide.add_argument("photo_id", type=int)
+    choice = decide.add_mutually_exclusive_group(required=True)
+    for flag, value in (("--flag", "flag"), ("--reject", "reject"), ("--clear", "none")):
+        choice.add_argument(flag, dest="decision", action="store_const", const=value)
+    decide.add_argument("--json", action="store_true")
+
+    rate = commands.add_parser("rate", help="set a frame's star rating (0 clears it)")
+    rate.add_argument("photo_id", type=int)
+    rate.add_argument("rating", type=int, choices=range(6), metavar="0-5")
+    rate.add_argument("--json", action="store_true")
+
     process = commands.add_parser("process", help="run a non-destructive local processing hook")
     process.add_argument("photo_id", type=int)
     process.add_argument("--pipeline", choices=("darktable",), default="darktable")
@@ -149,6 +161,17 @@ def main(argv: list[str] | None = None) -> int:
             library.set_pick(args.photo_id)
         print(f"Photo {args.photo_id} is now the manual best shot.")
         return 0
+
+    if args.command in {"decide", "rate"}:
+        try:
+            with Library(settings) as library:
+                payload = (library.set_decision(args.photo_id, args.decision) if args.command == "decide"
+                           else library.set_rating(args.photo_id, args.rating))
+            code = 0
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            payload, code = {"error": str(error)}, 2
+        _print(payload, args.json)
+        return code
 
     if args.command == "process":
         with Library(settings) as library:

@@ -30,7 +30,7 @@ from .pipelines import PipelineRegistry
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
-from .scoring import rank_group
+from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
 
 
@@ -55,6 +55,12 @@ _ABSOLUTE_PATH = re.compile(r"'?/[^\s'\"]+'?")
 def _job_detail(job_id: int | None) -> dict:
     """Provenance link to the background job that did the work; synchronous calls record none."""
     return {} if job_id is None else {"job_id": job_id}
+
+
+def _select(ranking: list[RankedPhoto]) -> RankedPhoto:
+    """Manual unrejected pick, else best unrejected frame, else best frame (keeper filtering drops it)."""
+    kept = [item for item in ranking if item.photo.decision != "reject"]
+    return next((item for item in kept if item.photo.manual_pick), kept[0] if kept else ranking[0])
 
 
 def public_message(text: str | None) -> str | None:
@@ -302,7 +308,36 @@ class Library:
         return self.catalog.photo_count()
 
     def keeper_ids(self) -> list[int]:
-        return [int(group["automatic_pick_id"]) for group in self.list_groups() if group["automatic_pick_id"] is not None]
+        return [int(photo["id"]) for group in self.list_groups() for photo in group["photos"]
+                if photo["decision"] != "reject" and (photo["decision"] == "flag" or photo["id"] == group["automatic_pick_id"])]
+
+    @_coordinated
+    def set_decision(self, photo_id: int, decision: str) -> dict:
+        return self._decided(self.catalog.set_decision(photo_id, decision))
+
+    @_coordinated
+    def set_rating(self, photo_id: int, rating: int) -> dict:
+        return self._decided(self.catalog.set_rating(photo_id, rating))
+
+    def _decided(self, photo: Photo) -> dict:
+        pick = self._rerank_group(photo.group_id) if photo.group_id is not None else None
+        if pick is None:
+            self._write_sidecar(photo.id)
+        return {"photo_id": photo.id, "decision": photo.decision, "rating": photo.rating,
+                "group_id": photo.group_id, "automatic_pick_id": pick}
+
+    def _rerank_group(self, group_id: int) -> int | None:
+        """Reapply the selection rule to one group and rewrite its sidecars; other groups are untouched."""
+        photos = [photo for photo_id in self.catalog.group_photo_ids(group_id) if (photo := self.catalog.get_photo(photo_id))]
+        scored = [(photo, metrics) for photo in photos if (metrics := self.catalog.get_metrics(photo.id))]
+        if not scored:
+            return None
+        ranking = rank_group(scored)
+        pick = int(_select(ranking).photo.id)
+        self.catalog.rerank_group(group_id, pick, {int(item.photo.id): item.total for item in ranking})
+        for photo in photos:
+            self._write_sidecar(photo.id, selected=photo.id == pick)
+        return pick
 
     @_coordinated
     def crop_candidates(self, photo_id: int) -> list[CropCandidate]:
@@ -538,7 +573,6 @@ class Library:
             raise ValueError("JPEG output must stay inside the managed library")
         pipeline = PipelineRegistry().darktable(self.settings.output_dir)
         results = []
-        keepers = set(self.keeper_ids())
         for photo in photos:
             rendered = None
             artifact = None
@@ -565,7 +599,7 @@ class Library:
                 rendered = pipeline.export_jpeg(Path(photo.path), request.profile,
                     crop=crop,
                     description=data.get("description"), keywords=data.get("subjects"),
-                    rating=5 if photo.id in keepers else None,
+                    rating=-1 if photo.decision == "reject" else photo.rating,
                     reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()})
                 if not rendered.success:
                     results.append(ExportResult(photo.id, False, None, rendered.message))
@@ -804,6 +838,8 @@ class Library:
     @_coordinated
     def set_pick(self, photo_id: int) -> None:
         group_id = self.catalog.set_manual_pick(photo_id)
+        if self.catalog.get_photo(photo_id).decision == "reject":  # Choosing a frame as best overrides its rejection.
+            self.catalog.set_decision(photo_id, "none", reason="manual_pick")
         self.catalog.append_event(photo_id, "manual_pick", {"group_id": group_id})
         group = next(group for group in self.catalog.list_groups() if group["id"] == group_id)
         for item in group["photos"]:
@@ -888,8 +924,7 @@ class Library:
             if not scored_input:
                 continue
             ranking = rank_group(scored_input)
-            manual = next((item for item in ranking if item.photo.manual_pick), None)
-            selected = manual or ranking[0]
+            selected = _select(ranking)
             selected_ids.add(int(selected.photo.id))
             first = group[0]
             stable_key = hashlib.sha256(f"{first.camera_id}|{first.path}".encode()).hexdigest()[:24]
@@ -925,4 +960,6 @@ class Library:
             keywords=data.get("subjects", []),
             artifacts=[artifact for artifact in catalog.list_artifacts() if artifact.photo_id == photo_id],
             active_crop=catalog.get_crop(photo_id),
+            decision=photo.decision,
+            rating=photo.rating,
         )

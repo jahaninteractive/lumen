@@ -648,7 +648,7 @@ class LibraryTests(unittest.TestCase):
             with Image.open(result.output) as image:
                 self.assertEqual("Rendered caption", image.getexif()[270])
                 self.assertEqual("bird\0", image.getexif()[40094].decode("utf-16le"))
-                self.assertEqual(5, image.getexif()[18246])
+                self.assertEqual(0, image.getexif()[18246], "the stored rating, not a keeper default")
 
     def test_export_cleanup_failure_removes_only_owned_collision_output(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -870,6 +870,99 @@ class LibraryTests(unittest.TestCase):
 
         self.assertEqual(chosen_id, group["automatic_pick_id"])
         self.assertTrue(chosen.manual_pick)
+
+    def import_burst(self, library, levels):
+        """Import a dated burst beside the undated DSC0001 singleton; return burst IDs best-first."""
+        exif = Image.Exif()
+        exif[36867] = "2026:10:21 12:00:00"
+        for index, level in enumerate(levels, start=2):
+            Image.new("RGB", (320, 240), (level, level, level)).save(self.source_dir / f"DSC000{index}.jpg", exif=exif)
+        library.import_path(self.source_dir)
+        burst = next(group for group in library.list_groups() if len(group["photos"]) > 1)
+        single = next(group for group in library.list_groups() if len(group["photos"]) == 1)
+        return [int(photo["id"]) for photo in burst["photos"]], int(single["photos"][0]["id"])
+
+    def group_of(self, library, photo_id):
+        return next(group for group in library.list_groups() if any(photo["id"] == photo_id for photo in group["photos"]))
+
+    def test_keepers_are_unrejected_flagged_or_group_best_including_single_frames(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate, worst), single = self.import_burst(library, (118, 70, 30))
+            self.assertEqual({best, single}, set(library.keeper_ids()), "a single frame is best in its own burst")
+            library.set_decision(alternate, "flag")
+            self.assertEqual({best, alternate, single}, set(library.keeper_ids()), "a flagged alternate keeps beside the pick")
+            library.set_decision(single, "reject")
+            self.assertEqual({best, alternate}, set(library.keeper_ids()), "a rejected single frame is not a keeper")
+            library.set_decision(single, "none")
+            library.set_decision(alternate, "none")
+            self.assertEqual({best, single}, set(library.keeper_ids()))
+            self.assertNotIn(worst, library.keeper_ids())
+
+    def test_rejecting_the_pick_promotes_next_unrejected_frame_and_manual_pick_clears_rejection(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate, worst), _ = self.import_burst(library, (118, 70, 30))
+            result = library.set_decision(best, "reject")
+            group = self.group_of(library, best)
+            self.assertEqual({"photo_id": best, "decision": "reject", "rating": 0, "group_id": group["id"],
+                              "automatic_pick_id": alternate}, result)
+            self.assertEqual(alternate, group["automatic_pick_id"])
+            self.assertEqual(alternate, library.set_decision(worst, "reject")["automatic_pick_id"], "rejecting an alternate keeps the pick")
+            rejected = library.catalog.get_photo(best)
+            json_path, xmp_path = library.sidecars.paths(rejected)
+            sidecar = json.loads(json_path.read_text())
+            self.assertEqual(("reject", False), (sidecar["decision"], sidecar["selection"]["best_in_group"]))
+            self.assertEqual({"previous": "none", "next": "reject"},
+                             next(event for event in sidecar["provenance"] if event["kind"] == "decision_changed")["details"])
+            self.assertIn('xmp:Rating="-1"', xmp_path.read_text())
+            promoted = json.loads(library.sidecars.paths(library.catalog.get_photo(alternate))[0].read_text())
+            self.assertTrue(promoted["selection"]["best_in_group"])
+
+            library.set_pick(best)
+            restored = library.catalog.get_photo(best)
+            self.assertEqual(("none", True), (restored.decision, restored.manual_pick))
+            self.assertEqual(best, self.group_of(library, best)["automatic_pick_id"])
+            cleared = [event.details for event in library.catalog.events_for(best) if event.kind == "decision_changed"][-1]
+            self.assertEqual({"previous": "reject", "next": "none", "reason": "manual_pick"}, cleared)
+            self.assertIn('xmp:Rating="0"', library.sidecars.paths(restored)[1].read_text())
+            self.assertEqual("reject", library.catalog.get_photo(worst).decision, "picking one frame leaves other rejections")
+
+    def test_all_rejected_burst_has_no_keeper_and_pick_restores_one(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate), single = self.import_burst(library, (118, 30))
+            library.set_decision(best, "reject")
+            library.set_decision(alternate, "reject")
+            group = self.group_of(library, best)
+            self.assertEqual(best, group["automatic_pick_id"], "an all-rejected burst still records its best frame")
+            self.assertEqual([single], library.keeper_ids())
+            library.import_path(self.source_dir)  # regrouping keeps decisions and the same rule
+            self.assertEqual(best, self.group_of(library, best)["automatic_pick_id"])
+            self.assertEqual([single], library.keeper_ids())
+            self.assertEqual(("reject", "reject"), (library.catalog.get_photo(best).decision, library.catalog.get_photo(alternate).decision))
+            library.set_pick(alternate)
+            self.assertEqual({alternate, single}, set(library.keeper_ids()))
+            self.assertEqual(alternate, self.group_of(library, best)["automatic_pick_id"])
+            self.assertEqual("reject", library.catalog.get_photo(best).decision)
+
+    def test_keepers_export_uses_new_definition_and_stored_rating(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate, worst), single = self.import_burst(library, (118, 70, 30))
+            library.set_rating(best, 3)
+            library.set_decision(alternate, "flag")
+            library.set_rating(alternate, 5)
+            library.set_decision(single, "reject")
+            library.set_rating(single, 2)
+            self.assertEqual({best, alternate}, set(library.keeper_ids()))
+            self.assertEqual(["rating_changed"], [event.kind for event in library.catalog.events_for(best) if event.kind.endswith("_changed")])
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
+                results = library.export_jpegs(library_module.ExportRequest(tuple(library.keeper_ids()) + (single,), None))
+            self.assertTrue(all(result.success for result in results), [result.message for result in results])
+            ratings = {}
+            for result in results:
+                with Image.open(result.output) as image:
+                    rating = image.info["xmp"].decode("utf-8").split('xmp:Rating="')[1].split('"')[0]
+                    ratings[result.photo_id] = (image.getexif()[18246], rating)
+            self.assertEqual({best: (3, "3"), alternate: (5, "5"), single: (0, "-1")}, ratings)
 
     def test_recursive_import_excludes_the_managed_library(self):
         library_dir = self.source_dir / "Lumen Library"

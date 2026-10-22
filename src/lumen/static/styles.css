@@ -21,9 +21,9 @@ body {
   line-height: 1.5;
 }
 
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 
-button, input {
+button, input, select {
   min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -41,7 +41,7 @@ button.secondary { color: var(--paper); background: transparent; }
 
 button:disabled { cursor: not-allowed; opacity: .5; }
 
-button:focus-visible, input:focus-visible, [role="tabpanel"]:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, [role="tabpanel"]:focus-visible {
   outline: 3px solid var(--cyan);
   outline-offset: 3px;
 }
@@ -166,6 +166,15 @@ button.danger { color: var(--danger); border-color: var(--danger); background: t
 .frame[aria-pressed="true"] { border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber); }
 .winner { position: absolute; top: .5rem; left: .5rem; padding: .2rem .45rem; border-radius: 3px; color: var(--black); background: var(--amber); font-size: .78rem; font-weight: 800; }
 .score { color: var(--cyan); font-variant-numeric: tabular-nums; }
+.marks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .4rem; }
+.marks span { padding: 0 .35rem; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); font-size: .78rem; }
+.marks .flagged { color: var(--amber); border-color: var(--amber); }
+.marks .rejected { color: var(--danger); border-color: var(--danger); }
+.frame[data-decision="reject"] img { opacity: .45; }
+.toggle { display: flex; align-items: center; gap: .5rem; min-height: 44px; margin-left: auto; }
+.toggle input { width: 1.2rem; accent-color: var(--amber); }
+.decision-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+.inspector select { padding: .5rem; color: var(--paper); background: var(--graphite); }
 
 .batch-button { display: block; width: 100%; margin-bottom: .55rem; color: var(--paper); background: transparent; text-align: left; font-weight: 600; }
 .batch-button:hover { border-color: var(--amber); }

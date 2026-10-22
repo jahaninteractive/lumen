@@ -161,7 +161,7 @@ class DarktablePipeline:
                     exif[270] = effective_description
                     exif[40094] = (";".join(effective_keywords) + "\0").encode("utf-16le")
                     effective_rating = rating if rating is not None else descriptive.get("rating", source_exif.get(18246, 0))
-                    exif[18246] = effective_rating
+                    exif[18246] = max(0, effective_rating)  # EXIF Rating is unsigned; a rejected frame's -1 lives in the XMP.
                     image = ImageOps.exif_transpose(opened).convert("RGB")
                     if icc := opened.info.get("icc_profile"):
                         image = ImageCms.profileToProfile(image, ImageCms.ImageCmsProfile(io.BytesIO(icc)), ImageCms.createProfile("sRGB"), outputMode="RGB")
@@ -175,8 +175,7 @@ class DarktablePipeline:
                     image.save(temporary, format="JPEG", quality=92,
                                exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
                                xmp=SidecarWriter._xmp(
-                                   effective_description, effective_keywords, effective_rating == 5,
-                                   rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
+                                   effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
                                ).encode("utf-8"))
                 if 37500 in capture:
                     # Pillow copies MakerNote bytes but not their absolute offsets; exiftool rebases them.

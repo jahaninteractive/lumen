@@ -1,7 +1,7 @@
 const JOB_ACTIVE = ['queued', 'running'];
 const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
-  job: null, jobTimer: null, jobRequest: 0,
+  job: null, jobTimer: null, jobRequest: 0, details: null, showRejected: false, rejectedCount: 0,
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
   // Busy while a request is in flight or a background job is queued/running.
   get busy() { return this.acting || JOB_ACTIVE.includes(this.job?.status); },
@@ -216,6 +216,76 @@ function metric(label, value) {
   return wrapper;
 }
 
+const DECISION_WORDS = { flag: 'Flagged', reject: 'Rejected', none: 'No decision' };
+const DECISION_ANNOUNCEMENTS = { flag: 'flagged', reject: 'rejected', none: 'decision cleared' };
+
+// Same rule as Library.keeper_ids: not rejected, and flagged or the group's best frame.
+function isKeeper(photo, group) {
+  return photo.decision !== 'reject' && (photo.decision === 'flag' || photo.id === group.automatic_pick_id);
+}
+
+async function decide(photo, field, value) {
+  const previous = photo.decision;
+  state.busy = true;
+  updateWorkflow();
+  try {
+    const result = await post(`/api/photos/${photo.id}/${field}`, { [field]: value });
+    photo.decision = result.decision;
+    photo.rating = result.rating;
+    state.rejectedCount += (result.decision === 'reject') - (previous === 'reject');
+    const group = state.groups.find(item => item.id === result.group_id);
+    if (group) {
+      group.automatic_pick_id = result.automatic_pick_id;
+      refreshFrames(group);
+    }
+    const name = photo.name.replace(/\.[^.]+$/, '');
+    announce(field === 'rating' ? `Rating ${result.rating} set for ${name}` : `${name} ${DECISION_ANNOUNCEMENTS[result.decision]}`);
+    if (state.selectedId === photo.id) {
+      renderInspector(photo);
+      document.querySelector(field === 'rating' ? '#rating' : `[data-decision="${value}"]`)?.focus();
+    }
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+function decisionControls(photo) {
+  const wrapper = document.createElement('div');
+  const status = document.createElement('p');
+  status.textContent = `Decision: ${DECISION_WORDS[photo.decision]} · Rating ${photo.rating}`;
+  const buttons = document.createElement('div');
+  buttons.className = 'decision-controls';
+  buttons.setAttribute('role', 'group');
+  buttons.setAttribute('aria-label', `Decision for ${photo.name}`);
+  for (const [value, label] of [['flag', 'Flag'], ['reject', 'Reject'], ['none', 'Clear decision']]) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.dataset.decision = value;
+    button.textContent = label;
+    button.addEventListener('click', () => decide(photo, 'decision', value));
+    buttons.append(button);
+  }
+  const label = document.createElement('label');
+  label.htmlFor = 'rating';
+  label.textContent = 'Rating';
+  const rating = document.createElement('select');
+  rating.id = 'rating';
+  for (let value = 0; value <= 5; value += 1) {
+    const option = document.createElement('option');
+    option.value = String(value);
+    option.textContent = value ? `${value} star${value === 1 ? '' : 's'}` : 'No rating';
+    rating.append(option);
+  }
+  rating.value = String(photo.rating);
+  rating.addEventListener('change', () => decide(photo, 'rating', Number(rating.value)));
+  wrapper.append(status, buttons, label, rating);
+  return wrapper;
+}
+
 async function inspect(photo) {
   if (state.selectedId !== photo.id) {
     state.compositionRequest += 1;
@@ -230,13 +300,20 @@ async function inspect(photo) {
   document.querySelectorAll('.frame').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.id) === photo.id)));
   const details = await request(`/api/photos/${photo.id}`);
   if (state.selectedId !== photo.id) return;
+  state.details = details;
+  renderInspector(photo);
+  if (compositionLoad) await compositionLoad;
+}
+
+function renderInspector(photo) {
+  const details = state.details;
   inspection.replaceChildren();
   const heading = document.createElement('h3');
   heading.textContent = photo.name;
   const verdict = document.createElement('p');
   verdict.className = 'quiet';
   verdict.textContent = photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
-  inspection.append(heading, verdict);
+  inspection.append(heading, verdict, decisionControls(photo));
   inspection.append(metric('Overall', photo.total_score), metric('Sharpness', details.metrics.sharpness), metric('Exposure', details.metrics.exposure));
   if (details.metrics.eye_quality !== null) inspection.append(metric('Eyes', details.metrics.eye_quality));
   if (details.tags?.data) {
@@ -280,7 +357,53 @@ async function inspect(photo) {
   });
   actions.append(tag);
   inspection.append(actions);
-  if (compositionLoad) await compositionLoad;
+}
+
+function fillFrame(button, photo, group) {
+  photo.groupPick = group.automatic_pick_id;
+  const best = photo.id === group.automatic_pick_id;
+  const marks = [DECISION_WORDS[photo.decision], photo.rating ? `Rating ${photo.rating}` : null].filter(word => word && word !== DECISION_WORDS.none);
+  button.dataset.decision = photo.decision;
+  button.setAttribute('aria-label', [`${photo.name}, score ${Math.round(photo.total_score * 100)} percent`, best ? 'best in group' : null, ...marks.map(word => word.toLowerCase())].filter(Boolean).join(', '));
+  const image = document.createElement('img');
+  image.src = photo.preview_url;
+  image.alt = '';
+  image.loading = 'lazy';
+  const meta = document.createElement('span');
+  meta.className = 'frame-meta';
+  const name = document.createElement('span');
+  name.textContent = photo.name;
+  const score = document.createElement('span');
+  score.className = 'score';
+  score.textContent = String(Math.round(photo.total_score * 100));
+  meta.append(name, score);
+  if (marks.length) {
+    const list = document.createElement('span');
+    list.className = 'marks';
+    marks.forEach(word => {
+      const mark = document.createElement('span');
+      mark.className = word.split(' ')[0].toLowerCase();
+      mark.textContent = word;
+      list.append(mark);
+    });
+    meta.append(list);
+  }
+  button.replaceChildren(image, meta);
+  if (best) {
+    const winner = document.createElement('span');
+    winner.className = 'winner';
+    winner.textContent = 'Best';
+    button.append(winner);
+  }
+}
+
+// Updates one group's cards in place (marks, Best badge) without reloading the contact sheet.
+function refreshFrames(group) {
+  const cards = Array.from(document.querySelectorAll('.frame'));
+  group.photos.forEach(photo => {
+    const card = cards.find(item => Number(item.dataset.id) === photo.id);
+    if (card) fillFrame(card, photo, group);
+  });
 }
 
 function renderGroups() {
@@ -301,33 +424,13 @@ function renderGroups() {
     rail.append(batch);
     group.photos.forEach(photo => {
       count += 1;
-      photo.groupPick = group.automatic_pick_id;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'frame';
       button.dataset.id = photo.id;
       button.dataset.group = group.id;
       button.setAttribute('aria-pressed', String(photo.id === state.selectedId));
-      button.setAttribute('aria-label', `${photo.name}, score ${Math.round(photo.total_score * 100)} percent${photo.id === group.automatic_pick_id ? ', best in group' : ''}`);
-      const image = document.createElement('img');
-      image.src = photo.preview_url;
-      image.alt = '';
-      image.loading = 'lazy';
-      const meta = document.createElement('span');
-      meta.className = 'frame-meta';
-      const name = document.createElement('span');
-      name.textContent = photo.name;
-      const score = document.createElement('span');
-      score.className = 'score';
-      score.textContent = String(Math.round(photo.total_score * 100));
-      meta.append(name, score);
-      button.append(image, meta);
-      if (photo.id === group.automatic_pick_id) {
-        const winner = document.createElement('span');
-        winner.className = 'winner';
-        winner.textContent = 'Best';
-        button.append(winner);
-      }
+      fillFrame(button, photo, group);
       button.addEventListener('click', () => inspect(photo).catch(error => announce(error.message)));
       sheet.append(button);
     });
@@ -344,9 +447,10 @@ function renderGroups() {
 }
 
 async function load() {
-  const [status, groups] = await Promise.all([request('/api/status'), request('/api/groups')]);
+  const [status, groups] = await Promise.all([request('/api/status'), request(state.showRejected ? '/api/groups?show_rejected=1' : '/api/groups')]);
   state.status = status;
   state.groups = groups.groups;
+  state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
   const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId));
   state.selectedGroupId = selectedGroup?.id ?? null;
@@ -613,10 +717,14 @@ function updateWorkflow() {
   const photo = photos.find(item => item.id === state.selectedId);
   const groupIndex = state.groups.findIndex(item => item.id === state.selectedGroupId);
   const group = state.groups[groupIndex];
-  const keepers = state.groups.filter(item => item.automatic_pick_id !== null).length;
+  const keepers = state.groups.reduce((total, item) => total + item.photos.filter(photo => isKeeper(photo, item)).length, 0);
   const available = state.status?.tools?.['darktable-cli']?.available === true;
   document.querySelector('#current-export-name').textContent = photo?.name || 'No photo selected';
   document.querySelector('#keeper-count').textContent = `${keepers} keeper${keepers === 1 ? '' : 's'}`;
+  document.querySelector('#rejected-count').textContent = `(${state.rejectedCount})`;
+  document.querySelectorAll('[data-decision]').forEach(button => { button.disabled = state.busy; });
+  const rating = document.querySelector('#rating');
+  if (rating) rating.disabled = state.busy;
   document.querySelector('#group-cleanup-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.photos.length)}` : 'No batch selected · 0 frames';
   document.querySelector('#workspace-cleanup-count').textContent = `${state.groups.length} batch${state.groups.length === 1 ? '' : 'es'} · ${frameCount(state.photoCount)}`;
   document.querySelector('#clear-help').textContent = `Use the exact uppercase word CLEAR. This removes all ${frameCount(state.photoCount)} from Lumen, including photos outside visible batches.`;
@@ -705,6 +813,10 @@ document.querySelector('#browse-xmp').addEventListener('click', async () => {
 document.querySelector('#reset-xmp').addEventListener('click', () => rememberProfile(null));
 document.querySelectorAll('input[name="export-scope"]').forEach(input => input.addEventListener('change', updateWorkflow));
 document.querySelector('#clear-confirmation').addEventListener('input', updateWorkflow);
+document.querySelector('#show-rejected').addEventListener('change', () => {
+  state.showRejected = document.querySelector('#show-rejected').checked;
+  return load().catch(error => announce(error.message));
+});
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
 
 function showExportResults(results) {

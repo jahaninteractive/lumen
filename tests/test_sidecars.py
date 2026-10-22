@@ -48,6 +48,20 @@ class SidecarTests(unittest.TestCase):
             self.assertIn("Bird &amp; branch", xmp_path.read_text())
             self.assertFalse(any(Path(directory).glob("*.tmp")))
 
+    def test_sidecars_carry_decision_and_minus_one_xmp_rating_for_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            writer = SidecarWriter(Path(directory))
+            photo = Photo(id=7, path="/photos/a.ARW", fingerprint="abcdef123456", captured_at=None, camera_id="A1")
+            metrics = PhotoMetrics(sharpness=0.8, exposure=0.7, clipping=0.01)
+            for decision, rating, selected, expected in (
+                ("reject", 4, False, "-1"), ("flag", 3, False, "3"), ("none", 0, True, "0"), ("none", 2, True, "2"),
+            ):
+                with self.subTest(decision=decision, rating=rating):
+                    json_path, xmp_path = writer.write(photo, metrics, [], selected=selected, decision=decision, rating=rating)
+                    payload = json.loads(json_path.read_text())
+                    self.assertEqual((decision, rating), (payload["decision"], payload["rating"]))
+                    self.assertIn(f'xmp:Rating="{expected}"', xmp_path.read_text(), "selection alone never implies a 5-star rating")
+
 
 if __name__ == "__main__":
     unittest.main()
