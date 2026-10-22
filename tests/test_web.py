@@ -764,7 +764,11 @@ class Element {
   getAttribute(name) { return this.attrs[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   querySelector(selector) { return element('#import-form ' + selector); }
-  closest(selector) { for (let node = this; node; node = node.parent) if (selector === '.crop-card' && node.classList.contains('crop-card')) return node; return null; }
+  closest(selector) {
+    const test = { '.crop-card': node => node.classList.contains('crop-card'), dialog: node => node.tagName === 'DIALOG', 'dialog form': node => node.tagName === 'FORM' && Boolean(node.parent?.closest('dialog')) }[selector];
+    for (let node = this; node; node = node.parent) if (test?.(node)) return node;
+    return null;
+  }
   focus() { focused = this; }
 }
 let focused = null;
@@ -1124,6 +1128,108 @@ const regression = `
     assert.equal(element('#shortcuts').hidden, true);
     return;
   }
+  if (scenario === 'compare' || scenario === 'loupe') {
+    await load();
+    const sheetNode = element('#contact-sheet');
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const card = id => sheetNode.children.find(item => Number(item.dataset.id) === id);
+    const texts = node => tree(node).map(item => item.textContent);
+    let prevented = 0;
+    let stopped = 0;
+    const key = (name, target, node = sheetNode) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() { prevented += 1; }, stopPropagation() { stopped += 1; } });
+    const dialog = element('#' + scenario);
+    dialog.tagName = 'DIALOG';
+    const form = Object.assign(new Element(), { tagName: 'FORM', parent: dialog });
+    if (scenario === 'loupe') {
+      await key('ArrowRight', card(1));
+      await key('Enter', card(2));
+      assert.equal(dialog.hidden, false, 'Enter opens the loupe for the focused frame');
+      assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg');
+      const viewport = element('#loupe-viewport');
+      assert.equal(viewport.getAttribute('aria-label'), 'photo-2.jpg viewport');
+      const image = viewport.children[0];
+      assert.equal(image.src, '/preview/2');
+      Object.assign(image, { naturalWidth: 1600, naturalHeight: 1200 });
+      image.listeners.load();
+      assert.deepEqual([image.width, image.height], [1600, 1200], 'the loupe shows the stored preview at 100 percent');
+      assert.equal(focused, viewport);
+      Object.assign(viewport, { scrollTop: 0, scrollLeft: 0, tagName: 'DIV' });
+      await key('ArrowDown', viewport, viewport);
+      await key('ArrowRight', viewport, viewport);
+      assert.deepEqual([viewport.scrollTop, viewport.scrollLeft], [40, 40]);
+      await key('PageDown', viewport, viewport);
+      assert.equal(stopped, 3, 'panning keys never reach contact-sheet navigation');
+      assert.equal(state.focusedId, 2);
+      const closeButton = Object.assign(element('#close-loupe'), { tagName: 'BUTTON', parent: form });
+      const before = prevented;
+      await key('Enter', closeButton, dialog);
+      assert.equal(prevented, before, 'Enter on a dialog button keeps its native activation');
+      await key('Escape', viewport, dialog);
+      assert.equal(dialog.hidden, true);
+      assert.equal(focused, card(2), 'closing returns focus to the originating frame');
+      return;
+    }
+    const opener = element('#open-compare');
+    assert.equal(opener.disabled, true);
+    await key('c', card(1));
+    assert.equal(opener.disabled, true, 'one marked frame cannot be compared');
+    await key('ArrowRight', card(1));
+    await key('c', card(2));
+    assert.equal(opener.disabled, false);
+    await opener.listeners.click();
+    assert.equal(dialog.hidden, false);
+    const details = side => texts(element('#compare-' + side + '-details'));
+    for (const [side, id] of [['left', 1], ['right', 2]]) {
+      for (const word of ['Name', 'photo-' + id + '.jpg', 'Overall score', '80%', 'Sharpness', 'Exposure', 'Decision', 'No decision', 'Rating', 'No rating']) assert.ok(details(side).includes(word), side + ' lists ' + word);
+      assert.ok(!details(side).includes('Eye quality'), 'eye quality is listed only when measured');
+      assert.equal(element('#compare-' + side + '-viewport').getAttribute('aria-label'), 'photo-' + id + '.jpg viewport');
+      assert.equal(element('#compare-' + side + '-viewport').children[0].src, '/preview/' + id);
+    }
+    const left = element('#compare-left-viewport');
+    const right = element('#compare-right-viewport');
+    Object.assign(left, { tagName: 'DIV', scrollTop: 0, scrollLeft: 0, scrollHeight: 1200, clientHeight: 400, scrollWidth: 1600, clientWidth: 400 });
+    Object.assign(right, { tagName: 'DIV', scrollTop: 0, scrollLeft: 0, scrollHeight: 2400, clientHeight: 400, scrollWidth: 3200, clientWidth: 400 });
+    Object.assign(left, { scrollTop: 400, scrollLeft: 600 });
+    left.listeners.scroll();
+    assert.deepEqual([right.scrollTop, right.scrollLeft], [1000, 1400], 'panning copies the fraction of the scrollable range');
+    right.listeners.scroll();
+    assert.deepEqual([left.scrollTop, left.scrollLeft], [400, 600], 'the echoed scroll does not feed back');
+    await key('ArrowDown', left, left);
+    assert.equal(left.scrollTop, 440);
+    assert.equal(stopped, 1);
+    element('#swap-compare').listeners.click();
+    assert.ok(details('left').includes('photo-2.jpg') && details('right').includes('photo-1.jpg'), 'Swap sides exchanges the panes');
+    assert.ok(element('#announcer').textContent.startsWith('Swapped'));
+    const loadsBefore = groupLoads;
+    await element('#compare-right-reject').listeners.click();
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/decision', body: { decision: 'reject' } });
+    assert.ok(details('right').includes('Rejected'));
+    assert.ok(details('left').includes('No decision'));
+    assert.ok(texts(card(1)).includes('Rejected'), 'the contact sheet card updates without reload');
+    assert.equal(groupLoads, loadsBefore);
+    const rating = Object.assign(element('#compare-left-rating'), { tagName: 'SELECT', value: '4' });
+    await rating.listeners.change();
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/rating', body: { rating: 4 } });
+    assert.ok(details('left').includes('4 of 5'));
+    const posts = decisionPosts.length;
+    const before = prevented;
+    await key('x', rating, dialog);
+    const swap = Object.assign(element('#swap-compare'), { tagName: 'BUTTON', parent: form });
+    await key('x', swap, dialog);
+    await key('Enter', swap, dialog);
+    assert.equal(decisionPosts.length, posts, 'the pane rating select and dialog buttons never cull');
+    assert.equal(prevented, before);
+    assert.notEqual(element('#loupe').hidden, false);
+    right.listeners.focus();
+    await key('f', right, dialog);
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/decision', body: { decision: 'flag' } }, 'culling keys act on the focused pane');
+    assert.ok(details('right').includes('Flagged'));
+    await key('Escape', right, dialog);
+    assert.equal(dialog.hidden, true);
+    assert.equal(focused, card(2), 'closing returns focus to the originating frame');
+    assert.equal(state.focusedId, 2);
+    return;
+  }
   if (scenario === 'all-rejected') {
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const rejected = id => ({ ...photo(id), decision: 'reject' });
@@ -1416,6 +1522,53 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_culling_keys_move_focus_and_decide_in_place(self):
         self.run_javascript_cleanup_regression("culling-keys")
 
+    def test_javascript_compare_syncs_panes_and_decides_in_place(self):
+        self.run_javascript_cleanup_regression("compare")
+
+    def test_javascript_loupe_opens_on_enter_pans_and_returns_focus(self):
+        self.run_javascript_cleanup_regression("loupe")
+
+    def test_compare_and_loupe_dialogs_have_labeled_viewports_and_actions(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        opener = by_id["open-compare"]
+        self.assertEqual(("button", "button"), (opener["tag"], opener["attrs"].get("type")))
+        self.assertIn("disabled", opener["attrs"])
+        self.assertTrue(any(node["attrs"].get("class") == "section-heading" for node in opener["parents"]))
+        for name in ("compare", "loupe"):
+            dialog = by_id[name]
+            self.assertEqual("dialog", dialog["tag"])
+            self.assertTrue(by_id[dialog["attrs"]["aria-labelledby"]]["text"].strip())
+            form = next(node for node in parser.nodes if node["tag"] == "form" and dialog in node["parents"])
+            self.assertEqual("dialog", form["attrs"].get("method"))
+        viewports = ["compare-left-viewport", "compare-right-viewport", "loupe-viewport"]
+        for name in viewports:
+            viewport = by_id[name]
+            self.assertEqual("0", viewport["attrs"].get("tabindex"))
+            self.assertIn("loupe-viewport", viewport["attrs"].get("class", ""))
+            self.assertTrue(viewport["attrs"].get("aria-label"))
+            self.assertIn(by_id["compare" if name.startswith("compare") else "loupe"], viewport["parents"])
+        for side in ("left", "right"):
+            pane = by_id[f"compare-{side}"]
+            self.assertTrue(pane["attrs"].get("aria-label"))
+            self.assertIn(pane, by_id[f"compare-{side}-viewport"]["parents"])
+            self.assertEqual("dl", by_id[f"compare-{side}-details"]["tag"])
+            for action, text in (("pick", "Pick as best"), ("flag", "Flag"), ("reject", "Reject")):
+                button = by_id[f"compare-{side}-{action}"]
+                self.assertEqual(("button", "button", text), (button["tag"], button["attrs"].get("type"), button["text"].strip()))
+                self.assertIn(pane, button["parents"])
+            rating = by_id[f"compare-{side}-rating"]
+            self.assertEqual("select", rating["tag"])
+            self.assertTrue(any(node["tag"] == "label" and node["attrs"].get("for") == f"compare-{side}-rating" and node["text"].strip() for node in parser.nodes))
+        for name, text, dialog in (("swap-compare", "Swap sides", "compare"), ("close-compare", "Close", "compare"), ("close-loupe", "Close", "loupe")):
+            self.assertEqual(("button", text), (by_id[name]["tag"], by_id[name]["text"].strip()))
+            self.assertIn(by_id[dialog], by_id[name]["parents"])
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\.loupe-viewport\s*\{[^}]*overflow:\s*auto")
+        self.assertRegex(styles, r"@media \(max-width: 680px\)\s*\{[^@]*\.compare-grid\s*\{\s*grid-template-columns:\s*1fr")
+
     def test_index_has_shortcuts_button_and_readable_legend_without_reserved_modifiers(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
@@ -1431,7 +1584,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for key in ("P", "X", "F", "U", "C", "0", "5", "Home", "End"):
             self.assertIn(key, keys)
         for key in keys:
-            self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down"}, key)
+            self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down", "Enter", "Esc"}, key)
+        for key in ("Enter", "Esc"):
+            self.assertIn(key, keys)
         for term in terms:
             self.assertNotRegex(term["text"], r"Cmd|Ctrl|Option|Command|Control|Alt|Shift|[+⌘⌥⌃]")
         self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() for node in legend))

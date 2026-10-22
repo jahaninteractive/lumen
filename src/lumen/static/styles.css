@@ -173,9 +173,24 @@ button.danger { color: var(--danger); border-color: var(--danger); background: t
 .frame[data-decision="reject"] img { opacity: .45; }
 .frame:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
 .marks .compare { color: var(--cyan); border-color: var(--cyan); }
-#shortcuts { max-width: 34rem; padding: 1.25rem; color: var(--paper); background: var(--charcoal); border: 1px solid var(--line); border-radius: 6px; }
-#shortcuts::backdrop { background: rgba(13, 15, 18, .75); }
-#shortcuts h2 { margin-top: 0; font-size: 1.1rem; }
+dialog { padding: 1.25rem; color: var(--paper); background: var(--charcoal); border: 1px solid var(--line); border-radius: 6px; }
+dialog::backdrop { background: rgba(13, 15, 18, .75); }
+dialog h2 { margin-top: 0; font-size: 1.1rem; }
+#shortcuts { max-width: 34rem; }
+#compare, #loupe { width: min(96vw, 1400px); max-width: none; max-height: 96vh; }
+.compare-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.compare-pane { min-width: 0; }
+.compare-pane figure { margin: 0; }
+.compare-pane dl { display: grid; grid-template-columns: auto 1fr; gap: .2rem 1rem; font-variant-numeric: tabular-nums; }
+.compare-pane dt { color: var(--muted); }
+.compare-pane dd { margin: 0; }
+.compare-pane .button-row { align-items: center; }
+.compare-pane select { padding: .5rem; color: var(--paper); background: var(--graphite); }
+/* Scale 1: the img keeps its stored preview size, so both panes zoom alike. No smooth scrolling: it would fight synced panning. */
+.loupe-viewport { height: min(55vh, 720px); overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #08090a; }
+#loupe .loupe-viewport { height: 78vh; }
+.loupe-viewport img { display: block; max-width: none; }
+.loupe-viewport:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
 #shortcuts dl { display: grid; grid-template-columns: auto 1fr; gap: .5rem 1rem; }
 #shortcuts dt, #shortcuts dd { margin: 0; }
 kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px solid var(--line); border-radius: 3px; color: var(--amber); background: var(--graphite); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
@@ -207,6 +222,8 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   .batch-rail { border-right: 0; border-bottom: 1px solid var(--line); }
   .input-row { align-items: stretch; flex-direction: column; }
   .contact-sheet { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .compare-grid { grid-template-columns: 1fr; }
+  .loupe-viewport { height: 40vh; }
 }
 
 @media (prefers-reduced-motion: reduce) {

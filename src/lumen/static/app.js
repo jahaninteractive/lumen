@@ -258,6 +258,7 @@ async function decide(photo, field, value, focusAfter = null) {
       group.automatic_pick_id = result.automatic_pick_id;
       group.rejected_count += delta;
       refreshFrames(group);
+      refreshPanes(photo.id);
       const batch = document.querySelectorAll('.batch-button')[groupIndex];
       if (batch) batch.textContent = batchText(group, groupIndex);
     }
@@ -274,6 +275,16 @@ async function decide(photo, field, value, focusAfter = null) {
     state.busy = false;
     updateWorkflow();
   }
+}
+
+function ratingSelect(select) {
+  for (let value = 0; value <= 5; value += 1) {
+    const option = document.createElement('option');
+    option.value = String(value);
+    option.textContent = value ? `${value} star${value === 1 ? '' : 's'}` : 'No rating';
+    select.append(option);
+  }
+  return select;
 }
 
 function decisionControls(photo) {
@@ -296,14 +307,8 @@ function decisionControls(photo) {
   const label = document.createElement('label');
   label.htmlFor = 'rating';
   label.textContent = 'Rating';
-  const rating = document.createElement('select');
+  const rating = ratingSelect(document.createElement('select'));
   rating.id = 'rating';
-  for (let value = 0; value <= 5; value += 1) {
-    const option = document.createElement('option');
-    option.value = String(value);
-    option.textContent = value ? `${value} star${value === 1 ? '' : 's'}` : 'No rating';
-    rating.append(option);
-  }
   rating.value = String(photo.rating);
   rating.addEventListener('change', () => decide(photo, 'rating', Number(rating.value), '#rating'));
   wrapper.append(status, buttons, label, rating);
@@ -463,6 +468,7 @@ function toggleCompare(photo) {
   const changed = marked ? [photo.id] : [photo.id, ...(state.compare.length >= 2 ? [state.compare.shift()] : [])];
   state.compare = marked ? state.compare.filter(id => id !== photo.id) : [...state.compare, photo.id];
   changed.forEach(refreshFrame);
+  updateWorkflow();
   announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
 }
 
@@ -473,9 +479,13 @@ const CULLING_ACTIONS = {
   flag: photo => decide(photo, 'decision', 'flag'),
   clear: photo => decide(photo, 'decision', 'none'),
   compare: toggleCompare,
-  loupe: null,  // Task 5 adds the loupe; until then Enter keeps its native click (inspect).
-  close: null,  // Task 5 closes compare/loupe views.
+  loupe: photo => openLoupe(photo.id),
+  close: () => closeView(),
 };
+
+function photoById(id) {
+  return state.groups.flatMap(group => group.photos).find(photo => photo.id === id);
+}
 
 function handleCullingKey(event) {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -487,14 +497,14 @@ function handleCullingKey(event) {
   const row = sheetColumns();
   const next = { ArrowLeft: index - 1, ArrowRight: index + 1, ArrowUp: index - row, ArrowDown: index + row, PageUp: index - row, PageDown: index + row, Home: 0, End: ids.length - 1 }[key];
   if (next !== undefined) {
-    if (!ids.length) return;
+    if (!ids.length || openView) return;  // never move focus behind an open compare or loupe
     event.preventDefault();
     return focusFrame(ids[Math.max(0, Math.min(ids.length - 1, next))]);
   }
   const action = /^[0-5]$/.test(key) ? photo => decide(photo, 'rating', Number(key)) : CULLING_ACTIONS[CULLING_KEYS[key]];
   if (!action) return;
   event.preventDefault();
-  const photo = state.groups.flatMap(group => group.photos).find(item => item.id === state.focusedId);
+  const photo = photoById(state.focusedId);
   return photo ? action(photo) : undefined;
 }
 
@@ -889,6 +899,7 @@ function updateWorkflow() {
   document.querySelector('#reset-xmp').disabled = state.busy || !state.profile;
   document.querySelector('#import-form button[type="submit"]').disabled = state.busy;
   document.querySelector('#browse-path').disabled = state.busy;
+  document.querySelector('#open-compare').disabled = state.busy || state.compare.length !== 2;
   document.querySelector('#ask-composition-ai').disabled = state.busy || !state.composition || state.composition.photo_id !== state.selectedId;
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
@@ -982,6 +993,150 @@ document.querySelector('#shortcuts-button').addEventListener('click', () => {
 shortcuts.addEventListener('keydown', event => {  // a modal <dialog> closes on Escape natively
   if (event.key === 'Escape' && !shortcuts.showModal) shortcuts.hidden = true;
 });
+
+// Compare and loupe: modal views over the sheet; culling keys act on the focused pane, Escape closes.
+const SIDES = ['left', 'right'];
+const paneMetrics = new Map();
+let comparing = [];  // photo ids shown left, right
+let openView = null;
+let viewOrigin = null;
+let syncing = null;  // the viewport whose scroll we just set; its echo is ignored
+
+function showView(dialog) {
+  openView = dialog;
+  viewOrigin = state.focusedId;
+  if (dialog.showModal) dialog.showModal();
+  else dialog.hidden = false;
+}
+
+function closeView() {
+  const dialog = openView;
+  if (!dialog) return;
+  openView = null;
+  comparing = [];
+  if (dialog.close) dialog.close();
+  else dialog.hidden = true;
+  focusFrame(viewOrigin);
+}
+
+// Scale 1 of the stored preview in both panes, so zoom matches; preview_url carries the version query.
+function showPreview(viewport, photo) {
+  const image = document.createElement('img');
+  image.alt = photo.name;
+  image.addEventListener('load', () => { image.width = image.naturalWidth; image.height = image.naturalHeight; });
+  image.src = photo.preview_url;
+  viewport.setAttribute('aria-label', `${photo.name} viewport`);
+  viewport.replaceChildren(image);
+}
+
+function syncScroll(from, to) {
+  if (syncing === from) { syncing = null; return; }
+  const left = from.scrollLeft / Math.max(1, from.scrollWidth - from.clientWidth) * (to.scrollWidth - to.clientWidth);
+  const top = from.scrollTop / Math.max(1, from.scrollHeight - from.clientHeight) * (to.scrollHeight - to.clientHeight);
+  if (Math.abs(to.scrollLeft - left) < 1 && Math.abs(to.scrollTop - top) < 1) return;
+  syncing = to;
+  to.scrollLeft = left;
+  to.scrollTop = top;
+}
+
+const PAN = { ArrowLeft: [-40, 0], ArrowRight: [40, 0], ArrowUp: [0, -40], ArrowDown: [0, 40] };
+function panKey(event, viewport) {
+  if (!(event.key in PAN) && !['Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
+  event.stopPropagation();  // scroll the viewport, never navigate the sheet behind it
+  if (!(event.key in PAN)) return;
+  event.preventDefault();
+  viewport.scrollLeft += PAN[event.key][0];
+  viewport.scrollTop += PAN[event.key][1];
+}
+
+function percent(value) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function refreshPanes(photoId) {
+  comparing.forEach((id, index) => {
+    if (id !== photoId) return;
+    const side = SIDES[index];
+    const photo = photoById(id);
+    const metrics = paneMetrics.get(id);
+    const rows = [['Name', photo.name], ['Overall score', percent(photo.total_score)], ['Sharpness', percent(metrics.sharpness)], ['Exposure', percent(metrics.exposure)],
+      ...(metrics.eye_quality == null ? [] : [['Eye quality', percent(metrics.eye_quality)]]),
+      ['Decision', DECISION_WORDS[photo.decision]], ['Rating', photo.rating ? `${photo.rating} of 5` : 'No rating']];
+    document.querySelector(`#compare-${side}-details`).replaceChildren(...rows.flatMap(([term, value]) => {
+      const dt = document.createElement('dt');
+      dt.textContent = term;
+      const dd = document.createElement('dd');
+      dd.textContent = value;
+      return [dt, dd];
+    }));
+    const rating = document.querySelector(`#compare-${side}-rating`);
+    rating.value = String(photo.rating);
+    rating.setAttribute('aria-label', `Rating for ${photo.name}`);
+  });
+}
+
+function fillPanes() {
+  comparing.forEach((id, index) => {
+    const photo = photoById(id);
+    document.querySelector(`#compare-${SIDES[index]}`).setAttribute('aria-label', `${index ? 'Right' : 'Left'}: ${photo.name}`);
+    showPreview(document.querySelector(`#compare-${SIDES[index]}-viewport`), photo);
+    refreshPanes(id);
+  });
+}
+
+async function openCompare() {
+  if (state.busy || state.compare.length !== 2 || openView) return;
+  const ids = [...state.compare];
+  try {
+    await Promise.all(ids.map(async id => paneMetrics.set(id, (await request(`/api/photos/${id}`)).metrics)));
+  } catch (error) {
+    return announce(error.message);
+  }
+  if (!ids.every(photoById)) return;
+  comparing = ids;
+  fillPanes();
+  showView(document.querySelector('#compare'));
+  document.querySelector('#compare-left-viewport').focus();
+}
+
+function openLoupe(photoId) {
+  const photo = photoById(photoId);
+  if (openView || !photo) return;
+  document.querySelector('#loupe-heading').textContent = photo.name;
+  const viewport = document.querySelector('#loupe-viewport');
+  showPreview(viewport, photo);
+  showView(document.querySelector('#loupe'));
+  viewport.focus();
+}
+
+for (const name of ['#compare', '#loupe']) {
+  const dialog = document.querySelector(name);
+  dialog.addEventListener('keydown', handleCullingKey);
+  dialog.addEventListener('close', closeView);  // native Escape from a select or button
+}
+const loupeViewport = document.querySelector('#loupe-viewport');
+loupeViewport.addEventListener('keydown', event => panKey(event, loupeViewport));
+SIDES.forEach((side, index) => {
+  const part = name => document.querySelector(`#compare-${side}-${name}`);
+  const viewport = part('viewport');
+  viewport.addEventListener('scroll', () => syncScroll(viewport, document.querySelector(`#compare-${SIDES[1 - index]}-viewport`)));
+  viewport.addEventListener('keydown', event => panKey(event, viewport));
+  viewport.addEventListener('focus', () => focusFrame(comparing[index], false));  // culling keys act on this pane
+  const photo = () => photoById(comparing[index]);
+  part('pick').addEventListener('click', () => decide(photo(), 'pick'));
+  part('flag').addEventListener('click', () => decide(photo(), 'decision', 'flag'));
+  part('reject').addEventListener('click', () => decide(photo(), 'decision', 'reject'));
+  const rating = ratingSelect(part('rating'));
+  rating.addEventListener('change', () => decide(photo(), 'rating', Number(rating.value)));
+});
+document.querySelector('#open-compare').addEventListener('click', openCompare);
+document.querySelector('#swap-compare').addEventListener('click', () => {
+  comparing.reverse();
+  fillPanes();
+  announce(`Swapped: ${photoById(comparing[0]).name} is on the left, ${photoById(comparing[1]).name} on the right`);
+});
+document.querySelector('#close-compare').addEventListener('click', closeView);
+document.querySelector('#close-loupe').addEventListener('click', closeView);
 
 function showExportResults(results) {
   const list = document.querySelector('#export-results');
