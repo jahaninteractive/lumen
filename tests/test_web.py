@@ -463,6 +463,26 @@ class WebTests(unittest.TestCase):
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual([], library.list_groups())
 
+    def test_merge_route_validates_ids_and_merges_into_earliest_group(self):
+        second = self.root / "second.jpg"
+        Image.new("RGB", (40, 30), "blue").save(second)
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            library.import_path(second)
+        for payload in ({}, {"group_ids": [1]}, {"group_ids": [1, 1]}, {"group_ids": [1, "2"]}, {"group_ids": [1, True]},
+                        {"group_ids": [1, 99999]}, {"group_ids": [1, 2], "extra": 1}, {"group_ids": "1,2"}, {"group_ids": [1, 0]}):
+            with self.subTest(payload=payload):
+                code, result = self.post_json("/api/groups/merge", payload)
+                self.assertEqual(400, code, result)
+                self.assertIn("error", result)
+                self.assertNotIn(str(self.root), result["error"])
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertEqual(2, len(library.list_groups()))
+        code, result = self.post_json("/api/groups/merge", {"group_ids": [2, 1]})
+        self.assertEqual(200, code, result)
+        self.assertEqual({"group_id": 1, "merged_group_ids": [2], "photo_count": 2, "automatic_pick_id": 1}, result)
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertEqual([[1, 2]], [sorted(photo["id"] for photo in group["photos"]) for group in library.list_groups()])
+
     def test_cleanup_rejects_unknown_group_and_nonempty_remove_payload(self):
         for path, payload in (("/api/groups/99999/remove", {}), ("/api/groups/1/remove", {"confirmation": "CLEAR"})):
             with self.subTest(path=path, payload=payload):
@@ -547,7 +567,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -566,7 +586,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -902,7 +922,7 @@ const document = {
     : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
     if (selector === '.frame') return element('#contact-sheet').children.filter(item => item.className === 'frame');
-    if (selector === '.batch-button') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === 'batch-button'); }
+    if (selector === '.batch-button' || selector === '.batch-select') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === selector.slice(1)); }
     if (selector === '[role="tab"]') return tabElements;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
@@ -926,7 +946,7 @@ const decisions = { 1: 'none', 2: 'none' };
 const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
 const picks = [];
-let groups = scenario === 'merge' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 const astroPosts = [];
 let polls = 0;
 let cancels = 0;
@@ -956,6 +976,7 @@ const tagPosts = [];
 let tagPolls = 0;
 const tagJob = (status, progress, extra = {}) => ({ job_id: 15, kind: 'tag', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const removals = [];
+const mergePosts = [];
 const compositionReviews = [];
 const cropMutations = [];
 const cropId = 'crop-1111111111111111';
@@ -1037,6 +1058,12 @@ async function fetch(url, options = {}) {
     cropMutations.push({ url, body });
     if (url.endsWith('/clear')) { assert.deepEqual(body, {}); activeCrop = null; payload = { photo_id: 2, active_crop: null }; }
     else { assert.deepEqual(body, { candidate_id: cropId }); activeCrop = { candidate_id: cropId }; payload = activeCrop; }
+  }
+  else if (url === '/api/groups/merge') {
+    assert.equal(options.method, 'POST');
+    mergePosts.push(JSON.parse(options.body));
+    groups = [group(1, [1, 2])];
+    payload = { group_id: 1, merged_group_ids: [2], photo_count: 2, automatic_pick_id: 1 };
   }
   else if (/^\/api\/groups\/\d+\/remove$/.test(url)) {
     assert.equal(options.method, 'POST');
@@ -1409,7 +1436,7 @@ const regression = `
     const days = () => element('#batch-list').children;
     assert.deepEqual(days().map(day => [day.tagName, day.open, day.children[0].tagName]), [['DETAILS', true, 'SUMMARY'], ['DETAILS', true, 'SUMMARY'], ['DETAILS', true, 'SUMMARY']]);
     assert.deepEqual(days().map(day => day.children[0].textContent), ['2026-10-21 · 250 frames · 3 keepers', '2026-10-22 · 140 frames · 0 keepers', 'Undated · 10 frames · 1 keeper']);
-    assert.deepEqual(days().map(day => day.children.slice(1).map(item => item.className)), [['batch-button', 'batch-button'], ['batch-button'], ['batch-button']]);
+    assert.deepEqual(days().map(day => day.children.slice(1).map(item => item.className)), [['batch-row', 'batch-row'], ['batch-row'], ['batch-row']]);
     const cards = () => document.querySelectorAll('.frame');
     const more = element('#show-more');
     assert.equal(cards().length, 200);
@@ -1691,6 +1718,31 @@ const regression = `
     assert.equal(element('#prepare-astro').disabled, false, 'a finished job frees the form');
     assert.equal(lights[0].disabled, false);
     assert.equal(confirm.disabled, false);
+    return;
+  }
+  if (scenario === 'merge-batches') {
+    await load();
+    const button = element('#merge-batches');
+    assert.equal(button.disabled, true, 'nothing selected');
+    let boxes = document.querySelectorAll('.batch-select');
+    assert.equal(boxes.length, 2);
+    assert.ok(boxes.every(box => box.getAttribute('aria-label').startsWith('Select Burst')));
+    boxes[0].checked = true; boxes[0].listeners.change();
+    assert.equal(button.disabled, true, 'one batch is not a merge');
+    boxes[1].checked = true; boxes[1].listeners.change();
+    assert.equal(button.disabled, false);
+    const loadsBefore = groupLoads;
+    await button.listeners.click();
+    assert.deepEqual(mergePosts, [{ group_ids: [1, 2] }]);
+    assert.equal(groupLoads, loadsBefore + 1, 'merge reloads the batches');
+    assert.equal(state.selectedGroupId, 1);
+    assert.equal(state.selectedId, 1, 'the merged batch is selected');
+    assert.equal(document.querySelectorAll('.batch-button').length, 1);
+    boxes = document.querySelectorAll('.batch-select');
+    assert.equal(boxes.length, 1);
+    assert.equal(boxes[0].checked, false, 'selection is cleared after the merge');
+    assert.equal(element('#merge-batches').disabled, true);
+    assert.ok(element('#announcer').textContent.includes('Merged 2 batches'), element('#announcer').textContent);
     return;
   }
   await inspect(state.groups.flatMap(item => item.photos).find(item => item.id === 2));
@@ -2044,6 +2096,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
+
+    def test_javascript_batch_rail_merges_selected_batches(self):
+        self.run_javascript_cleanup_regression("merge-batches")
 
     def test_javascript_cleanup_selection_follows_photo_after_group_refresh(self):
         for scenario in ("split", "merge", "missing"):

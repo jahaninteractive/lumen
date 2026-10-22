@@ -94,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
     remove.add_argument("group_id", type=int)
     remove.add_argument("--json", action="store_true")
 
+    merge = commands.add_parser("merge", help="merge bursts into the earliest one, e.g. long-exposure astro lights")
+    merge.add_argument("group_ids", type=int, nargs="+")
+    merge.add_argument("--json", action="store_true")
+
     clear = commands.add_parser("clear", help="clear the workspace with exact CLEAR confirmation")
     clear.add_argument("confirmation")
     clear.add_argument("--json", action="store_true")
@@ -256,10 +260,13 @@ def main(argv: list[str] | None = None) -> int:
         _print(asdict(result) | {"output": str(result.output)}, args.json)
         return 0 if result.success else 2
 
-    if args.command in {"export", "remove", "clear"}:
+    if args.command in {"export", "remove", "clear", "merge"}:
         try:
             with Library(settings) as library:
-                if args.command == "export":
+                if args.command == "merge":
+                    payload = library.merge_groups(args.group_ids)
+                    code = 0
+                elif args.command == "export":
                     photo_ids = (args.photo,) if args.photo is not None else tuple(library.keeper_ids())
                     results = library.export_jpegs(ExportRequest(photo_ids, args.profile, args.preset))
                     payload = {"results": [asdict(result) for result in results]}

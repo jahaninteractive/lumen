@@ -4,6 +4,7 @@ const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
   job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
+  mergeSelection: new Set(),
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
   get busy() { return this.acting || JOB_ACTIVE.includes(this.job?.status); },
@@ -572,6 +573,15 @@ function renderGroups() {
       dayHeadings.push(heading);
     }
     heading.groups.push(group);
+    const select = document.createElement('input');
+    select.type = 'checkbox';
+    select.className = 'batch-select';
+    select.checked = state.mergeSelection.has(group.id);
+    select.setAttribute('aria-label', `Select ${batchText(group, groupIndex)} for merging`);
+    select.addEventListener('change', () => {
+      state.mergeSelection[select.checked ? 'add' : 'delete'](group.id);
+      updateWorkflow();
+    });
     const batch = document.createElement('button');
     batch.type = 'button';
     batch.className = 'batch-button';
@@ -593,7 +603,10 @@ function renderGroups() {
         announce(batch.textContent);
       }
     });
-    heading.details.append(batch);
+    const row = document.createElement('div');
+    row.className = 'batch-row';
+    row.append(select, batch);
+    heading.details.append(row);
   });
   refreshDays();
   visible.forEach(([photo, group]) => sheet.append(renderFrame(photo, group)));
@@ -674,6 +687,7 @@ async function load() {
   const [status, groups] = await Promise.all([request('/api/status'), request(`/api/groups${location.search}`)]);
   state.status = status;
   state.groups = groups.groups;
+  state.mergeSelection = new Set([...state.mergeSelection].filter(id => state.groups.some(group => group.id === id)));
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
   state.keeperCount = groups.keeper_count;
@@ -1032,6 +1046,7 @@ function updateWorkflow() {
   document.querySelector('#refine-availability').textContent = available ? '' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
+  document.querySelector('#merge-batches').disabled = state.busy || state.mergeSelection.size < 2;
   document.querySelector('#clear-workspace').disabled = state.busy || !state.photoCount || document.querySelector('#clear-confirmation').value !== 'CLEAR';
   document.querySelector('#browse-xmp').disabled = state.busy;
   document.querySelector('#reset-xmp').disabled = state.busy || !state.profile;
@@ -1394,6 +1409,29 @@ async function cleanup(url, payload) {
   }
 }
 document.querySelector('#remove-group').addEventListener('click', () => cleanup(`/api/groups/${state.selectedGroupId}/remove`, {}));
+
+async function mergeBatches() {
+  const groupIds = state.groups.map(group => group.id).filter(id => state.mergeSelection.has(id));
+  state.busy = true;
+  updateWorkflow();
+  try {
+    const result = await post('/api/groups/merge', { group_ids: groupIds });
+    state.mergeSelection.clear();
+    state.selectedId = null;
+    state.selectedGroupId = result.group_id;
+    await load();
+    const index = state.groups.findIndex(group => group.id === result.group_id);
+    const first = state.groups[index]?.photos[0];
+    if (first) await inspect(first);
+    announce(`Merged ${groupIds.length} batches into ${index < 0 ? 'one batch' : batchText(state.groups[index], index)}.`);
+  } catch (error) {
+    announce(`Could not merge batches: ${error.message}`);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+document.querySelector('#merge-batches').addEventListener('click', mergeBatches);
 document.querySelector('#clear-workspace').addEventListener('click', () => cleanup('/api/library/clear', { confirmation: document.querySelector('#clear-confirmation').value }));
 
 try {

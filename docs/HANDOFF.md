@@ -1,8 +1,18 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-22 (Africa/Johannesburg) — travel volume / culling plan complete on branch `travel-volume-culling`, final review clean, not yet merged
+Last updated: 2026-10-22 (Africa/Johannesburg) — exposure-aware grouping and manual batch merge landed on `main`
 
 ## Resume here
+
+**Exposure-aware grouping + manual merge (2026-10-22, on `main`).** Long-exposure astro lights (15–30 s) were never grouped because `TimeGapGroupingPolicy` compared capture timestamps only.
+
+- `previews.read_metadata` now runs exiftool with `-n` and reads `ExposureTime` as seconds (`exposure_seconds`, `None` when absent or non-numeric). `Photo.exposure_seconds` is persisted through the existing `_MIGRATIONS` table (`photos.exposure_seconds REAL`, `photos.merged_into TEXT`) so older catalogs upgrade on open; `upsert_photo` and `_photo_from_row` carry it.
+- Grouping rule: adjacent same-camera frames group when `next.captured_at − previous.captured_at ≤ gap_seconds + 2 × previous.exposure_seconds` (`None` → 0). The doubled exposure covers in-camera long-exposure noise reduction. Short exposures keep the 2-second behaviour; the existing grouping tests are unchanged. Already-imported photos get an exposure only on re-import (upsert refreshes it).
+- `Library.merge_groups(group_ids)`: moves every photo into the earliest group (list order: `started_at`, then id), keeps at most one manual pick (the target's first, else the first source's), appends a `groups_merged` event (`{group_id, merged_group_ids}`) on each photo of the merged group, re-ranks it, rewrites sidecars, and deletes the emptied `photo_groups` rows. Moved photos store the target's `stable_key` in `merged_into`; `_regroup_and_write_sidecars` groups only un-merged photos automatically, then appends merged photos to the group whose stable key matches (a merge whose target burst vanished falls back to its own burst). Reimport therefore keeps manual merges.
+- CLI `lumen merge <group-id> <group-id>... [--json]` (exit 2 with `{"error": ...}` on bad ids). API `POST /api/groups/merge` `{"group_ids": [int, int, ...]}` with the shared host/origin + strict-JSON prelude: exactly that key, ≥2 distinct positive ints, else 400. Response `{group_id, merged_group_ids, photo_count, automatic_pick_id}`; it is in both cross-origin/malformed-JSON regression lists.
+- Batch rail: each batch row is `div.batch-row` holding a labelled `input.batch-select` checkbox (`Select Burst N · … for merging`) and the batch button; `#merge-batches` ("Merge selected batches") sits under the rail heading, enabled with ≥2 ticked batches, posts, reloads, selects the merged batch's first frame, clears the selection, and announces `Merged N batches into Burst X …`. `state.mergeSelection` is pruned to existing groups on every load. The astro job code is untouched.
+- Tests: `test_grouping` (31 s / 62 s / 90 s spacing, `None` exposure), `test_previews` exposure parsing, `test_catalog` migration + upsert round trip, `test_library` merge/pick/reimport, `test_cli` merge, `test_web` route validation + Node scenario `merge-batches`. The `filters` scenario now expects `batch-row` children under each day heading.
+
 
 **Branch `travel-volume-culling` (13 commits, `6236e7a..1f8a8a3`) implements the whole of `docs/superpowers/plans/2026-10-22-travel-volume-culling.md`** (spec: `docs/superpowers/specs/2026-10-22-travel-volume-culling-design.md`). Every task had an independent review and fix round; the whole-branch final review came back "ready with fixes", the single fix wave (`1f8a8a3`) was re-reviewed clean. The branch is **not merged into `main`**; merging is the user's call. The warning-strict suite passes **360 tests** at `1f8a8a3` (`env -u LUMEN_OMLX_MODEL`), `node --check src/lumen/static/app.js` passes, and `lumen doctor` reports darktable-cli, siril-cli, and exiftool available. The old astro plan is complete and committed as `0923f08`.
 

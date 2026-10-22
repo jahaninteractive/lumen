@@ -57,6 +57,8 @@ class Photo:
     rating: int = 0
     mirror_path: str | None = None
     preview_kind: str = "embedded"  # "embedded" (camera JPEG) or "refined" (darktable render)
+    exposure_seconds: float | None = None
+    merged_into: str | None = None  # stable_key of the group a manual merge moved this photo into
 
 
 @dataclass(slots=True)

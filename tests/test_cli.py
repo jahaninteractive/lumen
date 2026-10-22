@@ -492,6 +492,21 @@ class ExportCleanupCliTests(unittest.TestCase):
         self.assertEqual(1, payload["photos_removed"])
         self.assertTrue(Path(payload["snapshot_path"]).is_file())
 
+    def test_merge_joins_groups_into_the_earliest_and_rejects_single_ids(self):
+        second = self.root / "second.jpg"
+        Image.new("RGB", (40, 30), "blue").save(second)
+        with Library(self.settings) as library:
+            library.import_path(second)
+            self.assertEqual(2, len(library.list_groups()))
+        code, payload = self.run_command("merge", "2", "1")
+        self.assertEqual(0, code)
+        self.assertEqual((1, [2], 2), (payload["group_id"], payload["merged_group_ids"], payload["photo_count"]))
+        with Library(self.settings) as library:
+            self.assertEqual(1, len(library.list_groups()))
+        code, payload = self.run_command("merge", "1")
+        self.assertEqual(2, code)
+        self.assertIn("error", payload)
+
     def test_remove_unknown_group_returns_json_error(self):
         code, payload = self.run_command("remove", "99999")
         self.assertEqual(2, code)

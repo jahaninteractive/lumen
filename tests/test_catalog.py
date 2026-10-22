@@ -335,6 +335,32 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(("/lib/previews/def.jpg", "embedded"), (migrated.get_photo(1).preview_path, migrated.get_photo(1).preview_kind),
                              "a re-import writes a fresh embedded preview")
 
+    def test_migration_adds_exposure_and_merge_columns_and_upsert_round_trips_exposure(self):
+        legacy_path = Path(self.tmp.name) / "pre-exposure.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE photos (
+                    id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL,
+                    captured_at TEXT, camera_id TEXT NOT NULL, preview_path TEXT,
+                    format TEXT NOT NULL DEFAULT 'ARW', group_id INTEGER,
+                    manual_pick INTEGER NOT NULL DEFAULT 0, imported_at TEXT NOT NULL
+                );
+                INSERT INTO photos (id, path, fingerprint, camera_id, imported_at)
+                    VALUES (1, '/photos/a.ARW', 'abc', 'A1', '2026-10-21T10:00:00+00:00');
+                """
+            )
+        for _ in range(2):
+            with Catalog(legacy_path) as migrated:
+                columns = [row["name"] for row in migrated.connection.execute("PRAGMA table_info(photos)")]
+                photo = migrated.get_photo(1)
+        self.assertEqual((1, 1), (columns.count("exposure_seconds"), columns.count("merged_into")))
+        self.assertEqual((None, None), (photo.exposure_seconds, photo.merged_into))
+        with Catalog(legacy_path) as migrated:
+            migrated.upsert_photo(Photo(path="/photos/a.ARW", fingerprint="abc", captured_at=None, camera_id="A1", exposure_seconds=30.0))
+            self.assertEqual(30.0, migrated.get_photo(1).exposure_seconds)
+            self.assertEqual(30.0, migrated.list_photos()[0].exposure_seconds)
+
     def test_photos_for_filters_returns_matching_grouped_photo_ids(self):
         ids, _ = seed_filter_photos(self.catalog)
         self.assertEqual(sorted([ids["a1"], ids["a2"], ids["b2"], ids["c1"]]), self.catalog.photos_for_filters(GroupFilters()))

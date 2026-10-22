@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions
+from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
 
 
 def write_fake_darktable(directory: Path, sharp: tuple[str, ...] = ()) -> str:
@@ -57,6 +57,30 @@ class PreviewTests(unittest.TestCase):
                 "lumen.previews.subprocess.run", return_value=response
             ):
                 self.assertEqual((4000, 6000), read_image_dimensions(source))
+
+    def test_metadata_reads_exposure_seconds_numerically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.ARW"
+            source.write_bytes(b"raw")
+            response = subprocess.CompletedProcess(
+                ["exiftool"], 0,
+                '[{"DateTimeOriginal":"2026:10:21 22:15:00","Model":"ILCE-7CM2","SerialNumber":"1","ExposureTime":30}]', "",
+            )
+            with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch(
+                "lumen.previews.subprocess.run", return_value=response
+            ) as run:
+                metadata = read_metadata(source)
+            self.assertEqual(30.0, metadata["exposure_seconds"])
+            self.assertEqual("2026-10-21T22:15:00", metadata["captured_at"])
+            self.assertIn("-n", run.call_args.args[0])
+            self.assertIn("-ExposureTime", run.call_args.args[0])
+            response.stdout = '[{"Model":"ILCE-7CM2","ExposureTime":"bad"}]'
+            with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch(
+                "lumen.previews.subprocess.run", return_value=response
+            ):
+                self.assertIsNone(read_metadata(source)["exposure_seconds"])
+            with patch("lumen.previews.shutil.which", return_value=None):
+                self.assertIsNone(read_metadata(source)["exposure_seconds"])
 
     def test_unknown_source_dimensions_fail_clearly(self):
         with tempfile.TemporaryDirectory() as directory:

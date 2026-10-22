@@ -22,7 +22,7 @@ _JOB_TRANSITIONS = {
 _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
     "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT",
-               "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'"},
+               "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'", "exposure_seconds": "REAL", "merged_into": "TEXT"},
 }
 
 
@@ -220,11 +220,12 @@ class Catalog:
             """
             INSERT INTO photos
                 (path, fingerprint, captured_at, camera_id, preview_path, format,
-                 group_id, manual_pick, imported_at, preview_kind)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 group_id, manual_pick, imported_at, preview_kind, exposure_seconds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 fingerprint=excluded.fingerprint,
                 captured_at=excluded.captured_at,
+                exposure_seconds=excluded.exposure_seconds,
                 camera_id=excluded.camera_id,
                 preview_path=excluded.preview_path,
                 preview_kind=excluded.preview_kind,
@@ -244,6 +245,7 @@ class Catalog:
                 int(photo.manual_pick),
                 now,
                 photo.preview_kind,
+                photo.exposure_seconds,
             ),
         ).fetchone()
         self.connection.commit()
@@ -543,6 +545,27 @@ class Catalog:
             "SELECT id FROM photos WHERE group_id = ? ORDER BY id", (group_id,)
         ).fetchall()
         return [int(row["id"]) for row in rows]
+
+    def merge_groups(self, target_id: int, source_ids: list[int]) -> list[int]:
+        """Move every photo of `source_ids` into `target_id`, keeping at most one manual pick (target's first), and drop the emptied groups."""
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            target = self.connection.execute("SELECT stable_key FROM photo_groups WHERE id = ?", (target_id,)).fetchone()
+            if target is None:
+                raise ValueError(f"group {target_id} does not exist")
+            keep = None
+            for group_id in (target_id, *source_ids):
+                row = self.connection.execute(
+                    "SELECT id FROM photos WHERE group_id = ? AND manual_pick = 1 ORDER BY id LIMIT 1", (group_id,)).fetchone()
+                if row and keep is None:
+                    keep = int(row["id"])
+                elif row:
+                    self.connection.execute("UPDATE photos SET manual_pick = 0 WHERE group_id = ?", (group_id,))
+            for group_id in source_ids:
+                self.connection.execute("UPDATE photos SET group_id = ?, merged_into = ? WHERE group_id = ?",
+                                        (target_id, target["stable_key"], group_id))
+                self.connection.execute("DELETE FROM photo_groups WHERE id = ?", (group_id,))
+        return self.group_photo_ids(target_id)
 
     def list_group_ids(self) -> list[int]:
         return [int(row["id"]) for row in self.connection.execute("SELECT id FROM photo_groups ORDER BY id")]
@@ -886,6 +909,8 @@ class Catalog:
             rating=int(row["rating"]),
             mirror_path=row["mirror_path"],
             preview_kind=row["preview_kind"],
+            exposure_seconds=row["exposure_seconds"],
+            merged_into=row["merged_into"],
         )
 
     @staticmethod

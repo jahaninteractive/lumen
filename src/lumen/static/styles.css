@@ -216,7 +216,10 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 #show-more[hidden] { display: none; }
 .day { margin-bottom: .75rem; }
 .day summary { min-height: 44px; padding: .6rem 0; color: var(--cyan); cursor: pointer; font-weight: 700; font-variant-numeric: tabular-nums; }
-.batch-button { display: block; width: 100%; margin-bottom: .55rem; color: var(--paper); background: transparent; text-align: left; font-weight: 600; }
+.batch-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .55rem; }
+.batch-row .batch-select { flex: 0 0 auto; }
+#merge-batches { width: 100%; margin-bottom: .75rem; }
+.batch-button { display: block; width: 100%; flex: 1 1 auto; color: var(--paper); background: transparent; text-align: left; font-weight: 600; }
 .batch-button:hover { border-color: var(--amber); }
 .quiet { color: var(--muted); }
 .metric { margin-bottom: .85rem; }

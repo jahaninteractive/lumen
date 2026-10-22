@@ -161,30 +161,33 @@ class ExifToolPreviewProvider:
         return destination
 
 
-def read_metadata(path: Path) -> dict[str, str | None]:
+def read_metadata(path: Path) -> dict[str, str | float | None]:
+    unknown = {"captured_at": None, "camera_id": "unknown", "exposure_seconds": None}
     exiftool = shutil.which("exiftool")
     if not exiftool:
-        return {"captured_at": None, "camera_id": "unknown"}
+        return unknown
     try:
         result = subprocess.run(
-            [exiftool, "-json", "-DateTimeOriginal", "-CreateDate", "-Model", "-SerialNumber", str(path)],
+            [exiftool, "-json", "-n", "-DateTimeOriginal", "-CreateDate", "-Model", "-SerialNumber", "-ExposureTime", str(path)],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
     except subprocess.SubprocessError:
-        return {"captured_at": None, "camera_id": "unknown"}
+        return unknown
     if result.returncode != 0:
-        return {"captured_at": None, "camera_id": "unknown"}
+        return unknown
     try:
         item = json.loads(result.stdout)[0]
     except (json.JSONDecodeError, IndexError, TypeError):
-        return {"captured_at": None, "camera_id": "unknown"}
+        return unknown
     captured = item.get("DateTimeOriginal") or item.get("CreateDate")
     model = item.get("Model") or "unknown"
     serial = item.get("SerialNumber") or "unknown"
-    return {"captured_at": _normalize_exif_date(captured), "camera_id": f"{model}:{serial}"}
+    exposure = item.get("ExposureTime")  # -n gives seconds as a number
+    exposure = float(exposure) if isinstance(exposure, (int, float)) and not isinstance(exposure, bool) and exposure > 0 else None
+    return {"captured_at": _normalize_exif_date(captured), "camera_id": f"{model}:{serial}", "exposure_seconds": exposure}
 
 
 def _normalize_exif_date(value: str | None) -> str | None:

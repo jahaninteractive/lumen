@@ -446,6 +446,40 @@ class LibraryTests(unittest.TestCase):
             with closing(sqlite3.connect(next(path for path in metadata if path.name == "catalog.sqlite3"))) as snapshot:
                 self.assertEqual(1, snapshot.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
 
+    def test_merge_groups_moves_photos_into_earliest_group_and_survives_reimport(self):
+        for name in ("DSC0002.jpg", "DSC0003.jpg"):
+            Image.new("RGB", (320, 240), (90, 90, 90)).save(self.source_dir / name, quality=95)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            groups = library.list_groups()
+            self.assertEqual(3, len(groups))
+            first, second, third = (group["id"] for group in groups)
+            third_photo = groups[2]["photos"][0]["id"]
+            library.set_pick(third_photo)
+            for bad in ([first], [first, first], [first, 99999], [first, "2"], [first, True]):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    library.merge_groups(bad)
+            self.assertEqual(3, len(library.list_groups()))
+
+            result = library.merge_groups([third, first, second])
+
+            merged = library.list_groups()
+            self.assertEqual([first], [group["id"] for group in merged])
+            self.assertEqual({"group_id": first, "merged_group_ids": [second, third], "photo_count": 3,
+                              "automatic_pick_id": third_photo}, result)
+            self.assertEqual(third_photo, merged[0]["automatic_pick_id"], "the manual pick is kept")
+            for item in merged[0]["photos"]:
+                events = [event for event in library.catalog.events_for(item["id"]) if event.kind == "groups_merged"]
+                self.assertEqual([{"group_id": first, "merged_group_ids": [second, third]}], [event.details for event in events])
+                sidecar = json.loads(library.sidecars.paths(library.catalog.get_photo(item["id"]))[0].read_text())
+                self.assertEqual(item["id"] == third_photo, sidecar["selection"]["best_in_group"])
+
+            library.import_path(self.source_dir)  # automatic regrouping must honour the manual merge
+            after = library.list_groups()
+            self.assertEqual([first], [group["id"] for group in after])
+            self.assertEqual(3, len(after[0]["photos"]))
+            self.assertEqual(third_photo, after[0]["automatic_pick_id"])
+
     def test_remove_group_stages_only_its_managed_files_and_keeps_originals_and_exports(self):
         second = self.source_dir / "second.jpg"
         Image.new("RGB", (40, 30), "blue").save(second)

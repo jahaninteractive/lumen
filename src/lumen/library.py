@@ -56,6 +56,10 @@ def _job_detail(job_id: int | None) -> dict:
     return {} if job_id is None else {"job_id": job_id}
 
 
+def _stable_key(first: Photo) -> str:
+    return hashlib.sha256(f"{first.camera_id}|{first.path}".encode()).hexdigest()[:24]
+
+
 def _select(ranking: list[RankedPhoto]) -> RankedPhoto:
     """Manual unrejected pick, else best unrejected frame, else best frame (keeper filtering drops it)."""
     kept = [item for item in ranking if item.photo.decision != "reject"]
@@ -650,6 +654,22 @@ class Library:
             raise
 
     @_coordinated
+    def merge_groups(self, group_ids: list[int]) -> dict:
+        """Merge bursts into the earliest one; the merge survives automatic regrouping through `Photo.merged_into`."""
+        if (not isinstance(group_ids, list) or len(group_ids) < 2
+                or any(type(group_id) is not int or group_id <= 0 for group_id in group_ids) or len(set(group_ids)) != len(group_ids)):
+            raise ValueError("merge needs at least two distinct positive group IDs")
+        ordered = [group["id"] for group in self.catalog.list_groups() if group["id"] in set(group_ids)]
+        if missing := set(group_ids) - set(ordered):
+            raise ValueError(f"group {min(missing)} does not exist")
+        target, sources = ordered[0], ordered[1:]
+        photo_ids = self.catalog.merge_groups(target, sources)
+        for photo_id in photo_ids:
+            self.catalog.append_event(photo_id, "groups_merged", {"group_id": target, "merged_group_ids": sources})
+        pick = self._rerank_group(target)
+        return {"group_id": target, "merged_group_ids": sources, "photo_count": len(photo_ids), "automatic_pick_id": pick}
+
+    @_coordinated
     def remove_group(self, group_id: int) -> CleanupResult:
         try:
             if type(group_id) is not int or group_id not in self.catalog.list_group_ids():
@@ -1092,6 +1112,7 @@ class Library:
             camera_id=str(metadata["camera_id"]),
             preview_path=str(preview_path),
             format=source.suffix.lstrip(".").upper(),
+            exposure_seconds=metadata.get("exposure_seconds"),
         )
         if previous and previous.fingerprint != fingerprint:
             self.catalog.clear_tags(previous.id)
@@ -1125,7 +1146,13 @@ class Library:
 
     def _regroup_and_write_sidecars(self) -> None:
         photos = self.catalog.list_photos()
-        groups = TimeGapGroupingPolicy(self.settings.burst_gap_seconds).group(photos)
+        groups = TimeGapGroupingPolicy(self.settings.burst_gap_seconds).group([photo for photo in photos if not photo.merged_into])
+        keyed = {_stable_key(group[0]): group for group in groups}
+        for photo in sorted((photo for photo in photos if photo.merged_into), key=lambda item: item.path):
+            if photo.merged_into in keyed:
+                keyed[photo.merged_into].append(photo)
+            else:  # ponytail: a merge whose target burst no longer exists falls back to a burst of its own.
+                groups.append([photo])
         self.catalog.clear_group_assignments()
         selected_ids: set[int] = set()
         for group in groups:
@@ -1142,9 +1169,8 @@ class Library:
             selected = _select(ranking)
             selected_ids.add(int(selected.photo.id))
             first = group[0]
-            stable_key = hashlib.sha256(f"{first.camera_id}|{first.path}".encode()).hexdigest()[:24]
             self.catalog.assign_group(
-                stable_key,
+                _stable_key(first),
                 first.camera_id,
                 first.captured_at.isoformat() if first.captured_at else None,
                 [int(item.photo.id) for item in ranking],

@@ -383,6 +383,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     status = HTTPStatus.OK if all(result.success for result in results) else HTTPStatus.BAD_REQUEST
                     self._send_json({"results": [asdict(result) for result in results]}, status=status)
                     return
+                if path == "/api/groups/merge":
+                    if payload.keys() != {"group_ids"}:
+                        raise ValueError("merge requires exactly group_ids")
+                    group_ids = payload["group_ids"]
+                    if (not isinstance(group_ids, list) or len(group_ids) < 2 or len(set(group_ids)) != len(group_ids)
+                            or any(type(group_id) is not int or group_id <= 0 for group_id in group_ids)):
+                        raise ValueError("group_ids must list at least two distinct positive integers")
+                    with Library(settings) as library:
+                        self._send_json(library.merge_groups(group_ids))
+                    return
                 match = re.fullmatch(r"/api/groups/(\d+)/remove", path)
                 if match:
                     if payload:

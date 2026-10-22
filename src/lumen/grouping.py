@@ -23,7 +23,9 @@ class TimeGapGroupingPolicy:
                 continue
             previous = current[-1]
             gap = (_utc(photo.captured_at) - _utc(previous.captured_at)).total_seconds()
-            if photo.camera_id == previous.camera_id and gap <= self.gap_seconds:
+            # Doubled exposure: in-camera long-exposure noise reduction blanks the shutter for a second exposure.
+            allowed = self.gap_seconds + 2 * (previous.exposure_seconds or 0)
+            if photo.camera_id == previous.camera_id and gap <= allowed:
                 current.append(photo)
             else:
                 groups.append(current)
