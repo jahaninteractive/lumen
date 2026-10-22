@@ -801,6 +801,13 @@ class Catalog:
                 )
         return result
 
+    def group_frame_counts(self) -> dict[int, tuple[int, int]]:
+        """Unfiltered {group_id: (frames, rejected)}; a burst's counts never depend on the view."""
+        rows = self.connection.execute(
+            "SELECT group_id, COUNT(*), SUM(decision = 'reject') FROM photos WHERE group_id IS NOT NULL GROUP BY group_id"
+        )
+        return {int(row[0]): (int(row[1]), int(row[2])) for row in rows}
+
     def group_counts(self, filters: GroupFilters | None = None) -> dict[str, int]:
         """Grouped photos matching the filters, and all grouped photos."""
         where, params = filters.where() if filters else ("1", [])

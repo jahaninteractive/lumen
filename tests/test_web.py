@@ -841,6 +841,8 @@ const ingestCounts = extra => ({ copied: 0, verified: 0, already_present: 0, fai
 const ingestJob = (status, progress, extra = {}) => ({ job_id: 11, kind: 'ingest', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ingest: ingestCounts(), ...extra });
 let groupLoads = 0;
 let lastGroupsUrl = null;
+let keeperOverride = null;
+let groupsError = null;
 let resumeJobs = [];
 let importPolls = 0;
 const removals = [];
@@ -868,10 +870,12 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
+  else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
   else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
     groupLoads += 1; lastGroupsUrl = url;
+    const keepers = groups.reduce((count, item) => count + item.photos.filter(p => p.decision !== 'reject' && (p.decision === 'flag' || p.id === item.automatic_pick_id)).length, 0);
     const frames = groups.reduce((count, item) => count + item.photos.length, 0);
-    payload = { groups, photo_count: groups.reduce((count, item) => count + item.frame_count, 0), rejected_count: groups.reduce((count, item) => count + item.rejected_count, 0), counts: { filtered: frames, total: frames }, cameras: ['ILCE-7M4:1', 'ILCE-7RV:2'] };
+    payload = { groups, photo_count: groups.reduce((count, item) => count + item.frame_count, 0), rejected_count: groups.reduce((count, item) => count + item.rejected_count, 0), counts: { filtered: frames, total: frames }, cameras: ['ILCE-7M4:1', 'ILCE-7RV:2'], keeper_count: keeperOverride ?? keepers };
   }
   else if (/^\/api\/photos\/\d+\/pick$/.test(url)) { assert.deepEqual(JSON.parse(options.body), {}); picks.push(url); payload = { photo_id: Number(url.split('/')[3]), manual_pick: true }; }
   else if (url === '/api/jobs') payload = { jobs: resumeJobs };
@@ -1259,6 +1263,8 @@ const regression = `
     assert.equal(more.hidden, false);
     assert.equal(more.textContent, 'Show 200 more · 200 remaining');
     assert.deepEqual(element('#filter-camera').children.map(option => option.value), ['', 'ILCE-7M4:1', 'ILCE-7RV:2']);
+    assert.equal(element('#keeper-count').textContent, '4 keepers');
+    keeperOverride = 4;
 
     element('#filter-from').value = '2026-10-21';
     element('#filter-to').value = '2026-10-22';
@@ -1274,6 +1280,7 @@ const regression = `
     assert.equal(location.search, '?' + query);
     assert.equal(lastGroupsUrl, '/api/groups?' + query);
     assert.equal(element('#announcer').textContent, 'Showing 200 of 390 frames');
+    assert.equal(element('#keeper-count').textContent, '4 keepers', 'export counts library-wide keepers, not the filtered view');
     assert.equal(more.textContent, 'Show 190 more · 190 remaining');
     assert.equal(cards().length, 200);
     assert.deepEqual(cards().map(card => card.getAttribute('tabindex')).filter(value => value === '0'), ['0'], 'one frame in the tab order');
@@ -1297,6 +1304,17 @@ const regression = `
     assert.deepEqual(['#filter-from', '#filter-to', '#filter-camera', '#filter-decision', '#filter-rating', '#filter-text'].map(name => element(name).value),
       ['2026-10-21', '2026-10-22', 'ILCE-7M4:1', 'flag', '2', 'red fox']);
     assert.deepEqual([element('#filter-keepers').checked, element('#filter-tagged').checked, element('#show-rejected').checked], [true, true, false]);
+
+    element('#filter-to').value = '2026-10-01';
+    groupsError = 'invalid filter: date_to';
+    await element('#filter-form').listeners.submit({ preventDefault() {} });
+    assert.equal(element('#announcer').textContent, 'invalid filter: date_to');
+    assert.ok(lastGroupsUrl.includes('date_to=2026-10-01'));
+    assert.equal(location.search, '?' + query, 'a rejected filter is not left in the URL');
+    assert.equal(element('#filter-to').value, '2026-10-01', 'the form keeps what was typed');
+    await load();
+    assert.equal(lastGroupsUrl, '/api/groups?' + query, 'later loads still work');
+    keeperOverride = null;
 
     groups = [burst(9, '2026-10-21', range(1, 3))];
     await element('#reset-filters').listeners.click();
@@ -1739,12 +1757,20 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         payload, everything = shown("")
         self.assertEqual(["a1", "a2", "b2", "c1", "original"], everything)
         self.assertEqual({"filtered": 5, "total": 7}, payload["counts"])
+        self.assertEqual(4, payload["keeper_count"])
         self.assertEqual(sorted({"A", "B", original.camera_id}), payload["cameras"])
         self.assertEqual((7, 2), (payload["photo_count"], payload["rejected_count"]))
         payload, narrowed = shown("?date_from=2026-10-21&date_to=2026-10-22&camera=B&min_rating=1&tagged_only=1&text=Heron")
         self.assertEqual((["b2"], {"filtered": 1, "total": 7}), (narrowed, payload["counts"]))
         self.assertEqual(sorted({"A", "B", original.camera_id}), payload["cameras"], "cameras ignore the filters")
-        self.assertEqual([(1, 0)], [(group["frame_count"], group["rejected_count"]) for group in payload["groups"]])
+        self.assertEqual([(2, 1)], [(group["frame_count"], group["rejected_count"]) for group in payload["groups"]],
+                         "burst counts are unfiltered: removal acts on the whole burst")
+        self.assertEqual(4, payload["keeper_count"], "keeper_count is library-wide, as export uses it")
+        payload, top_rated = shown("?min_rating=5")
+        self.assertEqual([], top_rated)
+        self.assertEqual([(ids["a1"], 3, 1, [])], [(group["automatic_pick_id"], group["frame_count"], group["rejected_count"], group["photos"])
+                                                    for group in payload["groups"]], "a burst with keepers is not labelled all-rejected")
+        self.assertEqual((4, 1), (payload["keeper_count"], payload["rejected_count"]))
         self.assertEqual(["a1", "a2", "c1", "original"], shown("?keepers_only=1")[1])
         self.assertEqual(["a3", "b1"], shown("?decision=reject")[1])
         payload, rejected = shown("?camera=B&show_rejected=1")
@@ -1850,7 +1876,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(1 if retain_success else 0, sum(len(group["photos"]) for group in payload["groups"]))
         self.run_javascript_cleanup_regression("workspace-mixed" if retain_success else "workspace-ungrouped")
         with urllib.request.urlopen(self.base + "/api/groups", timeout=3) as response:
-            self.assertEqual({"groups": [], "photo_count": 0, "rejected_count": 0, "counts": {"filtered": 0, "total": 0}, "cameras": []}, json.load(response))
+            self.assertEqual({"groups": [], "photo_count": 0, "rejected_count": 0, "counts": {"filtered": 0, "total": 0}, "cameras": [], "keeper_count": 0}, json.load(response))
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual([], library.catalog.list_photos())
 

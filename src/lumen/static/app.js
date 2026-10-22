@@ -1,7 +1,7 @@
 const JOB_ACTIVE = ['queued', 'running'];
 const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
-  job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, shown: 200, focusedId: null, compare: [],
+  job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -234,11 +234,17 @@ function isKeeper(photo, group) {
   return photo.decision !== 'reject' && (photo.decision === 'flag' || photo.id === group.automatic_pick_id);
 }
 
+function keepersIn(group) {
+  return group.photos.filter(photo => isKeeper(photo, group)).length;
+}
+
 // The one decision path for the inspector and the keyboard: field is 'decision', 'rating', or 'pick'.
 // focusAfter (inspector only) returns focus to the re-rendered control; keyboard focus stays on the frame.
 async function decide(photo, field, value, focusAfter = null) {
   if (state.busy) return announce('Wait for the current change or job to finish.');
   const previous = photo.decision;
+  const owner = state.groups.find(item => item.photos.includes(photo));
+  const keepersBefore = owner ? keepersIn(owner) : 0;
   state.busy = true;
   updateWorkflow();
   try {
@@ -257,6 +263,8 @@ async function decide(photo, field, value, focusAfter = null) {
     if (group) {
       group.automatic_pick_id = result.automatic_pick_id;
       group.rejected_count += delta;
+      // ponytail: library-wide count adjusted by the visible burst; exact unfiltered, may drift under a filter until the next load.
+      if (group === owner) state.keeperCount += keepersIn(group) - keepersBefore;
       refreshFrames(group);
       refreshPanes(photo.id);
       const batch = document.querySelectorAll('.batch-button')[groupIndex];
@@ -514,7 +522,7 @@ let dayHeadings = [];  // { day, summary, groups } per rail <details>, so decisi
 
 function dayText(day, groups) {
   const frames = groups.reduce((total, group) => total + group.frame_count, 0);
-  const keepers = groups.reduce((total, group) => total + group.photos.filter(photo => isKeeper(photo, group)).length, 0);
+  const keepers = groups.reduce((total, group) => total + keepersIn(group), 0);
   return `${day} · ${frameCount(frames)} · ${keepers} keeper${keepers === 1 ? '' : 's'}`;
 }
 
@@ -642,9 +650,15 @@ function syncFilters(cameras) {
 }
 
 async function applyFilters(query = filterQuery()) {
+  const previous = location.search;
   history.replaceState(null, '', query ? `?${query}` : location.pathname);
   state.shown = PAGE;
-  await load();
+  try {
+    await load();
+  } catch (error) {  // A rejected filter never sticks in the URL; the form keeps what was typed.
+    history.replaceState(null, '', previous || location.pathname);
+    throw error;
+  }
   announceShowing();
 }
 
@@ -654,6 +668,7 @@ async function load() {
   state.groups = groups.groups;
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
+  state.keeperCount = groups.keeper_count;
   syncFilters(groups.cameras);
   const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId))
     || (state.selectedId === null ? state.groups.find(group => group.id === state.selectedGroupId) : undefined);
@@ -978,7 +993,7 @@ function updateWorkflow() {
   const photo = photos.find(item => item.id === state.selectedId);
   const groupIndex = state.groups.findIndex(item => item.id === state.selectedGroupId);
   const group = state.groups[groupIndex];
-  const keepers = state.groups.reduce((total, item) => total + item.photos.filter(photo => isKeeper(photo, item)).length, 0);
+  const keepers = state.keeperCount;  // library-wide, like export; never the filtered view
   const available = state.status?.tools?.['darktable-cli']?.available === true;
   document.querySelector('#current-export-name').textContent = photo?.name || 'No photo selected';
   document.querySelector('#keeper-count').textContent = `${keepers} keeper${keepers === 1 ? '' : 's'}`;

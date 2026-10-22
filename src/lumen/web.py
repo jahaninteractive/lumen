@@ -189,14 +189,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 with Library(settings) as library:
                     # Rejected frames are fetched so an all-rejected burst stays listed and its counts cover them.
                     groups = _serializable_groups(library.list_groups(replace(filters, show_rejected=True)))
-                    payload = {"photo_count": library.photo_count(), "counts": library.catalog.group_counts(filters), "cameras": library.cameras()}
+                    frame_counts = library.catalog.group_frame_counts()
+                    payload = {"photo_count": library.photo_count(), "counts": library.catalog.group_counts(filters),
+                               "cameras": library.cameras(), "keeper_count": len(library.keeper_ids())}
                 hide_rejected = not filters.show_rejected and filters.decision == "any"
+                rejected_count = 0  # rejected frames the current filters would reveal
                 for group in groups:
-                    group["frame_count"] = len(group["photos"])
-                    group["rejected_count"] = sum(photo["decision"] == "reject" for photo in group["photos"])
+                    group["frame_count"], group["rejected_count"] = frame_counts.get(group["id"], (len(group["photos"]), 0))
+                    rejected_count += sum(photo["decision"] == "reject" for photo in group["photos"])
                     if hide_rejected:
                         group["photos"] = [photo for photo in group["photos"] if photo["decision"] != "reject"]
-                rejected_count = sum(group["rejected_count"] for group in groups)
                 self._send_json({"groups": groups, "rejected_count": rejected_count, **payload})
                 return
             if path == "/api/jobs":
