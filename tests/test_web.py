@@ -706,6 +706,7 @@ Object.defineProperty(element('#astro-status'), 'textContent', { get() { return 
 const jobPayload = (status, progress, extra = {}) => ({ job_id: 7, kind: 'astro', status, progress, error: null, result: null, log_tail: ['log: Running command: register'], warnings: ['No flat frames supplied; stacking without flats.'], lights: 2, excluded_lights: 1, darks: 0, flats: 0, biases: 0, created_at: '', updated_at: '', ...extra });
 const importJob = (status, progress, extra = {}) => ({ job_id: 9, kind: 'import', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 let groupLoads = 0;
+let resumeJobs = [];
 let importPolls = 0;
 const removals = [];
 const compositionReviews = [];
@@ -733,7 +734,7 @@ async function fetch(url, options = {}) {
   if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (url === '/api/groups') { groupLoads += 1; payload = { groups, photo_count: groups.reduce((count, item) => count + item.photos.length, 0) }; }
-  else if (url === '/api/jobs') payload = { jobs: [] };
+  else if (url === '/api/jobs') payload = { jobs: resumeJobs };
   else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
   else if (url === '/api/jobs/9') {
     importPolls += 1;
@@ -839,6 +840,16 @@ const regression = `
     assert.equal(groupLoads, loadsBefore + 1, 'load() runs once when the job ends');
     assert.equal(element('#import-form button[type="submit"]').disabled, false);
     assert.equal(element('#cancel-job').disabled, true);
+    importPolls = 0;
+    resumeJobs = [jobPayload('queued', 0), importJob('queued', 0)];
+    await load();
+    assert.equal(state.job.kind, 'import', 'a queued job from another tab is resumed; a prepared astro stack is not');
+    assert.equal(state.job.status, 'queued');
+    assert.equal(activeTimers, 1);
+    resumeJobs = [];
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(activeTimers, 0);
+    assert.equal(state.job.status, 'succeeded');
     return;
   }
   const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');

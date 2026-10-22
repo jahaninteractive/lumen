@@ -904,10 +904,10 @@ class LibraryTests(unittest.TestCase):
         Image.new("RGB", (320, 240), (20, 20, 20)).save(second)
         original = Library._import_one
 
-        def timeout_second(library, source, *args):
+        def timeout_second(library, source, *args, **kwargs):
             if source.name == "DSC0002.jpg":
                 raise subprocess.TimeoutExpired("exiftool", 30)
-            return original(library, source, *args)
+            return original(library, source, *args, **kwargs)
 
         with patch.object(Library, "_import_one", timeout_second):
             with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1045,26 +1045,38 @@ class LibraryTests(unittest.TestCase):
         Image.new("RGB", (320, 240), (20, 20, 20)).save(second)
         with Library(Settings(library_dir=self.library_dir)) as library:
             library.import_path(self.source_dir)
-            Image.new("RGB", (320, 240), (90, 20, 20)).save(self.source_dir / "DSC0003.jpg")
-            real = library_module.fingerprint_file
-            replaced = []
+            prior = library.catalog.photo_by_path(str(second.resolve())).fingerprint
+            Image.new("RGB", (320, 240), (90, 20, 20)).save(second)
+            hashed = library_module.fingerprint_file(second)
+            added = self.source_dir / "DSC0003.jpg"
+            Image.new("RGB", (320, 240), (20, 90, 20)).save(added)
+            real = library_module.ExifToolPreviewProvider.create_preview
+            swapped = []
 
-            def replace_second_while_first_is_checked(path):
-                if path.name == "DSC0001.jpg" and not replaced:
-                    Image.new("RGB", (320, 240), (5, 200, 5)).save(second)
-                    replaced.append(path)
-                return real(path)
+            def swap_between_hash_and_preview(provider, source, destination):
+                if source.name == "DSC0002.jpg" and not swapped:
+                    Image.new("RGB", (320, 240), (5, 5, 200)).save(second)
+                    swapped.append(source)
+                return real(provider, source, destination)
 
-            with patch("lumen.library.fingerprint_file", side_effect=replace_second_while_first_is_checked):
+            with patch.object(library_module.ExifToolPreviewProvider, "create_preview", autospec=True,
+                              side_effect=swap_between_hash_and_preview):
                 status = self.run_job(library, library.start_import_job(self.source_dir))
             changed = library.catalog.photo_by_path(str(second.resolve()))
-            kinds = [event.kind for event in library.catalog.events_for(changed.id)]
+            failure = library.catalog.events_for(changed.id)[-1]
+            new_photo = library.catalog.photo_by_path(str(added.resolve()))
+            imported = library.catalog.events_for(new_photo.id)[-1]
             photo_count = library.photo_count()
 
         self.assertEqual("succeeded", status["status"])
-        self.assertEqual({"discovered": 3, "imported": 1, "updated": 1, "skipped": 1, "failed": 0}, status["result"])
-        self.assertEqual("source_replaced", kinds[-2])
-        self.assertEqual("imported", kinds[-1])
+        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 1, "failed": 1}, status["result"])
+        self.assertEqual(prior, changed.fingerprint, "the row keeps its prior identity, never mismatched content")
+        self.assertEqual("import_failed", failure.kind)
+        self.assertIn("source changed during import", failure.details["error"])
+        self.assertEqual(library_module.fingerprint_file(second), failure.details["source_fingerprint"])
+        self.assertEqual(status["job_id"], failure.details["job_id"])
+        self.assertFalse((self.library_dir / "previews" / f"{hashed}.jpg").exists())
+        self.assertEqual(("imported", status["job_id"]), (imported.kind, imported.details["job_id"]))
         self.assertEqual(3, photo_count)
 
     def test_import_job_label_is_basename_only(self):
@@ -1120,7 +1132,8 @@ class LibraryTests(unittest.TestCase):
             tagger = FlakyTagger(Path(second.preview_path))
             status = self.run_job(library, library.start_tag_job(tagger))
             manifest = json.loads((self.library_dir / "outputs" / "jobs" / str(status["job_id"]) / "manifest.json").read_text())
-            second_kinds = [event.kind for event in library.catalog.events_for(second.id)]
+            second_kinds = library.catalog.events_for(second.id)
+            third_event = library.catalog.events_for(third.id)[-1]
             third_tags = library.catalog.get_tags(third.id)
             retagger = FlakyTagger(None)
             retag_status = self.run_job(library, library.start_tag_job(retagger, retag=True))
@@ -1132,7 +1145,9 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual([Path(second.preview_path), Path(third.preview_path)], tagger.calls)
         self.assertEqual({"kind": "tag", "retag": False, "failed_photo_ids": [second.id]}, {key: manifest[key] for key in ("kind", "retag", "failed_photo_ids")})
         self.assertEqual({"tagged": 1, "skipped": 1, "failed": 1}, status["result"])
-        self.assertEqual("tag_failed", second_kinds[-1])
+        self.assertEqual("tag_failed", second_kinds[-1].kind)
+        self.assertEqual(status["job_id"], second_kinds[-1].details["job_id"])
+        self.assertEqual(status["job_id"], third_event.details["job_id"])
         self.assertEqual("A frame", third_tags["data"]["description"])
         self.assertTrue(status["log_tail"])
         self.assertNotIn(str(self.root), json.dumps(status))

@@ -25,6 +25,7 @@ from .composition import CropCandidate, generate_candidates
 from .domain import Artifact, Job, Photo, PhotoEdit
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
+from .omlx import OmlxError
 from .pipelines import PipelineRegistry
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
@@ -49,6 +50,11 @@ def _coordinated(method):
 
 
 _ABSOLUTE_PATH = re.compile(r"'?/[^\s'\"]+'?")
+
+
+def _job_detail(job_id: int | None) -> dict:
+    """Provenance link to the background job that did the work; synchronous calls record none."""
+    return {} if job_id is None else {"job_id": job_id}
 
 
 def public_message(text: str | None) -> str | None:
@@ -177,7 +183,8 @@ class Library:
         self._regroup_and_write_sidecars()
         return summary
 
-    def _import_candidate(self, source: Path, summary: ImportSummary, *, skip_unchanged: bool = False) -> None:
+    def _import_candidate(self, source: Path, summary: ImportSummary, *, skip_unchanged: bool = False,
+                          job_id: int | None = None) -> None:
         previous = self.catalog.photo_by_path(str(source))
         try:
             fingerprint = fingerprint_file(source)
@@ -185,7 +192,7 @@ class Library:
                     and previous.preview_path and Path(previous.preview_path).is_file()):
                 summary.skipped += 1
                 return
-            self._import_one(source, fingerprint)
+            self._import_one(source, fingerprint, job_id=job_id)
             if previous:
                 summary.updated += 1
             else:
@@ -194,7 +201,7 @@ class Library:
             summary.failed += 1
             summary.errors.append(f"{source.name}: {error}")
             failed_photo = self.catalog.photo_by_path(str(source))
-            details = {"source": str(source), "error": str(error)}
+            details = {"source": str(source), "error": str(error)} | _job_detail(job_id)
             try:
                 details["source_fingerprint"] = fingerprint_file(source)
             except OSError:
@@ -219,7 +226,7 @@ class Library:
                     if context.cancelled:
                         break
                     with worker._mutation():
-                        worker._import_candidate(source, summary, skip_unchanged=True)
+                        worker._import_candidate(source, summary, skip_unchanged=True, job_id=job.id)
                     for error in summary.errors:
                         worker._log_job(job, error)
                     summary.errors.clear()
@@ -252,9 +259,9 @@ class Library:
                             counts["skipped"] += 1
                         else:
                             try:
-                                worker.tag_photo(photo.id, tagger)  # A model failure appends tag_failed itself.
+                                worker.tag_photo(photo.id, tagger, job_id=job.id)  # A model failure appends tag_failed itself.
                                 counts["tagged"] += 1
-                            except Exception as error:
+                            except (OmlxError, ValueError, OSError) as error:
                                 counts["failed"] += 1
                                 failed_photo_ids.append(photo.id)
                                 worker._log_job(job, f"{Path(photo.path).name}: {type(error).__name__}: {error}")
@@ -759,7 +766,7 @@ class Library:
         }
 
     @_coordinated
-    def tag_photo(self, photo_id: int, tagger):
+    def tag_photo(self, photo_id: int, tagger, *, job_id: int | None = None):
         photo = self.catalog.get_photo(photo_id)
         if not photo or not photo.preview_path:
             raise ValueError(f"photo {photo_id} has no preview")
@@ -774,7 +781,7 @@ class Library:
                     "model": getattr(tagger, "model", "unknown"),
                     "error": str(error),
                     "raw_response": raw_response,
-                },
+                } | _job_detail(job_id),
             )
             self._write_sidecar(photo_id)
             raise
@@ -789,7 +796,7 @@ class Library:
         self.catalog.append_event(
             photo_id,
             "tagged",
-            {"model": tagger.model, "confidence": result.confidence, "raw_response": result.raw_response},
+            {"model": tagger.model, "confidence": result.confidence, "raw_response": result.raw_response} | _job_detail(job_id),
         )
         self._write_sidecar(photo_id)
         return result
@@ -815,13 +822,18 @@ class Library:
             if not (resolved := path.resolve()).is_relative_to(library_dir)
         )
 
-    def _import_one(self, source: Path, fingerprint: str | None = None) -> int:
+    def _import_one(self, source: Path, fingerprint: str | None = None, *, job_id: int | None = None) -> int:
         fingerprint = fingerprint or fingerprint_file(source)
         previous = self.catalog.photo_by_path(str(source))
         metadata = read_metadata(source)
         captured = datetime.fromisoformat(metadata["captured_at"]) if metadata["captured_at"] else None
         preview_path = self.settings.preview_dir / f"{fingerprint}.jpg"
+        preview_existed = preview_path.exists()  # Previews are content-addressed; an existing one is never rewritten.
         self.previews.create_preview(source, preview_path)
+        if fingerprint_file(source) != fingerprint:  # Swapped after hashing: metadata and preview may describe other bytes.
+            if not preview_existed:
+                preview_path.unlink(missing_ok=True)
+            raise ValueError("source changed during import")
         photo = Photo(
             path=str(source),
             fingerprint=fingerprint,
@@ -856,7 +868,7 @@ class Library:
                 "preview": str(preview_path),
                 "analyzer": "Pillow",
                 "vision": "available" if vision else "unavailable",
-            },
+            } | _job_detail(job_id),
         )
         return photo_id
 

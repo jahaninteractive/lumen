@@ -362,9 +362,10 @@ async function load() {
     try { remembered = localStorage.getItem('lumen-astro-job'); } catch { /* per-visit only */ }
     if (remembered) await request(`/api/astro/jobs/${remembered}`).then(job => (job.status === 'running' ? watchJob(job) : setAstroJob(job))).catch(() => localStorage.removeItem('lumen-astro-job'));
   }
-  if (!state.job) {
-    const running = (await request('/api/jobs')).jobs.find(job => job.status === 'running');
-    if (running) watchJob(running);
+  if (!JOB_ACTIVE.includes(state.job?.status)) {
+    // Pick up a job started from the CLI or another tab; a prepared astro stack stays queued until Run, so it is not active work.
+    const active = (await request('/api/jobs')).jobs.find(job => JOB_ACTIVE.includes(job.status) && !(job.kind === 'astro' && job.status === 'queued'));
+    if (active) watchJob(active);
   }
   if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
 }
