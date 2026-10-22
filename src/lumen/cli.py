@@ -87,6 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
     selection.add_argument("--photo", type=int)
     selection.add_argument("--keepers", action="store_true")
     export.add_argument("--profile", type=Path, help="optional darktable XMP profile")
+    export.add_argument("--preset", choices=("full", "share"), default="full",
+                        help="full: quality 92, keeps GPS; share: 2048 px long edge, quality 85, no GPS")
     export.add_argument("--json", action="store_true")
 
     remove = commands.add_parser("remove", help="remove a group from Lumen with recoverable working files")
@@ -232,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
             with Library(settings) as library:
                 if args.command == "export":
                     photo_ids = (args.photo,) if args.photo is not None else tuple(library.keeper_ids())
-                    results = library.export_jpegs(ExportRequest(photo_ids, args.profile))
+                    results = library.export_jpegs(ExportRequest(photo_ids, args.profile, args.preset))
                     payload = {"results": [asdict(result) for result in results]}
                     code = 0 if all(result.success for result in results) else 2
                 else:

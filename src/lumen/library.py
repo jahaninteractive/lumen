@@ -27,7 +27,7 @@ from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
 from .omlx import OmlxError
-from .pipelines import PipelineRegistry
+from .pipelines import EXPORT_PRESETS, PipelineRegistry
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
@@ -81,6 +81,7 @@ class ImportSummary:
 class ExportRequest:
     photo_ids: tuple[int, ...]
     profile: Path | None = None
+    preset: str = "full"
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,6 +683,8 @@ class Library:
             photos.append(photo)
         if request.profile is not None and not request.profile.is_file():
             raise ValueError(f"profile does not exist: {request.profile}")
+        if request.preset not in EXPORT_PRESETS:
+            raise ValueError(f"unknown export preset: {request.preset!r}")
         if not self.settings.jpeg_output_dir.resolve().is_relative_to(self.settings.library_dir.resolve()):
             raise ValueError("JPEG output must stay inside the managed library")
         pipeline = PipelineRegistry().darktable(self.settings.output_dir)
@@ -713,7 +716,8 @@ class Library:
                     crop=crop,
                     description=data.get("description"), keywords=data.get("subjects"),
                     rating=-1 if photo.decision == "reject" else photo.rating,
-                    reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()})
+                    reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
+                    preset=request.preset)
                 if not rendered.success:
                     results.append(ExportResult(photo.id, False, None, rendered.message))
                     continue

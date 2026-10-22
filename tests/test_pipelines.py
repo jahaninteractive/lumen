@@ -223,6 +223,111 @@ class PipelineTests(unittest.TestCase):
                 self.assertGreater(image.convert("RGB").getpixel((20, 30))[1], 220)
             self.assertEqual(before, source.read_bytes())
 
+    @staticmethod
+    def preset_render(size, *, paint=None):
+        """Fake darktable run writing an sRGB TIFF with camera EXIF and a GPS IFD."""
+        def render(command, **kwargs):
+            if command[1:] == ["--version"]:
+                return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+            exif = Image.Exif()
+            exif[271] = "Sony"
+            exif[270] = "Rendered caption"
+            exif[34665] = {36867: "2026:10:21 10:00:00", 40962: size[0], 40963: size[1]}
+            exif[34853] = {1: "N", 2: (1.0, 2.0, 3.0), 5: 0, 6: 12.0}
+            image = Image.new("RGB", size, "red")
+            if paint:
+                paint(image)
+            image.save(command[-8], format="TIFF", exif=exif.tobytes(), icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return render
+
+    def test_share_preset_resizes_render_to_2048_long_edge_at_quality_85_without_gps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.ARW"
+            source.write_bytes(b"raw")
+            result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
+                source, description="A red bird", keywords=["bird", "travel"], rating=4, preset="share",
+                runner=self.preset_render((4000, 2600)))
+            self.assertTrue(result.success, result.message)
+            self.assertEqual("source-lumen-share.jpg", result.output.name)
+            self.assertEqual({"preset": "share", "quality": 85, "long_edge": 2048, "include_gps": False},
+                             {key: result.settings[key] for key in ("preset", "quality", "long_edge", "include_gps")})
+            with Image.open(result.output) as image:
+                self.assertEqual((2048, 1331), image.size)
+                # Standard JPEG luminance table scaled for quality 85.
+                self.assertEqual([5, 3, 3, 5, 7, 12, 15, 18], image.quantization[0][:8])
+                self.assertIn("sRGB", ImageCms.getProfileDescription(ImageCms.ImageCmsProfile(io.BytesIO(image.info["icc_profile"]))))
+                exif = image.getexif()
+                self.assertNotIn(34853, exif)
+                self.assertEqual({}, dict(exif.get_ifd(34853)))
+                self.assertEqual("Sony", exif[271])
+                self.assertEqual("2026:10:21 10:00:00", exif.get_ifd(34665)[36867])
+                self.assertEqual((2048, 1331), (exif.get_ifd(34665)[40962], exif.get_ifd(34665)[40963]))
+                self.assertEqual("A red bird", exif[270])
+                self.assertEqual("bird;travel\0", exif[40094].decode("utf-16le"))
+                self.assertEqual(4, exif[18246])
+                xmp = ElementTree.fromstring(image.info["xmp"])
+                self.assertEqual("4", xmp.find(".//{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Description").attrib["{http://ns.adobe.com/xap/1.0/}Rating"])
+                provenance = json.loads(xmp.find(".//{https://lumen.local/ns/1.0/}export").text)
+                self.assertEqual(("share", 85, 2048, False), (provenance["preset"], provenance["quality"], provenance["long_edge"], provenance["include_gps"]))
+
+    def test_full_preset_is_unchanged_and_keeps_gps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.ARW"
+            source.write_bytes(b"raw")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            default = pipeline.export_jpeg(source, runner=self.preset_render((2400, 1600)))
+            explicit = pipeline.export_jpeg(source, preset="full", runner=self.preset_render((2400, 1600)))
+            for result in (default, explicit):
+                self.assertTrue(result.success, result.message)
+                self.assertEqual({"preset": "full", "quality": 92, "long_edge": None, "include_gps": True},
+                                 {key: result.settings[key] for key in ("preset", "quality", "long_edge", "include_gps")})
+                with Image.open(result.output) as image:
+                    self.assertEqual((2400, 1600), image.size)
+                    self.assertEqual([3, 2, 2, 3, 4, 6, 8, 10], image.quantization[0][:8])
+                    self.assertEqual({1: "N", 2: (1.0, 2.0, 3.0), 5: b"\x00", 6: 12.0}, dict(image.getexif().get_ifd(34853)))
+            self.assertEqual(["source-lumen-1.jpg", "source-lumen.jpg"], sorted(path.name for path in (default.output, explicit.output)))
+            with self.assertRaises(ValueError):
+                pipeline.export_jpeg(source, preset="web", runner=self.preset_render((80, 60)))
+
+    def test_share_filenames_use_share_suffix_and_collision_numbering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.ARW"
+            source.write_bytes(b"raw")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            jpeg = (root / "outputs" / "jpeg").resolve()
+            render = self.preset_render((80, 60))
+            full = pipeline.export_jpeg(source, runner=render)
+            first = pipeline.export_jpeg(source, preset="share", runner=render)
+            second = pipeline.export_jpeg(source, preset="share", runner=render,
+                                          reserved_paths={jpeg / "source-lumen-share-1.jpg"})
+            self.assertEqual([jpeg / "source-lumen.jpg", jpeg / "source-lumen-share.jpg", jpeg / "source-lumen-share-2.jpg"],
+                             [full.output, first.output, second.output])
+            self.assertFalse((jpeg / "source-lumen-share-1.jpg").exists())
+            with Image.open(first.output) as image:
+                self.assertEqual((80, 60), image.size)  # Share never upscales a small render.
+
+    def test_share_applies_crop_before_resize(self):
+        def paint(image):
+            image.paste((0, 255, 0), (1250, 0, 3750, 2500))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.ARW"
+            source.write_bytes(b"raw")
+            result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
+                source, crop={"left": .25, "top": 0, "width": .5, "height": 1}, preset="share",
+                runner=self.preset_render((5000, 2500), paint=paint))
+            self.assertTrue(result.success, result.message)
+            with Image.open(result.output) as image:
+                self.assertEqual((2048, 2048), image.size)
+                rgb = image.convert("RGB")
+                for point in ((2, 2), (1024, 1024), (2045, 2045)):
+                    self.assertGreater(rgb.getpixel(point)[1], 220)
+                    self.assertLess(rgb.getpixel(point)[0], 40)
+
     def test_jpeg_export_rejects_unknown_color_profile_without_publishing(self):
         for icc in (None, b"invalid ICC"):
             with self.subTest(icc=icc), tempfile.TemporaryDirectory() as directory:

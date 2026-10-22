@@ -1255,7 +1255,7 @@ document.querySelector('#swap-compare').addEventListener('click', () => {
 document.querySelector('#close-compare').addEventListener('click', closeView);
 document.querySelector('#close-loupe').addEventListener('click', closeView);
 
-function showExportResults(results) {
+function showExportResults(results, size) {
   const list = document.querySelector('#export-results');
   list.replaceChildren();
   results.forEach(result => {
@@ -1265,21 +1265,23 @@ function showExportResults(results) {
     list.append(item);
   });
   const succeeded = results.filter(result => result.success).length;
-  document.querySelector('#export-status').textContent = `Export complete: ${succeeded} saved, ${results.length - succeeded} failed.${succeeded < results.length ? ' Successful JPEGs remain; fix the reported problem and retry the failed photo.' : ''}`;
+  document.querySelector('#export-status').textContent = `${size} export complete: ${succeeded} saved, ${results.length - succeeded} failed.${succeeded < results.length ? ' Successful JPEGs remain; fix the reported problem and retry the failed photo.' : ''}`;
 }
 
 document.querySelector('#export-jpegs').addEventListener('click', async () => {
   const scope = document.querySelector('input[name="export-scope"]:checked').value;
-  const payload = { scope, profile: state.profile };
+  const preset = document.querySelector('input[name="export-preset"]:checked').value;
+  const payload = { scope, profile: state.profile, preset };
   if (scope === 'current') payload.photo_id = state.selectedId;
   state.busy = true;
   updateWorkflow();
-  document.querySelector('#export-status').textContent = `Exporting ${scope === 'current' ? 'current photo' : 'all keepers'}… Keep this page open until the result appears.`;
+  const size = preset === 'share' ? 'Share size' : 'Full resolution';
+  document.querySelector('#export-status').textContent = `Exporting ${scope === 'current' ? 'current photo' : 'all keepers'} at ${size}… Keep this page open until the result appears.`;
   document.querySelector('#export-results').replaceChildren();
   try {
-    showExportResults((await post('/api/export', payload)).results);
+    showExportResults((await post('/api/export', payload)).results, size);
   } catch (error) {
-    if (error.payload?.results) showExportResults(error.payload.results);
+    if (error.payload?.results) showExportResults(error.payload.results, size);
     else document.querySelector('#export-status').textContent = `${error.message}. Check darktable and the selected XMP, then retry. You can also use camera defaults.`;
     announce(document.querySelector('#export-status').textContent);
   } finally {

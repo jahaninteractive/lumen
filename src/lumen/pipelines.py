@@ -19,6 +19,12 @@ from .sidecars import SidecarWriter
 from .tools import find_tool
 
 
+EXPORT_PRESETS = {
+    "full": {"long_edge": None, "quality": 92, "include_gps": True},
+    "share": {"long_edge": 2048, "quality": 85, "include_gps": False},
+}
+
+
 def _public_provenance(settings: dict) -> dict:
     """Export record embedded in shareable JPEGs: no absolute paths or source fingerprint."""
     public = {key: value for key, value in settings.items() if key not in ("command", "source_fingerprint")}
@@ -95,19 +101,24 @@ class DarktablePipeline:
         self, source: Path, profile: Path | None = None, *,
         crop: dict[str, object] | None = None, description: str | None = None,
         keywords: list[str] | None = None, rating: int | None = None,
-        reserved_paths: set[Path] | None = None,
+        reserved_paths: set[Path] | None = None, preset: str = "full",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
+        if preset not in EXPORT_PRESETS:
+            raise ValueError(f"unknown export preset: {preset!r}")
+        options = EXPORT_PRESETS[preset]
         runner = runner or subprocess.run
         source = source.resolve()
         directory = (self.output_root / "jpeg").resolve()
         if not directory.is_relative_to(self.output_root):
             raise ValueError("JPEG output must stay inside the managed output directory")
         directory.mkdir(parents=True, exist_ok=True)
-        destination = directory / f"{source.stem}-lumen.jpg"
+        stem = f"{source.stem}-lumen" + ("" if preset == "full" else f"-{preset}")
+        destination = directory / f"{stem}.jpg"
         reserved = {path.resolve() for path in reserved_paths or ()}
         settings = {
-            "quality": 92, "color_space": "sRGB", "include_gps": True,
+            "preset": preset, "quality": options["quality"], "long_edge": options["long_edge"],
+            "color_space": "sRGB", "include_gps": options["include_gps"],
             "profile": str(profile.resolve()) if profile else None,
             "crop": crop, "source_fingerprint": "", "tool_version": "unknown",
             "command": [],
@@ -151,7 +162,7 @@ class DarktablePipeline:
                     capture = dict(source_exif.get_ifd(34665))
                     capture.pop(40965, None)  # Interop IFD offset is meaningless in the new file.
                     capture[40961] = 1  # EXIF sRGB
-                    if gps := source_exif.get_ifd(34853):
+                    if options["include_gps"] and (gps := source_exif.get_ifd(34853)):
                         exif[34853] = dict(gps)
                     exif[274] = 1  # Pixels are transposed below.
                     effective_description = description if description is not None else descriptive.get("description", source_exif.get(270, ""))
@@ -169,10 +180,12 @@ class DarktablePipeline:
                         raise ValueError("darktable render has no ICC profile; cannot guarantee sRGB")
                     if crop is not None:
                         image = image.crop((round(left * image.width), round(top * image.height), round((left + width) * image.width), round((top + height) * image.height)))
-                    capture[40962], capture[40963] = image.size  # After any crop.
+                    if long_edge := options["long_edge"]:
+                        image.thumbnail((long_edge, long_edge), Image.Resampling.LANCZOS)  # Never upscales.
+                    capture[40962], capture[40963] = image.size  # After any crop and resize.
                     exif[34665] = capture
                     temporary = work / "finished.jpg"
-                    image.save(temporary, format="JPEG", quality=92,
+                    image.save(temporary, format="JPEG", quality=options["quality"],
                                exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
                                xmp=SidecarWriter._xmp(
                                    effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
@@ -199,7 +212,7 @@ class DarktablePipeline:
                         break
                     except FileExistsError:
                         suffix += 1
-                        destination = directory / f"{source.stem}-lumen-{suffix}.jpg"
+                        destination = directory / f"{stem}-{suffix}.jpg"
             return JpegExportResult(True, 0, destination, command, "JPEG exported", settings, fingerprint)
         except Exception as error:
             errors = [str(error)]

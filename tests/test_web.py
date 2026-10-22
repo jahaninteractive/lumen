@@ -367,6 +367,40 @@ class WebTests(unittest.TestCase):
                     self.assertIn("error", result)
         self.assertFalse((self.root / "library" / "outputs" / "jpeg").exists())
 
+    def test_export_accepts_known_presets_only_and_ui_has_labeled_preset_radios(self):
+        with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+            for payload in ({"scope": "current", "photo_id": 1, "preset": "web"}, {"scope": "keepers", "preset": 2},
+                            {"scope": "keepers", "preset": None}, {"scope": "current", "photo_id": 1, "preset": ["share"]}):
+                with self.subTest(payload=payload):
+                    code, result = self.post_json("/api/export", payload)
+                    self.assertEqual(400, code)
+                    self.assertIn("error", result)
+        pipeline = DarktablePipeline("darktable-cli", self.root / "library" / "outputs")
+        with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
+            "lumen.pipelines.subprocess.run", side_effect=self.render
+        ):
+            code, share = self.post_json("/api/export", {"scope": "current", "photo_id": 1, "preset": "share"})
+            self.assertEqual(200, code, share)
+            code, full = self.post_json("/api/export", {"scope": "keepers", "preset": "full"})
+            self.assertEqual(200, code, full)
+        self.assertEqual("photo-lumen-share.jpg", Path(share["results"][0]["output"]).name)
+        self.assertEqual("share", share["results"][0]["artifact"]["settings"]["preset"])
+        self.assertEqual("photo-lumen.jpg", Path(full["results"][0]["output"]).name)
+        self.assertEqual("full", full["results"][0]["artifact"]["settings"]["preset"])
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        radios = [node for node in parser.nodes if node["tag"] == "input" and node["attrs"].get("name") == "export-preset"]
+        self.assertEqual([("radio", "full"), ("radio", "share")], [(node["attrs"].get("type"), node["attrs"].get("value")) for node in radios])
+        self.assertIn("checked", radios[0]["attrs"])
+        for radio, label in zip(radios, ("Full resolution (quality 92, keeps GPS)", "Share (2048 px long edge, quality 85, no GPS)")):
+            self.assertTrue(any(node["tag"] == "label" and label in " ".join(node["text"].split()) for node in radio["parents"]))
+            self.assertTrue(any(node["tag"] == "fieldset" and "Size" in " ".join(node["text"].split()) for node in radio["parents"]))
+        self.assertNotIn("Quality 92 · sRGB · Full resolution", html)
+        javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
+        self.assertIn('input[name="export-preset"]:checked', javascript)
+        self.assertRegex(javascript, r"payload = \{ scope, profile: state.profile, preset \}")
+
     def test_export_unavailable_darktable_returns_bad_request(self):
         with patch("lumen.library.PipelineRegistry.darktable", side_effect=RuntimeError("darktable-cli is unavailable")):
             code, payload = self.post_json("/api/export", {"scope": "keepers", "profile": None})

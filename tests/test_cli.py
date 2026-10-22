@@ -311,6 +311,22 @@ class ExportCleanupCliTests(unittest.TestCase):
         self.assertEqual(str(profile.resolve()), one["artifact"]["settings"]["profile"])
         datetime.fromisoformat(one["artifact"]["created_at"])
 
+    def test_export_preset_flag(self):
+        pipeline = DarktablePipeline("darktable-cli", self.settings.output_dir)
+        with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
+            "lumen.pipelines.subprocess.run", side_effect=self.render
+        ):
+            share_code, share = self.run_command("export", "--photo", str(self.photo_id), "--preset", "share")
+            full_code, full = self.run_command("export", "--photo", str(self.photo_id))
+        self.assertEqual((0, 0), (share_code, full_code))
+        self.assertEqual("photo-lumen-share.jpg", Path(share["results"][0]["output"]).name)
+        self.assertEqual("share", share["results"][0]["artifact"]["settings"]["preset"])
+        self.assertEqual("photo-lumen.jpg", Path(full["results"][0]["output"]).name)
+        self.assertEqual("full", full["results"][0]["artifact"]["settings"]["preset"])
+        with self.assertRaises(SystemExit) as caught:
+            self.run_command("export", "--photo", str(self.photo_id), "--preset", "web")
+        self.assertEqual(2, caught.exception.code)
+
     def test_export_requires_exactly_one_selection(self):
         for arguments in (("export",), ("export", "--photo", "1", "--keepers")):
             with self.subTest(arguments=arguments), self.assertRaises(SystemExit) as caught:

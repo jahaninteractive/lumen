@@ -17,6 +17,7 @@ from .config import Settings
 from .diagnostics import doctor_report
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
+from .pipelines import EXPORT_PRESETS
 from .omlx import OmlxTagger
 
 
@@ -334,7 +335,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     scope = payload.get("scope")
                     if scope not in ("current", "keepers"):
                         raise ValueError("scope must be current or keepers")
-                    allowed = {"scope", "profile", "photo_id"} if scope == "current" else {"scope", "profile"}
+                    allowed = {"scope", "profile", "preset", "photo_id"} if scope == "current" else {"scope", "profile", "preset"}
                     if payload.keys() - allowed:
                         raise ValueError("unexpected export selectors or fields")
                     if scope == "current" and type(payload.get("photo_id")) is not int:
@@ -342,9 +343,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     profile = payload.get("profile")
                     if profile is not None and not isinstance(profile, str):
                         raise ValueError("profile must be a path string or null")
+                    preset = payload.get("preset", "full")
+                    if not isinstance(preset, str) or preset not in EXPORT_PRESETS:
+                        raise ValueError("preset must be full or share")
                     with Library(settings) as library:
                         photo_ids = (payload["photo_id"],) if scope == "current" else tuple(library.keeper_ids())
-                        results = library.export_jpegs(ExportRequest(photo_ids, Path(profile) if profile is not None else None))
+                        results = library.export_jpegs(ExportRequest(photo_ids, Path(profile) if profile is not None else None, preset))
                     status = HTTPStatus.OK if all(result.success for result in results) else HTTPStatus.BAD_REQUEST
                     self._send_json({"results": [asdict(result) for result in results]}, status=status)
                     return

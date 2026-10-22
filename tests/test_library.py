@@ -718,6 +718,26 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(artifact.settings["command"], event["details"]["command"])
         self.assertEqual(before, (self.image_path.read_bytes(), self.image_path.stat().st_mtime_ns))
 
+    def test_export_records_preset_in_artifact_settings_sidecar_and_event(self):
+        self.assertEqual("full", library_module.ExportRequest((1,)).preset)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+                with self.assertRaises(ValueError):
+                    library.export_jpegs(library_module.ExportRequest((photo.id,), None, "web"))
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
+                result = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "share"))[0]
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(f"{self.image_path.stem}-lumen-share.jpg", Path(result.artifact.path).name)
+            expected = {"preset": "share", "quality": 85, "long_edge": 2048, "include_gps": False}
+            self.assertEqual(expected, {key: result.artifact.settings[key] for key in expected})
+            sidecar = json.loads(next(library.settings.sidecar_dir.glob("*.lumen.json")).read_text())
+            self.assertEqual(expected, {key: sidecar["artifacts"][0]["settings"][key] for key in expected})
+            event = next(event for event in sidecar["provenance"] if event["kind"] == "exported")
+            self.assertEqual(expected, {key: event["details"][key] for key in expected})
+
     def test_export_validates_all_ids_before_starting(self):
         self.assertTrue(hasattr(library_module, "ExportRequest"), "ExportRequest is missing")
         with Library(Settings(library_dir=self.library_dir)) as library:

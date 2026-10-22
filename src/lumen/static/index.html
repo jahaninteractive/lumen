@@ -69,7 +69,7 @@
         </section>
         <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
           <h2>Finish as JPEG</h2>
-          <p class="quiet">Quality 92 · sRGB · Full resolution. Camera EXIF and GPS location are kept.</p>
+          <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose a size below; only Full resolution keeps GPS location.</p>
           <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
           <fieldset id="export-controls">
             <legend>Choose what to export</legend>
@@ -77,6 +77,13 @@
               <label><input type="radio" name="export-scope" value="current" checked> Current photo <span id="current-export-name">No photo selected</span></label>
               <label><input type="radio" name="export-scope" value="keepers"> All keepers <span id="keeper-count">0 keepers</span></label>
             </div>
+            <fieldset id="export-preset">
+              <legend>Size</legend>
+              <div class="scope-options">
+                <label><input type="radio" name="export-preset" value="full" checked> Full resolution (quality 92, keeps GPS)</label>
+                <label><input type="radio" name="export-preset" value="share"> Share (2048 px long edge, quality 85, no GPS)</label>
+              </div>
+            </fieldset>
             <p id="profile-label">Optional darktable XMP profile</p>
             <p id="profile-path" class="path" aria-labelledby="profile-label">Camera-aware defaults</p>
             <div class="button-row">
