@@ -159,11 +159,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 with Library(settings) as library:
                     groups = _serializable_groups(library.list_groups())
                     photo_count = library.photo_count()
-                rejected_count = sum(photo["decision"] == "reject" for group in groups for photo in group["photos"])
-                if not show_rejected:
-                    for group in groups:
+                for group in groups:  # Every group stays listed; counts cover hidden rejected frames too.
+                    group["frame_count"] = len(group["photos"])
+                    group["rejected_count"] = sum(photo["decision"] == "reject" for photo in group["photos"])
+                    if not show_rejected:
                         group["photos"] = [photo for photo in group["photos"] if photo["decision"] != "reject"]
-                    groups = [group for group in groups if group["photos"]]
+                rejected_count = sum(group["rejected_count"] for group in groups)
                 self._send_json({"groups": groups, "photo_count": photo_count, "rejected_count": rejected_count})
                 return
             if path == "/api/jobs":

@@ -664,9 +664,23 @@ class Element {
   addEventListener(name, callback) { this.listeners[name] = callback; }
   querySelector(selector) { return element('#import-form ' + selector); }
   closest(selector) { for (let node = this; node; node = node.parent) if (selector === '.crop-card' && node.classList.contains('crop-card')) return node; return null; }
-  focus() {}
+  focus() { focused = this; }
+}
+let focused = null;
+function inspectorRating() {
+  const tree = node => [node, ...(node.children || []).flatMap(tree)];
+  return tree(element('#inspection')).find(node => node.id === 'rating') || null;
 }
 const elements = new Map();
+// Attribute selectors walk the rendered trees in DOM order (rail, sheet, inspector), so hooks shared by cards and controls collide here as they would in a browser.
+function byData(selector) {
+  const match = /^\[data-([a-z-]+)(?:="([^"]*)")?\]$/.exec(selector);
+  if (!match) return null;
+  const key = match[1].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+  const tree = node => [node, ...(node.children || []).flatMap(tree)];
+  return ['#batch-list', '#contact-sheet', '#inspection'].flatMap(name => tree(element(name)))
+    .filter(node => node.dataset && key in node.dataset && (match[2] === undefined || String(node.dataset[key]) === match[2]));
+}
 function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
@@ -681,14 +695,15 @@ const tabElements = ['compose', 'export', 'astro', 'clear'].map((name, index) =>
 const scope = new Element(); scope.value = 'current';
 const document = {
   createElement: () => new Element(),
-  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : element(selector),
+  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : byData(selector) ? byData(selector)[0] ?? null
+    : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
     if (selector === '.frame') return element('#contact-sheet').children.filter(item => item.className === 'frame');
     if (selector === '.batch-button') return element('#batch-list').children;
     if (selector === '[role="tab"]') return tabElements;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
-    return [];
+    return byData(selector) || [];
   },
 };
 let activeTimers = 0;
@@ -698,7 +713,8 @@ const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, previ
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
 const ratings = { 1: 0, 2: 0 };
-const group = (id, ids) => ({ id, automatic_pick_id: ids[0], photos: ids.map(photo) });
+const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
+const picks = [];
 let groups = scenario === 'merge' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 const astroPosts = [];
 let polls = 0;
@@ -737,7 +753,8 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: true }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
-  else if (url === '/api/groups' || url === '/api/groups?show_rejected=1') { groupLoads += 1; lastGroupsUrl = url; payload = { groups, photo_count: groups.reduce((count, item) => count + item.photos.length, 0) }; }
+  else if (url === '/api/groups' || url === '/api/groups?show_rejected=1') { groupLoads += 1; lastGroupsUrl = url; payload = { groups, photo_count: groups.reduce((count, item) => count + item.frame_count, 0), rejected_count: groups.reduce((count, item) => count + item.rejected_count, 0) }; }
+  else if (/^\/api\/photos\/\d+\/pick$/.test(url)) { assert.deepEqual(JSON.parse(options.body), {}); picks.push(url); payload = { photo_id: Number(url.split('/')[3]), manual_pick: true }; }
   else if (url === '/api/jobs') payload = { jobs: resumeJobs };
   else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
   else if (url === '/api/jobs/9') {
@@ -871,7 +888,7 @@ const regression = `
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const card = id => element('#contact-sheet').children.find(item => Number(item.dataset.id) === id);
     const texts = id => tree(card(id)).map(node => node.textContent);
-    const control = value => tree(element('#inspection')).find(node => node.dataset?.decision === value);
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
     assert.equal(element('#keeper-count').textContent, '1 keeper');
     await inspect(state.groups[0].photos[1]);
     await control('flag').listeners.click();
@@ -880,8 +897,16 @@ const regression = `
     assert.equal(element('#keeper-count').textContent, '2 keepers', 'a flagged alternate is a keeper');
     assert.equal(element('#announcer').textContent, 'photo-2 flagged');
     await inspect(state.groups[0].photos[0]);
+    state.busy = true;
+    updateWorkflow();
+    assert.equal(control('reject').disabled, true, 'decision controls are disabled while busy');
+    assert.ok(element('#contact-sheet').children.every(item => item.disabled !== true), 'frame cards stay usable while busy');
+    state.busy = false;
+    updateWorkflow();
     await control('reject').listeners.click();
     assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/decision', body: { decision: 'reject' } });
+    assert.equal(focused, control('reject'), 'focus returns to the re-rendered Reject control, not a frame card');
+    assert.ok(element('#contact-sheet').children.every(item => item.disabled !== true));
     assert.equal(groupLoads, loadsBefore, 'a decision updates cards in place without load()');
     assert.ok(texts(1).includes('Rejected'));
     assert.ok(card(1).getAttribute('aria-label').includes('rejected'));
@@ -896,6 +921,7 @@ const regression = `
     await rating.listeners.change();
     assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/rating', body: { rating: 3 } });
     assert.ok(texts(1).includes('Rating 3'));
+    assert.equal(focused.id, 'rating');
     assert.equal(element('#announcer').textContent, 'Rating 3 set for photo-1');
     await control('none').listeners.click();
     assert.equal(element('#announcer').textContent, 'photo-1 decision cleared');
@@ -906,6 +932,42 @@ const regression = `
     await element('#show-rejected').listeners.change();
     assert.equal(groupLoads, loadsBefore + 1, 'the hide-rejected toggle reloads with the rejected frames');
     assert.equal(lastGroupsUrl, '/api/groups?show_rejected=1');
+    return;
+  }
+  if (scenario === 'all-rejected') {
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const rejected = id => ({ ...photo(id), decision: 'reject' });
+    const NO_KEEPER = 'No keeper in this burst: every frame is rejected.';
+    groups = [{ id: 1, automatic_pick_id: 1, frame_count: 2, rejected_count: 2, photos: [] }, group(2, [3])];
+    await load();
+    const batches = () => element('#batch-list').children;
+    assert.equal(batches().length, 2, 'an all-rejected burst keeps its rail entry while hidden');
+    assert.equal(batches()[0].textContent, 'Burst 1 · 2 frames · ' + NO_KEEPER);
+    assert.equal(element('#keeper-count').textContent, '1 keeper');
+    assert.equal(element('#workspace-cleanup-count').textContent, '2 batches · 3 frames');
+    await batches()[0].listeners.click();
+    assert.equal(state.selectedGroupId, 1);
+    assert.equal(element('#group-cleanup-count').textContent, 'Burst 1 · 2 frames', 'removal counts the hidden rejected frames');
+    assert.equal(element('#remove-group').disabled, false);
+    assert.equal(element('#inspection').textContent, NO_KEEPER);
+    groups = [{ id: 1, automatic_pick_id: 1, frame_count: 2, rejected_count: 2, photos: [rejected(1), rejected(2)] }, group(2, [3])];
+    element('#show-rejected').checked = true;
+    await element('#show-rejected').listeners.change();
+    const card = id => element('#contact-sheet').children.find(item => Number(item.dataset.id) === id);
+    const texts = id => tree(card(id)).map(node => node.textContent);
+    assert.ok(texts(1).includes('Rejected'));
+    assert.ok(!texts(1).includes('Best'), 'a rejected pick never shows the Best badge');
+    assert.ok(!card(1).getAttribute('aria-label').includes('best in group'));
+    await inspect(state.groups[0].photos[0]);
+    assert.ok(tree(element('#inspection')).some(node => node.textContent === NO_KEEPER));
+    const choose = tree(element('#inspection')).find(node => node.textContent === 'Choose as best');
+    assert.ok(choose, 'a rejected best frame can still be chosen as best');
+    groups = [{ id: 1, automatic_pick_id: 1, frame_count: 2, rejected_count: 1, photos: [photo(1), rejected(2)] }, group(2, [3])];
+    await choose.listeners.click();
+    assert.deepEqual(picks, ['/api/photos/1/pick']);
+    assert.ok(texts(1).includes('Best') && !texts(1).includes('Rejected'));
+    assert.equal(batches()[0].textContent, 'Burst 1 · 2 frames');
+    assert.equal(element('#keeper-count').textContent, '2 keepers');
     return;
   }
   const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');
@@ -1114,6 +1176,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_decisions_update_cards_in_place_and_keeper_count(self):
         self.run_javascript_cleanup_regression("decisions")
 
+    def test_javascript_all_rejected_burst_explains_no_keeper_and_offers_pick(self):
+        self.run_javascript_cleanup_regression("all-rejected")
+
     def test_decision_and_rating_routes_validate_strictly_and_hide_rejected_by_default(self):
         def photo_state():
             code, payload = self.get_json("/api/photos/1")
@@ -1148,7 +1213,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(("reject", 3), photo_state())
 
         code, hidden = self.get_json("/api/groups")
-        self.assertEqual((200, [], 1, 1), (code, hidden["groups"], hidden["rejected_count"], hidden["photo_count"]))
+        self.assertEqual((200, 1, 1), (code, hidden["rejected_count"], hidden["photo_count"]))
+        self.assertEqual([(group_id, [], 1, 1)], [(group["id"], group["photos"], group["frame_count"], group["rejected_count"])
+                                                 for group in hidden["groups"]], "an all-rejected group stays listed with its counts")
         code, shown = self.get_json("/api/groups?show_rejected=1")
         self.assertEqual(200, code)
         photo = shown["groups"][0]["photos"][0]
@@ -1157,7 +1224,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertNotIn(str(self.root), json.dumps(shown))
         self.post_json("/api/photos/1/decision", {"decision": "none"})
         code, restored = self.get_json("/api/groups")
-        self.assertEqual((1, 0), (len(restored["groups"][0]["photos"]), restored["rejected_count"]))
+        self.assertEqual((1, 0, 1, 0), (len(restored["groups"][0]["photos"]), restored["rejected_count"],
+                                        restored["groups"][0]["frame_count"], restored["groups"][0]["rejected_count"]))
 
     def test_export_panel_states_keeper_definition_and_inspector_has_native_decision_controls(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()

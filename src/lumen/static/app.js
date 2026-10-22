@@ -218,6 +218,15 @@ function metric(label, value) {
 
 const DECISION_WORDS = { flag: 'Flagged', reject: 'Rejected', none: 'No decision' };
 const DECISION_ANNOUNCEMENTS = { flag: 'flagged', reject: 'rejected', none: 'decision cleared' };
+const NO_KEEPER = 'No keeper in this burst: every frame is rejected.';
+
+function allRejected(group) {
+  return group.frame_count > 0 && group.rejected_count === group.frame_count;
+}
+
+function batchText(group, index) {
+  return `Burst ${index + 1} · ${frameCount(group.frame_count)}${allRejected(group) ? ` · ${NO_KEEPER}` : ''}`;
+}
 
 // Same rule as Library.keeper_ids: not rejected, and flagged or the group's best frame.
 function isKeeper(photo, group) {
@@ -232,17 +241,22 @@ async function decide(photo, field, value) {
     const result = await post(`/api/photos/${photo.id}/${field}`, { [field]: value });
     photo.decision = result.decision;
     photo.rating = result.rating;
-    state.rejectedCount += (result.decision === 'reject') - (previous === 'reject');
-    const group = state.groups.find(item => item.id === result.group_id);
+    const delta = (result.decision === 'reject') - (previous === 'reject');
+    state.rejectedCount += delta;
+    const groupIndex = state.groups.findIndex(item => item.id === result.group_id);
+    const group = state.groups[groupIndex];
     if (group) {
       group.automatic_pick_id = result.automatic_pick_id;
+      group.rejected_count += delta;
       refreshFrames(group);
+      const batch = document.querySelectorAll('.batch-button')[groupIndex];
+      if (batch) batch.textContent = batchText(group, groupIndex);
     }
     const name = photo.name.replace(/\.[^.]+$/, '');
     announce(field === 'rating' ? `Rating ${result.rating} set for ${name}` : `${name} ${DECISION_ANNOUNCEMENTS[result.decision]}`);
     if (state.selectedId === photo.id) {
       renderInspector(photo);
-      document.querySelector(field === 'rating' ? '#rating' : `[data-decision="${value}"]`)?.focus();
+      document.querySelector(field === 'rating' ? '#rating' : `[data-decision-control="${value}"]`)?.focus();
     }
   } catch (error) {
     announce(error.message);
@@ -264,7 +278,7 @@ function decisionControls(photo) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary';
-    button.dataset.decision = value;
+    button.dataset.decisionControl = value;
     button.textContent = label;
     button.addEventListener('click', () => decide(photo, 'decision', value));
     buttons.append(button);
@@ -312,7 +326,9 @@ function renderInspector(photo) {
   heading.textContent = photo.name;
   const verdict = document.createElement('p');
   verdict.className = 'quiet';
-  verdict.textContent = photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
+  const group = state.groups.find(item => item.photos.includes(photo));
+  verdict.textContent = group && allRejected(group) ? NO_KEEPER
+    : photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
   inspection.append(heading, verdict, decisionControls(photo));
   inspection.append(metric('Overall', photo.total_score), metric('Sharpness', details.metrics.sharpness), metric('Exposure', details.metrics.exposure));
   if (details.metrics.eye_quality !== null) inspection.append(metric('Eyes', details.metrics.eye_quality));
@@ -323,7 +339,7 @@ function renderInspector(photo) {
   }
   const actions = document.createElement('div');
   actions.className = 'actions';
-  if (photo.id !== photo.groupPick) {
+  if (photo.id !== photo.groupPick || photo.decision === 'reject') {  // Choosing a rejected frame clears its rejection.
     const choose = document.createElement('button');
     choose.type = 'button';
     choose.className = 'secondary';
@@ -361,7 +377,7 @@ function renderInspector(photo) {
 
 function fillFrame(button, photo, group) {
   photo.groupPick = group.automatic_pick_id;
-  const best = photo.id === group.automatic_pick_id;
+  const best = photo.id === group.automatic_pick_id && photo.decision !== 'reject';
   const marks = [DECISION_WORDS[photo.decision], photo.rating ? `Rating ${photo.rating}` : null].filter(word => word && word !== DECISION_WORDS.none);
   button.dataset.decision = photo.decision;
   button.setAttribute('aria-label', [`${photo.name}, score ${Math.round(photo.total_score * 100)} percent`, best ? 'best in group' : null, ...marks.map(word => word.toLowerCase())].filter(Boolean).join(', '));
@@ -415,11 +431,18 @@ function renderGroups() {
     const batch = document.createElement('button');
     batch.type = 'button';
     batch.className = 'batch-button';
-    batch.textContent = `Burst ${groupIndex + 1} · ${group.photos.length} frame${group.photos.length === 1 ? '' : 's'}`;
+    batch.textContent = batchText(group, groupIndex);
     batch.setAttribute('aria-pressed', String(group.id === state.selectedGroupId));
     batch.addEventListener('click', () => {
       document.querySelector(`[data-group="${group.id}"]`)?.focus();
       if (group.photos[0]) inspect(group.photos[0]).catch(error => announce(error.message));
+      else {  // An all-rejected burst with its frames hidden can still be selected, e.g. to remove it.
+        state.selectedId = null;
+        state.selectedGroupId = group.id;
+        inspection.textContent = NO_KEEPER;
+        updateWorkflow();
+        announce(batch.textContent);
+      }
     });
     rail.append(batch);
     group.photos.forEach(photo => {
@@ -452,7 +475,8 @@ async function load() {
   state.groups = groups.groups;
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
-  const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId));
+  const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId))
+    || (state.selectedId === null ? state.groups.find(group => group.id === state.selectedGroupId) : undefined);
   state.selectedGroupId = selectedGroup?.id ?? null;
   if (!selectedGroup) {
     state.selectedId = null;
@@ -722,10 +746,10 @@ function updateWorkflow() {
   document.querySelector('#current-export-name').textContent = photo?.name || 'No photo selected';
   document.querySelector('#keeper-count').textContent = `${keepers} keeper${keepers === 1 ? '' : 's'}`;
   document.querySelector('#rejected-count').textContent = `(${state.rejectedCount})`;
-  document.querySelectorAll('[data-decision]').forEach(button => { button.disabled = state.busy; });
+  document.querySelectorAll('[data-decision-control]').forEach(button => { button.disabled = state.busy; });
   const rating = document.querySelector('#rating');
   if (rating) rating.disabled = state.busy;
-  document.querySelector('#group-cleanup-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.photos.length)}` : 'No batch selected · 0 frames';
+  document.querySelector('#group-cleanup-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.frame_count)}` : 'No batch selected · 0 frames';
   document.querySelector('#workspace-cleanup-count').textContent = `${state.groups.length} batch${state.groups.length === 1 ? '' : 'es'} · ${frameCount(state.photoCount)}`;
   document.querySelector('#clear-help').textContent = `Use the exact uppercase word CLEAR. This removes all ${frameCount(state.photoCount)} from Lumen, including photos outside visible batches.`;
   document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
