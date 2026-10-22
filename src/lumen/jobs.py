@@ -109,7 +109,9 @@ class LocalJobRunner:
                     self._active_cancel = None
         with Catalog(self.database_path) as catalog:
             job = catalog.get_job(job_id)
-            if job.status in {"queued", "running"}:
+            if job.status == "running" and job.result_path is not None:
+                result = False  # A recorded result is never undone by a late cancel.
+            elif job.status in {"queued", "running"}:
                 try:
                     catalog.update_job(job_id, status="cancelled")
                 except ValueError:
@@ -185,7 +187,7 @@ class LocalJobRunner:
                     was_cancelled = cancelled.is_set()
                     with Catalog(self.database_path) as catalog:
                         current = catalog.get_job(job_id)
-                        if was_cancelled or current.status == "cancelled":
+                        if (was_cancelled or current.status == "cancelled") and current.result_path is None:
                             if current.status == "running":
                                 catalog.update_job(job_id, status="cancelled")
                         elif has_process:

@@ -85,6 +85,21 @@ class LocalJobRunnerTests(unittest.TestCase):
         self.runner_under_test.shutdown()
         self.assertFalse(self.runner_under_test.is_alive)
 
+    def test_recorded_result_is_never_undone_by_a_late_cancel(self):
+        job = self.job("result")
+        self.runner_under_test = self.runner()
+        outcome = {}
+
+        def work(context):
+            with Catalog(self.db_path) as catalog:
+                catalog.update_job(job.id, result_path="/result/out.tif")
+            outcome["cancel"] = self.runner_under_test.cancel(job.id)
+
+        self.runner_under_test.submit(job.id, work)
+        saved = self.wait_status(job.id, "succeeded")
+        self.assertFalse(outcome["cancel"])
+        self.assertEqual("/result/out.tif", saved.result_path)
+
     def test_rejects_second_submission_while_one_job_is_active(self):
         entered, release = threading.Event(), threading.Event()
         first, second = self.job("first"), self.job("second")
@@ -304,6 +319,16 @@ class LocalJobRunnerTests(unittest.TestCase):
         self.runner_under_test.shutdown()
         replacement = self.runner()
         replacement.shutdown()
+
+    def test_constructor_purges_placeholder_left_by_a_crashed_preparation(self):
+        kept = self.job("kept")
+        self.catalog.connection.execute(
+            "INSERT INTO jobs (kind, status, progress, manifest_path, log_path, created_at, updated_at) "
+            "VALUES ('astro', 'queued', 0, 'pending', 'pending', '2026-10-22T00:00:00+00:00', '2026-10-22T00:00:00+00:00')"
+        )
+        self.catalog.connection.commit()
+        self.runner_under_test = self.runner()
+        self.assertEqual([kept.id], [job.id for job in self.catalog.list_jobs()])
 
     def test_constructor_recovers_orphaned_running_job(self):
         job = self.job("orphan")

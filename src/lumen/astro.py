@@ -6,10 +6,14 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Collection, Mapping, Sequence
+from typing import Any, Callable, Collection, Mapping, Sequence
+
+from PIL import Image
 
 from .pipelines import SirilPipeline
 from .previews import fingerprint_file
@@ -23,7 +27,10 @@ MISSING_WARNINGS = {
     "dark": "No dark frames: thermal noise and hot pixels will not be subtracted.",
     "flat": "No flat frames: vignetting and dust shadows will not be corrected.",
     "bias": "No bias frames: read-noise offset will not be subtracted.",
-}
+}# Coarse progress markers from Siril's "Running command: X" log lines, in script order.
+STAGES = (("Running command: calibrate", 0.3), ("Running command: register", 0.5), ("Running command: savetif", 0.9))
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
 STACK_OPTIONS = "rej w 3 3 -norm=addscale -output_norm -rgb_equal -filter-wfwhm=3k -filter-round=3k -out=result"
 
 
@@ -305,3 +312,146 @@ def _write_once(path: Path, text: str) -> None:
     with path.open("x", encoding="utf-8") as handle:
         handle.write(text)
     path.chmod(0o444)
+
+
+@dataclass(frozen=True, slots=True)
+class AstroExecution:
+    result: Path
+    bits_per_sample: tuple[int, ...]
+    returncode: int
+
+
+def stage_progress(line: str) -> float | None:
+    for marker, progress in STAGES:
+        if marker in line:
+            return progress
+    return None
+
+
+def revalidate_frames(manifest: AstroManifest, job: Path) -> None:
+    """Every source must still match its prepared size, mtime, and sha256, and every link must still point at it."""
+    for frame_set in (manifest.lights, manifest.darks, manifest.flats, manifest.biases):
+        for frame in frame_set.frames:
+            source = Path(frame.source)
+            if not source.is_file():
+                raise ValueError(f"source frame is missing: {source.name}")
+            link = job / frame.link
+            if not link.is_symlink() or os.readlink(link) != frame.source:
+                raise ValueError(f"job link was altered: {frame.link}")
+            stat = source.stat()
+            if (stat.st_size, stat.st_mtime_ns) != (frame.size, frame.mtime_ns) or fingerprint_file(source) != frame.fingerprint:
+                raise ValueError(f"source frame changed since preparation: {source.name}")
+
+
+def verify_tiff(path: Path) -> tuple[int, ...]:
+    try:
+        with Image.open(path) as image:
+            image_format = image.format
+            value = image.tag_v2.get(258) if image_format == "TIFF" else None
+    except OSError as error:
+        raise RuntimeError(f"{path.name} is not a readable TIFF: {error}") from error
+    bits = tuple(int(bit) for bit in (value if isinstance(value, tuple) else (value,) if value is not None else ()))
+    if image_format != "TIFF" or not bits or any(bit != 16 for bit in bits):
+        raise RuntimeError(f"{path.name} is not a 16-bit TIFF (format {image_format}, bits per sample {list(bits)})")
+    return bits
+
+
+def execute_job(context: Any, manifest: AstroManifest, *, output_root: Path, timeout_seconds: float = 7200.0,
+                popen: Callable[..., Any] | None = None) -> AstroExecution | None:
+    """Run a prepared job's Siril command under the job runner; returns None when cancelled.
+
+    Raises ValueError before launch when frames or the job directory are not as prepared,
+    and RuntimeError when Siril times out, exits nonzero, or leaves no 16-bit TIFF.
+    """
+    job = Path(manifest.job_dir)
+    if job.parent != Path(output_root).resolve() / "astro":
+        raise ValueError("astro jobs must run inside the managed output directory")
+    result = job / manifest.result
+    with (job / manifest.log).open("a", encoding="utf-8") as log:
+        def note(text: str) -> None:
+            log.write(f"lumen: {text}\n")
+            log.flush()
+
+        note(f"job {manifest.job_id} launch check at {datetime.now(timezone.utc).isoformat()}")
+        try:
+            for name in (manifest.result, "process", "masters"):
+                if (job / name).exists():
+                    raise ValueError(f"job directory already contains outputs ({name}); prepare a new job")
+            revalidate_frames(manifest, job)
+        except ValueError as error:
+            note(f"refusing to launch: {error}")
+            raise
+        context.update_progress(0.05)
+        note("command " + json.dumps(list(manifest.command)))
+        process = (popen or subprocess.Popen)(
+            list(manifest.command), cwd=str(job), stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+        )
+        context.register_process(process)
+        context.update_progress(0.1)
+        reached = latest = 0.1
+
+        def pump() -> None:
+            # Only copies output; catalog progress writes happen on the polling thread below.
+            nonlocal latest
+            for raw in process.stdout:
+                line = _ANSI.sub("", raw.rstrip("\n"))
+                try:
+                    log.write(line + "\n")
+                    log.flush()
+                except ValueError:  # Log closed after the join timeout; keep draining the pipe.
+                    pass
+                stage = stage_progress(line)
+                if stage is not None and stage > latest:
+                    latest = stage
+
+        reader = threading.Thread(target=pump, name=f"lumen-astro-log-{manifest.job_id}", daemon=True)
+        reader.start()
+        deadline = time.monotonic() + timeout_seconds
+        timed_out = False
+        while process.poll() is None:
+            if latest > reached:
+                reached = latest
+                context.update_progress(reached)
+            if context.wait_for_cancel(0.1):
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                _stop(process)
+                break
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        reader.join(5)
+        if not reader.is_alive():
+            process.stdout.close()
+        returncode = process.poll()
+        if returncode is not None:
+            context.clear_process(process)
+        if context.cancelled:
+            note("cancelled by the photographer; no result was recorded")
+            return None
+        if timed_out:
+            note(f"timed out after {timeout_seconds:g} seconds")
+            raise RuntimeError(f"Siril timed out after {timeout_seconds:g} seconds")
+        if returncode != 0:
+            raise RuntimeError(f"Siril failed with exit code {returncode}; see {manifest.log}")
+        if not result.is_file():
+            raise RuntimeError(f"Siril exited successfully but did not produce {manifest.result}")
+        bits = verify_tiff(result)
+        note(f"verified {manifest.result} ({'x'.join(map(str, bits))} bits per sample)")
+        context.update_progress(0.95)
+        return AstroExecution(result, bits, returncode)
+
+
+def _stop(process: Any) -> None:
+    for signal_process in (process.terminate, process.kill):
+        try:
+            signal_process()
+            process.wait(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+        except OSError:
+            return

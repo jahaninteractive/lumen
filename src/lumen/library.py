@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import tempfile
 import threading
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -20,8 +21,11 @@ from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, app
 from .catalog import Catalog
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
-from .domain import Artifact, Photo, PhotoEdit
+from .domain import Artifact, Job, Photo, PhotoEdit
+from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
+from .jobs import LocalJobRunner
 from .pipelines import PipelineRegistry
+from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
 from .scoring import rank_group
@@ -97,9 +101,22 @@ class Library:
         self.catalog = Catalog(settings.database_path)
         self.previews = ExifToolPreviewProvider()
         self.sidecars = SidecarWriter(settings.sidecar_dir)
+        self._runner: LocalJobRunner | None = None
+
+    @property
+    def job_runner(self) -> LocalJobRunner:
+        # Created on first use: the runner takes the catalog's exclusive owner lock and starts a worker thread.
+        if self._runner is None:
+            self._runner = LocalJobRunner(self.settings.database_path)
+        return self._runner
 
     def close(self) -> None:
-        self.catalog.close()
+        try:
+            if self._runner is not None:
+                self._runner.shutdown()
+                self._runner = None
+        finally:
+            self.catalog.close()
 
     def __enter__(self) -> "Library":
         return self
@@ -474,6 +491,115 @@ class Library:
                 results.append(ExportResult(photo.id, False, None, "; ".join(errors)))
         return results
 
+    @_coordinated
+    def prepare_astro_job(self, group_id: int, *, confirmed: bool, excluded_photo_ids: Sequence[int] = (),
+                          darks: Path | None = None, flats: Path | None = None, biases: Path | None = None) -> Job:
+        if confirmed is not True:
+            raise ValueError("astro stacking requires explicit photographer confirmation")
+        if type(group_id) is not int or not (photo_ids := self.catalog.group_photo_ids(group_id)):
+            raise ValueError(f"unknown group ID: {group_id}")
+        excluded = list(excluded_photo_ids)
+        if len(set(excluded)) != len(excluded) or any(type(item) is not int or item not in photo_ids for item in excluded):
+            raise ValueError("excluded photos must be unique members of the group")
+        photos = [self.catalog.get_photo(photo_id) for photo_id in photo_ids]
+        metrics = {}
+        for photo in photos:
+            if fingerprint_file(Path(photo.path)) != photo.fingerprint:
+                raise ValueError(f"source content changed since import; reimport before stacking: {Path(photo.path).name}")
+            if stored := self.catalog.get_metrics(photo.id):
+                metrics[Path(photo.path)] = stored.astro
+        executable = find_tool("siril-cli")
+        if not executable:
+            raise RuntimeError("siril-cli is not installed")
+        siril = probe_siril(executable)
+
+        def prepare(job_id: int) -> tuple[str, str]:
+            manifest = prepare_siril_job(
+                output_root=self.settings.output_dir, job_id=job_id, siril=siril,
+                lights=[Path(photo.path) for photo in photos],
+                excluded=[Path(photo.path) for photo in photos if photo.id in excluded],
+                darks=darks, flats=flats, biases=biases, astro_metrics=metrics,
+            )
+            job_dir = Path(manifest.job_dir)
+            return str(job_dir / "manifest.json"), str(job_dir / manifest.log)
+
+        return self.catalog.create_prepared_job("astro", prepare)
+
+    def run_astro_job(self, job_id: int, *, timeout_seconds: float = 7200.0) -> Job:
+        with self._mutation():
+            job = self.catalog.get_job(job_id)
+            if job.kind != "astro":
+                raise ValueError(f"job {job_id} is not an astro job")
+            if job.status != "queued":
+                raise ValueError(f"job {job_id} is not queued")
+            load_manifest(Path(job.manifest_path), self.settings.output_dir)
+            runner = self.job_runner
+
+        def work(context) -> None:
+            # Re-read and re-verify on the worker so nothing changed between submission and launch.
+            manifest = load_manifest(Path(job.manifest_path), self.settings.output_dir)
+            execution = execute_job(context, manifest, output_root=self.settings.output_dir, timeout_seconds=timeout_seconds)
+            if execution is not None:
+                self._record_astro_result(context, job_id, manifest, execution)
+
+        runner.submit(job_id, work)
+        return job
+
+    def cancel_job(self, job_id: int) -> bool:
+        if self._runner is not None:
+            return self._runner.cancel(job_id)
+        with self._mutation():
+            job = self.catalog.get_job(job_id)
+            if job.status == "queued":
+                self.catalog.update_job(job_id, status="cancelled")
+                return True
+            if job.status == "running":
+                raise RuntimeError(f"job {job_id} is running under another job runner; cancel it there")
+            return job.status == "cancelled"
+
+    def wait_for_job(self, job_id: int, timeout: float | None = None) -> bool:
+        return self._runner is not None and self._runner.wait(job_id, timeout)
+
+    def _record_astro_result(self, context, job_id: int, manifest, execution) -> None:
+        """Worker-thread bookkeeping after a verified stack: artifact, provenance, sidecars, job result."""
+        output_fingerprint = fingerprint_file(execution.result)
+        with self._mutation(), Catalog(self.settings.database_path) as catalog:
+            if context.cancelled:
+                return
+            by_path = {Path(photo.path).resolve(): photo for photo in catalog.list_photos()}
+            light_ids = [photo.id for frame in manifest.lights.frames if (photo := by_path.get(Path(frame.source)))]
+            settings = {
+                "job_id": manifest.job_id, "manifest": "manifest.json", "script_sha256": manifest.script_sha256,
+                "siril_version": manifest.siril.version_text, "command": list(manifest.command),
+                "warnings": list(manifest.warnings), "lights": len(manifest.lights.frames),
+                "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
+                "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames),
+                "light_fingerprints": [frame.fingerprint for frame in manifest.lights.frames],
+                "light_photo_ids": light_ids, "exit_code": execution.returncode,
+                "bits_per_sample": list(execution.bits_per_sample),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            stack_identity = hashlib.sha256("\n".join(settings["light_fingerprints"]).encode()).hexdigest()
+            artifact = catalog.save_artifact(None, f"astro-job-{manifest.job_id}", stack_identity, "astro_tiff",
+                                             str(execution.result), settings, output_fingerprint)
+            try:
+                details = {"job_id": manifest.job_id, "artifact_id": artifact.id, "output": artifact.path,
+                           "output_fingerprint": output_fingerprint, "created_at": settings["created_at"]}
+                catalog.append_event(None, "astro_stacked", details | {"light_photo_ids": light_ids})
+                for photo_id in light_ids:
+                    catalog.append_event(photo_id, "astro_stacked", details)
+                for photo_id in light_ids:
+                    self._write_sidecar(photo_id, catalog=catalog)
+                catalog.update_job(job_id, result_path=str(execution.result))
+            except Exception:
+                catalog.discard_export(artifact.id, kind="astro_stacked")
+                for photo_id in light_ids:  # Sidecars must not keep events the catalog no longer has.
+                    try:
+                        self._write_sidecar(photo_id, catalog=catalog)
+                    except Exception:
+                        pass
+                raise
+
     def get_photo(self, photo_id: int) -> dict | None:
         photo = self.catalog.get_photo(photo_id)
         if not photo:
@@ -622,22 +748,23 @@ class Library:
             if photo.id is not None:
                 self._write_sidecar(photo.id, selected=photo.id in selected_ids)
 
-    def _write_sidecar(self, photo_id: int, selected: bool | None = None) -> None:
-        photo = self.catalog.get_photo(photo_id)
-        metrics = self.catalog.get_metrics(photo_id)
+    def _write_sidecar(self, photo_id: int, selected: bool | None = None, *, catalog: Catalog | None = None) -> None:
+        catalog = catalog or self.catalog  # Worker threads pass their own connection.
+        photo = catalog.get_photo(photo_id)
+        metrics = catalog.get_metrics(photo_id)
         if not photo or not metrics:
             return
         if selected is None:
-            selected = any(group["automatic_pick_id"] == photo_id for group in self.catalog.list_groups())
-        tags = self.catalog.get_tags(photo_id)
+            selected = any(group["automatic_pick_id"] == photo_id for group in catalog.list_groups())
+        tags = catalog.get_tags(photo_id)
         data = tags["data"] if tags else {}
         self.sidecars.write(
             photo,
             metrics,
-            self.catalog.events_for(photo_id),
+            catalog.events_for(photo_id),
             selected=selected,
             description=data.get("description", ""),
             keywords=data.get("subjects", []),
-            artifacts=[artifact for artifact in self.catalog.list_artifacts() if artifact.photo_id == photo_id],
-            active_crop=self.catalog.get_crop(photo_id),
+            artifacts=[artifact for artifact in catalog.list_artifacts() if artifact.photo_id == photo_id],
+            active_crop=catalog.get_crop(photo_id),
         )

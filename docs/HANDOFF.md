@@ -1,10 +1,10 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-22 (Africa/Johannesburg) — astro Task 2 complete
+Last updated: 2026-10-22 (Africa/Johannesburg) — astro Task 3 complete
 
 ## Resume here
 
-The active repository is `/Users/nasir/Developer/localimagemanip`. The project is runnable and its complete warning-strict test suite currently passes **250 tests** (run with `env -u LUMEN_OMLX_MODEL`; the user's shell override fails the doctor default-model assertion in `test_cli`). `node --check src/lumen/static/app.js` also passes.
+The active repository is `/Users/nasir/Developer/localimagemanip`. The project is runnable and its complete warning-strict test suite currently passes **269 tests** (run with `env -u LUMEN_OMLX_MODEL`; the user's shell override fails the doctor default-model assertion in `test_cli`). `node --check src/lumen/static/app.js` also passes.
 
 The composition implementation is complete through Task 5 and its independent re-review is approved with no open findings. Read:
 
@@ -16,7 +16,7 @@ The composition implementation is complete through Task 5 and its independent re
 
 The composition plan is complete. Its final independent re-review is approved with 0 Critical, 0 Important, and 0 Minor findings. Astro Task 1 is the active next milestone.
 
-Astro Task 1 is complete and independently approved with no open findings. It adds validated persisted jobs, strict transitions/recovery, exclusive per-catalog runner ownership across local processes, one heavy worker, and owned-process cancellation/reaping with retryable shutdown. Read `.superpowers/sdd/2026-10-21-astro-stacking/task-1-rereview-2.md`; Astro Task 2 (Siril preparation) is complete and independently re-reviewed with 0 Critical / 0 Important open (two final Minor type checks also fixed). **Task 3 (execute/cancel/import) is the next milestone.** Task 2 is not yet committed unless `git log` shows it.
+Astro Task 1 is complete and independently approved with no open findings. It adds validated persisted jobs, strict transitions/recovery, exclusive per-catalog runner ownership across local processes, one heavy worker, and owned-process cancellation/reaping with retryable shutdown. Read `.superpowers/sdd/2026-10-21-astro-stacking/task-1-rereview-2.md`; Astro Task 2 (Siril preparation) is committed (`deab8bd`). Astro Task 3 (execute/cancel/import) is complete and independently re-reviewed with 0 Critical / 0 Important open; see "Astro Task 3" below. **Task 4 (CLI and protected API) is the next milestone.** Task 3 is uncommitted unless `git log` shows a commit after `deab8bd`.
 
 ## Working features
 
@@ -47,7 +47,7 @@ Verification commands last run:
 ```sh
 uv run python -W error -m unittest tests.test_web -v       # 37 passed
 node --check src/lumen/static/app.js                       # exit 0
-env -u LUMEN_OMLX_MODEL uv run python -W error -m unittest discover -s tests -v   # 250 passed (2026-10-22)
+env -u LUMEN_OMLX_MODEL uv run python -W error -m unittest discover -s tests -v   # 269 passed (2026-10-22)
 ```
 
 The latest whole-plan fixes prove the default candidates include one contextual and one tighter crop, source replacement invalidates an old crop before the fingerprint-upsert failure boundary, and every export rejects source bytes not successfully cataloged after an interrupted replacement. See `.superpowers/sdd/2026-10-21-composition-crops/plan-final-fix-report.md`.
@@ -68,7 +68,7 @@ Use `docs/superpowers/plans/2026-10-21-astro-stacking.md` task by task. Do not j
 
 1. **Job catalog and single-worker lifecycle** — complete and independently approved.
 2. **Reproducible Siril preparation** — complete; see "Astro Task 2" below.
-3. **Execute/cancel/import** — revalidate fingerprints before launch, stream logs, require declared 16-bit TIFF even on exit 0, catalog the result artifact, and never mutate sources.
+3. **Execute/cancel/import** — complete; see "Astro Task 3" below.
 4. **CLI and protected API** — explicit group confirmation, selection/exclusion, calibration folders, status/log tail, run, and cancellation.
 5. **Astro web workflow** — explicit confirmation, per-light inclusion, calibration folder pickers, warnings, progress/cancel, retained failure context, and finish/export action.
 
@@ -93,7 +93,22 @@ Evidence (exact `--version`/`--help`, help sources, per-branch dry runs): `.supe
 - `lumen doctor` reports Siril `version: "1.4.4"`, `supported: true` (was the banner line).
 - Dry-validated with the installed 1.4.4 on synthetic RGGB CFA FITS (no user photos), library path with space/non-ASCII: every calibration branch exit 0 with 16-bit RGB `result.tif`; sources unchanged. **Not yet run on real Sony ARW lights.**
 
-### Task 3 must handle (from Task 2 review)
+### Astro Task 3 — what exists (2026-10-22)
+
+- `Library.prepare_astro_job(group_id, *, confirmed, excluded_photo_ids, darks, flats, biases) -> Job`: requires `confirmed is True`; refuses lights whose bytes differ from their catalog fingerprint; probes Siril via `find_tool`+`probe_siril`; `Catalog.create_prepared_job` inserts a `pending` placeholder, prepares the job dir with no SQLite lock held (frame hashing can take seconds), then stores the paths or deletes the placeholder on failure. Runner startup purges placeholders left by a crash.
+- `Library.run_astro_job(job_id, *, timeout_seconds=7200)`: verifies the manifest on the caller thread, submits to the lazily created `LocalJobRunner` (one per `Library`; `close()` shuts it down). The worker re-loads the manifest, then `astro.execute_job`: refuses if `result.tif`/`process/`/`masters/` already exist, revalidates every frame (exists, link still points at it, size, mtime_ns, sha256), launches the manifest command via Popen argument array with cwd=job dir, streams stdout+stderr (ANSI-stripped) into `<job>/siril.log` from a reader thread, writes coarse progress 0.05→0.1→0.3 (calibrate)→0.5 (register)→0.9 (savetif)→0.95 (TIFF verified) from the polling thread, enforces the timeout (terminate→kill), and requires a 16-bit TIFF (`BitsPerSample` all 16) even on exit 0.
+- Success bookkeeping (`_record_astro_result`, worker thread, own `Catalog` under the library mutation lock): artifact kind `astro_tiff` (photo_id None, settings include job_id, siril_version, command, counts, light_fingerprints, light_photo_ids, exit_code, bits_per_sample), one global and one per-light `astro_stacked` event, light sidecars rewritten, then `result_path`; any failure discards the artifact/events, rewrites sidecars, and fails the job. Cancellation returns no result; a recorded result is never undone by a late cancel (`LocalJobRunner.cancel` returns False once `result_path` is set — a two-line Task 1 change made for this).
+- `Library.cancel_job`: queued jobs cancel without a runner; running jobs raise RuntimeError if this `Library` owns no runner. `wait_for_job(job_id, timeout)` for callers/tests.
+- Verified: fake Siril as a real child process (changed/missing frames, stale outputs, timeout, exit 3, exit 0 without TIFF, 8-bit TIFF, mid-run cancel, cancel racing a clean exit, bookkeeping failure compensation, unchanged source bytes/mtimes in every case); mutation checks on revalidation, exit/TIFF, cancel, and late-cancel guards; `execute_job` against real Siril 1.4.4 on synthetic CFA FITS (16×16×16 TIFF, sources unchanged). **Still not run on real Sony ARW lights.**
+
+### Task 4 must handle (from Task 3 review)
+
+- The web server creates a `Library` per request; `Library.close()` shuts down its runner and would cancel a running job. Task 4 needs one process-level runner (module-level, keyed by database path, or an injected `job_runner`) shared by all request `Library` objects, and `cancel_job` must route to it.
+- Status/log-tail must whitelist fields: never serialize `artifact.settings` (contains `command` with absolute paths and `light_fingerprints`), manifests, or job `error` strings containing source basenames without review; job `result_path` is authoritative over status races.
+- `run_astro_job` rejects a `pending` placeholder (`load_manifest` ValueError); listings may filter `manifest_path == 'pending'`.
+- A manifest tampered between submit and launch is caught by the worker's re-load (untested race).
+
+### Task 3 inherited notes (now implemented)
 
 - Revalidate every frame's size/mtime_ns/sha256 from `load_manifest(path, settings.output_dir)` immediately before launch; `load_manifest` raises `ValueError` for tampered/foreign manifests and may raise `OSError` for unreadable files.
 - Refuse to launch if `result.tif` (or stale `process/`) already exists so a rerun can't mistake an old TIFF for success; exit 0 without the TIFF is failure.

@@ -386,3 +386,328 @@ class SirilProbeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FAKE_SIRIL = """
+import sys, time
+from pathlib import Path
+from PIL import Image
+scenario = sys.argv[1]
+print("log: Welcome to siril 1.4.4 for macos (aarch64) - CLI", flush=True)
+print("log: Running command: calibrate", flush=True)
+print("log: Running command: register", flush=True)
+if scenario == "hang":
+    Image.new("I;16", (8, 6)).save("result.tif")
+    time.sleep(60)
+print("log: Running command: savetif", flush=True)
+if scenario == "success":
+    Image.new("I;16", (8, 6)).save("result.tif")
+elif scenario == "eight_bit":
+    Image.new("RGB", (8, 6)).save("result.tif")
+elif scenario == "nonzero":
+    print("log: Error in line 5 ('stack'): invalid arguments.", flush=True)
+    sys.exit(3)
+print("log: Script execution finished successfully.", flush=True)
+"""
+
+
+class AstroJobTests(unittest.TestCase):
+    def setUp(self):
+        from PIL import Image
+        from lumen.config import Settings
+        from lumen.library import Library
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.night = self.root / "Night ✨"
+        self.night.mkdir()
+        for index in range(3):
+            exif = Image.Exif()
+            exif[34665] = {36867: f"2026:10:21 22:00:0{index}"}
+            Image.new("RGB", (64, 48), (index, 0, 0)).save(self.night / f"light {index} é.tif", exif=exif.tobytes())
+        self.lights = sorted(self.night.iterdir())
+        self.settings = Settings(library_dir=self.root / "Lumen Library ✨")
+        self.library = Library(self.settings)
+        self.addCleanup(self.library.close)
+        self.library.import_path(self.night)
+        self.group = self.library.list_groups()[0]
+        self.photo_ids = [photo["id"] for photo in self.group["photos"]]
+        self.launches = []
+        self.scenario = "success"
+        self.real_popen = subprocess.Popen  # patching lumen.astro.subprocess.Popen patches the global name too
+        patcher = patch("lumen.library.find_tool", return_value=SIRIL.executable)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch("lumen.library.probe_siril", return_value=SIRIL)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch("lumen.astro.subprocess.Popen", side_effect=self.fake_popen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def fake_popen(self, command, **kwargs):
+        import sys
+        self.launches.append(list(command))
+        return self.real_popen([sys.executable, "-c", FAKE_SIRIL, self.scenario], **kwargs)
+
+    def snapshot(self):
+        return [(path.read_bytes(), path.stat().st_mtime_ns) for path in self.lights]
+
+    def prepare(self, **overrides):
+        options = {"confirmed": True}
+        return self.library.prepare_astro_job(self.group["id"], **(options | overrides))
+
+    def run_and_wait(self, job_id, **options):
+        self.library.run_astro_job(job_id, **options)
+        self.assertTrue(self.library.wait_for_job(job_id, timeout=10))
+        return self.library.catalog.get_job(job_id)
+
+    def test_prepare_creates_queued_job_whose_directory_matches_its_id(self):
+        job = self.prepare(excluded_photo_ids=[self.photo_ids[2]])
+        job_dir = self.settings.output_dir / "astro" / str(job.id)
+        self.assertEqual(("astro", "queued", 0.0), (job.kind, job.status, job.progress))
+        self.assertEqual(str(job_dir / "manifest.json"), job.manifest_path)
+        self.assertEqual(str(job_dir / "siril.log"), job.log_path)
+        manifest = load_manifest(job_dir / "manifest.json", self.settings.output_dir)
+        self.assertEqual([str(path) for path in self.lights[:2]], [frame.source for frame in manifest.lights.frames])
+        self.assertEqual((str(self.lights[2]),), manifest.excluded_lights)
+        self.assertEqual([job.id], [item.id for item in self.library.catalog.list_jobs()])
+
+    def test_prepare_requires_confirmation_and_valid_selection(self):
+        for options in ({"confirmed": False}, {"excluded_photo_ids": [999]}, {"excluded_photo_ids": self.photo_ids[:2]}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.prepare(**options)
+        with self.assertRaises(ValueError):
+            self.library.prepare_astro_job(999, confirmed=True)
+        self.assertEqual([], self.library.catalog.list_jobs())
+        self.assertFalse((self.settings.output_dir / "astro").exists() and any((self.settings.output_dir / "astro").iterdir()))
+
+    def test_cancel_during_preparation_leaves_no_prepared_job(self):
+        from lumen import library as library_module
+
+        def cancel_midway(**options):
+            manifest = prepare_siril_job(**options)
+            self.library.catalog.update_job(manifest.job_id, status="cancelled")
+            return manifest
+
+        with patch.object(library_module, "prepare_siril_job", side_effect=cancel_midway), self.assertRaisesRegex(ValueError, "cancelled during preparation"):
+            self.prepare()
+        jobs = self.library.catalog.list_jobs()
+        self.assertEqual(["cancelled"], [job.status for job in jobs])
+        self.assertEqual("pending", jobs[0].manifest_path)
+
+    def test_prepare_refuses_lights_changed_since_import(self):
+        self.lights[0].write_bytes(self.lights[0].read_bytes() + b"!")
+        with self.assertRaisesRegex(ValueError, "since import"):
+            self.prepare()
+        self.assertEqual([], self.library.catalog.list_jobs())
+
+    def test_failed_preparation_leaves_no_job_row_or_directory(self):
+        with patch("lumen.library.probe_siril", return_value=SirilCapabilities(SIRIL.executable, (1, 2, 6))):
+            with self.assertRaises(UnsupportedSirilVersion):
+                self.prepare()
+        with patch("lumen.library.find_tool", return_value=None), self.assertRaisesRegex(RuntimeError, "siril-cli"):
+            self.prepare()
+        self.assertEqual([], self.library.catalog.list_jobs())
+        self.assertFalse(any((self.settings.output_dir / "astro").glob("*")))
+
+    def test_successful_run_streams_log_and_catalogs_tiff_with_provenance(self):
+        before = self.snapshot()
+        job = self.prepare(excluded_photo_ids=[self.photo_ids[2]])
+        finished = self.run_and_wait(job.id)
+        self.assertEqual(("succeeded", 1.0, None), (finished.status, finished.progress, finished.error))
+        result = Path(job.manifest_path).parent / "result.tif"
+        self.assertEqual(str(result), finished.result_path)
+        self.assertEqual(1, len(self.launches))
+        self.assertEqual(load_manifest(Path(job.manifest_path), self.settings.output_dir).command, tuple(self.launches[0]))
+        log = Path(job.log_path).read_text(encoding="utf-8")
+        self.assertIn("log: Running command: register", log)
+        self.assertIn("Script execution finished successfully", log)
+        artifacts = self.library.catalog.list_artifacts()
+        self.assertEqual(1, len(artifacts))
+        artifact = artifacts[0]
+        self.assertEqual(("astro_tiff", None, str(result)), (artifact.kind, artifact.photo_id, artifact.path))
+        self.assertEqual(hashlib.sha256(result.read_bytes()).hexdigest(), artifact.output_fingerprint)
+        self.assertEqual(job.id, artifact.settings["job_id"])
+        self.assertEqual(self.photo_ids[:2], artifact.settings["light_photo_ids"])
+        self.assertEqual("1.4.4", artifact.settings["siril_version"])
+        self.assertEqual(0, artifact.settings["exit_code"])
+        self.assertEqual((16,), tuple(artifact.settings["bits_per_sample"]))
+        for photo_id in self.photo_ids[:2]:
+            events = [event for event in self.library.catalog.events_for(photo_id) if event.kind == "astro_stacked"]
+            self.assertEqual(1, len(events))
+            self.assertEqual(artifact.id, events[0].details["artifact_id"])
+            sidecar = json.loads(self.library.sidecars.paths(self.library.catalog.get_photo(photo_id))[0].read_text())
+            self.assertIn("astro_stacked", [event["kind"] for event in sidecar["provenance"]])
+        self.assertEqual([], [event for event in self.library.catalog.events_for(self.photo_ids[2]) if event.kind == "astro_stacked"])
+        self.assertEqual(1, len([event for event in self.library.catalog.events_for(None) if event.kind == "astro_stacked"]))
+        self.assertEqual(before, self.snapshot())
+
+    def test_changed_or_missing_frames_block_launch(self):
+        original = self.lights[1].read_bytes()
+        for name, damage in (("changed", lambda path: path.write_bytes(original + b"!")), ("missing", lambda path: path.unlink())):
+            with self.subTest(name=name):
+                job = self.prepare()
+                damage(self.lights[1])
+                finished = self.run_and_wait(job.id)
+                self.assertEqual("failed", finished.status)
+                self.assertIn(name, finished.error)
+                self.assertEqual([], self.launches)
+                self.assertEqual([], self.library.catalog.list_artifacts())
+                self.assertIn(name, Path(job.log_path).read_text(encoding="utf-8"))
+                self.lights[1].write_bytes(original)
+
+    def test_bookkeeping_failure_after_a_good_stack_leaves_no_artifact_or_events(self):
+        job = self.prepare()
+        with patch.object(self.library.sidecars, "write", side_effect=OSError("disk full")):
+            finished = self.run_and_wait(job.id)
+        self.assertEqual("failed", finished.status)
+        self.assertIn("disk full", finished.error)
+        self.assertIsNone(finished.result_path)
+        self.assertTrue((Path(job.manifest_path).parent / "result.tif").is_file())
+        self.assertEqual([], self.library.catalog.list_artifacts())
+        for photo_id in self.photo_ids:
+            self.assertEqual([], [event for event in self.library.catalog.events_for(photo_id) if event.kind == "astro_stacked"])
+            sidecar = json.loads(self.library.sidecars.paths(self.library.catalog.get_photo(photo_id))[0].read_text())
+            self.assertNotIn("astro_stacked", [event["kind"] for event in sidecar["provenance"]])
+        self.assertEqual([], [event for event in self.library.catalog.events_for(None) if event.kind == "astro_stacked"])
+
+    def test_existing_outputs_block_launch(self):
+        job = self.prepare()
+        (Path(job.manifest_path).parent / "result.tif").write_bytes(b"stale")
+        finished = self.run_and_wait(job.id)
+        self.assertEqual("failed", finished.status)
+        self.assertIn("already contains", finished.error)
+        self.assertEqual([], self.launches)
+
+    def test_timeout_fails_the_job_and_reaps_the_process(self):
+        self.scenario = "hang"
+        before = self.snapshot()
+        job = self.prepare()
+        finished = self.run_and_wait(job.id, timeout_seconds=0.5)
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual("failed", finished.status)
+        self.assertIn("timed out", finished.error)
+        self.assertIsNone(finished.result_path)
+        self.assertEqual([], self.library.catalog.list_artifacts())
+
+    def test_nonzero_exit_fails_without_artifact(self):
+        self.scenario = "nonzero"
+        before = self.snapshot()
+        job = self.prepare()
+        finished = self.run_and_wait(job.id)
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual("failed", finished.status)
+        self.assertIn("exit code 3", finished.error)
+        self.assertIn("invalid arguments", Path(job.log_path).read_text(encoding="utf-8"))
+        self.assertEqual([], self.library.catalog.list_artifacts())
+
+    def test_zero_exit_without_declared_tiff_or_with_wrong_depth_fails(self):
+        for scenario, message in (("no_tiff", "did not produce"), ("eight_bit", "16-bit")):
+            with self.subTest(scenario=scenario):
+                self.scenario = scenario
+                job = self.prepare()
+                finished = self.run_and_wait(job.id)
+                self.assertEqual("failed", finished.status)
+                self.assertIn(message, finished.error)
+                self.assertIsNone(finished.result_path)
+        self.assertEqual([], self.library.catalog.list_artifacts())
+
+    def test_cancellation_stops_only_the_owned_process_and_never_succeeds(self):
+        import time
+        self.scenario = "hang"
+        job = self.prepare()
+        self.library.run_astro_job(job.id)
+        deadline = time.monotonic() + 10
+        log_path = Path(job.log_path)
+        while not log_path.exists() or "Running command: register" not in log_path.read_text(encoding="utf-8", errors="replace"):
+            self.assertLess(time.monotonic(), deadline, "fake Siril never started")
+            time.sleep(0.05)
+        from lumen.library import Library
+        with Library(self.settings) as other:  # Another Library in this process does not own the runner.
+            with self.assertRaisesRegex(RuntimeError, "another job runner"):
+                other.cancel_job(job.id)
+        before = self.snapshot()
+        self.assertTrue(self.library.cancel_job(job.id))
+        self.assertTrue(self.library.wait_for_job(job.id, timeout=10))
+        finished = self.library.catalog.get_job(job.id)
+        self.assertEqual(("cancelled", None, None), (finished.status, finished.result_path, finished.error))
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual([], self.library.catalog.list_artifacts())
+        self.assertIn("Running command: register", Path(job.log_path).read_text(encoding="utf-8"))
+        self.assertTrue(Path(job.manifest_path).is_file())
+        with self.assertRaises(ValueError):
+            self.library.run_astro_job(job.id)
+
+    def test_queued_job_can_be_cancelled_without_starting_a_runner(self):
+        import threading
+        job = self.prepare()
+        self.assertTrue(self.library.cancel_job(job.id))
+        self.assertEqual("cancelled", self.library.catalog.get_job(job.id).status)
+        self.assertNotIn("lumen-local-job-runner", [thread.name for thread in threading.enumerate()])
+        self.assertTrue(self.library.cancel_job(job.id))
+        with self.assertRaises(ValueError):
+            self.library.cancel_job(job.id + 100)
+
+    def test_run_rejects_non_astro_or_tampered_jobs(self):
+        job = self.prepare()
+        (Path(job.manifest_path).parent / "stack.ssf").chmod(0o644)
+        (Path(job.manifest_path).parent / "stack.ssf").write_text("requires 1.4.0 1.5.0\nclose\n")
+        with self.assertRaises(ValueError):
+            self.library.run_astro_job(job.id)
+        self.assertEqual("queued", self.library.catalog.get_job(job.id).status)
+        other = self.library.catalog.create_job(kind="export", manifest_path="/x/m.json", log_path="/x/l.log")
+        with self.assertRaises(ValueError):
+            self.library.run_astro_job(other.id)
+        self.assertEqual([], self.launches)
+
+
+class StageProgressTests(unittest.TestCase):
+    def test_coarse_stages_are_monotonic_and_ignore_noise(self):
+        from lumen.astro import stage_progress
+        self.assertIsNone(stage_progress("log: Reading FITS: file light_00001.fit"))
+        self.assertIsNone(stage_progress("progress: Rejection stacking in progress..., 0.00%"))
+        stages = [stage_progress(f"log: Running command: {command}") for command in ("cd", "convert", "calibrate", "register", "stack", "savetif")]
+        self.assertEqual([None, None, 0.3, 0.5, None, 0.9], stages)
+
+
+class ExecuteJobCancellationTests(unittest.TestCase):
+    def test_cancellation_after_a_clean_exit_still_records_no_result(self):
+        import sys
+        from lumen.astro import execute_job
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            night = root / "night"
+            night.mkdir()
+            lights = [(night / f"l{index}.tif", (night / f"l{index}.tif").write_bytes(b"light"))[0] for index in range(2)]
+            outputs = root / "outputs"
+            outputs.mkdir()
+            manifest = prepare_siril_job(output_root=outputs, job_id=3, lights=lights, siril=SIRIL)
+            real_popen = subprocess.Popen
+
+            class Context:
+                # Cancellation arrives while the process is still running, but the process then exits 0 with a result.
+                cancelled = False
+
+                def wait_for_cancel(self, timeout):
+                    self.cancelled = True
+                    return True
+
+                def update_progress(self, progress):
+                    pass
+
+                def register_process(self, process):
+                    pass
+
+                def clear_process(self, process):
+                    pass
+
+            def popen(command, **kwargs):
+                return real_popen([sys.executable, "-c", FAKE_SIRIL, "success"], **kwargs)
+
+            execution = execute_job(Context(), manifest, output_root=outputs, popen=popen)
+            self.assertIsNone(execution)
+            self.assertTrue((Path(manifest.job_dir) / "result.tif").is_file())
+            self.assertIn("cancelled by the photographer", (Path(manifest.job_dir) / "siril.log").read_text())

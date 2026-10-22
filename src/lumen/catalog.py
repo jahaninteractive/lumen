@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Callable, Any
 
 from .composition import CropRect
 from .domain import Artifact, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
@@ -191,6 +191,41 @@ class Catalog:
             ).fetchone()
         return self._job_from_row(row)
 
+    def create_prepared_job(self, kind: str, prepare: Callable[[int], tuple[str, str]]) -> Job:
+        """Insert a queued job, then prepare its files under the new ID outside any transaction.
+
+        ``prepare`` receives the job ID and returns (manifest_path, log_path). It may take
+        seconds (it hashes every frame), so no SQLite lock is held while it runs; if it
+        raises, the placeholder row is deleted so no job exists without its manifest.
+        """
+        now = datetime.now(timezone.utc)
+        with self.connection:
+            row = self.connection.execute(
+                """INSERT INTO jobs
+                (kind, status, progress, manifest_path, log_path, result_path, error, created_at, updated_at)
+                VALUES (?, 'queued', 0, 'pending', 'pending', NULL, NULL, ?, ?) RETURNING id""",
+                (kind, now.isoformat(), now.isoformat()),
+            ).fetchone()
+        job_id = int(row["id"])
+        try:
+            manifest_path, log_path = prepare(job_id)
+            Job(id=job_id, kind=kind, status="queued", progress=0.0, manifest_path=manifest_path,
+                log_path=log_path, result_path=None, error=None, created_at=now, updated_at=now)  # validates the paths
+            with self.connection:
+                row = self.connection.execute(
+                    "UPDATE jobs SET manifest_path = ?, log_path = ? WHERE id = ? AND status = 'queued' RETURNING *",
+                    (manifest_path, log_path, job_id),
+                ).fetchone()
+            if row is None:
+                raise ValueError(f"job {job_id} was cancelled during preparation")
+        except BaseException:
+            with self.connection:
+                self.connection.execute(
+                    "DELETE FROM jobs WHERE id = ? AND status = 'queued' AND manifest_path = 'pending'", (job_id,)
+                )
+            raise
+        return self._job_from_row(row)
+
     def get_job(self, job_id: int) -> Job:
         if type(job_id) is not int or job_id <= 0:
             raise ValueError("job ID must be a positive integer")
@@ -250,6 +285,8 @@ class Catalog:
     def recover_running_jobs(self) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with self.connection:
+            # A placeholder left by a crash mid-preparation has no manifest and can never run.
+            self.connection.execute("DELETE FROM jobs WHERE status = 'queued' AND manifest_path = 'pending'")
             cursor = self.connection.execute(
                 """UPDATE jobs SET status = 'interrupted',
                 error = 'Interrupted during application restart', updated_at = ?
@@ -396,14 +433,14 @@ class Catalog:
         rows = self.connection.execute("SELECT * FROM artifacts ORDER BY id").fetchall()
         return [self._artifact_from_row(row) for row in rows]
 
-    def discard_export(self, artifact_id: int) -> None:
+    def discard_export(self, artifact_id: int, kind: str = "exported") -> None:
         """Remove only the newly created artifact and its success events."""
         with self.connection:
             self.connection.execute(
                 """
-                DELETE FROM provenance WHERE kind = 'exported'
+                DELETE FROM provenance WHERE kind = ?
                 AND json_extract(details_json, '$.artifact_id') = ?
-                """, (artifact_id,),
+                """, (kind, artifact_id),
             )
             self.connection.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))
 
