@@ -57,6 +57,42 @@ class PipelineTests(unittest.TestCase):
                         self.assertEqual(description, parsed.find(".//dc:description/rdf:Alt/rdf:li", ns).text or "")
                         self.assertEqual(keywords, [item.text for item in parsed.findall(".//dc:subject/rdf:Bag/rdf:li", ns)])
 
+    def test_jpeg_export_can_render_through_the_macos_decoder_without_darktable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            calls = []
+
+            def render(command, **kwargs):
+                calls.append(command)
+                self.assertNotEqual("darktable-cli", command[0], "darktable must not run for the macOS decoder")
+                if command[0].endswith("sw_vers"):
+                    return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
+                self.assertTrue(command[0].endswith("/sips"))
+                self.assertIn("--matchTo", command)
+                Image.new("RGB", (80, 60), "red").save(command[command.index("--out") + 1], format="TIFF",
+                                                     icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            result = pipeline.export_jpeg(source, decoder="macos", runner=render)
+            self.assertTrue(result.success, result.message)
+            self.assertEqual("macos", result.settings["decoder"])
+            self.assertEqual("macOS 26.5.1 sips", result.settings["tool_version"])
+            self.assertIn("macOS decoder", result.message)
+            self.assertTrue(result.command[0].endswith("/sips"))
+            with Image.open(result.output) as image:
+                self.assertIn(b"macos", image.info["xmp"])
+
+            profile = root / "look.xmp"
+            profile.write_text("<x:xmpmeta/>")
+            refused = pipeline.export_jpeg(source, profile, decoder="macos", runner=render)
+            self.assertFalse(refused.success)
+            self.assertIn("darktable", refused.message)
+            with self.assertRaises(ValueError):
+                pipeline.export_jpeg(source, decoder="gimp", runner=render)
+
     def test_jpeg_export_preserves_metadata_and_original_with_collision_suffix(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

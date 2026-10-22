@@ -446,9 +446,18 @@ class LibraryTests(unittest.TestCase):
             with closing(sqlite3.connect(next(path for path in metadata if path.name == "catalog.sqlite3"))) as snapshot:
                 self.assertEqual(1, snapshot.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
 
-    def test_unsupported_raw_is_flagged_at_import_and_export_fails_fast_without_darktable(self):
+    def test_unsupported_raw_is_flagged_at_import_and_exports_through_the_macos_decoder(self):
         warning = "Sony reduced-size lossless raw; darktable cannot decode it"
         metadata = {"captured_at": None, "camera_id": "ILCE-7CM2:1", "exposure_seconds": None, "raw_warning": warning}
+
+        def macos_runner(command, **kwargs):
+            self.assertNotEqual("darktable-cli", command[0], "darktable must not run for a flagged raw")
+            if command[0].endswith("sw_vers"):
+                return subprocess.CompletedProcess(command, 0, "26.5.1", "")
+            Image.new("RGB", (320, 240), "red").save(command[command.index("--out") + 1], format="TIFF",
+                                                   icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+            return subprocess.CompletedProcess(command, 0, "", "")
+
         with Library(Settings(library_dir=self.library_dir)) as library:
             with patch("lumen.library.read_metadata", return_value=metadata):
                 library.import_path(self.image_path)
@@ -458,12 +467,13 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual([warning], library.get_photo(photo.id)["warnings"])
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
-                "lumen.pipelines.subprocess.run", side_effect=AssertionError("darktable must not run")
+                "lumen.pipelines.subprocess.run", side_effect=macos_runner
             ):
                 result = library.export_jpegs(library_module.ExportRequest((photo.id,), None))[0]
-            self.assertFalse(result.success)
-            self.assertEqual(warning, result.message)
-            self.assertEqual([], library.catalog.list_artifacts())
+            self.assertTrue(result.success, result.message)
+            self.assertEqual("macos", result.artifact.settings["decoder"])
+            exported = next(event for event in library.catalog.events_for(photo.id) if event.kind == "exported")
+            self.assertEqual("macos", exported.details["decoder"])
             with patch("lumen.library.read_metadata", return_value=metadata | {"raw_warning": None}):
                 library.import_path(self.image_path)  # a later decoder fix clears the flag on reimport
             self.assertEqual([], library.get_photo(photo.id)["warnings"])

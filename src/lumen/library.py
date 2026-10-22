@@ -805,8 +805,8 @@ class Library:
                 data = tags["data"] if tags else {}
                 if fingerprint_file(Path(photo.path)) != photo.fingerprint:
                     raise ValueError("source content changed since import; reimport before exporting")
-                if warnings := self._import_warnings(self.catalog.events_for(photo.id)):
-                    raise ValueError(warnings[0])  # Known-undecodable raw: skip the 10 s darktable attempt.
+                # A raw darktable cannot decode goes through macOS's decoder instead; provenance records which one rendered.
+                decoder = "macos" if self._import_warnings(self.catalog.events_for(photo.id)) else "darktable"
                 edit = self.catalog.get_crop(photo.id)
                 crop = None
                 if edit is not None:
@@ -827,7 +827,7 @@ class Library:
                     description=data.get("description"), keywords=data.get("subjects"),
                     rating=-1 if photo.decision == "reject" else photo.rating,
                     reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
-                    preset=request.preset)
+                    preset=request.preset, decoder=decoder)
                 if not rendered.success:
                     results.append(ExportResult(photo.id, False, None, rendered.message))
                     continue

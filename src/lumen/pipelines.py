@@ -92,6 +92,12 @@ class JpegExportResult(PipelineResult):
     output_fingerprint: str
 
 
+# macOS's own RAW decoder, used only for raws darktable's rawspeed refuses (e.g. Sony reduced-size lossless ARW).
+SIPS = "/usr/bin/sips"
+SRGB_PROFILE = "/System/Library/ColorSync/Profiles/sRGB Profile.icc"
+DECODERS = frozenset({"darktable", "macos"})
+
+
 class DarktablePipeline:
     def __init__(self, executable: str, output_root: Path):
         self.executable = executable
@@ -101,11 +107,13 @@ class DarktablePipeline:
         self, source: Path, profile: Path | None = None, *,
         crop: dict[str, object] | None = None, description: str | None = None,
         keywords: list[str] | None = None, rating: int | None = None,
-        reserved_paths: set[Path] | None = None, preset: str = "full",
+        reserved_paths: set[Path] | None = None, preset: str = "full", decoder: str = "darktable",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
         if preset not in EXPORT_PRESETS:
             raise ValueError(f"unknown export preset: {preset!r}")
+        if decoder not in DECODERS:
+            raise ValueError(f"unknown export decoder: {decoder!r}")
         options = EXPORT_PRESETS[preset]
         runner = runner or subprocess.run
         source = source.resolve()
@@ -120,7 +128,7 @@ class DarktablePipeline:
             "preset": preset, "quality": options["quality"], "long_edge": options["long_edge"],
             "color_space": "sRGB", "include_gps": options["include_gps"],
             "profile": str(profile.resolve()) if profile else None,
-            "crop": crop, "source_fingerprint": "", "tool_version": "unknown",
+            "crop": crop, "source_fingerprint": "", "tool_version": "unknown", "decoder": decoder,
             "command": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -137,17 +145,24 @@ class DarktablePipeline:
                     and left + width <= 1 and top + height <= 1
                 ):
                     raise ValueError("crop must be a bounded normalized rectangle")
-            version = runner([self.executable, "--version"], capture_output=True, text=True, timeout=30, check=False)
-            if version.returncode != 0:
-                raise RuntimeError(version.stderr.strip() or "could not probe darktable version")
-            settings["tool_version"] = version.stdout.strip() or version.stderr.strip() or "unknown"
+            if decoder == "macos":
+                if profile is not None:
+                    raise ValueError("an XMP profile needs darktable; the macOS decoder cannot apply one")
+                version = runner(["/usr/bin/sw_vers", "-productVersion"], capture_output=True, text=True, timeout=30, check=False)
+                settings["tool_version"] = f"macOS {version.stdout.strip() or 'unknown'} sips"
+            else:
+                version = runner([self.executable, "--version"], capture_output=True, text=True, timeout=30, check=False)
+                if version.returncode != 0:
+                    raise RuntimeError(version.stderr.strip() or "could not probe darktable version")
+                settings["tool_version"] = version.stdout.strip() or version.stderr.strip() or "unknown"
             with tempfile.TemporaryDirectory(prefix=".export-", dir=directory) as workspace:
                 work = Path(workspace)
                 (work / "source").mkdir()
                 staged_source = work / "source" / source.name
                 shutil.copyfile(source, staged_source)
                 settings["source_fingerprint"] = fingerprint_file(staged_source)
-                rendered = self.run(staged_source, work / "render.tif", profile, runner=runner)
+                rendered = (self._run_sips(staged_source, work / "render.tif", runner) if decoder == "macos"
+                            else self.run(staged_source, work / "render.tif", profile, runner=runner))
                 command = rendered.command
                 settings["command"] = list(command)
                 if not rendered.success:
@@ -177,7 +192,7 @@ class DarktablePipeline:
                     if icc := opened.info.get("icc_profile"):
                         image = ImageCms.profileToProfile(image, ImageCms.ImageCmsProfile(io.BytesIO(icc)), ImageCms.createProfile("sRGB"), outputMode="RGB")
                     else:
-                        raise ValueError("darktable render has no ICC profile; cannot guarantee sRGB")
+                        raise ValueError(f"{decoder} render has no ICC profile; cannot guarantee sRGB")
                     if crop is not None:
                         image = image.crop((round(left * image.width), round(top * image.height), round((left + width) * image.width), round((top + height) * image.height)))
                     if long_edge := options["long_edge"]:
@@ -213,7 +228,8 @@ class DarktablePipeline:
                     except FileExistsError:
                         suffix += 1
                         destination = directory / f"{stem}-{suffix}.jpg"
-            return JpegExportResult(True, 0, destination, command, "JPEG exported", settings, fingerprint)
+            message = "JPEG exported" + (" with the macOS decoder (darktable cannot decode this raw)" if decoder == "macos" else "")
+            return JpegExportResult(True, 0, destination, command, message, settings, fingerprint)
         except Exception as error:
             errors = [str(error)]
             if published is not None:
@@ -227,6 +243,18 @@ class DarktablePipeline:
                 except Exception as cleanup_error:
                     errors.append(f"workspace cleanup failed ({work}): {cleanup_error}")
             return JpegExportResult(False, 1, destination, command, "; ".join(errors), settings, "")
+
+    @staticmethod
+    def _run_sips(source: Path, destination: Path, runner) -> PipelineResult:
+        """Decode with macOS sips into a 16-bit sRGB TIFF; default-settings render, no profile."""
+        command = [SIPS, "-s", "format", "tiff", "--matchTo", SRGB_PROFILE, str(source), "--out", str(destination)]
+        try:
+            completed = runner(command, capture_output=True, text=True, timeout=600, check=False)
+        except subprocess.TimeoutExpired:
+            return PipelineResult(False, 124, destination, tuple(command), "sips timed out after 600 seconds")
+        success = completed.returncode == 0 and destination.exists()
+        message = (completed.stderr.strip() or completed.stdout.strip()) if not success else ""
+        return PipelineResult(success, completed.returncode, destination, tuple(command), message or ("" if success else "sips produced no output"))
 
     def command(self, source: Path, destination: Path, profile: Path | None = None) -> list[str]:
         destination = destination.resolve()

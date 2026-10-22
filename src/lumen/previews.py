@@ -190,8 +190,8 @@ def read_metadata(path: Path) -> dict[str, str | float | None]:
     exposure = float(exposure) if isinstance(exposure, (int, float)) and not isinstance(exposure, bool) and exposure > 0 else None
     # Sony's reduced-size (M/S) lossless ARW stores the raw as YCbCr lossless JPEG (photometric 6); rawspeed refuses it.
     unsupported = path.suffix.lower() == ".arw" and item.get("PhotometricInterpretation") == 6
-    warning = ("Sony reduced-size lossless raw; darktable cannot decode it, so JPEG export and refined previews fail. "
-               "Culling uses the embedded preview.") if unsupported else None
+    warning = ("Sony reduced-size lossless raw; darktable cannot decode it. JPEG export uses the macOS decoder with default "
+               "settings, refined previews are unavailable, and culling uses the embedded preview.") if unsupported else None
     return {"captured_at": _normalize_exif_date(captured), "camera_id": f"{model}:{serial}", "exposure_seconds": exposure,
             "raw_warning": warning}
 
