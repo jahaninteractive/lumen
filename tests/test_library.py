@@ -446,6 +446,28 @@ class LibraryTests(unittest.TestCase):
             with closing(sqlite3.connect(next(path for path in metadata if path.name == "catalog.sqlite3"))) as snapshot:
                 self.assertEqual(1, snapshot.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
 
+    def test_unsupported_raw_is_flagged_at_import_and_export_fails_fast_without_darktable(self):
+        warning = "Sony reduced-size lossless raw; darktable cannot decode it"
+        metadata = {"captured_at": None, "camera_id": "ILCE-7CM2:1", "exposure_seconds": None, "raw_warning": warning}
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            with patch("lumen.library.read_metadata", return_value=metadata):
+                library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            imported = next(event for event in library.catalog.events_for(photo.id) if event.kind == "imported")
+            self.assertEqual(warning, imported.details["raw_warning"])
+            self.assertEqual([warning], library.get_photo(photo.id)["warnings"])
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
+                "lumen.pipelines.subprocess.run", side_effect=AssertionError("darktable must not run")
+            ):
+                result = library.export_jpegs(library_module.ExportRequest((photo.id,), None))[0]
+            self.assertFalse(result.success)
+            self.assertEqual(warning, result.message)
+            self.assertEqual([], library.catalog.list_artifacts())
+            with patch("lumen.library.read_metadata", return_value=metadata | {"raw_warning": None}):
+                library.import_path(self.image_path)  # a later decoder fix clears the flag on reimport
+            self.assertEqual([], library.get_photo(photo.id)["warnings"])
+
     def test_merge_groups_moves_photos_into_earliest_group_and_survives_reimport(self):
         for name in ("DSC0002.jpg", "DSC0003.jpg"):
             Image.new("RGB", (320, 240), (90, 90, 90)).save(self.source_dir / name, quality=95)

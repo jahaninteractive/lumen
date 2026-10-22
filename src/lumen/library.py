@@ -805,6 +805,8 @@ class Library:
                 data = tags["data"] if tags else {}
                 if fingerprint_file(Path(photo.path)) != photo.fingerprint:
                     raise ValueError("source content changed since import; reimport before exporting")
+                if warnings := self._import_warnings(self.catalog.events_for(photo.id)):
+                    raise ValueError(warnings[0])  # Known-undecodable raw: skip the 10 s darktable attempt.
                 edit = self.catalog.get_crop(photo.id)
                 crop = None
                 if edit is not None:
@@ -1027,12 +1029,21 @@ class Library:
         if not photo:
             return None
         metrics = self.catalog.get_metrics(photo_id)
+        events = self.catalog.events_for(photo_id)
         return {
             "photo": photo,
             "metrics": metrics,
-            "events": self.catalog.events_for(photo_id),
+            "events": events,
             "tags": self.catalog.get_tags(photo_id),
+            "warnings": self._import_warnings(events),
         }
+
+    @staticmethod
+    def _import_warnings(events) -> list[str]:
+        """Warnings from the latest import of this photo; a reimport after a decoder fix clears them."""
+        latest = next((event for event in reversed(events) if event.kind == "imported"), None)
+        warning = latest.details.get("raw_warning") if latest else None
+        return [warning] if warning else []
 
     @_coordinated
     def tag_photo(self, photo_id: int, tagger, *, job_id: int | None = None):
@@ -1140,6 +1151,7 @@ class Library:
                 "preview": str(preview_path),
                 "analyzer": "Pillow",
                 "vision": "available" if vision else "unavailable",
+                "raw_warning": metadata.get("raw_warning"),
             } | _job_detail(job_id),
         )
         return photo_id

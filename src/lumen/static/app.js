@@ -362,6 +362,12 @@ function renderInspector(photo) {
   verdict.textContent = group && allRejected(group) ? NO_KEEPER
     : photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
   inspection.append(heading, verdict, decisionControls(photo));
+  for (const text of details.warnings || []) {
+    const warning = document.createElement('p');
+    warning.className = 'warning';
+    warning.textContent = `Warning: ${text}`;
+    inspection.append(warning);
+  }
   inspection.append(metric('Overall', photo.total_score), metric('Sharpness', details.metrics.sharpness), metric('Exposure', details.metrics.exposure));
   if (details.metrics.eye_quality !== null) inspection.append(metric('Eyes', details.metrics.eye_quality));
   if (details.tags?.data) {

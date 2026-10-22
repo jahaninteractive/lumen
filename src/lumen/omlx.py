@@ -188,6 +188,7 @@ class OmlxTagger:
             "messages": [{"role": "user", "content": content}],
             "temperature": 0,
             "max_tokens": 500,
+            "chat_template_kwargs": {"enable_thinking": False},  # Qwen-style thinking otherwise eats the budget and returns no content.
         }
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -201,13 +202,16 @@ class OmlxTagger:
             opener = urllib.request.build_opener(NoRedirectHandler())
             with opener.open(request, timeout=timeout) as response:
                 result = json.load(response)
-            content = result["choices"][0]["message"]["content"]
+            message = result["choices"][0]["message"]
+            content = message.get("content")
         except urllib.error.HTTPError as error:
             error.close()
             raise OmlxError(f"Local oMLX request failed: {error}") from error
         except (urllib.error.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as error:
             raise OmlxError(f"Local oMLX request failed: {error}") from error
         if not isinstance(content, str):
+            if isinstance(message, dict) and message.get("reasoning_content"):
+                raise OmlxError("Local oMLX model spent its token budget on reasoning and returned no answer; use a model that answers directly")
             raise OmlxError("Local oMLX response did not contain text")
         return content
 

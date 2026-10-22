@@ -115,7 +115,31 @@ class OmlxTests(unittest.TestCase):
         self.assertIn("crop-square", labels)
         self.assertIn("Do not return coordinates", labels)
         self.assertEqual(0, payload["temperature"])
+        self.assertEqual({"enable_thinking": False}, payload["chat_template_kwargs"], "thinking models must answer, not reason into the token budget")
         self.assertEqual("Bearer secret", request.headers["Authorization"])
+
+    def test_reasoning_only_reply_is_reported_clearly(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return None
+
+            def read(self):
+                return json.dumps({"choices": [{"finish_reason": "length", "message": {"role": "assistant", "reasoning_content": "Let me think..."}}]}).encode()
+
+        class Opener:
+            def open(self, request, timeout):
+                return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "preview.jpg"
+            Image.new("RGB", (20, 10), "gray").save(preview)
+            with patch("lumen.omlx.urllib.request.build_opener", return_value=Opener()):
+                with self.assertRaisesRegex(OmlxError, "reasoning") as caught:
+                    OmlxTagger("http://127.0.0.1:8000", "vision-model").tag(preview)
+        self.assertNotIn("'content'", str(caught.exception))
 
     def test_composition_review_validates_candidates_before_request(self):
         with tempfile.TemporaryDirectory() as directory:

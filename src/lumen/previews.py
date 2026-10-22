@@ -162,13 +162,14 @@ class ExifToolPreviewProvider:
 
 
 def read_metadata(path: Path) -> dict[str, str | float | None]:
-    unknown = {"captured_at": None, "camera_id": "unknown", "exposure_seconds": None}
+    unknown = {"captured_at": None, "camera_id": "unknown", "exposure_seconds": None, "raw_warning": None}
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return unknown
     try:
         result = subprocess.run(
-            [exiftool, "-json", "-n", "-DateTimeOriginal", "-CreateDate", "-Model", "-SerialNumber", "-ExposureTime", str(path)],
+            [exiftool, "-json", "-n", "-DateTimeOriginal", "-CreateDate", "-Model", "-SerialNumber", "-ExposureTime",
+             "-SubIFD:PhotometricInterpretation", str(path)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -187,7 +188,12 @@ def read_metadata(path: Path) -> dict[str, str | float | None]:
     serial = item.get("SerialNumber") or "unknown"
     exposure = item.get("ExposureTime")  # -n gives seconds as a number
     exposure = float(exposure) if isinstance(exposure, (int, float)) and not isinstance(exposure, bool) and exposure > 0 else None
-    return {"captured_at": _normalize_exif_date(captured), "camera_id": f"{model}:{serial}", "exposure_seconds": exposure}
+    # Sony's reduced-size (M/S) lossless ARW stores the raw as YCbCr lossless JPEG (photometric 6); rawspeed refuses it.
+    unsupported = path.suffix.lower() == ".arw" and item.get("PhotometricInterpretation") == 6
+    warning = ("Sony reduced-size lossless raw; darktable cannot decode it, so JPEG export and refined previews fail. "
+               "Culling uses the embedded preview.") if unsupported else None
+    return {"captured_at": _normalize_exif_date(captured), "camera_id": f"{model}:{serial}", "exposure_seconds": exposure,
+            "raw_warning": warning}
 
 
 def _normalize_exif_date(value: str | None) -> str | None:

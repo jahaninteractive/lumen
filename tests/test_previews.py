@@ -82,6 +82,30 @@ class PreviewTests(unittest.TestCase):
             with patch("lumen.previews.shutil.which", return_value=None):
                 self.assertIsNone(read_metadata(source)["exposure_seconds"])
 
+    def test_metadata_flags_sony_reduced_size_lossless_raw_that_darktable_cannot_decode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            response = subprocess.CompletedProcess(["exiftool"], 0, '[{"Model":"ILCE-7CM2","PhotometricInterpretation":6}]', "")
+            with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch(
+                "lumen.previews.subprocess.run", return_value=response
+            ) as run:
+                warning = read_metadata(source)["raw_warning"]
+            self.assertIn("-SubIFD:PhotometricInterpretation", run.call_args.args[0])
+            self.assertIn("lossless", warning)
+            self.assertIn("darktable", warning)
+            for stdout in ('[{"Model":"ILCE-7CM2","PhotometricInterpretation":32803}]', '[{"Model":"ILCE-7CM2"}]'):
+                response.stdout = stdout
+                with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch(
+                    "lumen.previews.subprocess.run", return_value=response
+                ):
+                    self.assertIsNone(read_metadata(source)["raw_warning"])
+            response.stdout = '[{"PhotometricInterpretation":6}]'
+            with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch(
+                "lumen.previews.subprocess.run", return_value=response
+            ):
+                self.assertIsNone(read_metadata(Path(directory) / "photo.jpg")["raw_warning"], "only raw files are flagged")
+
     def test_unknown_source_dimensions_fail_clearly(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "unknown.ARW"

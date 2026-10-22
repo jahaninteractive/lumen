@@ -266,7 +266,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                     photo.pop(key, None)
                 photo["preview_url"] = f"/preview/{photo['id']}?v={preview_version}"
-                self._send_json({"photo": photo, "metrics": asdict(item["metrics"]), "tags": item["tags"]})
+                self._send_json({"photo": photo, "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
                 return
             match = re.fullmatch(r"/preview/(\d+)", path)
             if match:

@@ -463,6 +463,17 @@ class WebTests(unittest.TestCase):
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual([], library.list_groups())
 
+    def test_photo_details_carry_import_warnings(self):
+        code, payload = self.get_json("/api/photos/1")
+        self.assertEqual(200, code)
+        self.assertEqual([], payload["warnings"])
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            library.catalog.append_event(1, "imported", {"raw_warning": "Sony reduced-size lossless raw; darktable cannot decode it"})
+        self.assertEqual(["Sony reduced-size lossless raw; darktable cannot decode it"], self.get_json("/api/photos/1")[1]["warnings"])
+
+    def test_javascript_inspector_shows_import_warnings(self):
+        self.run_javascript_cleanup_regression("raw-warning")
+
     def test_merge_route_validates_ids_and_merges_into_earliest_group(self):
         second = self.root / "second.jpg"
         Image.new("RGB", (40, 30), "blue").save(second)
@@ -1041,7 +1052,7 @@ async function fetch(url, options = {}) {
     if ('decision' in body) decisions[id] = body.decision; else ratings[id] = body.rating;
     payload = { photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 };
   }
-  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null };
+  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (url === '/api/photos/2/crops') {
     cropLoads += 1;
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
@@ -1718,6 +1729,16 @@ const regression = `
     assert.equal(element('#prepare-astro').disabled, false, 'a finished job frees the form');
     assert.equal(lights[0].disabled, false);
     assert.equal(confirm.disabled, false);
+    return;
+  }
+  if (scenario === 'raw-warning') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    await inspect(state.groups[0].photos[0]);
+    assert.ok(!tree(element('#inspection')).some(node => node.className === 'warning'), 'no warning for a supported raw');
+    await inspect(state.groups[0].photos[1]);
+    const warning = tree(element('#inspection')).find(node => node.className === 'warning');
+    assert.equal(warning?.textContent, 'Warning: Sony reduced-size lossless raw; darktable cannot decode it');
     return;
   }
   if (scenario === 'merge-batches') {
