@@ -28,6 +28,7 @@ class SidecarWriter:
         active_crop: PhotoEdit | None = None,
         decision: str = "none",
         rating: int = 0,
+        alt_text: str | None = None,
     ) -> tuple[Path, Path]:
         if photo.id is None:
             raise ValueError("photo must be stored before writing a sidecar")
@@ -76,6 +77,7 @@ class SidecarWriter:
                 {"id": event.id, "created_at": event.created_at.isoformat(), "details": event.details}
                 for event in events if event.kind == "ingested"
             ],
+            alt_text=alt_text,
         ))
         return json_path, xmp_path
 
@@ -99,7 +101,8 @@ class SidecarWriter:
 
     @staticmethod
     def _xmp(description: str, keywords: list[str], *, rating: int, provenance: dict | None = None, crop: dict | None = None,
-             crop_provenance: list[dict] | None = None, ingest_provenance: list[dict] | None = None) -> str:
+             crop_provenance: list[dict] | None = None, ingest_provenance: list[dict] | None = None,
+             alt_text: str | None = None) -> str:
         keyword_items = "".join(f"<rdf:li>{escape(keyword)}</rdf:li>" for keyword in keywords)
         export = f'<lumen:export>{escape(json.dumps(provenance, sort_keys=True))}</lumen:export>' if provenance else ""
         crop_payload = f'<lumen:crop>{escape(json.dumps(crop, sort_keys=True))}</lumen:crop>' if crop else ""
@@ -107,12 +110,16 @@ class SidecarWriter:
                         f'</lumen:cropProvenance>' if crop_provenance else "")
         ingest_history = (f'<lumen:ingested>{escape(json.dumps(ingest_provenance, sort_keys=True))}</lumen:ingested>'
                           if ingest_provenance else "")
+        iptc_ns = ' xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"' if alt_text else ""
+        alt = (f'<Iptc4xmpCore:AltTextAccessibility><rdf:Alt><rdf:li xml:lang="x-default">{escape(alt_text)}</rdf:li>'
+               f'</rdf:Alt></Iptc4xmpCore:AltTextAccessibility>' if alt_text else "")
         return f'''<?xml version="1.0" encoding="UTF-8"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-    <rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:lumen="https://lumen.local/ns/1.0/" xmp:Rating="{rating}">
+    <rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:lumen="https://lumen.local/ns/1.0/"{iptc_ns} xmp:Rating="{rating}">
       <dc:description><rdf:Alt><rdf:li xml:lang="x-default">{escape(description)}</rdf:li></rdf:Alt></dc:description>
       <dc:subject><rdf:Bag>{keyword_items}</rdf:Bag></dc:subject>
+      {alt}
       {export}
       {crop_payload}
       {crop_history}

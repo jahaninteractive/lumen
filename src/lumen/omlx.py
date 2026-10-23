@@ -16,6 +16,8 @@ PROBLEMS = ("eyes_closed", "motion_blur", "out_of_focus", "subject_cut_off", "ob
             "severely_under_exposed", "severely_over_exposed")
 SKY_CLASSES = ("night_sky", "aurora", "milky_way", "twilight", "cloud", "not_sky")
 SKY_ISSUES = ("haze", "light_pollution", "trailing", "cloud_band")
+CAPTION_MAX = 200
+ALT_TEXT_MAX = 125
 
 
 class OmlxError(RuntimeError):
@@ -47,6 +49,12 @@ class BurstResponseError(OmlxError):
 
 
 class AstroResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class CaptionResponseError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
@@ -97,6 +105,13 @@ class AstroTriage:
     sky: str  # one of SKY_CLASSES
     confidence: float
     issues: list[str]  # unique SKY_ISSUES
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class Caption:
+    caption: str
+    alt_text: str
     raw_response: str
 
 
@@ -163,6 +178,18 @@ def parse_astro_response(raw: str) -> AstroTriage:
             or len(set(issues)) != len(issues)):
         raise AstroResponseError("oMLX issues must be unique known sky issues", raw)
     return AstroTriage(payload["sky"], float(payload["confidence"]), list(issues), raw)
+
+
+def parse_caption_response(raw: str) -> Caption:
+    payload = _json_object(raw, CaptionResponseError)
+    if set(payload) != {"caption", "alt_text"}:
+        raise CaptionResponseError("oMLX caption response must contain only caption and alt_text", raw)
+    caption, alt_text = payload["caption"], payload["alt_text"]
+    if not isinstance(caption, str) or not 1 <= len(caption := caption.strip()) <= CAPTION_MAX or "#" in caption:
+        raise CaptionResponseError(f"oMLX caption must contain 1 to {CAPTION_MAX} characters and no hashtags", raw)
+    if not isinstance(alt_text, str) or not 1 <= len(alt_text := alt_text.strip()) <= ALT_TEXT_MAX:
+        raise CaptionResponseError(f"oMLX alt_text must contain 1 to {ALT_TEXT_MAX} characters", raw)
+    return Caption(caption, alt_text, raw)
 
 
 def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
@@ -327,6 +354,12 @@ class OmlxTagger:
                   "(array, may be empty). Do not identify a person.")
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
         return parse_astro_response(content)
+
+    def caption(self, preview: Path, timeout: float = 240) -> Caption:
+        prompt = ("Write caption (under 200 characters, no hashtags, no emoji) and alt_text (under 125 characters, a "
+                  "literal description of what is visible for a screen reader). Return JSON only. Do not identify a person.")
+        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
+        return parse_caption_response(content)
 
     def critique_burst(self, frames: list[tuple[str, Path]], timeout: float = 240) -> BurstCritique:
         ids = [frame_id for frame_id, _ in frames]

@@ -106,8 +106,8 @@ class DarktablePipeline:
     def export_jpeg(
         self, source: Path, profile: Path | None = None, *,
         crop: dict[str, object] | None = None, description: str | None = None,
-        keywords: list[str] | None = None, rating: int | None = None,
-        reserved_paths: set[Path] | None = None, preset: str = "full", decoder: str = "darktable",
+        keywords: list[str] | None = None, rating: int | None = None, alt_text: str | None = None,
+        caption_used: bool = False, reserved_paths: set[Path] | None = None, preset: str = "full", decoder: str = "darktable",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
         if preset not in EXPORT_PRESETS:
@@ -126,7 +126,7 @@ class DarktablePipeline:
         reserved = {path.resolve() for path in reserved_paths or ()}
         settings = {
             "preset": preset, "quality": options["quality"], "long_edge": options["long_edge"],
-            "color_space": "sRGB", "include_gps": options["include_gps"],
+            "color_space": "sRGB", "include_gps": options["include_gps"], "caption_used": caption_used,
             "profile": str(profile.resolve()) if profile else None,
             "crop": crop, "source_fingerprint": "", "tool_version": "unknown", "decoder": decoder,
             "command": [],
@@ -204,6 +204,7 @@ class DarktablePipeline:
                                exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
                                xmp=SidecarWriter._xmp(
                                    effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
+                                   alt_text=alt_text,
                                ).encode("utf-8"))
                 if 37500 in capture:
                     # Pillow copies MakerNote bytes but not their absolute offsets; exiftool rebases them.

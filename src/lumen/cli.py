@@ -69,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     critique.add_argument("group_id", type=int)
     critique.add_argument("--json", action="store_true")
 
+    caption = commands.add_parser("caption", help="draft a caption and alt text with the review oMLX model (advisory)")
+    caption.add_argument("photo_id", type=int)
+    caption.add_argument("--json", action="store_true")
+
     triage = commands.add_parser("triage", help="classify a group's sky frames with the fast oMLX model (never excludes)")
     triage.add_argument("group_id", type=int)
     triage.add_argument("--json", action="store_true")
@@ -246,6 +250,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with Library(settings) as library:
                 payload = library.critique_burst(args.group_id, library.tagger_for("review"))
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": public_message(str(error))}, args.json)
+            return 2
+        _print(payload, args.json)
+        return 0
+
+    if args.command == "caption":
+        try:
+            with Library(settings) as library:
+                payload = library.caption_photo(args.photo_id, library.tagger_for("review"))
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
             _print({"error": public_message(str(error))}, args.json)
             return 2

@@ -14,7 +14,7 @@ from lumen.cli import main
 from lumen.config import Settings
 from lumen.diagnostics import doctor_report
 from lumen.library import Library
-from lumen.omlx import AstroTriage, BurstCritique
+from lumen.omlx import AstroTriage, BurstCritique, Caption
 from lumen.pipelines import DarktablePipeline, PipelineResult
 from lumen.tools import ToolStatus
 
@@ -404,6 +404,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(0, code)
         payload = json.loads(output.getvalue())
         self.assertEqual((2, True), (len(payload["lights"]), payload["astro_cue"]))
+
+    def test_caption_command_prints_caption_and_alt_text(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def caption(self, preview):
+                return Caption("A caption.", "Alt text.", "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root / "p.jpg")])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "caption", "1", "--json"])
+        self.assertEqual((0, "Alt text."), (code, json.loads(output.getvalue())["alt_text"]))
 
     def test_critique_command_prints_suggestion_and_exits_two_on_failure(self):
         class FakeTagger:

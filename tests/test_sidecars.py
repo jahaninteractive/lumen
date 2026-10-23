@@ -48,6 +48,12 @@ class SidecarTests(unittest.TestCase):
             self.assertIn("Bird &amp; branch", xmp_path.read_text())
             self.assertFalse(any(Path(directory).glob("*.tmp")))
 
+    def test_xmp_carries_alt_text_in_iptc_core_only_when_present(self):
+        with_alt = SidecarWriter._xmp("d", [], rating=0, alt_text="Two penguins on ice")
+        self.assertIn('xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"', with_alt)
+        self.assertIn("<Iptc4xmpCore:AltTextAccessibility><rdf:Alt><rdf:li xml:lang=\"x-default\">Two penguins on ice</rdf:li>", with_alt)
+        self.assertNotIn("AltTextAccessibility", SidecarWriter._xmp("d", [], rating=0))
+
     def test_sidecars_carry_decision_and_minus_one_xmp_rating_for_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             writer = SidecarWriter(Path(directory))

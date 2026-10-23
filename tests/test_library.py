@@ -15,7 +15,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
-from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError
+from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError
 from lumen import library as library_module
 from lumen import ingest as ingest_module
 from lumen.pipelines import DarktablePipeline
@@ -811,6 +811,58 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(expected, {key: sidecar["artifacts"][0]["settings"][key] for key in expected})
             event = next(event for event in sidecar["provenance"] if event["kind"] == "exported")
             self.assertEqual(expected, {key: event["details"][key] for key in expected})
+
+    def test_caption_is_advisory_editable_and_only_share_export_uses_it(self):
+        class FakeTagger:
+            model, role = "review-model", "review"
+            def caption(self, preview):
+                return Caption("Penguins porpoise beside the zodiac.", "Three penguins leaping from grey water.", '{"c":1}')
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            library.catalog.save_tags(photo.id, {"description": "Original description", "subjects": ["ice"]}, "fast-model")
+            result = library.caption_photo(photo.id, FakeTagger())
+            self.assertEqual("Three penguins leaping from grey water.", result["alt_text"])
+            event = [e for e in library.catalog.events_for(photo.id) if e.kind == "caption_written"][-1]
+            self.assertEqual(("model", '{"c":1}'), (event.details["author"], event.details["raw_response"]))
+            edited = library.set_caption(photo.id, caption="Porpoising gentoos.", alt_text=None)
+            self.assertEqual(("Porpoising gentoos.", "Three penguins leaping from grey water."), (edited["caption"], edited["alt_text"]))
+            self.assertEqual("photographer", [e for e in library.catalog.events_for(photo.id) if e.kind == "caption_written"][-1].details["author"])
+            with self.assertRaises(ValueError):
+                library.set_caption(photo.id, caption="#nope", alt_text=None)
+            with self.assertRaises(ValueError):
+                library.set_caption(photo.id, caption=None, alt_text="x" * 126)
+            self.assertIn("AltTextAccessibility", library.sidecars.paths(photo)[1].read_text())
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
+                share = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "share"))[0]
+                full = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "full"))[0]
+            with Image.open(share.output) as image:
+                self.assertEqual("Porpoising gentoos.", image.getexif()[270])
+                self.assertIn("Three penguins leaping from grey water.", image.info["xmp"].decode())
+            with Image.open(full.output) as image:
+                self.assertEqual("Original description", image.getexif()[270])
+                self.assertNotIn("AltTextAccessibility", image.info["xmp"].decode())
+            self.assertTrue(share.artifact.settings["caption_used"]); self.assertFalse(full.artifact.settings["caption_used"])
+            cleared = library.set_caption(photo.id, caption="", alt_text="")
+            self.assertEqual((None, None), (cleared["caption"], cleared["alt_text"]))
+            self.assertNotIn("AltTextAccessibility", library.sidecars.paths(photo)[1].read_text())
+
+    def test_caption_failure_records_raw_response_and_reraises(self):
+        class BadTagger:
+            model, role = "review-model", "review"
+            def caption(self, preview):
+                raise CaptionResponseError("bad caption", "#raw")
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            with self.assertRaises(CaptionResponseError):
+                library.caption_photo(photo.id, BadTagger())
+            event = [e for e in library.catalog.events_for(photo.id) if e.kind == "caption_failed"][-1]
+            self.assertEqual(("review", "#raw"), (event.details["role"], event.details["raw_response"]))
+            self.assertIsNone(library.catalog.get_tags(photo.id))
 
     def test_export_validates_all_ids_before_starting(self):
         self.assertTrue(hasattr(library_module, "ExportRequest"), "ExportRequest is missing")

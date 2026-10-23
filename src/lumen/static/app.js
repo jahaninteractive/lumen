@@ -564,6 +564,7 @@ function renderInspector(photo) {
     description.textContent = details.tags.data.description;
     inspection.append(description, ...keywordLists(photo, details.tags.data));
   }
+  inspection.append(captionControls(photo, details.tags?.data || {}));
   const actions = document.createElement('div');
   actions.className = 'actions';
   if (photo.id !== photo.groupPick || photo.decision === 'reject') {  // Choosing a rejected frame clears its rejection.
@@ -600,6 +601,88 @@ function renderInspector(photo) {
     tag.setAttribute('aria-describedby', reason.id);
     inspection.append(reason);
   }
+}
+
+// Advisory: a local AI draft is stored as the model's and shown for editing; only the Share export uses it.
+function captionControls(photo, data) {
+  const block = document.createElement('div');
+  block.id = 'caption-controls';
+  const heading = document.createElement('h4');
+  heading.textContent = 'Caption and alt text';
+  const note = document.createElement('p');
+  note.className = 'quiet';
+  note.id = 'caption-note';
+  note.textContent = 'Used only by the Share export. A local AI draft is a suggestion: edit it, then save.';
+  block.append(heading, note);
+  const fields = [['caption-input', 'Caption', data.caption], ['alt-input', 'Alt text', data.alt_text]].map(([id, text, value]) => {
+    const label = document.createElement('label');
+    label.htmlFor = id;
+    label.textContent = text;
+    const input = document.createElement('input');
+    input.id = id;
+    input.autocomplete = 'off';
+    input.value = value || '';
+    input.setAttribute('aria-describedby', note.id);
+    block.append(label, input);
+    return input;
+  });
+  const [caption, alt] = fields;
+  caption.maxLength = 200;  // CAPTION_MAX in omlx.py; the server enforces the same limit.
+  alt.maxLength = 125;  // ALT_TEXT_MAX in omlx.py.
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.id = 'save-caption';
+  save.textContent = 'Save caption';
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      const saved = await post(`/api/photos/${photo.id}/caption/edit`, { caption: caption.value, alt_text: alt.value });
+      Object.assign(data, { caption: saved.caption, alt_text: saved.alt_text });
+      announce(`Caption saved for ${photo.name}`);
+    } catch (error) {
+      announce(error.message);
+    } finally {
+      save.disabled = false;
+    }
+  });
+  const ask = document.createElement('button');
+  ask.type = 'button';
+  ask.className = 'secondary';
+  ask.id = 'ask-caption-ai';
+  ask.textContent = 'Write caption with local AI';
+  ask.disabled = !roleReady('review');
+  ask.addEventListener('click', async () => {
+    ask.disabled = true;
+    state.busy = true;  // The server holds the library lock for the whole model call.
+    updateWorkflow();
+    announce(`Asking local AI to caption ${photo.name}`);
+    try {
+      const drafted = await post(`/api/photos/${photo.id}/caption`);
+      caption.value = drafted.caption || '';
+      alt.value = drafted.alt_text || '';
+      Object.assign(data, { caption: drafted.caption, alt_text: drafted.alt_text });
+      announce(`Local AI caption written for ${photo.name}; edit and save to change it`);
+    } catch (error) {
+      announce(error.message);
+    } finally {
+      ask.disabled = !roleReady('review');
+      state.busy = false;
+      updateWorkflow();
+    }
+  });
+  actions.append(save, ask);
+  block.append(actions);
+  if (roleUnavailable('review')) {
+    const reason = document.createElement('p');
+    reason.className = 'quiet';
+    reason.id = 'caption-ai-availability';
+    reason.textContent = roleUnavailable('review');
+    ask.setAttribute('aria-describedby', reason.id);
+    block.append(reason);
+  }
+  return block;
 }
 
 // Applied keywords each carry a Remove (undo); suggestions carry an Add. Species ride along as labelled text.

@@ -11,6 +11,7 @@ import lumen.omlx as omlx
 from lumen.omlx import (
     AstroResponseError,
     BurstResponseError,
+    CaptionResponseError,
     CompositionResponseError,
     NoRedirectHandler,
     OmlxError,
@@ -20,6 +21,7 @@ from lumen.omlx import (
     TagResponseError,
     parse_astro_response,
     parse_burst_response,
+    parse_caption_response,
     parse_composition_response,
     parse_reject_response,
     parse_tag_response,
@@ -285,6 +287,26 @@ class OmlxTests(unittest.TestCase):
                     {"sky": "cloud", "confidence": 0.5, "issues": ["haze", "haze"]}, {"sky": "cloud", "confidence": 0.5}):
             with self.subTest(bad=bad), self.assertRaises(AstroResponseError):
                 parse_astro_response(json.dumps(bad))
+
+    def test_caption_response_enforces_lengths_and_no_hashtags(self):
+        good = json.dumps({"caption": "Gentoo penguins porpoise beside the zodiac.", "alt_text": "Three penguins leaping from grey water near a black inflatable boat."})
+        self.assertEqual("Gentoo penguins porpoise beside the zodiac.", parse_caption_response(good).caption)
+        for bad in ({"caption": "x" * 201, "alt_text": "a"}, {"caption": "fun #trip", "alt_text": "a"}, {"caption": "a", "alt_text": "x" * 126},
+                    {"caption": "a", "alt_text": "b", "hashtags": []}, {"caption": "", "alt_text": "b"}):
+            with self.subTest(bad=bad), self.assertRaises(CaptionResponseError):
+                parse_caption_response(json.dumps(bad))
+
+    def test_caption_prompt_forbids_identification_with_short_budget(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "c.jpg"; Image.new("RGB", (8, 8)).save(path)
+            reply = json.dumps({"caption": "Ice.", "alt_text": "White ice."})
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), reply)[1]):
+                result = tagger.caption(path)
+        self.assertEqual(("Ice.", "White ice."), (result.caption, result.alt_text))
+        self.assertIn("Do not identify a person.", captured["content"][0]["text"])
+        self.assertEqual(200, captured["kw"]["max_tokens"])
 
     def test_burst_response_requires_supplied_frame_and_bounded_rationale(self):
         good = json.dumps({"frame_id": "7", "rationale": "Sharpest eye, wing fully extended.", "confidence": 0.72})

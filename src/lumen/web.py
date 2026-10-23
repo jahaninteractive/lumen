@@ -524,6 +524,27 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "confidence": review.confidence,
                     })
                     return
+                match = re.fullmatch(r"/api/photos/(\d+)/caption", path)
+                if match:
+                    if payload:
+                        raise ValueError("caption requires an empty JSON object")
+                    with Library(settings) as library:
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
+                        try:
+                            caption = library.caption_photo(int(match.group(1)), tagger)
+                        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+                            raise ValueError(public_message(str(error))) from error
+                    self._send_json(caption)
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/caption/edit", path)
+                if match:
+                    if payload.keys() != {"caption", "alt_text"} or not all(
+                            value is None or isinstance(value, str) for value in payload.values()):
+                        raise ValueError("caption edit requires caption and alt_text, each a string or null")
+                    with Library(settings) as library:
+                        self._send_json(library.set_caption(
+                            int(match.group(1)), caption=payload["caption"], alt_text=payload["alt_text"]))
+                    return
                 match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
                 if match:
                     if payload:

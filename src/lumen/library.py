@@ -26,7 +26,7 @@ from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
-from .omlx import ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
+from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
 from .pipelines import EXPORT_PRESETS, PipelineRegistry
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
@@ -55,6 +55,14 @@ _ABSOLUTE_PATH = re.compile(r"'?/[^\s'\"]+'?")
 def _job_detail(job_id: int | None) -> dict:
     """Provenance link to the background job that did the work; synchronous calls record none."""
     return {} if job_id is None else {"job_id": job_id}
+
+
+def _check_caption(caption: str | None, alt_text: str | None) -> None:
+    """Photographer edits share the model limits; None leaves a field unchanged and "" clears it."""
+    if caption and (len(caption) > CAPTION_MAX or "#" in caption):
+        raise ValueError(f"caption must contain at most {CAPTION_MAX} characters and no hashtags")
+    if alt_text and len(alt_text) > ALT_TEXT_MAX:
+        raise ValueError(f"alt text must contain at most {ALT_TEXT_MAX} characters")
 
 
 def _stable_key(first: Photo) -> str:
@@ -869,6 +877,44 @@ class Library:
         """, (group_id, group_id)).fetchone()
         return self._critique(group_id, dict(row), json.loads(row["details_json"])) if row else None
 
+    @_coordinated
+    def caption_photo(self, photo_id: int, tagger) -> dict:
+        """Advisory: store the review model's caption and alt text for the photographer to edit."""
+        photo = self.catalog.get_photo(photo_id)
+        if not photo or not photo.preview_path or not Path(photo.preview_path).is_file():
+            raise ValueError(f"photo {photo_id} has no preview")
+        model, role = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None)
+        try:
+            result = tagger.caption(Path(photo.preview_path))
+        except Exception as error:
+            self.catalog.append_event(photo_id, "caption_failed", {
+                "model": model, "role": role, "error": str(error), "raw_response": getattr(error, "raw_response", None)})
+            self._write_sidecar(photo_id)
+            raise
+        return self._save_caption(photo_id, {"caption": result.caption, "alt_text": result.alt_text}, model, {
+            "model": model, "role": role, "raw_response": result.raw_response, "author": "model"})
+
+    @_coordinated
+    def set_caption(self, photo_id: int, *, caption: str | None, alt_text: str | None) -> dict:
+        """Photographer edit: None leaves a field unchanged, an empty string clears it."""
+        if not self.catalog.get_photo(photo_id):
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        caption, alt_text = (None if value is None else value.strip() for value in (caption, alt_text))
+        _check_caption(caption, alt_text)
+        changes = {key: value for key, value in (("caption", caption), ("alt_text", alt_text)) if value is not None}
+        return self._save_caption(photo_id, changes, "photographer", {"author": "photographer"})
+
+    def _save_caption(self, photo_id: int, changes: dict, model: str, details: dict) -> dict:
+        existing = self.catalog.get_tags(photo_id)
+        data = (existing["data"] if existing else {}) | changes
+        data = {key: value for key, value in data.items() if not (key in changes and value == "")}
+        self.catalog.save_tags(photo_id, data, existing["model"] if existing else model)
+        shape = {"photo_id": photo_id, "caption": data.get("caption"), "alt_text": data.get("alt_text")}
+        self.catalog.append_event(photo_id, "caption_written", details | {
+            "caption": shape["caption"], "alt_text": shape["alt_text"]})
+        self._write_sidecar(photo_id)
+        return shape
+
     def _change_crop(self, photo_id: int, edit: PhotoEdit | None) -> None:
         previous = self.catalog.get_crop(photo_id)
         previous_events = self.catalog.crop_event_ids(photo_id)
@@ -1061,9 +1107,13 @@ class Library:
                         "author": edit.author, "rationale": edit.rationale,
                         "selected_at": edit.selected_at.isoformat(),
                     }
+                share = request.preset == "share"  # Full keeps the photographer's description and no alt text.
+                caption = data.get("caption")
+                caption_used = share and bool(caption)
                 rendered = pipeline.export_jpeg(Path(photo.path), request.profile,
                     crop=crop,
-                    description=data.get("description"), keywords=data.get("subjects"),
+                    description=caption if caption_used else data.get("description"),
+                    keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
                     rating=-1 if photo.decision == "reject" else photo.rating,
                     reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
                     preset=request.preset, decoder=decoder)
@@ -1490,6 +1540,7 @@ class Library:
             selected=selected,
             description=data.get("description", ""),
             keywords=data.get("subjects", []),
+            alt_text=data.get("alt_text"),
             artifacts=[artifact for artifact in catalog.list_artifacts() if artifact.photo_id == photo_id],
             active_crop=catalog.get_crop(photo_id),
             decision=photo.decision,

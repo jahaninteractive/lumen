@@ -1038,6 +1038,34 @@ class WebTests(unittest.TestCase):
     def test_javascript_burst_critique_shows_advice_and_only_use_this_pick_changes_the_pick(self):
         self.run_javascript_cleanup_regression("critique")
 
+    def test_caption_routes_gate_validate_and_inspector_has_native_inputs(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def caption(self, preview):
+                from lumen.omlx import Caption
+                return Caption("A caption.", "Alt text.", "{}")
+
+        Image.new("RGB", (120, 90)).save(self.root / "p.jpg")
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root / "p.jpg")})[1]["job_id"])
+            self.assertEqual(403, self.post_json("/api/photos/1/caption", {}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json("/api/photos/1/caption", {"style": "fun"})[0])
+            self.assertEqual((200, {"photo_id": 1, "caption": "A caption.", "alt_text": "Alt text."}), self.post_json("/api/photos/1/caption", {}))
+            for payload in ({"caption": "x" * 201, "alt_text": None}, {"caption": "a"}, {"caption": "a", "alt_text": "b", "tone": "x"}, {"caption": 1, "alt_text": None}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/1/caption/edit", payload)[0])
+            self.assertEqual("Edited.", self.post_json("/api/photos/1/caption/edit", {"caption": "Edited.", "alt_text": None})[1]["caption"])
+            self.assertEqual("Edited.", self.get_json("/api/photos/1")[1]["tags"]["data"]["caption"])
+        with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}):
+            self.assertEqual((400, {"error": "review model Qwen3.8-27B-4bit is not loaded in oMLX"}), self.post_json("/api/photos/1/caption", {}))
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("caption-input", js); self.assertIn("alt-input", js); self.assertIn("maxLength = 125", js)
+
+    def test_javascript_caption_inputs_save_and_never_trigger_culling_keys(self):
+        self.run_javascript_cleanup_regression("caption")
+
     def test_javascript_keywords_add_and_remove_without_reload_and_tag_keepers_gates_on_role(self):
         self.run_javascript_cleanup_regression("keywords")
 
@@ -1132,6 +1160,7 @@ const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
 const picks = [];
 const critiqueRequests = [];
+const captionPosts = [];
 let deferCritique = false;
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
@@ -1266,8 +1295,14 @@ async function fetch(url, options = {}) {
     to.push(body.keyword);
     payload = { photo_id: 1, subjects: [...keywordData.subjects], suggested: [...keywordData.suggested] };
   }
+  else if (/^\/api\/photos\/1\/caption(\/edit)?$/.test(url)) {
+    const body = JSON.parse(options.body);
+    captionPosts.push({ url, body });
+    payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
+  }
   else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
-    tags: scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
+    tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
+      : scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (url === '/api/photos/2/crops') {
     cropLoads += 1;
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
@@ -1525,6 +1560,40 @@ const regression = `
     assert.equal(state.job.status, 'succeeded');
     return;
   }
+  if (scenario === 'caption') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    await inspect(state.groups[0].photos[0]);
+    const caption = byId('caption-input');
+    const alt = byId('alt-input');
+    assert.deepEqual([caption.tagName, caption.value, caption.maxLength], ['INPUT', 'Porpoising.', 200]);
+    assert.deepEqual([alt.tagName, alt.value, alt.maxLength], ['INPUT', 'Penguins leaping.', 125]);
+    const labels = tree(element('#inspection')).filter(node => node.tagName === 'LABEL' && node.htmlFor !== 'rating');
+    assert.deepEqual(labels.map(node => [node.htmlFor, node.textContent]), [['caption-input', 'Caption'], ['alt-input', 'Alt text']]);
+    const posts = decisionPosts.length;
+    await element('#contact-sheet').listeners.keydown({ key: 'x', metaKey: false, ctrlKey: false, altKey: false, target: caption, preventDefault() {} });
+    assert.equal(decisionPosts.length, posts, 'typing in the caption never culls');
+    caption.value = 'Edited.';
+    alt.value = 'Alt.';
+    assert.equal(byId('save-caption').textContent, 'Save caption');
+    await byId('save-caption').listeners.click();
+    assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption/edit', body: { caption: 'Edited.', alt_text: 'Alt.' } });
+    assert.ok(announcements.includes('Caption saved for photo-1.jpg'));
+    assert.equal(byId('ask-caption-ai').textContent, 'Write caption with local AI');
+    assert.equal(byId('ask-caption-ai').disabled, false);
+    await byId('ask-caption-ai').listeners.click();
+    assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption', body: {} });
+    assert.deepEqual([caption.value, alt.value], ['Drafted.', 'Drafted alt.']);
+    state.status.omlx_roles.review.loaded = false;
+    renderInspector(state.groups[0].photos[0]);
+    assert.equal(byId('ask-caption-ai').disabled, true);
+    assert.equal(byId('ask-caption-ai').getAttribute('aria-describedby'), 'caption-ai-availability');
+    assert.ok(byId('caption-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
+    return;
+  }
   if (scenario === 'critique') {
     await load();
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
@@ -1681,7 +1750,7 @@ const regression = `
     const posts = decisionPosts.length;
     const before = prevented;
     for (const modifier of ['metaKey', 'ctrlKey', 'altKey']) await key('x', { [modifier]: true });
-    for (const name of ['#import-path', '#clear-confirmation']) {
+    for (const name of ['#import-path', '#clear-confirmation', '#caption-input', '#alt-input']) {
       element(name).tagName = 'INPUT';
       await key('x', { target: element(name) });
       await key('Home', { target: element(name) });
