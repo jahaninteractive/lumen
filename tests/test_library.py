@@ -1919,6 +1919,21 @@ class LibraryTests(unittest.TestCase):
                 # Rejecting the top frame legitimately reranks; the failed critique leaves that pick alone.
                 self.assertEqual(removing.pick_after_reject, library.list_groups()[0]["automatic_pick_id"])
 
+                for photo in group["photos"][1:4]:  # with the mid-call reject, 4 of 10 rejected
+                    library.set_decision(photo["id"], "reject")
+
+                class RecordingTagger:
+                    model, role = "review-model", "review"
+                    def critique_burst(self, frames):
+                        self.frames = list(frames)
+                        return BurstCritique(frames[0][0], "ok", 0.5, "{}")
+
+                recording = RecordingTagger()
+                library.critique_burst(group["id"], recording)
+                kept = [p["id"] for p in library.list_groups()[0]["photos"] if p["decision"] != "reject"]
+                self.assertEqual(kept, [int(fid) for fid, _ in recording.frames])  # never padded with rejected frames
+                self.assertEqual(6, len(kept))
+
 
 if __name__ == "__main__":
     unittest.main()

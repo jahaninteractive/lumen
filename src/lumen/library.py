@@ -760,9 +760,10 @@ class Library:
         group = self._group(group_id)
         if group is None:
             raise ValueError(f"unknown group ID: {group_id}")
-        if sum(photo["decision"] != "reject" for photo in group["photos"]) < 2:
+        kept = [photo for photo in group["photos"] if photo["decision"] != "reject"]  # rank order; rejected never sent
+        if len(kept) < 2:
             raise ValueError("burst critique needs at least two frames that are not rejected")
-        frames = sorted(group["photos"], key=lambda photo: photo["decision"] == "reject")[:8]  # stable: rank order kept
+        frames = kept[:8]
         if any(not photo["preview_path"] or not Path(photo["preview_path"]).is_file() for photo in frames):
             raise ValueError(f"burst {group_id} has a frame without a preview")
         candidate_ids = [int(photo["id"]) for photo in frames]
