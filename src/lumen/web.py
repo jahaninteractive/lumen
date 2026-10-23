@@ -15,6 +15,7 @@ from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups
 from .config import Settings
 from .diagnostics import doctor_report
+from .digest import parse_day
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .pipelines import EXPORT_PRESETS
@@ -213,6 +214,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
                     "astro_output_dir": str((settings.output_dir / "astro").resolve()),
                     "ingest_output_dir": str((settings.output_dir / "ingest").resolve()),
+                    "digest_dir": str(settings.digest_dir.resolve()),
                 })
                 return
             if path == "/api/groups":
@@ -523,6 +525,22 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "rationale": review.rationale,
                         "confidence": review.confidence,
                     })
+                    return
+                if path == "/api/digests":
+                    if payload.keys() - {"date", "overwrite"} or type(payload.get("overwrite", False)) is not bool:
+                        raise ValueError("digest requires date (YYYY-MM-DD) and an optional boolean overwrite")
+                    day = parse_day(payload.get("date"))
+                    with Library(settings) as library:
+                        try:  # Soft gate: without the review model the digest is facts only.
+                            tagger, reason = library.tagger_for("review"), None
+                        except RuntimeError as error:
+                            tagger, reason = None, str(error)
+                        try:
+                            result = library.digest_day(day, tagger, overwrite=payload.get("overwrite", False), unavailable_reason=reason)
+                        except FileExistsError as error:
+                            self._send_json({"error": str(error), "exists": True}, status=HTTPStatus.CONFLICT)
+                            return
+                    self._send_json(result)
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/caption", path)
                 if match:

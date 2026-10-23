@@ -11,6 +11,7 @@ from pathlib import Path
 from .catalog import GroupFilters
 from .config import Settings
 from .diagnostics import doctor_report
+from .digest import parse_day
 from .library import CleanupError, ExportRequest, Library, public_message
 from .pipelines import PipelineRegistry
 
@@ -72,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     caption = commands.add_parser("caption", help="draft a caption and alt text with the review oMLX model (advisory)")
     caption.add_argument("photo_id", type=int)
     caption.add_argument("--json", action="store_true")
+
+    digest = commands.add_parser("digest", help="write a day's facts digest, with a review-model narrative when loaded")
+    digest.add_argument("date", help="capture day as YYYY-MM-DD")
+    digest.add_argument("--overwrite", action="store_true", help="replace an existing digest for this day")
+    digest.add_argument("--json", action="store_true")
 
     triage = commands.add_parser("triage", help="classify a group's sky frames with the fast oMLX model (never excludes)")
     triage.add_argument("group_id", type=int)
@@ -261,6 +267,21 @@ def main(argv: list[str] | None = None) -> int:
             with Library(settings) as library:
                 payload = library.caption_photo(args.photo_id, library.tagger_for("review"))
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": public_message(str(error))}, args.json)
+            return 2
+        _print(payload, args.json)
+        return 0
+
+    if args.command == "digest":
+        try:
+            day = parse_day(args.date)
+            with Library(settings) as library:
+                try:  # Soft gate: without the review model the digest is facts only.
+                    tagger, reason = library.tagger_for("review"), None
+                except RuntimeError as error:
+                    tagger, reason = None, str(error)
+                payload = library.digest_day(day, tagger, overwrite=args.overwrite, unavailable_reason=reason)
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:  # Includes FileExistsError.
             _print({"error": public_message(str(error))}, args.json)
             return 2
         _print(payload, args.json)

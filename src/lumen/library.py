@@ -22,6 +22,7 @@ from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, app
 from .catalog import Catalog, GroupFilters
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
+from .digest import day_facts, render_facts_table
 from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
@@ -914,6 +915,33 @@ class Library:
             "caption": shape["caption"], "alt_text": shape["alt_text"]})
         self._write_sidecar(photo_id)
         return shape
+
+    @_coordinated
+    def digest_day(self, day: date, tagger=None, *, overwrite: bool = False, unavailable_reason: str | None = None) -> dict:
+        """Facts first: the table is always written; the review model's narrative is appended only when it answers."""
+        path = self.settings.digest_dir / f"{day.isoformat()}.md"
+        existed = path.exists()
+        if existed and not overwrite:
+            raise FileExistsError("digest exists; confirm overwrite")
+        facts = day_facts(self, day)
+        text = render_facts_table(facts)
+        narrative, raw = False, None
+        if facts["frames"]:
+            if tagger is None:
+                body = f"Narrative unavailable: {unavailable_reason or 'review model is not loaded in oMLX'}"
+            else:
+                try:
+                    body = raw = tagger.write_digest(text)
+                    narrative = True
+                except Exception as error:  # A model failure never costs the facts.
+                    body, raw = f"Narrative unavailable: {public_message(str(error))}", getattr(error, "raw_response", None)
+            text += f"\n## Narrative\n\n{body}\n"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        SidecarWriter._atomic_write(path, text)
+        self.catalog.append_event(None, "digest_written", {
+            "date": facts["date"], "path_name": path.name, "frames": facts["frames"], "narrative": narrative,
+            "model": getattr(tagger, "model", None), "role": getattr(tagger, "role", None), "raw_response": raw})
+        return {"date": facts["date"], "file": path.name, "frames": facts["frames"], "narrative": narrative, "overwritten": existed}
 
     def _change_crop(self, photo_id: int, edit: PhotoEdit | None) -> None:
         previous = self.catalog.get_crop(photo_id)

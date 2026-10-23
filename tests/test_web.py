@@ -1072,6 +1072,31 @@ class WebTests(unittest.TestCase):
     def test_javascript_tag_keepers_disabled_when_fast_model_unloaded(self):
         self.run_javascript_cleanup_regression("keywords-unloaded")
 
+    def test_digest_route_confirms_overwrite_and_degrades_without_review_model(self):
+        for index in range(2):
+            image = Image.new("RGB", (120, 90), (index * 40, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 10:00:0{index}"
+            image.save(self.root / f"d{index}.jpg", exif=exif)
+        none = {"version": None, "default_model": None, "loaded_models": []}
+        with patch("lumen.library.get_server_status", return_value=none):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            self.assertEqual(403, self.post_json("/api/digests", {"date": "2026-10-22"}, headers={"Origin": "https://attacker.example"})[0])
+            for payload in ({"date": "22/10/2026"}, {"date": "2026-10-22", "overwrite": "yes"}, {}, {"date": "2026-10-22", "model": "x"}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/digests", payload)[0])
+            code, body = self.post_json("/api/digests", {"date": "2026-10-22"})
+            self.assertEqual((200, {"date": "2026-10-22", "file": "2026-10-22.md", "frames": 2, "narrative": False, "overwritten": False}), (code, body))
+            self.assertEqual((409, True), (lambda r: (r[0], r[1]["exists"]))(self.post_json("/api/digests", {"date": "2026-10-22"})))
+            self.assertTrue(self.post_json("/api/digests", {"date": "2026-10-22", "overwrite": True})[1]["overwritten"])
+            self.assertIn("digest_dir", self.get_json("/api/status")[1])
+            text = (self.root / "library" / "digests" / "2026-10-22.md").read_text()
+            self.assertIn("Narrative unavailable: review model Qwen3.8-27B-4bit is not loaded in oMLX", text)
+
+    def test_javascript_digest_button_confirms_overwrite_and_announces_result(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        for needle in ('id="write-digest"', '<p id="digest-result"', '<dialog id="digest-confirm"', 'id="digest-confirm-yes"'):
+            self.assertIn(needle, html)
+        self.run_javascript_cleanup_regression("digest")
+
     def run_javascript_cleanup_regression(self, scenario):
         script = r"""
 const fs = require('node:fs');
@@ -1161,6 +1186,7 @@ const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.le
 const picks = [];
 const critiqueRequests = [];
 const captionPosts = [];
+const digestPosts = [];
 let deferCritique = false;
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
@@ -1227,7 +1253,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
+  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
     critiqueRequests.push([url, options.method]);
@@ -1294,6 +1320,13 @@ async function fetch(url, options = {}) {
     from.splice(from.indexOf(body.keyword), 1);
     to.push(body.keyword);
     payload = { photo_id: 1, subjects: [...keywordData.subjects], suggested: [...keywordData.suggested] };
+  }
+  else if (url === '/api/digests') {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    digestPosts.push(body);
+    if (body.overwrite === true) payload = { date: body.date, file: body.date + '.md', frames: 2, narrative: false, overwritten: true };
+    else { ok = false; payload = { error: 'digest exists; confirm overwrite', exists: true }; }
   }
   else if (/^\/api\/photos\/1\/caption(\/edit)?$/.test(url)) {
     const body = JSON.parse(options.body);
@@ -1558,6 +1591,22 @@ const regression = `
     assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
     await settle();
     assert.equal(state.job.status, 'succeeded');
+    return;
+  }
+  if (scenario === 'digest') {
+    await load();
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    const today = new Date().toLocaleDateString('sv-SE');
+    await element('#write-digest').listeners.click();
+    assert.deepEqual(digestPosts, [{ date: today }]);
+    assert.equal(element('#digest-confirm').hidden, false, 'an existing digest asks before overwriting');
+    assert.equal(element('#digest-confirm-text').textContent, 'A digest for ' + today + ' already exists. Overwrite it?');
+    await element('#digest-confirm-yes').listeners.click();
+    assert.deepEqual(digestPosts.at(-1), { date: today, overwrite: true });
+    assert.equal(element('#digest-confirm').hidden, true);
+    assert.equal(announcements.at(-1), 'Digest written for ' + today + ': ' + today + '.md (facts only)');
+    assert.equal(element('#digest-result').textContent, today + '.md');
     return;
   }
   if (scenario === 'caption') {

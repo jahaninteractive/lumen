@@ -31,6 +31,8 @@
         <p id="merge-count" class="quiet">0 batches selected</p>
         <button type="button" id="merge-batches" class="secondary" disabled>Merge selected batches</button>
         <button type="button" id="jump-selected" class="secondary">Jump to selected</button>
+        <button type="button" id="write-digest" class="secondary">Write today's digest</button>
+        <p id="digest-result" class="path"></p>
       </div>
       <div id="batch-list"><p class="quiet">No imported batches yet.</p></div>
     </nav>
@@ -330,6 +332,16 @@
       <p id="reject-all-text"></p>
       <div class="button-row">
         <button type="button" id="reject-all-yes">Confirm</button>
+        <button type="submit" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="digest-confirm" aria-labelledby="digest-confirm-text">
+    <form method="dialog">
+      <p id="digest-confirm-text"></p>
+      <div class="button-row">
+        <button type="button" id="digest-confirm-yes">Confirm</button>
         <button type="submit" class="secondary">Cancel</button>
       </div>
     </form>

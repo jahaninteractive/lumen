@@ -12,6 +12,7 @@ from lumen.omlx import (
     AstroResponseError,
     BurstResponseError,
     CaptionResponseError,
+    DigestResponseError,
     CompositionResponseError,
     NoRedirectHandler,
     OmlxError,
@@ -23,6 +24,7 @@ from lumen.omlx import (
     parse_burst_response,
     parse_caption_response,
     parse_composition_response,
+    parse_digest_response,
     parse_reject_response,
     parse_tag_response,
 )
@@ -307,6 +309,18 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual(("Ice.", "White ice."), (result.caption, result.alt_text))
         self.assertIn("Do not identify a person.", captured["content"][0]["text"])
         self.assertEqual(200, captured["kw"]["max_tokens"])
+
+    def test_digest_response_is_a_single_bounded_narrative_and_request_sends_no_image(self):
+        self.assertEqual("Calm.", parse_digest_response(json.dumps({"narrative": "Calm."})))
+        for bad in ({"narrative": ""}, {"narrative": "x" * 1501}, {"narrative": "a", "title": "b"}, ["a"]):
+            with self.subTest(bad=bad), self.assertRaises(DigestResponseError):
+                parse_digest_response(json.dumps(bad))
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), json.dumps({"narrative": "Calm."}))[1]):
+            tagger.write_digest("| Frames | 2 |")
+        self.assertTrue(all(part["type"] == "text" for part in captured["content"]))
+        self.assertIn("Do not invent species, places, or counts.", captured["content"][0]["text"])
 
     def test_burst_response_requires_supplied_frame_and_bounded_rationale(self):
         good = json.dumps({"frame_id": "7", "rationale": "Sharpest eye, wing fully extended.", "confidence": 0.72})

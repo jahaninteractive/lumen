@@ -421,6 +421,25 @@ class CliTests(unittest.TestCase):
                 code = main(["--library", str(root / "library"), "caption", "1", "--json"])
         self.assertEqual((0, "Alt text."), (code, json.loads(output.getvalue())["alt_text"]))
 
+    def test_digest_command_writes_file_and_requires_overwrite_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = Image.new("RGB", (120, 90)); exif = Image.Exif(); exif[36867] = "2026:10:22 10:00:00"; image.save(root / "d.jpg", exif=exif)
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root / "d.jpg")])
+            offline = {"version": None, "default_model": None, "loaded_models": []}
+            output = io.StringIO()
+            with patch("lumen.library.get_server_status", return_value=offline), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "digest", "2026-10-22", "--json"])
+            self.assertEqual((0, False), (code, json.loads(output.getvalue())["narrative"]))
+            self.assertTrue((root / "library" / "digests" / "2026-10-22.md").exists())
+            output = io.StringIO()
+            with patch("lumen.library.get_server_status", return_value=offline), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "digest", "2026-10-22", "--json"])
+            self.assertEqual((2, "digest exists; confirm overwrite"), (code, json.loads(output.getvalue())["error"]))
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(2, main(["--library", str(root / "library"), "digest", "22-10-2026", "--json"]))
+
     def test_critique_command_prints_suggestion_and_exits_two_on_failure(self):
         class FakeTagger:
             def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")

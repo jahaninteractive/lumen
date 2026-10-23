@@ -18,6 +18,7 @@ SKY_CLASSES = ("night_sky", "aurora", "milky_way", "twilight", "cloud", "not_sky
 SKY_ISSUES = ("haze", "light_pollution", "trailing", "cloud_band")
 CAPTION_MAX = 200
 ALT_TEXT_MAX = 125
+NARRATIVE_MAX = 1500
 
 
 class OmlxError(RuntimeError):
@@ -55,6 +56,12 @@ class AstroResponseError(OmlxError):
 
 
 class CaptionResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class DigestResponseError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
@@ -190,6 +197,14 @@ def parse_caption_response(raw: str) -> Caption:
     if not isinstance(alt_text, str) or not 1 <= len(alt_text := alt_text.strip()) <= ALT_TEXT_MAX:
         raise CaptionResponseError(f"oMLX alt_text must contain 1 to {ALT_TEXT_MAX} characters", raw)
     return Caption(caption, alt_text, raw)
+
+
+def parse_digest_response(raw: str) -> str:
+    payload = _json_object(raw, DigestResponseError)
+    narrative = payload.get("narrative")
+    if set(payload) != {"narrative"} or not isinstance(narrative, str) or not 1 <= len(narrative := narrative.strip()) <= NARRATIVE_MAX:
+        raise DigestResponseError(f"oMLX digest response must contain only a narrative of 1 to {NARRATIVE_MAX} characters", raw)
+    return narrative
 
 
 def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
@@ -360,6 +375,13 @@ class OmlxTagger:
                   "literal description of what is visible for a screen reader). Return JSON only. Do not identify a person.")
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
         return parse_caption_response(content)
+
+    def write_digest(self, facts_markdown: str, timeout: float = 240) -> str:
+        """Text only: the facts table goes to the model, never an image."""
+        prompt = ("Write a short field-notes narrative (3 to 6 sentences, plain prose, no lists, no hashtags) from these "
+                  "facts only. Do not invent species, places, or counts. Return JSON only with narrative.")
+        content = [{"type": "text", "text": prompt}, {"type": "text", "text": facts_markdown}]
+        return parse_digest_response(self._complete(content, timeout, max_tokens=600))
 
     def critique_burst(self, frames: list[tuple[str, Path]], timeout: float = 240) -> BurstCritique:
         ids = [frame_id for frame_id, _ in frames]

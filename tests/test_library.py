@@ -3,7 +3,7 @@ import fcntl
 import json
 import os
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 import sqlite3
 import subprocess
 import unittest
@@ -863,6 +863,41 @@ class LibraryTests(unittest.TestCase):
             event = [e for e in library.catalog.events_for(photo.id) if e.kind == "caption_failed"][-1]
             self.assertEqual(("review", "#raw"), (event.details["role"], event.details["raw_response"]))
             self.assertIsNone(library.catalog.get_tags(photo.id))
+
+    def test_digest_writes_facts_first_and_narrative_only_when_the_model_answers(self):  # Review Focus
+        class FakeTagger:
+            model, role = "review-model", "review"
+            def __init__(self, fail=False): self.fail = fail; self.prompt = None
+            def write_digest(self, facts_markdown):
+                self.prompt = facts_markdown
+                if self.fail: raise OmlxError("Local oMLX request failed: boom")
+                return "A calm day with gentoos."
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                image = Image.new("RGB", (120, 90), (index * 40, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 10:00:0{index}"
+                image.save(root / f"d{index}.jpg", exif=exif)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                tagger = FakeTagger()
+                result = library.digest_day(date(2026, 10, 22), tagger)
+                path = library.settings.digest_dir / "2026-10-22.md"
+                text = path.read_text()
+                self.assertTrue(result["narrative"]); self.assertIn("| Frames | 2 |", text); self.assertLess(text.index("| Frames"), text.index("## Narrative"))
+                self.assertIn("A calm day with gentoos.", text); self.assertIn("| Frames | 2 |", tagger.prompt)
+                with self.assertRaises(FileExistsError):
+                    library.digest_day(date(2026, 10, 22), tagger)
+                result = library.digest_day(date(2026, 10, 22), FakeTagger(fail=True), overwrite=True)
+                text = path.read_text()
+                self.assertFalse(result["narrative"]); self.assertIn("| Frames | 2 |", text); self.assertIn("Narrative unavailable: Local oMLX request failed: boom", text)
+                result = library.digest_day(date(2026, 10, 22), None, overwrite=True, unavailable_reason="review model Qwen3.8-27B-4bit is not loaded in oMLX")
+                self.assertIn("Narrative unavailable: review model Qwen3.8-27B-4bit is not loaded in oMLX", path.read_text())
+                empty = library.digest_day(date(2026, 10, 23), FakeTagger(fail=True))
+                self.assertEqual((0, False), (empty["frames"], empty["narrative"]))
+                self.assertIn("No frames were imported for this day.", (library.settings.digest_dir / "2026-10-23.md").read_text())
+                events = [e for e in library.catalog.events_for(None) if e.kind == "digest_written"]
+                self.assertEqual(4, len(events)); self.assertEqual("2026-10-22.md", events[0].details["path_name"]); self.assertNotIn("/", events[0].details["path_name"])
 
     def test_export_validates_all_ids_before_starting(self):
         self.assertTrue(hasattr(library_module, "ExportRequest"), "ExportRequest is missing")

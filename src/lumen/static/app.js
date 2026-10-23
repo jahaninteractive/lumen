@@ -2013,3 +2013,29 @@ try {
   document.querySelector('#export-status').textContent = 'Browser storage is unavailable; choose an XMP for this visit.';
 }
 load().catch(error => announce(error.message));
+
+// Daily digest: facts always, narrative only when the review model answers; an existing file is replaced only after Confirm.
+const digestButton = document.querySelector('#write-digest');
+const digestConfirm = document.querySelector('#digest-confirm');
+async function writeDigest(day, overwrite = false) {
+  digestButton.disabled = true;
+  try {
+    const result = await post('/api/digests', overwrite ? { date: day, overwrite: true } : { date: day });
+    document.querySelector('#digest-result').textContent = result.file;
+    announce(`Digest written for ${result.date}: ${result.file} (${result.narrative ? 'narrative included' : 'facts only'})`);
+  } catch (error) {
+    if (!error.payload?.exists) return announce(`Could not write the digest: ${error.message}`);
+    digestConfirm.dataset.date = day;  // the day asked about at open time
+    document.querySelector('#digest-confirm-text').textContent = `A digest for ${day} already exists. Overwrite it?`;
+    if (digestConfirm.showModal) digestConfirm.showModal();
+    else digestConfirm.hidden = false;
+  } finally {
+    digestButton.disabled = false;
+  }
+}
+digestButton.addEventListener('click', () => writeDigest(new Date().toLocaleDateString('sv-SE')));
+document.querySelector('#digest-confirm-yes').addEventListener('click', () => {
+  if (digestConfirm.close) digestConfirm.close();
+  else digestConfirm.hidden = true;
+  return writeDigest(digestConfirm.dataset.date, true);
+});
