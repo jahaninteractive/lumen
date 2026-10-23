@@ -1,10 +1,10 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-23 (Africa/Johannesburg) — Local AI Assist landed on branch `local-ai-assist`
+Last updated: 2026-10-23 (Africa/Johannesburg) — Local AI Assist merged into `main`
 
 ## Resume here
 
-**Local AI Assist landed on branch `local-ai-assist` (2026-10-23, not merged into `main`; merging is the user's call).** Spec `docs/superpowers/specs/2026-10-22-local-ai-assist-design.md`; plan `docs/superpowers/plans/2026-10-22-local-ai-assist.md`, all 7 tasks done with a per-task review and a whole-branch final review (fix wave applied). Warning-strict suite: 440 tests pass at the branch head (`env -u LUMEN_OMLX_MODEL`), `node --check` OK; 16 commits. No Safari/VoiceOver pass and no live-model end-to-end run were done.
+**Local AI Assist merged into `main` (2026-10-23, merge commit `b409055`).** Spec `docs/superpowers/specs/2026-10-22-local-ai-assist-design.md`; plan `docs/superpowers/plans/2026-10-22-local-ai-assist.md`, all 7 tasks done with a per-task review and a whole-branch final review (fix wave applied). Warning-strict suite: 440 tests pass on merged `main` (`env -u LUMEN_OMLX_MODEL`), `node --check` OK; 17 commits plus the merge. No Safari/VoiceOver pass and no live-model end-to-end run were done.
 
 - Roles and gating: `Settings.omlx_fast_model` (`LUMEN_OMLX_FAST_MODEL`, default `Qwen3-VL-8B-Instruct-4bit`) and `Settings.review_model` (`LUMEN_OMLX_REVIEW_MODEL`, else `omlx_model`). `Library.tagger_for(role)` is the only `OmlxTagger` constructor; it reads live `/api/status` and raises `RuntimeError("<role> model <name> is not loaded in oMLX")` (web → 400 verbatim; a refusal never creates a job row). `lumen doctor` / `/api/status` carry `omlx_roles {fast, review: {model, loaded}}`; the browser disables every AI button from it with a text reason naming the model.
 - Vocabulary: `src/lumen/data/vocabulary.json` is copied once to `<library>/vocabulary.json` (`vocabulary.load_vocabulary`), then photographer-owned. `match_keywords` is case/whitespace-insensitive, stores the vocabulary spelling, caps free-text suggestions at 3; species < 0.6 confidence are never applied even if the model repeats the name as a subject.
