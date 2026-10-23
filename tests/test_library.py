@@ -37,6 +37,7 @@ class LibraryTests(unittest.TestCase):
     def test_composition_review_records_original_recommendation_without_selecting_crop(self):
         class FakeTagger:
             model = "test-vlm"
+            role = "review"
 
             def review_composition(self, original, candidates):
                 self.original = original
@@ -67,6 +68,7 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual([candidate.id for candidate in before], event.details["candidate_ids"])
         self.assertEqual("crop-original", event.details["candidate_id"])
         self.assertEqual("test-vlm", event.details["model"])
+        self.assertEqual("review", event.details["role"])
         self.assertEqual("composition_reviewed", sidecar["provenance"][-1]["kind"])
         self.assertTrue(tagger.original_was_file)
         self.assertTrue(all(not path.exists() for _, path in tagger.candidates if path != tagger.original))
@@ -120,6 +122,7 @@ class LibraryTests(unittest.TestCase):
 
         self.assertEqual(before, after)
         self.assertEqual("composition_review_failed", event.kind)
+        self.assertIsNone(event.details["role"])
         self.assertEqual("not model json", event.details["raw_response"])
         self.assertEqual([candidate.id for candidate in before], event.details["candidate_ids"])
         self.assertTrue(all(not path.exists() for _, path in tagger.candidates if path != tagger.original))

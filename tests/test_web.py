@@ -1091,6 +1091,15 @@ class WebTests(unittest.TestCase):
             text = (self.root / "library" / "digests" / "2026-10-22.md").read_text()
             self.assertIn("Narrative unavailable: review model Qwen3.8-27B-4bit is not loaded in oMLX", text)
 
+    def test_digest_route_strips_absolute_paths_from_os_errors(self):
+        none = {"version": None, "default_model": None, "loaded_models": []}
+        failure = OSError("/Users/someone/Pictures/Lumen Library/digests: permission denied")
+        with patch("lumen.library.get_server_status", return_value=none), patch("lumen.library.Library.digest_day", side_effect=failure):
+            code, body = self.post_json("/api/digests", {"date": "2026-10-22"})
+        self.assertEqual(400, code)
+        self.assertNotIn("/Users", body["error"])
+        self.assertIn("<path>", body["error"])
+
     def test_javascript_digest_button_confirms_overwrite_and_announces_result(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
         for needle in ('id="write-digest"', '<p id="digest-result"', '<dialog id="digest-confirm"', 'id="digest-confirm-yes"'):
@@ -1193,6 +1202,7 @@ const captionPosts = [];
 const digestPosts = [];
 const digestBusy = [];
 let deferCritique = false;
+const pendingTags = [];
 let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
@@ -1319,6 +1329,7 @@ async function fetch(url, options = {}) {
     payload = { decided: body.photo_ids.map(id => ({ photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 })), remaining: rejectRows.length };
   }
   else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
+  else if (url === '/api/photos/1/tag') { assert.equal(options.method, 'POST'); return new Promise(resolve => pendingTags.push(() => resolve({ ok: true, json: async () => ({ photo_id: 1 }) }))); }
   else if (url === '/api/photos/1/keywords') {
     assert.equal(options.method, 'POST');
     const body = JSON.parse(options.body);
@@ -1595,6 +1606,13 @@ const regression = `
     assert.ok(texts('suggested-keywords').includes('ice'));
     assert.equal(element('#announcer').textContent, 'Keyword ice removed from photo-1.jpg');
     assert.equal(groupLoads, loadsBefore, 'keyword changes re-render in place without load()');
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
+    const tagging = tree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true').listeners.click();
+    await new Promise(setImmediate);
+    assert.equal(control('reject').disabled, true, 'culling waits while the fast model holds the library');
+    pendingTags.shift()();
+    await tagging;
+    assert.equal(control('reject').disabled, false);
     await element('#tag-keepers').listeners.click();
     assert.deepEqual(tagPosts, [{ scope: 'keepers' }]);
     assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
@@ -2550,9 +2568,11 @@ const regression = `
   }
 })()
 `;
+let finished = false;  // Timers are stubbed, so a never-settling await would otherwise exit 0 with assertions skipped.
+process.on('exit', () => { if (!finished) { console.error('scenario did not finish'); process.exitCode = 1; } });
 vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regression, {
   assert: require('node:assert/strict'), URLSearchParams, setImmediate, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
-}).catch(error => { console.error(error); process.exitCode = 1; });
+}).then(() => { finished = true; }, error => { finished = true; console.error(error); process.exitCode = 1; });
 """
         app = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js"
         result = subprocess.run(["node", "-e", script, str(app), scenario, self.base], capture_output=True, text=True, timeout=10)

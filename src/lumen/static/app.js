@@ -588,6 +588,8 @@ function renderInspector(photo) {
   tag.disabled = !roleReady('fast');
   tag.addEventListener('click', async () => {
     tag.disabled = true;
+    state.busy = true;  // The server holds the library lock for the whole model call.
+    updateWorkflow();
     try {
       await request(`/api/photos/${photo.id}/tag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       announce(`Tags added to ${photo.name}`);
@@ -595,6 +597,9 @@ function renderInspector(photo) {
     } catch (error) {
       announce(error.message);
       tag.disabled = false;
+    } finally {
+      state.busy = false;
+      updateWorkflow();
     }
   });
   actions.append(tag);

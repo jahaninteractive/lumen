@@ -801,6 +801,7 @@ class Library:
         except Exception as error:
             self.catalog.append_event(photo_id, "composition_review_failed", {
                 "model": model,
+                "role": getattr(tagger, "role", None),
                 "error": str(error),
                 "raw_response": getattr(error, "raw_response", None),
                 "candidate_ids": candidate_ids,
@@ -812,6 +813,7 @@ class Library:
             raise
         self.catalog.append_event(photo_id, "composition_reviewed", {
             "model": model,
+            "role": getattr(tagger, "role", None),
             "candidate_id": result.candidate_id,
             "rationale": result.rationale,
             "confidence": result.confidence,
