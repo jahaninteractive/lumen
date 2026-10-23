@@ -1002,9 +1002,14 @@ function syncFilters(cameras) {
   Object.entries(FILTER_CONTROLS).forEach(([name, selector]) => {
     const control = document.querySelector(selector);
     if (FLAG_FILTERS.includes(name)) control.checked = params.get(name) === '1';
-    else control.value = params.get(name) ?? FILTER_DEFAULTS[name] ?? '';
+    else keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');
   });
-  document.querySelector('#find').value = document.querySelector('#filter-text').value;
+  keepTyping(document.querySelector('#find'), params.get('text') ?? '');
+}
+
+// A reload never rewrites the field being typed in, nor one that differs from the URL only by spaces.
+function keepTyping(control, value) {
+  if (control !== document.activeElement && control.value.trim() !== value) control.value = value;
 }
 
 async function applyFilters(query = filterQuery()) {
@@ -1716,9 +1721,11 @@ document.querySelector('#filter-form').addEventListener('submit', event => {
   return applyFilters().catch(error => announce(error.message));
 });
 // The rail find and the form's tag text are one `text` filter; typing in either mirrors the other and applies it.
+let findTimer = null;
 [['#find', '#filter-text'], ['#filter-text', '#find']].forEach(([source, mirror]) => document.querySelector(source).addEventListener('input', () => {
   document.querySelector(mirror).value = document.querySelector(source).value;
-  return applyFilters().catch(error => announce(error.message));
+  window.clearTimeout(findTimer);
+  findTimer = window.setTimeout(() => applyFilters().catch(error => announce(error.message)), 300);
 }));
 document.querySelector('#reset-filters').addEventListener('click', () => applyFilters('').catch(error => announce(error.message)));
 document.querySelector('#show-more').addEventListener('click', showMore);

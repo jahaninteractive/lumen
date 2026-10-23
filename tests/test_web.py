@@ -1155,6 +1155,7 @@ const tabElements = ['compose', 'export', 'review', 'astro', 'ingest', 'clear'].
 });
 const scope = new Element(); scope.value = 'current';
 const document = {
+  get activeElement() { return focused; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
   querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
@@ -1171,7 +1172,7 @@ const document = {
 let activeTimers = 0;
 let nextTimer = 0;
 const timers = new Map();
-const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
+const window = { setTimeout: callback => callback(), clearTimeout() {}, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
 // pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
 async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
@@ -1189,6 +1190,8 @@ const captionPosts = [];
 const digestPosts = [];
 const digestBusy = [];
 let deferCritique = false;
+let deferGroups = false;
+const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
 let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
@@ -1386,6 +1389,7 @@ async function fetch(url, options = {}) {
     else if (scenario === 'astro-fail') payload = jobPayload('failed', 0.5, { error: 'Siril exited with exit code 3' });
     else payload = jobPayload('succeeded', 1, { result: { artifact_id: 1, name: 'result.tif' } });
   } else throw new Error('Unexpected request: ' + url);
+  if (deferGroups && url.startsWith('/api/groups')) { const reply = { ok, json: async () => payload }; return new Promise(resolve => pendingGroups.push(() => resolve(reply))); }
   return { ok, json: async () => payload };
 }
 `;
@@ -1934,7 +1938,8 @@ const regression = `
     const find = element('#find');
     find.tagName = 'INPUT';
     find.value = 'ice';
-    await find.listeners.input();
+    const type = async (control, value) => { control.value = value; control.listeners.input(); await new Promise(setImmediate); };
+    await type(find, 'ice');
     assert.equal(lastGroupsUrl, '/api/groups?text=ice');
     assert.equal(location.search, '?text=ice');
     assert.equal(element('#filter-text').value, 'ice');
@@ -1944,10 +1949,39 @@ const regression = `
     const posts = decisionPosts.length;
     await element('#contact-sheet').listeners.keydown({ key: 'x', metaKey: false, ctrlKey: false, altKey: false, target: find, preventDefault() {} });
     assert.equal(decisionPosts.length, posts, 'typing in find never culls');
-    element('#filter-text').value = 'krill';
-    await element('#filter-text').listeners.input();
+    await type(element('#filter-text'), 'krill');
     assert.equal(find.value, 'krill');
     assert.equal(lastGroupsUrl, '/api/groups?text=krill');
+
+    // Responses land while the photographer keeps typing: a trailing space and later keystrokes survive.
+    deferGroups = true;
+    find.focus();
+    await type(find, 'motion ');
+    await type(find, 'motion b');
+    assert.equal(pendingGroups.length, 2);
+    pendingGroups.shift()();
+    await new Promise(setImmediate);
+    assert.equal(find.value, 'motion b', 'a later keystroke survives the earlier response');
+    assert.equal(element('#filter-text').value, 'motion b');
+    pendingGroups.shift()();
+    await new Promise(setImmediate);
+    assert.equal(lastGroupsUrl, '/api/groups?text=motion+b');
+    assert.deepEqual([find.value, element('#filter-text').value], ['motion b', 'motion b']);
+    await type(find, 'motion bo');
+    find.value = 'motion boa';  // a keystroke whose debounced apply has not fired yet
+    pendingGroups.shift()();
+    await new Promise(setImmediate);
+    assert.equal(find.value, 'motion boa', 'a response never rewrites the focused find box');
+    await type(find, 'motion ');
+    pendingGroups.shift()();
+    await new Promise(setImmediate);
+    assert.deepEqual([find.value, element('#filter-text').value], ['motion ', 'motion '], 'a trailing space survives the reload');
+    find.focus.call(element('#contact-sheet'));
+    await type(find, 'motion  ');
+    pendingGroups.shift()();
+    await new Promise(setImmediate);
+    assert.equal(find.value, 'motion  ', 'unfocused, an equal trimmed value is still left alone');
+    deferGroups = false;
     return;
   }
   if (scenario === 'filters') {
