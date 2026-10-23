@@ -1560,6 +1560,7 @@ function updateWorkflow() {
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
   document.querySelector('#merge-batches').disabled = state.busy || state.mergeSelection.size < 2;
+  document.querySelector('#write-digest').disabled = state.busy;
   document.querySelector('#merge-count').textContent = `${state.mergeSelection.size} batch${state.mergeSelection.size === 1 ? '' : 'es'} selected`;
   document.querySelectorAll('[data-merge-group]').forEach(box => { box.checked = state.mergeSelection.has(Number(box.dataset.mergeGroup)); });
   document.querySelectorAll('[data-burst]').forEach(section => {
@@ -2018,7 +2019,8 @@ load().catch(error => announce(error.message));
 const digestButton = document.querySelector('#write-digest');
 const digestConfirm = document.querySelector('#digest-confirm');
 async function writeDigest(day, overwrite = false) {
-  digestButton.disabled = true;
+  state.busy = true;  // The server holds the library lock for the whole model call, so culling waits visibly.
+  updateWorkflow();
   try {
     const result = await post('/api/digests', overwrite ? { date: day, overwrite: true } : { date: day });
     document.querySelector('#digest-result').textContent = result.file;
@@ -2030,7 +2032,8 @@ async function writeDigest(day, overwrite = false) {
     if (digestConfirm.showModal) digestConfirm.showModal();
     else digestConfirm.hidden = false;
   } finally {
-    digestButton.disabled = false;
+    state.busy = false;
+    updateWorkflow();
   }
 }
 digestButton.addEventListener('click', () => writeDigest(new Date().toLocaleDateString('sv-SE')));

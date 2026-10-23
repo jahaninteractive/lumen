@@ -116,6 +116,12 @@ class AstroTriage:
 
 
 @dataclass(frozen=True, slots=True)
+class DigestNarrative:
+    narrative: str
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
 class Caption:
     caption: str
     alt_text: str
@@ -376,12 +382,13 @@ class OmlxTagger:
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
         return parse_caption_response(content)
 
-    def write_digest(self, facts_markdown: str, timeout: float = 240) -> str:
+    def write_digest(self, facts_markdown: str, timeout: float = 240) -> DigestNarrative:
         """Text only: the facts table goes to the model, never an image."""
         prompt = ("Write a short field-notes narrative (3 to 6 sentences, plain prose, no lists, no hashtags) from these "
                   "facts only. Do not invent species, places, or counts. Return JSON only with narrative.")
         content = [{"type": "text", "text": prompt}, {"type": "text", "text": facts_markdown}]
-        return parse_digest_response(self._complete(content, timeout, max_tokens=600))
+        raw = self._complete(content, timeout, max_tokens=600)
+        return DigestNarrative(parse_digest_response(raw), raw)
 
     def critique_burst(self, frames: list[tuple[str, Path]], timeout: float = 240) -> BurstCritique:
         ids = [frame_id for frame_id, _ in frames]

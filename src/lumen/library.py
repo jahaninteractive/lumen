@@ -931,8 +931,8 @@ class Library:
                 body = f"Narrative unavailable: {unavailable_reason or 'review model is not loaded in oMLX'}"
             else:
                 try:
-                    body = raw = tagger.write_digest(text)
-                    narrative = True
+                    result = tagger.write_digest(text)
+                    body, raw, narrative = result.narrative, result.raw_response, True
                 except Exception as error:  # A model failure never costs the facts.
                     body, raw = f"Narrative unavailable: {public_message(str(error))}", getattr(error, "raw_response", None)
             text += f"\n## Narrative\n\n{body}\n"

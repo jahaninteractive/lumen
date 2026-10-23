@@ -15,7 +15,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
-from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError
+from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
 from lumen import library as library_module
 from lumen import ingest as ingest_module
 from lumen.pipelines import DarktablePipeline
@@ -865,13 +865,15 @@ class LibraryTests(unittest.TestCase):
             self.assertIsNone(library.catalog.get_tags(photo.id))
 
     def test_digest_writes_facts_first_and_narrative_only_when_the_model_answers(self):  # Review Focus
+        RAW_DIGEST = json.dumps({"narrative": "A calm day with gentoos."})
+
         class FakeTagger:
             model, role = "review-model", "review"
             def __init__(self, fail=False): self.fail = fail; self.prompt = None
             def write_digest(self, facts_markdown):
                 self.prompt = facts_markdown
                 if self.fail: raise OmlxError("Local oMLX request failed: boom")
-                return "A calm day with gentoos."
+                return DigestNarrative("A calm day with gentoos.", RAW_DIGEST)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -898,6 +900,7 @@ class LibraryTests(unittest.TestCase):
                 self.assertIn("No frames were imported for this day.", (library.settings.digest_dir / "2026-10-23.md").read_text())
                 events = [e for e in library.catalog.events_for(None) if e.kind == "digest_written"]
                 self.assertEqual(4, len(events)); self.assertEqual("2026-10-22.md", events[0].details["path_name"]); self.assertNotIn("/", events[0].details["path_name"])
+                self.assertEqual([RAW_DIGEST, None, None, None], [event.details["raw_response"] for event in events])
 
     def test_export_validates_all_ids_before_starting(self):
         self.assertTrue(hasattr(library_module, "ExportRequest"), "ExportRequest is missing")

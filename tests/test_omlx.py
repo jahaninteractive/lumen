@@ -12,6 +12,7 @@ from lumen.omlx import (
     AstroResponseError,
     BurstResponseError,
     CaptionResponseError,
+    DigestNarrative,
     DigestResponseError,
     CompositionResponseError,
     NoRedirectHandler,
@@ -318,7 +319,8 @@ class OmlxTests(unittest.TestCase):
         tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
         captured = {}
         with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), json.dumps({"narrative": "Calm."}))[1]):
-            tagger.write_digest("| Frames | 2 |")
+            result = tagger.write_digest("| Frames | 2 |")
+        self.assertEqual(DigestNarrative("Calm.", json.dumps({"narrative": "Calm."})), result)
         self.assertTrue(all(part["type"] == "text" for part in captured["content"]))
         self.assertIn("Do not invent species, places, or counts.", captured["content"][0]["text"])
 

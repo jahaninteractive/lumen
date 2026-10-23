@@ -1187,6 +1187,7 @@ const picks = [];
 const critiqueRequests = [];
 const captionPosts = [];
 const digestPosts = [];
+const digestBusy = [];
 let deferCritique = false;
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
@@ -1325,6 +1326,7 @@ async function fetch(url, options = {}) {
     assert.equal(options.method, 'POST');
     const body = JSON.parse(options.body);
     digestPosts.push(body);
+    digestBusy.push([state.busy, element('#write-digest').disabled]);
     if (body.overwrite === true) payload = { date: body.date, file: body.date + '.md', frames: 2, narrative: false, overwritten: true };
     else { ok = false; payload = { error: 'digest exists; confirm overwrite', exists: true }; }
   }
@@ -1607,6 +1609,8 @@ const regression = `
     assert.equal(element('#digest-confirm').hidden, true);
     assert.equal(announcements.at(-1), 'Digest written for ' + today + ': ' + today + '.md (facts only)');
     assert.equal(element('#digest-result').textContent, today + '.md');
+    assert.deepEqual(digestBusy, [[true, true], [true, true]], 'culling and the button wait while the digest request runs');
+    assert.deepEqual([state.busy, element('#write-digest').disabled], [false, false]);
     return;
   }
   if (scenario === 'caption') {
