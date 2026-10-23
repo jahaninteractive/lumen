@@ -1095,6 +1095,8 @@ const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
 const picks = [];
 const critiqueRequests = [];
+let deferCritique = false;
+const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
 let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 const astroPosts = [];
@@ -1159,6 +1161,7 @@ async function fetch(url, options = {}) {
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
     critiqueRequests.push([url, options.method]);
     if (options.method === 'POST') assert.deepEqual(JSON.parse(options.body), {});
+    if (options.method === 'POST' && deferCritique) return new Promise(resolve => pendingCritiques.push(() => resolve({ ok: true, json: async () => ({ ...storedCritique, rationale: 'Fresh look.' }) })));
     payload = options.method === 'POST' ? { ...storedCritique, rationale: 'Fresh look.' } : { critique: scenario === 'critique' ? storedCritique : null };
   }
   else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
@@ -1490,13 +1493,24 @@ const regression = `
     assert.deepEqual(picks, [], 'rendering stored advice never changes the pick');
     await inspect(state.groups[0].photos[1]);
     assert.equal(critiqueRequests.filter(([, method]) => method !== 'POST').length, 1, 'stored advice is fetched once per burst');
-    await byId('ask-burst-ai').listeners.click();
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
+    deferCritique = true;
+    const asking = byId('ask-burst-ai').listeners.click();
+    await new Promise(setImmediate);
+    assert.equal(control('reject').disabled, true, 'culling waits while the review model holds the library');
+    pendingCritiques.shift()();
+    await asking;
+    assert.equal(control('reject').disabled, false);
     assert.deepEqual(critiqueRequests.at(-1), ['/api/groups/1/critique', 'POST']);
     assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Fresh look. (confidence 72%)');
     assert.deepEqual(picks, [], 'asking for advice never changes the pick');
     await byId('use-burst-pick').listeners.click();
     assert.deepEqual(picks, ['/api/photos/3/pick']);
     assert.equal(state.groups[0].automatic_pick_id, 3);
+    state.groups[0].photos[2].decision = 'reject';
+    renderInspector(state.groups[0].photos[1]);
+    assert.ok(byId('burst-advice').textContent.endsWith('(frame is rejected)'));
+    assert.equal(byId('use-burst-pick'), undefined, 'a rejected suggestion offers no Use this pick');
     state.status.omlx_roles.review.loaded = false;
     renderInspector(state.groups[0].photos[1]);
     assert.equal(byId('ask-burst-ai').disabled, true);

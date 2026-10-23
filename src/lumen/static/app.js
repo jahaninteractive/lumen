@@ -484,6 +484,8 @@ function burstCritique(photo, group) {
   ask.disabled = !roleReady('review');
   ask.addEventListener('click', async () => {
     ask.disabled = true;
+    state.busy = true;  // The server holds the library lock for the whole model call, so culling waits visibly.
+    updateWorkflow();
     announce('Asking local AI to compare this burst');
     try {
       const data = await post(`/api/groups/${group.id}/critique`);
@@ -493,6 +495,9 @@ function burstCritique(photo, group) {
     } catch (error) {
       announce(error.message);
       ask.disabled = !roleReady('review');
+    } finally {
+      state.busy = false;
+      updateWorkflow();
     }
   });
   block.append(ask);
@@ -510,14 +515,17 @@ function burstCritique(photo, group) {
     const suggested = group.photos[index];
     const advice = document.createElement('p');
     advice.id = 'burst-advice';
-    advice.textContent = `Local AI suggests frame ${index + 1} (${data.name}): ${data.rationale} (confidence ${Math.round(data.confidence * 100)}%)`;
+    const rejected = suggested.decision === 'reject';
+    advice.textContent = `Local AI suggests frame ${index + 1} (${data.name}): ${data.rationale} (confidence ${Math.round(data.confidence * 100)}%)${rejected ? ' (frame is rejected)' : ''}`;
+    block.append(advice);
+    if (rejected) return block;
     const use = document.createElement('button');
     use.type = 'button';
     use.className = 'secondary';
     use.id = 'use-burst-pick';
     use.textContent = 'Use this pick';
     use.addEventListener('click', () => decide(suggested, 'pick', null, `.frame[data-id="${suggested.id}"]`));
-    block.append(advice, use);
+    block.append(use);
   }
   return block;
 }

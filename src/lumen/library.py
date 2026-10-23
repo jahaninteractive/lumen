@@ -792,16 +792,15 @@ class Library:
         return self._critique(group_id, chosen, details)
 
     def latest_critique(self, group_id: int) -> dict | None:
-        """The newest stored burst critique whose chosen frame is still in the group, without raw output."""
-        group = self._group(group_id)
-        members = {int(photo["id"]): photo for photo in (group or {}).get("photos", [])}
-        rows = self.catalog.connection.execute(
-            "SELECT details_json FROM provenance WHERE kind = 'burst_reviewed' ORDER BY id DESC").fetchall()
-        for row in rows:
-            details = json.loads(row["details_json"])
-            if details.get("group_id") == group_id and details.get("frame_id") in members:
-                return self._critique(group_id, members[details["frame_id"]], details)
-        return None
+        """The newest stored burst critique whose chosen frame is still a non-rejected member, without raw output."""
+        row = self.catalog.connection.execute("""
+            SELECT photos.id, photos.path, provenance.details_json FROM provenance
+            JOIN photos ON photos.id = json_extract(provenance.details_json, '$.frame_id')
+            WHERE provenance.kind = 'burst_reviewed' AND json_extract(provenance.details_json, '$.group_id') = ?
+              AND photos.group_id = ? AND photos.decision != 'reject'
+            ORDER BY provenance.id DESC LIMIT 1
+        """, (group_id, group_id)).fetchone()
+        return self._critique(group_id, dict(row), json.loads(row["details_json"])) if row else None
 
     def _change_crop(self, photo_id: int, edit: PhotoEdit | None) -> None:
         previous = self.catalog.get_crop(photo_id)

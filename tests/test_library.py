@@ -1877,6 +1877,9 @@ class LibraryTests(unittest.TestCase):
                 self.assertEqual(("review", '{"r":1}', group["id"]), (event.details["role"], event.details["raw_response"], event.details["group_id"]))
                 self.assertEqual(result | {"raw_response": None}, (library.latest_critique(group["id"]) or {}) | {"raw_response": None})
                 self.assertNotIn("raw_response", result)
+                library.set_decision(result["photo_id"], "reject")
+                self.assertIsNone(library.latest_critique(group["id"]), "a critique of a since-rejected frame is not offered")
+                library.set_decision(result["photo_id"], "none")
                 library.set_decision(group["photos"][1]["id"], "reject")
                 library.set_decision(group["photos"][2]["id"], "reject")
                 with self.assertRaisesRegex(ValueError, "at least two frames"):
