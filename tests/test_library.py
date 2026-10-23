@@ -2,6 +2,7 @@ import tempfile
 import fcntl
 import json
 import os
+from dataclasses import replace
 from datetime import datetime
 import sqlite3
 import subprocess
@@ -14,7 +15,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
-from lumen.omlx import BurstCritique, BurstResponseError
+from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError
 from lumen import library as library_module
 from lumen import ingest as ingest_module
 from lumen.pipelines import DarktablePipeline
@@ -23,7 +24,7 @@ from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
 from lumen.domain import PhotoEdit
 from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, RejectReview, TagResult
-from lumen.omlx import TagResponseError, parse_composition_response, parse_tag_response
+from lumen.omlx import AstroResponseError, TagResponseError, parse_composition_response, parse_tag_response
 from lumen.catalog import GroupFilters
 
 try:
@@ -1846,6 +1847,82 @@ class LibraryTests(unittest.TestCase):
                 data = library.catalog.get_tags(photo_id)["data"]
         self.assertEqual(["ice"], data["subjects"])
         self.assertEqual(1, [word.casefold() for word in data["suggested"]].count("chinstrap penguin"))
+
+    def _lights(self, root, count=4, exposure="15"):
+        for index in range(count):
+            image = Image.new("RGB", (120, 90), (0, 0, index * 20)); exif = Image.Exif()
+            exif[36867] = f"2026:10:22 22:00:{index * 10:02d}"; exif[33434] = int(exposure)  # one rational; a (15, 1) tuple is two values
+            image.save(root / f"l{index}.jpg", exif=exif)
+
+    def test_tag_job_triages_long_exposures_and_triage_job_covers_a_group(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            triaged = []
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("stars", [], "", [], 0.9, "{}", species=[], conditions=[])
+            def triage_astro(self, preview):
+                FakeTagger.triaged.append(preview.name)
+                cloudy = len(FakeTagger.triaged) == 2
+                return AstroTriage("cloud" if cloudy else "night_sky", 0.9, ["cloud_band"] if cloudy else [], '{"t":1}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._lights(root)
+            Image.new("RGB", (120, 90)).save(root / "day.jpg")  # no exposure → not triaged
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                self.assertTrue(all(p.exposure_seconds == 15.0 for p in library.catalog.list_photos() if p.path.endswith(".jpg") and "day" not in p.path))
+                library.wait_for_job(library.start_tag_job(FakeTagger(), scope="all").id)
+                self.assertEqual(4, len(FakeTagger.triaged))
+                group = next(g for g in library.list_groups() if len(g["photos"]) == 4)
+                triage = library.astro_triage(group["id"])
+                self.assertTrue(triage["astro_cue"])
+                self.assertEqual(1, sum(light["flagged"] for light in triage["lights"]))
+                flagged = next(light for light in triage["lights"] if light["flagged"])
+                self.assertEqual(("cloud", ["cloud_band"]), (flagged["sky"]["class"], flagged["issues"]))
+                event = [e for e in library.catalog.events_for(flagged["photo_id"]) if e.kind == "astro_triaged"][-1]
+                self.assertEqual('{"t":1}', event.details["raw_response"])
+                self.assertNotIn("raw_response", json.dumps(triage))
+                FakeTagger.triaged.clear()
+                library.wait_for_job(library.start_triage_job(FakeTagger(), group_id=group["id"]).id)
+                self.assertEqual(4, len(FakeTagger.triaged))
+                self.assertEqual(sorted(l["photo_id"] for l in triage["lights"]), sorted(p["id"] for p in group["photos"]))
+
+    def test_tag_job_counts_triage_failure_separately_and_keeps_the_tag(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("stars", [], "", [], 0.9, "{}", species=[], conditions=[])
+            def triage_astro(self, preview):
+                raise AstroResponseError("bad sky", '{"sky":"day"}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._lights(root, 2)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                job = library.start_tag_job(FakeTagger(), scope="all")
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                self.assertEqual("succeeded", status["status"])
+                self.assertEqual({"tagged": 2, "skipped": 0, "failed": 0, "triage_failed": 2}, status["result"])
+                photo = library.catalog.list_photos()[0]
+                self.assertEqual("stars", library.catalog.get_tags(photo.id)["data"]["description"])
+                self.assertIn("astro_triage_failed", [e.kind for e in library.catalog.events_for(photo.id)])
+                with self.assertRaises(ValueError):
+                    library.start_triage_job(FakeTagger(), group_id=999)
+
+    def test_astro_triage_flags_from_metrics_without_a_model_and_cue_needs_a_majority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._lights(root, 3)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                group = library.list_groups()[0]
+                photo = group["photos"][0]
+                metrics = library.catalog.get_metrics(photo["id"])
+                library.catalog.save_metrics(photo["id"], replace(metrics, astro=metrics.astro | {"trailing_warning": True}), photo["total_score"])
+                triage = library.astro_triage(group["id"])
+                self.assertFalse(triage["astro_cue"])
+                self.assertEqual([photo["id"]], [l["photo_id"] for l in triage["lights"] if l["flagged"]])
+                self.assertIsNone(triage["lights"][0]["sky"])
 
     def _burst(self, root, count=3):
         for index in range(count):

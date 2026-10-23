@@ -104,6 +104,8 @@ main { min-width: 0; }
 .burst-header .quiet { font-variant-numeric: tabular-nums; }
 .burst-selected { color: var(--amber); font-weight: 700; }
 .burst-selected:empty { display: none; }
+.astro-cue { color: var(--cyan); border: 1px solid var(--cyan); border-radius: 999px; padding: .1rem .5rem; font-size: .85rem; }
+#astro-lights .triage { margin-left: .5rem; }
 .burst-header .toggle { margin-left: auto; }
 .burst-frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
 

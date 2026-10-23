@@ -3,7 +3,7 @@ const CULLING_JOBS = ['import', 'ingest'];  // jobs that only add frames, so cul
 const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, critique: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
-  astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
+  astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   mergeSelection: new Set(),
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -325,6 +325,12 @@ function burstSection(group, groupIndex, frames) {
   astro.setAttribute('aria-label', `Stack Burst ${groupIndex + 1} in the Astro tab`);
   astro.addEventListener('click', () => selectGroup(group).then(() => selectTab(document.querySelector('#astro-tab'))).catch(error => announce(error.message)));
   header.append(heading, facts, selected, toggle, remove, astro);
+  if (group.astro_cue) {  // advisory text from stored triage; it never switches the tab
+    const cue = document.createElement('span');
+    cue.className = 'astro-cue';
+    cue.textContent = 'Looks like astro';
+    header.append(cue);
+  }
   const grid = document.createElement('div');
   grid.className = 'burst-frames';
   grid.append(...frames);
@@ -1107,13 +1113,14 @@ document.querySelector('#reject-all-yes').addEventListener('click', () => {
   return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
 });
 
-const JOB_NAMES = { import: 'Import', tag: 'Tagging', review_rejects: 'Reject review', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+const JOB_NAMES = { import: 'Import', tag: 'Tagging', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
+    : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
     : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.` : '';
   const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
@@ -1148,7 +1155,10 @@ function watchJob(job) {
   if (JOB_ACTIVE.includes(job.status)) startJobPolling();
   else {
     stopJobPolling();
-    if (JOB_ACTIVE.includes(previous)) load().catch(error => announce(error.message));
+    if (JOB_ACTIVE.includes(previous)) {
+      load().catch(error => announce(error.message));
+      if (['triage', 'tag'].includes(job.kind) && state.selectedGroupId !== null) loadAstroTriage(state.selectedGroupId);
+    }
   }
   updateWorkflow();
 }
@@ -1284,15 +1294,72 @@ function renderAstroLights(group) {
     input.addEventListener('change', updateWorkflow);
     const name = document.createElement('span');
     name.textContent = photo.name;
-    label.append(input, name);
+    const triage = document.createElement('span');
+    triage.className = 'triage quiet';
+    triage.textContent = 'not triaged';
+    label.append(input, name, triage);
     list.append(label);
   });
+  if (group) loadAstroTriage(group.id);
+}
+
+// Astro triage is advice: it only writes text; checkboxes change only through the counted confirm below.
+function triageText(light) {
+  if (!light) return 'not triaged';
+  const parts = [light.sky ? `${light.sky.class.replace(/_/g, ' ')} ${Math.round(light.sky.confidence * 100)}%` : 'not triaged',
+    ...light.issues.map(issue => issue.replace(/_/g, ' '))];
+  if (light.trailing_warning && !light.issues.includes('trailing')) parts.push('trailing measured');
+  if (light.flagged) parts.push('flagged');
+  return parts.join(' · ');
+}
+
+async function loadAstroTriage(groupId) {
+  try {
+    const triage = await request(`/api/groups/${groupId}/triage`);
+    if (groupId !== state.selectedGroupId) return;
+    state.astro.triage = triage;
+  } catch (error) {
+    return announce(error.message);
+  }
+  const lights = new Map(state.astro.triage.lights.map(light => [light.photo_id, light]));
+  Array.from(document.querySelector('#astro-lights').children).forEach(label => {
+    label.children[2].textContent = triageText(lights.get(Number(label.children[0].dataset.id)));
+  });
+  updateWorkflow();
+}
+
+function flaggedLights() {
+  const flagged = new Set((state.astro.triage?.lights || []).filter(light => light.flagged).map(light => String(light.photo_id)));
+  return Array.from(document.querySelectorAll('#astro-lights input')).filter(input => input.checked && flagged.has(String(input.dataset.id)));
 }
 
 function astroLights() {
   const inputs = Array.from(document.querySelectorAll('#astro-lights input'));
   return { included: inputs.filter(input => input.checked).length, excluded: inputs.filter(input => !input.checked).map(input => Number(input.dataset.id)) };
 }
+
+const excludeConfirm = document.querySelector('#exclude-confirm');
+const lightsText = count => `${count} light${count === 1 ? '' : 's'}`;
+document.querySelector('#triage-astro').addEventListener('click', () => {
+  if (state.selectedGroupId !== null) return startTagJob(`/api/groups/${state.selectedGroupId}/triage`, {});
+});
+document.querySelector('#exclude-flagged').addEventListener('click', () => {
+  const ids = flaggedLights().map(input => String(input.dataset.id));
+  if (!ids.length) return;
+  excludeConfirm.dataset.ids = ids.join(',');  // the lights flagged at open time, not a count
+  document.querySelector('#exclude-confirm-text').textContent = `Uncheck ${ids.length} flagged light${ids.length === 1 ? '' : 's'}? Flagged means cloud, not sky, trailing, or a cloud band. Nothing is stacked until you prepare and run.`;
+  if (excludeConfirm.showModal) excludeConfirm.showModal();
+  else excludeConfirm.hidden = false;
+});
+document.querySelector('#exclude-confirm-yes').addEventListener('click', () => {
+  if (excludeConfirm.close) excludeConfirm.close();
+  else excludeConfirm.hidden = true;
+  const ids = new Set(excludeConfirm.dataset.ids.split(','));
+  const unchecked = Array.from(document.querySelectorAll('#astro-lights input')).filter(input => input.checked && !input.disabled && ids.has(String(input.dataset.id)));
+  unchecked.forEach(input => { input.checked = false; });  // client state only; prepare sends it as excluded_photo_ids
+  updateWorkflow();
+  announce(`${lightsText(unchecked.length)} excluded`);
+});
 
 function astroPath(name) {
   return `${state.status?.astro_output_dir || '<library>/outputs/astro'}/${state.astro.job.job_id}/${name}`;
@@ -1447,6 +1514,11 @@ function updateWorkflow() {
   document.querySelector('#prepare-astro').disabled = state.busy || !siril || !group || !document.querySelector('#astro-confirm').checked || astroLights().included < 2 || activeJob;
   document.querySelector('#run-astro').disabled = state.busy || job?.status !== 'queued';
   document.querySelectorAll('#astro-lights input').forEach(input => { input.disabled = activeJob; });
+  const flagged = flaggedLights().length;
+  document.querySelector('#triage-astro').disabled = state.busy || !group || !roleReady('fast');
+  document.querySelector('#triage-astro-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#exclude-flagged').textContent = `Exclude flagged lights (${flagged})`;
+  document.querySelector('#exclude-flagged').disabled = activeJob || !flagged;
   document.querySelector('#astro-confirm').disabled = activeJob;
   document.querySelector('#cancel-astro').disabled = state.acting || !activeJob;
   document.querySelector('#cancel-job').disabled = state.acting || !JOB_ACTIVE.includes(state.job?.status);

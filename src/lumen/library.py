@@ -272,9 +272,16 @@ class Library:
             if not retag and existing is not None and "description" in existing["data"]:  # A reject-only row is untagged.
                 return ("skipped",)
             worker.tag_photo(photo.id, tagger, job_id=job.id)  # A model failure appends tag_failed itself.
+            if photo.exposure_seconds is not None and photo.exposure_seconds >= 1.0:
+                try:  # A long exposure is also triaged; a triage failure never fails the tag.
+                    worker._triage_one(photo, tagger, job_id=job.id)
+                except Exception as error:
+                    worker._log_job(job, f"{Path(photo.path).name}: triage {type(error).__name__}: {error}")
+                    return ("tagged", "triage_failed")
             return ("tagged",)
 
-        return self._run_photo_job("tag", tagger, scope, retag, per_photo)
+        return self._run_photo_job("tag", tagger, scope, per_photo, counters=("tagged", "skipped", "failed"),
+                                   manifest={"retag": retag})
 
     def start_reject_review_job(self, tagger, *, scope: str | list[int] = "keepers") -> Job:
         """Advisory: stores problems and a reject suggestion per photo; never changes a decision."""
@@ -285,10 +292,25 @@ class Library:
             review = worker._review_rejects_one(photo.id, tagger, job_id=job.id)
             return ("reviewed", "suggested") if review.suggest_reject else ("reviewed",)
 
-        return self._run_photo_job("review_rejects", tagger, scope, False, per_photo)
+        return self._run_photo_job("review_rejects", tagger, scope, per_photo,
+                                   counters=("reviewed", "skipped", "failed", "suggested"))
 
-    def _run_photo_job(self, kind: str, tagger, scope, retag: bool, per_photo) -> Job:
-        """One worker loop for per-photo model jobs; per_photo returns the summary counters to increment."""
+    def start_triage_job(self, tagger, *, group_id: int) -> Job:
+        """Advisory sky triage of every frame in one group, whatever its exposure; exclusions never change."""
+        group = self._group(group_id)
+        if group is None:
+            raise ValueError(f"unknown group ID: {group_id}")
+
+        def per_photo(worker, photo, job) -> tuple[str, ...]:
+            worker._triage_one(photo, tagger, job_id=job.id)
+            return ("triaged",)
+
+        return self._run_photo_job("triage", tagger, [photo["id"] for photo in group["photos"]], per_photo,
+                                   counters=("triaged", "failed"), manifest={"group_id": group_id})
+
+    def _run_photo_job(self, kind: str, tagger, scope, per_photo, *, counters: tuple[str, ...],
+                       manifest: dict | None = None) -> Job:
+        """One worker loop for per-photo model jobs; per_photo returns names from counters to increment ("failed" required)."""
         if scope == "keepers":
             ids = self.keeper_ids()
         elif scope == "all":
@@ -301,9 +323,8 @@ class Library:
             ids = list(scope)
         else:
             raise ValueError("scope must be keepers, all, or a non-empty list of distinct photo IDs")
-        manifest = {"kind": kind, "scope": scope} | ({"retag": retag} if kind == "tag" else {}) | {
+        manifest = {"kind": kind, "scope": scope} | (manifest or {}) | {
             "role": getattr(tagger, "role", None), "model": tagger.model}
-        counter_names = ("tagged", "skipped", "failed") if kind == "tag" else ("reviewed", "skipped", "failed", "suggested")
         runner = self.job_runner
         job = self.catalog.create_prepared_job(kind, lambda job_id: self._write_job_files(job_id, manifest))
 
@@ -311,15 +332,15 @@ class Library:
             with Library(self.settings, job_runner=runner) as worker:
                 photos = worker.catalog.list_photos() if ids is None else [
                     photo for photo_id in ids if (photo := worker.catalog.get_photo(photo_id))]
-                counts = dict.fromkeys(counter_names, 0)
+                counts = dict.fromkeys(counters, 0)
                 failed_photo_ids = []
                 for index, photo in enumerate(photos, 1):
                     if context.cancelled:
                         break
                     with worker._mutation():
                         try:
-                            for name in per_photo(worker, photo, job):
-                                counts[name] += 1
+                            for name in per_photo(worker, photo, job):  # names outside counters appear once used
+                                counts[name] = counts.get(name, 0) + 1
                         except (OmlxError, ValueError, OSError) as error:
                             counts["failed"] += 1
                             failed_photo_ids.append(photo.id)
@@ -357,6 +378,52 @@ class Library:
             "confidence": review.confidence, "raw_response": review.raw_response} | _job_detail(job_id))
         self._write_sidecar(photo_id)
         return review
+
+    def _triage_one(self, photo: Photo, tagger, *, job_id: int | None = None):
+        if not photo.preview_path:
+            raise ValueError(f"photo {photo.id} has no preview")
+        role = getattr(tagger, "role", None)
+        try:
+            triage = tagger.triage_astro(Path(photo.preview_path))
+        except Exception as error:
+            self.catalog.append_event(photo.id, "astro_triage_failed", {
+                "model": getattr(tagger, "model", "unknown"), "role": role, "error": str(error),
+                "raw_response": getattr(error, "raw_response", None)} | _job_detail(job_id))
+            self._write_sidecar(photo.id)
+            raise
+        existing = self.catalog.get_tags(photo.id)
+        self.catalog.save_tags(photo.id, (existing["data"] if existing else {}) | {
+            "sky": {"class": triage.sky, "confidence": triage.confidence}, "issues": list(triage.issues)},
+            existing["model"] if existing else tagger.model)
+        self.catalog.append_event(photo.id, "astro_triaged", {
+            "model": tagger.model, "role": role, "sky": triage.sky, "confidence": triage.confidence,
+            "issues": list(triage.issues), "raw_response": triage.raw_response} | _job_detail(job_id))
+        self._write_sidecar(photo.id)
+        return triage
+
+    def astro_cue(self, photo_ids: Sequence[int]) -> bool:
+        """True when stored triage says more than half these frames are night sky, aurora, or Milky Way."""
+        skies = [((self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("sky") or {}).get("class")
+                 for photo_id in photo_ids]  # ponytail: per-photo tag reads; batch with json_extract if the sheet slows
+        return sum(sky in {"night_sky", "aurora", "milky_way"} for sky in skies) * 2 > len(skies)
+
+    def astro_triage(self, group_id: int) -> dict:
+        """Per-light sky triage plus metric warnings for the Astro tab; advisory, without raw model output."""
+        group = self._group(group_id)
+        if group is None:
+            raise ValueError(f"unknown group ID: {group_id}")
+        lights = []
+        for photo in group["photos"]:
+            data = (self.catalog.get_tags(photo["id"]) or {"data": {}})["data"]
+            astro = json.loads(photo["astro_json"]) if photo["astro_json"] else {}
+            sky, issues = data.get("sky"), data.get("issues", [])
+            trailing = bool(astro.get("trailing_warning"))
+            lights.append({"photo_id": photo["id"], "name": Path(photo["path"]).name, "sky": sky, "issues": issues,
+                           "confidence": sky["confidence"] if sky else None, "star_count": astro.get("star_count"),
+                           "trailing_warning": trailing,
+                           "flagged": (sky or {}).get("class") in {"cloud", "not_sky"}
+                           or bool({"trailing", "cloud_band"} & set(issues)) or trailing})
+        return {"group_id": group_id, "lights": lights, "astro_cue": self.astro_cue([p["id"] for p in group["photos"]])}
 
     def reject_suggestions(self) -> list[dict]:
         """Advisory reject suggestions still awaiting the photographer; web turns fingerprint16 into preview_url."""

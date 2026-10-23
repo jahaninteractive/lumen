@@ -14,7 +14,7 @@ from lumen.cli import main
 from lumen.config import Settings
 from lumen.diagnostics import doctor_report
 from lumen.library import Library
-from lumen.omlx import BurstCritique
+from lumen.omlx import AstroTriage, BurstCritique
 from lumen.pipelines import DarktablePipeline, PipelineResult
 from lumen.tools import ToolStatus
 
@@ -383,6 +383,27 @@ class CliTests(unittest.TestCase):
                 main(["--library", str(root / "library"), "doctor"])
             self.assertIn("fast: Qwen3-VL-8B-Instruct-4bit (loaded)", output.getvalue())
             self.assertIn("review: Qwen3.8-27B-4bit (not loaded)", output.getvalue())
+
+    def test_triage_command_runs_job_and_prints_lights(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def triage_astro(self, preview):
+                return AstroTriage("aurora", 0.8, [], "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                image = Image.new("RGB", (120, 90)); exif = Image.Exif(); exif[36867] = f"2026:10:22 22:00:{index * 10:02d}"; exif[33434] = 15
+                image.save(root / f"l{index}.jpg", exif=exif)
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "triage", "1", "--json"])
+        self.assertEqual(0, code)
+        payload = json.loads(output.getvalue())
+        self.assertEqual((2, True), (len(payload["lights"]), payload["astro_cue"]))
 
     def test_critique_command_prints_suggestion_and_exits_two_on_failure(self):
         class FakeTagger:

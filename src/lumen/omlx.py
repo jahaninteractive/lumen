@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 ROLES = {"fast": "omlx_fast_model", "review": "review_model"}  # role -> Settings attribute naming its model
 PROBLEMS = ("eyes_closed", "motion_blur", "out_of_focus", "subject_cut_off", "obstructed", "misfire",
             "severely_under_exposed", "severely_over_exposed")
+SKY_CLASSES = ("night_sky", "aurora", "milky_way", "twilight", "cloud", "not_sky")
+SKY_ISSUES = ("haze", "light_pollution", "trailing", "cloud_band")
 
 
 class OmlxError(RuntimeError):
@@ -39,6 +41,12 @@ class RejectResponseError(OmlxError):
 
 
 class BurstResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class AstroResponseError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
@@ -81,6 +89,14 @@ class BurstCritique:
     frame_id: str
     rationale: str
     confidence: float
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class AstroTriage:
+    sky: str  # one of SKY_CLASSES
+    confidence: float
+    issues: list[str]  # unique SKY_ISSUES
     raw_response: str
 
 
@@ -134,6 +150,19 @@ def parse_burst_response(raw: str, frame_ids: set[str]) -> BurstCritique:
     if not _confidence(payload["confidence"]):
         raise BurstResponseError("oMLX confidence must be a finite number between 0 and 1", raw)
     return BurstCritique(frame_id, rationale, float(payload["confidence"]), raw)
+
+
+def parse_astro_response(raw: str) -> AstroTriage:
+    payload = _json_object(raw, AstroResponseError)
+    if set(payload) != {"sky", "confidence", "issues"}:
+        raise AstroResponseError("oMLX astro response must contain only sky, confidence, and issues", raw)
+    if payload["sky"] not in SKY_CLASSES or not _confidence(payload["confidence"]):
+        raise AstroResponseError("oMLX sky must be a known class and confidence 0 to 1", raw)
+    issues = payload["issues"]
+    if (not isinstance(issues, list) or not all(isinstance(i, str) and i in SKY_ISSUES for i in issues)
+            or len(set(issues)) != len(issues)):
+        raise AstroResponseError("oMLX issues must be unique known sky issues", raw)
+    return AstroTriage(payload["sky"], float(payload["confidence"]), list(issues), raw)
 
 
 def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
@@ -291,6 +320,13 @@ class OmlxTagger:
                   "(array of {kind, confidence}), suggest_reject (boolean), confidence (0 to 1). Do not identify a person.")
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=300)
         return parse_reject_response(content)
+
+    def triage_astro(self, preview: Path, timeout: float = 240) -> AstroTriage:
+        prompt = ("Classify the sky in this long exposure as one of: " + ", ".join(SKY_CLASSES) + ". List any issues "
+                  "from: " + ", ".join(SKY_ISSUES) + ". Return JSON only with sky, confidence (0 to 1), issues "
+                  "(array, may be empty). Do not identify a person.")
+        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
+        return parse_astro_response(content)
 
     def critique_burst(self, frames: list[tuple[str, Path]], timeout: float = 240) -> BurstCritique:
         ids = [frame_id for frame_id, _ in frames]

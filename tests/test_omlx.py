@@ -9,6 +9,7 @@ from PIL import Image
 
 import lumen.omlx as omlx
 from lumen.omlx import (
+    AstroResponseError,
     BurstResponseError,
     CompositionResponseError,
     NoRedirectHandler,
@@ -17,6 +18,7 @@ from lumen.omlx import (
     PROBLEMS,
     RejectResponseError,
     TagResponseError,
+    parse_astro_response,
     parse_burst_response,
     parse_composition_response,
     parse_reject_response,
@@ -276,6 +278,14 @@ class OmlxTests(unittest.TestCase):
         self.assertIn("Do not identify a person.", text)
         self.assertEqual("fast", tagger.role)
 
+    def test_astro_response_requires_known_sky_class_and_issues(self):
+        good = json.dumps({"sky": "milky_way", "confidence": 0.91, "issues": ["haze"]})
+        self.assertEqual(("milky_way", ["haze"]), (parse_astro_response(good).sky, parse_astro_response(good).issues))
+        for bad in ({"sky": "day", "confidence": 0.5, "issues": []}, {"sky": "cloud", "confidence": 0.5, "issues": ["rain"]},
+                    {"sky": "cloud", "confidence": 0.5, "issues": ["haze", "haze"]}, {"sky": "cloud", "confidence": 0.5}):
+            with self.subTest(bad=bad), self.assertRaises(AstroResponseError):
+                parse_astro_response(json.dumps(bad))
+
     def test_burst_response_requires_supplied_frame_and_bounded_rationale(self):
         good = json.dumps({"frame_id": "7", "rationale": "Sharpest eye, wing fully extended.", "confidence": 0.72})
         self.assertEqual("7", parse_burst_response(good, {"7", "8"}).frame_id)
@@ -303,6 +313,21 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual(["Frame 1", "Frame 2", "Frame 3"], texts[1:])
         self.assertEqual(3, sum(part["type"] == "image_url" for part in captured["content"]))
         self.assertEqual(400, captured["kw"]["max_tokens"])
+
+    def test_triage_astro_sends_one_image_with_classes_and_short_budget(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k", role="fast")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "l.jpg"; Image.new("RGB", (8, 8)).save(path)
+            reply = json.dumps({"sky": "aurora", "confidence": 0.7, "issues": ["trailing"]})
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), reply)[1]):
+                result = tagger.triage_astro(path)
+        self.assertEqual(("aurora", ["trailing"], reply), (result.sky, result.issues, result.raw_response))
+        prompt = captured["content"][0]["text"]
+        self.assertIn("Do not identify a person.", prompt)
+        self.assertTrue(all(name in prompt for name in omlx.SKY_CLASSES + omlx.SKY_ISSUES))
+        self.assertEqual(1, sum(part["type"] == "image_url" for part in captured["content"]))
+        self.assertEqual(200, captured["kw"]["max_tokens"])
 
 
 if __name__ == "__main__":

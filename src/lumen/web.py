@@ -225,6 +225,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     # Rejected frames are fetched so an all-rejected burst stays listed and its counts cover them.
                     groups = _serializable_groups(library.list_groups(replace(filters, show_rejected=True)))
                     frame_counts = library.catalog.group_frame_counts()
+                    for group in groups:  # Advisory text cue from stored triage; never a model call or mode switch.
+                        group["astro_cue"] = library.astro_cue([photo["id"] for photo in group["photos"]])
                     payload = {"photo_count": library.photo_count(), "counts": library.catalog.group_counts(filters),
                                "cameras": library.cameras(), "keeper_count": len(library.keeper_ids())}
                 hide_rejected = not filters.show_rejected and filters.decision == "any"
@@ -263,6 +265,14 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json(library.job_status(int(match.group(2))))
                 except (ValueError, OverflowError, OSError, RuntimeError):
                     self._send_json({"error": "astro job is unavailable" if match.group(1) else "job is unavailable"}, status=HTTPStatus.NOT_FOUND)
+                return
+            match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
+            if match:
+                try:
+                    with Library(settings) as library:
+                        self._send_json(library.astro_triage(int(match.group(1))))
+                except (ValueError, OverflowError):
+                    self._send_json({"error": "unknown burst"}, status=HTTPStatus.NOT_FOUND)
                 return
             match = re.fullmatch(r"/api/groups/(\d+)/critique", path)
             if match:
@@ -513,6 +523,18 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "rationale": review.rationale,
                         "confidence": review.confidence,
                     })
+                    return
+                match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
+                if match:
+                    if payload:
+                        raise ValueError("astro triage requires an empty JSON object")
+                    group_id = int(match.group(1))
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        if not any(group["id"] == group_id for group in library.list_groups()):
+                            self._send_json({"error": "unknown burst"}, status=HTTPStatus.NOT_FOUND)
+                            return
+                        job = library.start_triage_job(library.tagger_for("fast"), group_id=group_id)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 match = re.fullmatch(r"/api/groups/(\d+)/critique", path)
                 if match:

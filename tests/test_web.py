@@ -586,7 +586,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -605,7 +605,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -998,6 +998,43 @@ class WebTests(unittest.TestCase):
             self.assertEqual(group["automatic_pick_id"], self.get_json("/api/groups")[1]["groups"][0]["automatic_pick_id"])
             self.assertEqual(body, self.get_json(f"/api/groups/{group['id']}/critique")[1]["critique"])
 
+    def test_triage_routes_and_groups_cue_never_switch_mode_or_change_exclusions(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def triage_astro(self, preview):
+                from lumen.omlx import AstroTriage
+                return AstroTriage("night_sky", 0.9, [], "{}")
+
+        for index in range(3):
+            image = Image.new("RGB", (120, 90), (0, 0, index * 20)); exif = Image.Exif(); exif[36867] = f"2026:10:22 22:00:{index * 10:02d}"; exif[33434] = 15
+            image.save(self.root / f"l{index}.jpg", exif=exif)
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            group = self.get_json("/api/groups")[1]["groups"][0]
+            self.assertFalse(group["astro_cue"])
+            self.assertEqual(403, self.post_json(f"/api/groups/{group['id']}/triage", {}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json(f"/api/groups/{group['id']}/triage", {"all": True})[0])
+            code, job = self.post_json(f"/api/groups/{group['id']}/triage", {})
+            self.assertEqual(202, code)
+            self.assertEqual("succeeded", self.wait_job(job["job_id"])["status"])
+            self.assertTrue(self.get_json("/api/groups")[1]["groups"][0]["astro_cue"])
+            code, triage = self.get_json(f"/api/groups/{group['id']}/triage")
+            self.assertEqual(3, len(triage["lights"]))
+            self.assertNotIn("raw_response", json.dumps(triage))
+        with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}):
+            code, body = self.post_json(f"/api/groups/{group['id']}/triage", {})
+            self.assertEqual((400, "fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX"), (code, body["error"]))
+            self.assertEqual(404, self.get_json("/api/groups/999/triage")[0])
+
+    def test_astro_panel_has_triage_text_and_counted_exclude_confirmation(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        for needle in ('id="triage-astro"', 'id="exclude-flagged"', 'id="exclude-confirm"'):
+            self.assertIn(needle, html)
+
+    def test_javascript_astro_triage_excludes_only_after_confirmation_and_cue_is_text(self):
+        self.run_javascript_cleanup_regression("astro-triage")
+
     def test_javascript_burst_critique_shows_advice_and_only_use_this_pick_changes_the_pick(self):
         self.run_javascript_cleanup_regression("critique")
 
@@ -1099,6 +1136,11 @@ let deferCritique = false;
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
 let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+if (scenario === 'astro-triage') groups[0].astro_cue = true;
+const triageRequests = [];
+const triagePayload = () => ({ group_id: 1, astro_cue: scenario === 'astro-triage', lights: [1, 2, 3].map(id => ({
+  photo_id: id, name: 'photo-' + id + '.jpg', sky: { class: id === 2 ? 'cloud' : 'night_sky', confidence: 0.91 }, confidence: 0.91,
+  issues: id === 2 ? ['cloud_band'] : [], star_count: 40, trailing_warning: false, flagged: scenario === 'astro-triage' && id === 2 })) });
 const astroPosts = [];
 let polls = 0;
 let cancels = 0;
@@ -1164,6 +1206,7 @@ async function fetch(url, options = {}) {
     if (options.method === 'POST' && deferCritique) return new Promise(resolve => pendingCritiques.push(() => resolve({ ok: true, json: async () => ({ ...storedCritique, rationale: 'Fresh look.' }) })));
     payload = options.method === 'POST' ? { ...storedCritique, rationale: 'Fresh look.' } : { critique: scenario === 'critique' ? storedCritique : null };
   }
+  else if (/^\/api\/groups\/\d+\/triage$/.test(url)) { assert.notEqual(options.method, 'POST'); triageRequests.push(url); payload = triagePayload(); }
   else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
   else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
     groupLoads += 1; lastGroupsUrl = url;
@@ -1969,6 +2012,37 @@ const regression = `
     return;
   }
   const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');
+  if (scenario === 'astro-triage') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const cue = tree(element('#contact-sheet')).find(node => node.className === 'astro-cue');
+    assert.equal(cue?.textContent, 'Looks like astro', 'the cue is text in the burst header');
+    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
+    await inspect(state.groups[0].photos[0]);
+    await new Promise(setImmediate);
+    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
+    assert.deepEqual(triageRequests, ['/api/groups/1/triage']);
+    const lights = document.querySelectorAll('#astro-lights input');
+    const triageTexts = element('#astro-lights').children.map(label => label.children[2].textContent);
+    assert.deepEqual(triageTexts, ['night sky 91%', 'cloud 91% · cloud band · flagged', 'night sky 91%']);
+    assert.equal(element('#exclude-flagged').textContent, 'Exclude flagged lights (1)');
+    assert.equal(element('#exclude-flagged').disabled, false);
+    assert.equal(element('#triage-astro').disabled, false, 'fast model ready');
+    element('#exclude-flagged').listeners.click();
+    assert.equal(element('#exclude-confirm').hidden, false);
+    assert.ok(element('#exclude-confirm-text').textContent.startsWith('Uncheck 1 flagged light? Flagged means cloud, not sky, trailing, or a cloud band.'));
+    assert.ok(lights.every(input => input.checked), 'opening the confirmation changes nothing');
+    element('#exclude-confirm').hidden = true;  // Cancel: the form closes the dialog; no listener runs
+    assert.ok(lights.every(input => input.checked), 'cancel leaves every light checked');
+    element('#exclude-flagged').listeners.click();
+    element('#exclude-confirm-yes').listeners.click();
+    assert.deepEqual(lights.map(input => input.checked), [true, false, true]);
+    assert.deepEqual(astroLights().excluded, [2]);
+    assert.equal(element('#announcer').textContent, '1 light excluded');
+    assert.equal(element('#exclude-flagged').textContent, 'Exclude flagged lights (0)');
+    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true');
+    return;
+  }
   if (scenario === 'astro-resume') {
     await load();
     assert.equal(state.astro.job.status, 'running', 'a remembered job is refetched on load');

@@ -144,6 +144,12 @@
             <legend>Lights to include <span id="astro-group-count" class="quiet">No batch selected</span></legend>
             <div id="astro-lights" class="scope-options"></div>
           </fieldset>
+          <p class="quiet">Local AI triage is advice only. Flagged means cloud, not sky, trailing, or a cloud band; no light is unchecked until you confirm.</p>
+          <div class="button-row">
+            <button type="button" id="triage-astro" class="secondary" aria-describedby="triage-astro-availability" disabled>Triage lights with local AI</button>
+            <button type="button" id="exclude-flagged" class="secondary" aria-haspopup="dialog" disabled>Exclude flagged lights (0)</button>
+          </div>
+          <p id="triage-astro-availability" class="quiet"></p>
           <fieldset>
             <legend>Calibration folders (optional)</legend>
             <p id="astro-darks-label">Dark frames</p>
@@ -324,6 +330,16 @@
       <p id="reject-all-text"></p>
       <div class="button-row">
         <button type="button" id="reject-all-yes">Confirm</button>
+        <button type="submit" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="exclude-confirm" aria-labelledby="exclude-confirm-text">
+    <form method="dialog">
+      <p id="exclude-confirm-text"></p>
+      <div class="button-row">
+        <button type="button" id="exclude-confirm-yes">Confirm</button>
         <button type="submit" class="secondary">Cancel</button>
       </div>
     </form>

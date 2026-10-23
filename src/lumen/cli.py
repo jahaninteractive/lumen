@@ -69,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     critique.add_argument("group_id", type=int)
     critique.add_argument("--json", action="store_true")
 
+    triage = commands.add_parser("triage", help="classify a group's sky frames with the fast oMLX model (never excludes)")
+    triage.add_argument("group_id", type=int)
+    triage.add_argument("--json", action="store_true")
+
     pick = commands.add_parser("pick", help="make a frame the manual best shot for its group")
     pick.add_argument("photo_id", type=int)
 
@@ -247,6 +251,19 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         _print(payload, args.json)
         return 0
+
+    if args.command == "triage":
+        try:
+            with Library(settings) as library:
+                job = library.start_triage_job(library.tagger_for("fast"), group_id=args.group_id)
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                payload = library.astro_triage(args.group_id)
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": _job_error(error)}, args.json)
+            return 2
+        _print(payload, args.json)
+        return 0 if status["status"] == "succeeded" and not (status.get("result") or {}).get("failed") else 2
 
     if args.command == "pick":
         with Library(settings) as library:
