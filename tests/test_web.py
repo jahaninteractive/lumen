@@ -971,6 +971,36 @@ class WebTests(unittest.TestCase):
     def test_javascript_review_panel_decides_rows_by_button_and_key_and_confirms_count(self):
         self.run_javascript_cleanup_regression("review-rejects")
 
+    def test_critique_routes_gate_on_review_model_and_never_change_the_pick(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def critique_burst(self, frames):
+                from lumen.omlx import BurstCritique
+                return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
+
+        for index in range(3):
+            image = Image.new("RGB", (120, 90), (index * 30, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+            image.save(self.root / f"b{index}.jpg", exif=exif)
+        fast_only = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=fast_only), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            group = self.get_json("/api/groups")[1]["groups"][0]
+            self.assertEqual((400, {"error": "review model Qwen3.8-27B-4bit is not loaded in oMLX"}), self.post_json(f"/api/groups/{group['id']}/critique", {}))
+            self.assertEqual({"critique": None}, self.get_json(f"/api/groups/{group['id']}/critique")[1])
+        with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.assertEqual(403, self.post_json(f"/api/groups/{group['id']}/critique", {}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json(f"/api/groups/{group['id']}/critique", {"pick": True})[0])
+            self.assertEqual(404, self.post_json("/api/groups/999/critique", {})[0])
+            code, body = self.post_json(f"/api/groups/{group['id']}/critique", {})
+            self.assertEqual(200, code)
+            self.assertEqual({"group_id", "photo_id", "name", "rationale", "confidence", "candidate_ids"}, set(body))
+            self.assertEqual(group["automatic_pick_id"], self.get_json("/api/groups")[1]["groups"][0]["automatic_pick_id"])
+            self.assertEqual(body, self.get_json(f"/api/groups/{group['id']}/critique")[1]["critique"])
+
+    def test_javascript_burst_critique_shows_advice_and_only_use_this_pick_changes_the_pick(self):
+        self.run_javascript_cleanup_regression("critique")
+
     def test_javascript_keywords_add_and_remove_without_reload_and_tag_keepers_gates_on_role(self):
         self.run_javascript_cleanup_regression("keywords")
 
@@ -1064,7 +1094,9 @@ const decisions = { 1: 'none', 2: 'none' };
 const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
 const picks = [];
-let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+const critiqueRequests = [];
+const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
+let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 const astroPosts = [];
 let polls = 0;
 let cancels = 0;
@@ -1124,6 +1156,11 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
+  else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
+    critiqueRequests.push([url, options.method]);
+    if (options.method === 'POST') assert.deepEqual(JSON.parse(options.body), {});
+    payload = options.method === 'POST' ? { ...storedCritique, rationale: 'Fresh look.' } : { critique: scenario === 'critique' ? storedCritique : null };
+  }
   else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
   else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
     groupLoads += 1; lastGroupsUrl = url;
@@ -1440,6 +1477,31 @@ const regression = `
     assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
     await settle();
     assert.equal(state.job.status, 'succeeded');
+    return;
+  }
+  if (scenario === 'critique') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Best timing. (confidence 72%)');
+    assert.equal(byId('ask-burst-ai').textContent, 'Ask local AI which frame is best');
+    assert.equal(byId('ask-burst-ai').disabled, false);
+    assert.deepEqual(picks, [], 'rendering stored advice never changes the pick');
+    await inspect(state.groups[0].photos[1]);
+    assert.equal(critiqueRequests.filter(([, method]) => method !== 'POST').length, 1, 'stored advice is fetched once per burst');
+    await byId('ask-burst-ai').listeners.click();
+    assert.deepEqual(critiqueRequests.at(-1), ['/api/groups/1/critique', 'POST']);
+    assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Fresh look. (confidence 72%)');
+    assert.deepEqual(picks, [], 'asking for advice never changes the pick');
+    await byId('use-burst-pick').listeners.click();
+    assert.deepEqual(picks, ['/api/photos/3/pick']);
+    assert.equal(state.groups[0].automatic_pick_id, 3);
+    state.status.omlx_roles.review.loaded = false;
+    renderInspector(state.groups[0].photos[1]);
+    assert.equal(byId('ask-burst-ai').disabled, true);
+    assert.ok(byId('burst-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
+    assert.equal(byId('ask-burst-ai').getAttribute('aria-describedby'), 'burst-ai-availability');
     return;
   }
   if (scenario === 'review-rejects') {

@@ -264,6 +264,11 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 except (ValueError, OverflowError, OSError, RuntimeError):
                     self._send_json({"error": "astro job is unavailable" if match.group(1) else "job is unavailable"}, status=HTTPStatus.NOT_FOUND)
                 return
+            match = re.fullmatch(r"/api/groups/(\d+)/critique", path)
+            if match:
+                with Library(settings) as library:
+                    self._send_json({"critique": library.latest_critique(int(match.group(1)))})
+                return
             match = re.fullmatch(r"/api/photos/(\d+)/crops", path)
             if match:
                 try:
@@ -508,6 +513,22 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "rationale": review.rationale,
                         "confidence": review.confidence,
                     })
+                    return
+                match = re.fullmatch(r"/api/groups/(\d+)/critique", path)
+                if match:
+                    if payload:
+                        raise ValueError("burst critique requires an empty JSON object")
+                    group_id = int(match.group(1))
+                    with Library(settings) as library:
+                        if not any(group["id"] == group_id for group in library.list_groups()):
+                            self._send_json({"error": "unknown burst"}, status=HTTPStatus.NOT_FOUND)
+                            return
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
+                        try:
+                            critique = library.critique_burst(group_id, tagger)
+                        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+                            raise ValueError(public_message(str(error))) from error
+                    self._send_json(critique)
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/(decision|rating)", path)
                 if match:

@@ -26,7 +26,7 @@ from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
-from .omlx import ROLES, OmlxError, OmlxTagger, get_server_status
+from .omlx import ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
 from .pipelines import EXPORT_PRESETS, PipelineRegistry
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
@@ -743,6 +743,64 @@ class Library:
         })
         self._write_sidecar(photo_id)
         return result
+
+    def _group(self, group_id: int) -> dict | None:
+        return next((group for group in self.catalog.list_groups() if group["id"] == group_id), None)
+
+    @staticmethod
+    def _critique(group_id: int, frame: dict, details: dict) -> dict:
+        """Public burst-critique shape; raw model output stays in provenance."""
+        return {"group_id": group_id, "photo_id": int(frame["id"]), "name": Path(frame["path"]).name,
+                "rationale": details["rationale"], "confidence": details["confidence"],
+                "candidate_ids": details["candidate_ids"]}
+
+    @_coordinated
+    def critique_burst(self, group_id: int, tagger) -> dict:
+        """Advisory: ask the review model for the best frame of a burst; the pick is never changed here."""
+        group = self._group(group_id)
+        if group is None:
+            raise ValueError(f"unknown group ID: {group_id}")
+        if sum(photo["decision"] != "reject" for photo in group["photos"]) < 2:
+            raise ValueError("burst critique needs at least two frames that are not rejected")
+        frames = sorted(group["photos"], key=lambda photo: photo["decision"] == "reject")[:8]  # stable: rank order kept
+        if any(not photo["preview_path"] or not Path(photo["preview_path"]).is_file() for photo in frames):
+            raise ValueError(f"burst {group_id} has a frame without a preview")
+        candidate_ids = [int(photo["id"]) for photo in frames]
+        model, role, raw = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None), None
+        try:
+            result = tagger.critique_burst([(str(photo["id"]), Path(photo["preview_path"])) for photo in frames])
+            raw = result.raw_response
+            if result.frame_id not in {str(photo_id) for photo_id in candidate_ids}:
+                raise BurstResponseError("oMLX returned a frame that was not supplied", raw)
+            current = self._group(group_id)
+            chosen = next((photo for photo in (current or {}).get("photos", [])
+                           if photo["id"] == int(result.frame_id) and photo["decision"] != "reject"), None)
+            if chosen is None:
+                raise ValueError("burst changed during review")
+        except Exception as error:
+            self.catalog.append_event(None, "burst_review_failed", {
+                "model": model, "role": role, "group_id": group_id, "error": str(error),
+                "raw_response": getattr(error, "raw_response", None) or raw, "candidate_ids": candidate_ids})
+            raise
+        details = {"model": model, "role": role, "group_id": group_id, "frame_id": int(chosen["id"]),
+                   "candidate_ids": candidate_ids, "rationale": result.rationale, "confidence": result.confidence,
+                   "raw_response": raw}
+        self.catalog.append_event(int(chosen["id"]), "burst_reviewed", details)
+        for photo in current["photos"]:
+            self._write_sidecar(int(photo["id"]))
+        return self._critique(group_id, chosen, details)
+
+    def latest_critique(self, group_id: int) -> dict | None:
+        """The newest stored burst critique whose chosen frame is still in the group, without raw output."""
+        group = self._group(group_id)
+        members = {int(photo["id"]): photo for photo in (group or {}).get("photos", [])}
+        rows = self.catalog.connection.execute(
+            "SELECT details_json FROM provenance WHERE kind = 'burst_reviewed' ORDER BY id DESC").fetchall()
+        for row in rows:
+            details = json.loads(row["details_json"])
+            if details.get("group_id") == group_id and details.get("frame_id") in members:
+                return self._critique(group_id, members[details["frame_id"]], details)
+        return None
 
     def _change_crop(self, photo_id: int, edit: PhotoEdit | None) -> None:
         previous = self.catalog.get_crop(photo_id)

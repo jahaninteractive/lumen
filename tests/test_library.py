@@ -14,6 +14,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
+from lumen.omlx import BurstCritique, BurstResponseError
 from lumen import library as library_module
 from lumen import ingest as ingest_module
 from lumen.pipelines import DarktablePipeline
@@ -1845,6 +1846,78 @@ class LibraryTests(unittest.TestCase):
                 data = library.catalog.get_tags(photo_id)["data"]
         self.assertEqual(["ice"], data["subjects"])
         self.assertEqual(1, [word.casefold() for word in data["suggested"]].count("chinstrap penguin"))
+
+    def _burst(self, root, count=3):
+        for index in range(count):
+            image = Image.new("RGB", (120, 90), (index * 30, 0, 0))
+            exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+            image.save(root / f"b{index}.jpg", exif=exif)
+
+    def test_burst_critique_records_suggestion_without_changing_the_pick(self):
+        class FakeTagger:
+            model, role = "review-model", "review"
+            def critique_burst(self, frames):
+                self.frames = list(frames)
+                return BurstCritique(frames[-1][0], "Best timing.", 0.72, '{"r":1}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._burst(root)
+            tagger = FakeTagger()
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                group = library.list_groups()[0]
+                self.assertEqual(3, len(group["photos"]))
+                pick_before = group["automatic_pick_id"]
+                result = library.critique_burst(group["id"], tagger)
+                group_after = library.list_groups()[0]
+                self.assertEqual(pick_before, group_after["automatic_pick_id"])
+                self.assertEqual(int(tagger.frames[-1][0]), result["photo_id"])
+                self.assertEqual([str(p["id"]) for p in group["photos"]], [fid for fid, _ in tagger.frames])
+                event = [e for e in library.catalog.events_for(result["photo_id"]) if e.kind == "burst_reviewed"][-1]
+                self.assertEqual(("review", '{"r":1}', group["id"]), (event.details["role"], event.details["raw_response"], event.details["group_id"]))
+                self.assertEqual(result | {"raw_response": None}, (library.latest_critique(group["id"]) or {}) | {"raw_response": None})
+                self.assertNotIn("raw_response", result)
+                library.set_decision(group["photos"][1]["id"], "reject")
+                library.set_decision(group["photos"][2]["id"], "reject")
+                with self.assertRaisesRegex(ValueError, "at least two frames"):
+                    library.critique_burst(group["id"], tagger)
+
+    def test_burst_critique_caps_at_eight_frames_ranked_and_fails_cleanly_when_burst_changes(self):  # Review Focus
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._burst(root, 10)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                group = library.list_groups()[0]
+                last = group["photos"][-1]["id"]  # ranked last, so outside the 8-frame cap
+
+                class ChangingTagger:
+                    model, role = "review-model", "review"
+                    def critique_burst(self, frames):
+                        self.frames = list(frames)
+                        return BurstCritique(str(last), "ok", 0.5, '{"r":2}')  # a member of the burst but not of the supplied set
+
+                tagger = ChangingTagger()
+                with self.assertRaises((ValueError, BurstResponseError)):
+                    library.critique_burst(group["id"], tagger)
+                self.assertEqual([str(p["id"]) for p in group["photos"][:8]], [fid for fid, _ in tagger.frames])
+                failed = [e for e in library.catalog.events_for(None) if e.kind == "burst_review_failed"][-1]
+                self.assertEqual(([p["id"] for p in group["photos"][:8]], '{"r":2}'), (failed.details["candidate_ids"], failed.details["raw_response"]))
+
+                class RemovingTagger:
+                    model, role = "review-model", "review"
+                    def critique_burst(self, frames):
+                        chosen = int(frames[0][0])
+                        with Library(Settings(library_dir=root / "library")) as other:  # the photographer rejects that frame mid-call
+                            other.set_decision(chosen, "reject")
+                            self.pick_after_reject = other.list_groups()[0]["automatic_pick_id"]
+                        return BurstCritique(frames[0][0], "ok", 0.5, "{}")
+
+                removing = RemovingTagger()
+                with self.assertRaisesRegex(ValueError, "burst changed during review"):
+                    library.critique_burst(group["id"], removing)
+                self.assertEqual("burst_review_failed", [e for e in library.catalog.events_for(None)][-1].kind)
+                # Rejecting the top frame legitimately reranks; the failed critique leaves that pick alone.
+                self.assertEqual(removing.pick_after_reject, library.list_groups()[0]["automatic_pick_id"])
 
 
 if __name__ == "__main__":

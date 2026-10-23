@@ -65,6 +65,10 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.add_argument("job_id", type=int)
     cancel.add_argument("--json", action="store_true")
 
+    critique = commands.add_parser("critique", help="ask the review oMLX model which burst frame is best (never picks)")
+    critique.add_argument("group_id", type=int)
+    critique.add_argument("--json", action="store_true")
+
     pick = commands.add_parser("pick", help="make a frame the manual best shot for its group")
     pick.add_argument("photo_id", type=int)
 
@@ -232,6 +236,16 @@ def main(argv: list[str] | None = None) -> int:
             _print({"error": public_message(str(error))}, args.json)
             return 2
         _print({"tagged": [{"photo_id": args.photo, **asdict(result)}]}, args.json)
+        return 0
+
+    if args.command == "critique":
+        try:
+            with Library(settings) as library:
+                payload = library.critique_burst(args.group_id, library.tagger_for("review"))
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": public_message(str(error))}, args.json)
+            return 2
+        _print(payload, args.json)
         return 0
 
     if args.command == "pick":

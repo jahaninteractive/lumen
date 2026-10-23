@@ -14,6 +14,7 @@ from lumen.cli import main
 from lumen.config import Settings
 from lumen.diagnostics import doctor_report
 from lumen.library import Library
+from lumen.omlx import BurstCritique
 from lumen.pipelines import DarktablePipeline, PipelineResult
 from lumen.tools import ToolStatus
 
@@ -382,6 +383,30 @@ class CliTests(unittest.TestCase):
                 main(["--library", str(root / "library"), "doctor"])
             self.assertIn("fast: Qwen3-VL-8B-Instruct-4bit (loaded)", output.getvalue())
             self.assertIn("review: Qwen3.8-27B-4bit (not loaded)", output.getvalue())
+
+    def test_critique_command_prints_suggestion_and_exits_two_on_failure(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def critique_burst(self, frames):
+                return BurstCritique(frames[0][0], "Sharpest.", 0.8, "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                image = Image.new("RGB", (120, 90), (index * 30, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+                image.save(root / f"b{index}.jpg", exif=exif)
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "critique", "1", "--json"])
+            self.assertEqual(0, code)
+            self.assertEqual("Sharpest.", json.loads(output.getvalue())["rationale"])
+            output = io.StringIO()
+            with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "critique", "1", "--json"])
+            self.assertEqual((2, "review model Qwen3.8-27B-4bit is not loaded in oMLX"), (code, json.loads(output.getvalue())["error"]))
 
 
 class ExportCleanupCliTests(unittest.TestCase):

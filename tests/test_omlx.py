@@ -9,6 +9,7 @@ from PIL import Image
 
 import lumen.omlx as omlx
 from lumen.omlx import (
+    BurstResponseError,
     CompositionResponseError,
     NoRedirectHandler,
     OmlxError,
@@ -16,6 +17,7 @@ from lumen.omlx import (
     PROBLEMS,
     RejectResponseError,
     TagResponseError,
+    parse_burst_response,
     parse_composition_response,
     parse_reject_response,
     parse_tag_response,
@@ -273,6 +275,34 @@ class OmlxTests(unittest.TestCase):
         self.assertIn("wildlife: gentoo penguin", text)
         self.assertIn("Do not identify a person.", text)
         self.assertEqual("fast", tagger.role)
+
+    def test_burst_response_requires_supplied_frame_and_bounded_rationale(self):
+        good = json.dumps({"frame_id": "7", "rationale": "Sharpest eye, wing fully extended.", "confidence": 0.72})
+        self.assertEqual("7", parse_burst_response(good, {"7", "8"}).frame_id)
+        for bad in ({"frame_id": "9", "rationale": "x", "confidence": 0.5}, {"frame_id": "7", "rationale": "x" * 301, "confidence": 0.5},
+                    {"frame_id": "7", "rationale": "x", "confidence": 0.5, "second": "8"}, {"frame_id": 7, "rationale": "x", "confidence": 0.5}):
+            with self.subTest(bad=bad), self.assertRaises(BurstResponseError):
+                parse_burst_response(json.dumps(bad), {"7", "8"})
+
+    def test_critique_burst_sends_labeled_frames_and_validates_count(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            frames = []
+            for index in range(3):
+                path = Path(directory) / f"{index}.jpg"; Image.new("RGB", (8, 8)).save(path); frames.append((str(index + 1), path))
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), json.dumps({"frame_id": "2", "rationale": "ok", "confidence": 0.6}))[1]):
+                result = tagger.critique_burst(frames)
+            with self.assertRaises(ValueError):
+                tagger.critique_burst(frames[:1])
+            with self.assertRaises(ValueError):
+                tagger.critique_burst(frames * 3)
+        self.assertEqual("2", result.frame_id)
+        texts = [part["text"] for part in captured["content"] if part["type"] == "text"]
+        self.assertIn("Do not identify a person.", texts[0])
+        self.assertEqual(["Frame 1", "Frame 2", "Frame 3"], texts[1:])
+        self.assertEqual(3, sum(part["type"] == "image_url" for part in captured["content"]))
+        self.assertEqual(400, captured["kw"]["max_tokens"])
 
 
 if __name__ == "__main__":

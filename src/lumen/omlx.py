@@ -38,6 +38,12 @@ class RejectResponseError(OmlxError):
         self.raw_response = raw_response
 
 
+class BurstResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -66,6 +72,14 @@ class CompositionReview:
 class RejectReview:
     problems: list[dict]  # [{"kind": one of PROBLEMS, "confidence": float}]
     suggest_reject: bool
+    confidence: float
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class BurstCritique:
+    frame_id: str
+    rationale: str
     confidence: float
     raw_response: str
 
@@ -106,6 +120,20 @@ def parse_reject_response(raw: str) -> RejectReview:
         raise RejectResponseError("oMLX suggest_reject must be boolean and confidence 0 to 1", raw)
     return RejectReview([{"kind": p["kind"], "confidence": float(p["confidence"])} for p in problems],
                         payload["suggest_reject"], float(payload["confidence"]), raw)
+
+
+def parse_burst_response(raw: str, frame_ids: set[str]) -> BurstCritique:
+    payload = _json_object(raw, BurstResponseError)
+    if set(payload) != {"frame_id", "rationale", "confidence"}:
+        raise BurstResponseError("oMLX burst response must contain only frame_id, rationale, and confidence", raw)
+    frame_id, rationale = payload["frame_id"], payload["rationale"]
+    if not isinstance(frame_id, str) or frame_id not in frame_ids:
+        raise BurstResponseError("oMLX returned a frame that was not supplied", raw)
+    if not isinstance(rationale, str) or not 1 <= len(rationale := rationale.strip()) <= 300:
+        raise BurstResponseError("oMLX rationale must contain 1 to 300 characters", raw)
+    if not _confidence(payload["confidence"]):
+        raise BurstResponseError("oMLX confidence must be a finite number between 0 and 1", raw)
+    return BurstCritique(frame_id, rationale, float(payload["confidence"]), raw)
 
 
 def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
@@ -263,6 +291,20 @@ class OmlxTagger:
                   "(array of {kind, confidence}), suggest_reject (boolean), confidence (0 to 1). Do not identify a person.")
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=300)
         return parse_reject_response(content)
+
+    def critique_burst(self, frames: list[tuple[str, Path]], timeout: float = 240) -> BurstCritique:
+        ids = [frame_id for frame_id, _ in frames]
+        if not 2 <= len(frames) <= 8:
+            raise ValueError("burst critique needs 2 to 8 frames")
+        if any(not isinstance(frame_id, str) or not frame_id.strip() for frame_id in ids) or len(set(ids)) != len(ids):
+            raise ValueError("burst frame IDs must be unique, non-empty strings")
+        content = [{"type": "text", "text": (
+            "Compare these frames from one burst for sharpness, expression or pose, timing, framing, and distracting "
+            f"elements. Select exactly one frame_id from: {', '.join(ids)}. Return JSON only with frame_id, rationale "
+            "(at most 300 characters), confidence (0 to 1). Do not identify a person.")}]
+        for frame_id, path in frames:
+            content.extend(({"type": "text", "text": f"Frame {frame_id}"}, self._image_content(path)))
+        return parse_burst_response(self._complete(content, timeout, max_tokens=400), set(ids))
 
     @staticmethod
     def _image_content(path: Path) -> dict:

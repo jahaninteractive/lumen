@@ -1,7 +1,7 @@
 const JOB_ACTIVE = ['queued', 'running'];
 const CULLING_JOBS = ['import', 'ingest'];  // jobs that only add frames, so culling may continue alongside them
 const state = {
-  groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
+  groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, critique: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
   mergeSelection: new Set(),
@@ -447,8 +447,13 @@ async function inspect(photo) {
   updateWorkflow();
   const compositionLoad = document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true' ? loadComposition() : null;
   document.querySelectorAll('.frame').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.id) === photo.id)));
+  const groupId = state.selectedGroupId;
+  const critiqueLoad = groupId !== null && state.critique?.groupId !== groupId
+    ? request(`/api/groups/${groupId}/critique`).then(payload => payload.critique, () => null) : null;
   const details = await request(`/api/photos/${photo.id}`);
+  const critique = critiqueLoad && await critiqueLoad;
   if (state.selectedId !== photo.id) return;
+  if (critiqueLoad) state.critique = { groupId, data: critique };
   state.details = details;
   renderInspector(photo);
   if (compositionLoad) await compositionLoad;
@@ -466,6 +471,57 @@ function rankingExplanation(photo, group) {
   return paragraph;
 }
 
+// Advisory only: the stored or fresh suggestion is shown; the pick changes only through "Use this pick".
+function burstCritique(photo, group) {
+  if (group.photos.filter(item => item.decision !== 'reject').length < 2) return null;
+  const block = document.createElement('div');
+  block.id = 'burst-critique';
+  const ask = document.createElement('button');
+  ask.type = 'button';
+  ask.className = 'secondary';
+  ask.id = 'ask-burst-ai';
+  ask.textContent = 'Ask local AI which frame is best';
+  ask.disabled = !roleReady('review');
+  ask.addEventListener('click', async () => {
+    ask.disabled = true;
+    announce('Asking local AI to compare this burst');
+    try {
+      const data = await post(`/api/groups/${group.id}/critique`);
+      state.critique = { groupId: group.id, data };
+      if (state.selectedId === photo.id) renderInspector(photo);
+      announce(document.querySelector('#burst-advice')?.textContent || `Local AI suggests ${data.name}`);
+    } catch (error) {
+      announce(error.message);
+      ask.disabled = !roleReady('review');
+    }
+  });
+  block.append(ask);
+  if (roleUnavailable('review')) {
+    const reason = document.createElement('p');
+    reason.className = 'quiet';
+    reason.id = 'burst-ai-availability';
+    reason.textContent = roleUnavailable('review');
+    ask.setAttribute('aria-describedby', reason.id);
+    block.append(reason);
+  }
+  const data = state.critique?.groupId === group.id ? state.critique.data : null;
+  const index = data ? group.photos.findIndex(item => item.id === data.photo_id) : -1;
+  if (index >= 0) {
+    const suggested = group.photos[index];
+    const advice = document.createElement('p');
+    advice.id = 'burst-advice';
+    advice.textContent = `Local AI suggests frame ${index + 1} (${data.name}): ${data.rationale} (confidence ${Math.round(data.confidence * 100)}%)`;
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'secondary';
+    use.id = 'use-burst-pick';
+    use.textContent = 'Use this pick';
+    use.addEventListener('click', () => decide(suggested, 'pick', null, `.frame[data-id="${suggested.id}"]`));
+    block.append(advice, use);
+  }
+  return block;
+}
+
 function renderInspector(photo) {
   const details = state.details;
   inspection.replaceChildren();
@@ -478,6 +534,8 @@ function renderInspector(photo) {
     : photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
   inspection.append(heading, verdict);
   if (group) inspection.append(rankingExplanation(photo, group));
+  const critique = group && burstCritique(photo, group);
+  if (critique) inspection.append(critique);
   inspection.append(decisionControls(photo));
   for (const text of details.warnings || []) {
     const warning = document.createElement('p');
