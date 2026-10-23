@@ -1172,7 +1172,10 @@ const document = {
 let activeTimers = 0;
 let nextTimer = 0;
 const timers = new Map();
-const window = { setTimeout: callback => callback(), clearTimeout() {}, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
+// The find scenario records timeouts so its debounce is real; elsewhere they run at once.
+const timeouts = new Map();
+let nextTimeout = 0;
+const window = { setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
 // pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
 async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
@@ -1938,11 +1941,15 @@ const regression = `
     const find = element('#find');
     find.tagName = 'INPUT';
     find.value = 'ice';
-    const type = async (control, value) => { control.value = value; control.listeners.input(); await new Promise(setImmediate); };
+    const flush = () => new Promise(setImmediate);
+    const type = async (control, value) => { control.value = value; control.listeners.input(); await flush(); };
+    const fire = async () => { const due = [...timeouts.values()]; timeouts.clear(); due.forEach(callback => callback()); await flush(); };  // never await: an apply may wait on a deferred reply
     await type(find, 'ice');
+    assert.equal(lastGroupsUrl, '/api/groups', 'find is debounced');
+    assert.equal(element('#filter-text').value, 'ice', 'the form mirrors find at once');
+    await fire();
     assert.equal(lastGroupsUrl, '/api/groups?text=ice');
     assert.equal(location.search, '?text=ice');
-    assert.equal(element('#filter-text').value, 'ice');
     assert.equal(find.value, 'ice', 'syncFilters keeps the rail find in step with the URL');
     await inspect(state.groups[0].photos[0]);
     assert.equal(reasons().textContent, 'Matches: keyword: ice');
@@ -1951,36 +1958,42 @@ const regression = `
     assert.equal(decisionPosts.length, posts, 'typing in find never culls');
     await type(element('#filter-text'), 'krill');
     assert.equal(find.value, 'krill');
+    await fire();
     assert.equal(lastGroupsUrl, '/api/groups?text=krill');
 
-    // Responses land while the photographer keeps typing: a trailing space and later keystrokes survive.
+    // Responses land while the photographer keeps typing.
     deferGroups = true;
     find.focus();
+    await type(find, 'ab');
+    await fire();
+    assert.equal(pendingGroups.length, 1);
+    await type(find, 'abc');  // its apply is still pending when the "ab" reply lands
+    pendingGroups.shift()();
+    await flush();
+    assert.deepEqual([find.value, element('#filter-text').value], ['abc', 'abc'], 'a reply never rewrites either field while an apply is pending');
+    await fire();
+    assert.equal(lastGroupsUrl, '/api/groups?text=abc', 'the later keystroke reaches the query');
+    pendingGroups.shift()();
+    await flush();
+    assert.deepEqual([find.value, element('#filter-text').value], ['abc', 'abc']);
     await type(find, 'motion ');
-    await type(find, 'motion b');
-    assert.equal(pendingGroups.length, 2);
+    await fire();
     pendingGroups.shift()();
-    await new Promise(setImmediate);
-    assert.equal(find.value, 'motion b', 'a later keystroke survives the earlier response');
-    assert.equal(element('#filter-text').value, 'motion b');
-    pendingGroups.shift()();
-    await new Promise(setImmediate);
-    assert.equal(lastGroupsUrl, '/api/groups?text=motion+b');
-    assert.deepEqual([find.value, element('#filter-text').value], ['motion b', 'motion b']);
-    await type(find, 'motion bo');
-    find.value = 'motion boa';  // a keystroke whose debounced apply has not fired yet
-    pendingGroups.shift()();
-    await new Promise(setImmediate);
-    assert.equal(find.value, 'motion boa', 'a response never rewrites the focused find box');
-    await type(find, 'motion ');
-    pendingGroups.shift()();
-    await new Promise(setImmediate);
+    await flush();
     assert.deepEqual([find.value, element('#filter-text').value], ['motion ', 'motion '], 'a trailing space survives the reload');
-    find.focus.call(element('#contact-sheet'));
-    await type(find, 'motion  ');
+
+    // Reset drops a pending find apply.
+    await type(find, 'zodiac');
+    element('#reset-filters').focus();
+    const loads = groupLoads;
+    element('#reset-filters').listeners.click();
+    await flush();
     pendingGroups.shift()();
-    await new Promise(setImmediate);
-    assert.equal(find.value, 'motion  ', 'unfocused, an equal trimmed value is still left alone');
+    await flush();
+    await fire();
+    assert.equal(groupLoads, loads + 1, 'only the reset fetches');
+    assert.equal(lastGroupsUrl, '/api/groups');
+    assert.deepEqual([find.value, element('#filter-text').value], ['', '']);
     deferGroups = false;
     return;
   }

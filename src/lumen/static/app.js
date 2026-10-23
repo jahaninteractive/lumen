@@ -977,6 +977,12 @@ const FILTER_CONTROLS = {
 };
 const FLAG_FILTERS = ['keepers_only', 'tagged_only', 'show_rejected'];
 const FILTER_DEFAULTS = { decision: 'any', min_rating: '0' };
+let findTimer = null;  // pending debounced apply from #find / #filter-text
+
+function cancelFind() {
+  window.clearTimeout(findTimer);
+  findTimer = null;
+}
 
 function filterQuery() {
   const params = new URLSearchParams();
@@ -999,12 +1005,15 @@ function syncFilters(cameras) {
     option.textContent = camera;
     return option;
   }));
+  // A pending find apply owns both text fields, as does a mirror that matches the field being typed in.
+  const text = ['#find', '#filter-text'].map(selector => document.querySelector(selector));
+  const holdText = findTimer !== null || (text.includes(document.activeElement) && text[0].value === text[1].value);
   Object.entries(FILTER_CONTROLS).forEach(([name, selector]) => {
     const control = document.querySelector(selector);
     if (FLAG_FILTERS.includes(name)) control.checked = params.get(name) === '1';
-    else keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');
+    else if (!(name === 'text' && holdText)) keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');
   });
-  keepTyping(document.querySelector('#find'), params.get('text') ?? '');
+  if (!holdText) keepTyping(text[0], params.get('text') ?? '');
 }
 
 // A reload never rewrites the field being typed in, nor one that differs from the URL only by spaces.
@@ -1718,16 +1727,22 @@ document.querySelector('#clear-confirmation').addEventListener('input', updateWo
 document.querySelector('#show-rejected').addEventListener('change', () => applyFilters().catch(error => announce(error.message)));
 document.querySelector('#filter-form').addEventListener('submit', event => {
   event.preventDefault();
+  cancelFind();
   return applyFilters().catch(error => announce(error.message));
 });
 // The rail find and the form's tag text are one `text` filter; typing in either mirrors the other and applies it.
-let findTimer = null;
 [['#find', '#filter-text'], ['#filter-text', '#find']].forEach(([source, mirror]) => document.querySelector(source).addEventListener('input', () => {
   document.querySelector(mirror).value = document.querySelector(source).value;
   window.clearTimeout(findTimer);
-  findTimer = window.setTimeout(() => applyFilters().catch(error => announce(error.message)), 300);
+  findTimer = window.setTimeout(() => {
+    findTimer = null;
+    applyFilters().catch(error => announce(error.message));
+  }, 300);
 }));
-document.querySelector('#reset-filters').addEventListener('click', () => applyFilters('').catch(error => announce(error.message)));
+document.querySelector('#reset-filters').addEventListener('click', () => {
+  cancelFind();
+  return applyFilters('').catch(error => announce(error.message));
+});
 document.querySelector('#show-more').addEventListener('click', showMore);
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
 sheet.addEventListener('keydown', handleCullingKey);
