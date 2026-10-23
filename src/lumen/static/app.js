@@ -547,6 +547,12 @@ function renderInspector(photo) {
   verdict.textContent = group && allRejected(group) ? NO_KEEPER
     : photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
   inspection.append(heading, verdict);
+  if (photo.matched?.length) {
+    const reasons = document.createElement('p');
+    reasons.id = 'match-reasons';
+    reasons.textContent = `Matches: ${photo.matched.join(', ')}`;
+    inspection.append(reasons);
+  }
   if (group) inspection.append(rankingExplanation(photo, group));
   const critique = group && burstCritique(photo, group);
   if (critique) inspection.append(critique);
@@ -998,6 +1004,7 @@ function syncFilters(cameras) {
     if (FLAG_FILTERS.includes(name)) control.checked = params.get(name) === '1';
     else control.value = params.get(name) ?? FILTER_DEFAULTS[name] ?? '';
   });
+  document.querySelector('#find').value = document.querySelector('#filter-text').value;
 }
 
 async function applyFilters(query = filterQuery()) {
@@ -1708,6 +1715,11 @@ document.querySelector('#filter-form').addEventListener('submit', event => {
   event.preventDefault();
   return applyFilters().catch(error => announce(error.message));
 });
+// The rail find and the form's tag text are one `text` filter; typing in either mirrors the other and applies it.
+[['#find', '#filter-text'], ['#filter-text', '#find']].forEach(([source, mirror]) => document.querySelector(source).addEventListener('input', () => {
+  document.querySelector(mirror).value = document.querySelector(source).value;
+  return applyFilters().catch(error => announce(error.message));
+}));
 document.querySelector('#reset-filters').addEventListener('click', () => applyFilters('').catch(error => announce(error.message)));
 document.querySelector('#show-more').addEventListener('click', showMore);
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);

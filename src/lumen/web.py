@@ -229,6 +229,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     frame_counts = library.catalog.group_frame_counts()
                     for group in groups:  # Advisory text cue from stored triage; never a model call or mode switch.
                         group["astro_cue"] = library.astro_cue([photo["id"] for photo in group["photos"]])
+                        for photo in group["photos"]:  # Why each frame matched the find text; always present.
+                            photo["matched"] = library.catalog.match_terms(photo["id"], filters.text) if filters.text else []
                     payload = {"photo_count": library.photo_count(), "counts": library.catalog.group_counts(filters),
                                "cameras": library.cameras(), "keeper_count": len(library.keeper_ids())}
                 hide_rejected = not filters.show_rejected and filters.decision == "any"

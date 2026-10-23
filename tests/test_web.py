@@ -1924,6 +1924,32 @@ const regression = `
     assert.equal(state.focusedId, 2);
     return;
   }
+  if (scenario === 'find') {
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const reasons = () => tree(element('#inspection')).find(node => node.id === 'match-reasons');
+    await load();
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(reasons(), undefined, 'no match line without a find');
+    groups[0].photos[0].matched = ['keyword: ice'];
+    const find = element('#find');
+    find.tagName = 'INPUT';
+    find.value = 'ice';
+    await find.listeners.input();
+    assert.equal(lastGroupsUrl, '/api/groups?text=ice');
+    assert.equal(location.search, '?text=ice');
+    assert.equal(element('#filter-text').value, 'ice');
+    assert.equal(find.value, 'ice', 'syncFilters keeps the rail find in step with the URL');
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(reasons().textContent, 'Matches: keyword: ice');
+    const posts = decisionPosts.length;
+    await element('#contact-sheet').listeners.keydown({ key: 'x', metaKey: false, ctrlKey: false, altKey: false, target: find, preventDefault() {} });
+    assert.equal(decisionPosts.length, posts, 'typing in find never culls');
+    element('#filter-text').value = 'krill';
+    await element('#filter-text').listeners.input();
+    assert.equal(find.value, 'krill');
+    assert.equal(lastGroupsUrl, '/api/groups?text=krill');
+    return;
+  }
   if (scenario === 'filters') {
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
@@ -2491,6 +2517,14 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_filters_write_url_group_days_and_page_frames(self):
         self.run_javascript_cleanup_regression("filters")
 
+    def test_javascript_find_input_filters_and_inspector_shows_match_reasons(self):
+        self.run_javascript_cleanup_regression("find")
+
+    def test_rail_find_input_is_labelled_and_mirrors_the_text_filter(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('<label for="find">Find</label>', html)
+        self.assertIn('id="find"', html)
+
     def test_javascript_all_rejected_burst_explains_no_keeper_and_offers_pick(self):
         self.run_javascript_cleanup_regression("all-rejected")
 
@@ -2613,6 +2647,15 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         code, restored = self.get_json("/api/groups")
         self.assertEqual((1, 0, 1, 0), (len(restored["groups"][0]["photos"]), restored["rejected_count"],
                                         restored["groups"][0]["frame_count"], restored["groups"][0]["rejected_count"]))
+
+    def test_groups_report_match_reasons_only_when_text_filter_is_set(self):
+        with Library(Settings(library_dir=self.root / "library")) as library:  # setUp already imported photo 1
+            library.catalog.save_tags(1, {"description": "d", "subjects": ["ice"], "caption": "Ice floe"}, "m")
+        plain = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]
+        self.assertEqual([], plain["matched"])
+        found = self.get_json("/api/groups?text=ice")[1]["groups"][0]["photos"][0]
+        self.assertEqual(["keyword: ice", "caption"], found["matched"])
+        self.assertEqual([], self.get_json("/api/groups?text=zodiac")[1]["groups"])
 
     def test_groups_filters_round_trip_and_reject_invalid_repeated_or_inverted_params_publicly(self):
         with Library(Settings(library_dir=self.root / "library")) as library:
