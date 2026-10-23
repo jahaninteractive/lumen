@@ -11,6 +11,16 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
+ROLES = {"fast": "omlx_fast_model", "review": "review_model"}  # role -> Settings attribute naming its model
+PROBLEMS = ("eyes_closed", "motion_blur", "out_of_focus", "subject_cut_off", "obstructed", "misfire",
+            "severely_under_exposed", "severely_over_exposed")
+SKY_CLASSES = ("night_sky", "aurora", "milky_way", "twilight", "cloud", "not_sky")
+SKY_ISSUES = ("haze", "light_pollution", "trailing", "cloud_band")
+CAPTION_MAX = 200
+ALT_TEXT_MAX = 125
+NARRATIVE_MAX = 1500
+
+
 class OmlxError(RuntimeError):
     pass
 
@@ -22,6 +32,36 @@ class TagResponseError(OmlxError):
 
 
 class CompositionResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class RejectResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class BurstResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class AstroResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class CaptionResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class DigestResponseError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
@@ -40,6 +80,8 @@ class TagResult:
     technical: list[str]
     confidence: float
     raw_response: str
+    species: list[dict] | tuple = ()  # [{"name": str, "confidence": float}]
+    conditions: list[str] | tuple = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +91,129 @@ class CompositionReview:
     confidence: float
 
 
-def parse_tag_response(raw: str) -> TagResult:
+@dataclass(frozen=True, slots=True)
+class RejectReview:
+    problems: list[dict]  # [{"kind": one of PROBLEMS, "confidence": float}]
+    suggest_reject: bool
+    confidence: float
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class BurstCritique:
+    frame_id: str
+    rationale: str
+    confidence: float
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class AstroTriage:
+    sky: str  # one of SKY_CLASSES
+    confidence: float
+    issues: list[str]  # unique SKY_ISSUES
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class DigestNarrative:
+    narrative: str
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class Caption:
+    caption: str
+    alt_text: str
+    raw_response: str
+
+
+def _json_object(raw: str, error_type) -> dict:
+    """Strip an optional Markdown fence and parse one JSON object, raising error_type(message, raw)."""
+    text = raw.strip()
+    if text.startswith("```"):
+        first_newline = text.find("\n")
+        final_fence = text.rfind("```")
+        if first_newline == -1 or final_fence <= first_newline or not text.endswith("```"):
+            raise error_type("oMLX returned an incomplete JSON fence", raw)
+        text = text[first_newline + 1 : final_fence].strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise error_type(f"oMLX did not return valid JSON: {error.msg}", raw) from error
+    if not isinstance(payload, dict):
+        raise error_type("oMLX response must be a JSON object", raw)
+    return payload
+
+
+def _confidence(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1
+
+
+def parse_reject_response(raw: str) -> RejectReview:
+    payload = _json_object(raw, RejectResponseError)
+    if set(payload) != {"problems", "suggest_reject", "confidence"}:
+        raise RejectResponseError("oMLX reject response must contain only problems, suggest_reject, and confidence", raw)
+    problems = payload["problems"]
+    if (not isinstance(problems, list)
+            or not all(isinstance(p, dict) and set(p) == {"kind", "confidence"} and p["kind"] in PROBLEMS
+                       and _confidence(p["confidence"]) for p in problems)
+            or len({p["kind"] for p in problems}) != len(problems)):
+        raise RejectResponseError("oMLX problems must be unique known kinds with confidence", raw)
+    if type(payload["suggest_reject"]) is not bool or not _confidence(payload["confidence"]):
+        raise RejectResponseError("oMLX suggest_reject must be boolean and confidence 0 to 1", raw)
+    return RejectReview([{"kind": p["kind"], "confidence": float(p["confidence"])} for p in problems],
+                        payload["suggest_reject"], float(payload["confidence"]), raw)
+
+
+def parse_burst_response(raw: str, frame_ids: set[str]) -> BurstCritique:
+    payload = _json_object(raw, BurstResponseError)
+    if set(payload) != {"frame_id", "rationale", "confidence"}:
+        raise BurstResponseError("oMLX burst response must contain only frame_id, rationale, and confidence", raw)
+    frame_id, rationale = payload["frame_id"], payload["rationale"]
+    if not isinstance(frame_id, str) or frame_id not in frame_ids:
+        raise BurstResponseError("oMLX returned a frame that was not supplied", raw)
+    if not isinstance(rationale, str) or not 1 <= len(rationale := rationale.strip()) <= 300:
+        raise BurstResponseError("oMLX rationale must contain 1 to 300 characters", raw)
+    if not _confidence(payload["confidence"]):
+        raise BurstResponseError("oMLX confidence must be a finite number between 0 and 1", raw)
+    return BurstCritique(frame_id, rationale, float(payload["confidence"]), raw)
+
+
+def parse_astro_response(raw: str) -> AstroTriage:
+    payload = _json_object(raw, AstroResponseError)
+    if set(payload) != {"sky", "confidence", "issues"}:
+        raise AstroResponseError("oMLX astro response must contain only sky, confidence, and issues", raw)
+    if payload["sky"] not in SKY_CLASSES or not _confidence(payload["confidence"]):
+        raise AstroResponseError("oMLX sky must be a known class and confidence 0 to 1", raw)
+    issues = payload["issues"]
+    if (not isinstance(issues, list) or not all(isinstance(i, str) and i in SKY_ISSUES for i in issues)
+            or len(set(issues)) != len(issues)):
+        raise AstroResponseError("oMLX issues must be unique known sky issues", raw)
+    return AstroTriage(payload["sky"], float(payload["confidence"]), list(issues), raw)
+
+
+def parse_caption_response(raw: str) -> Caption:
+    payload = _json_object(raw, CaptionResponseError)
+    if set(payload) != {"caption", "alt_text"}:
+        raise CaptionResponseError("oMLX caption response must contain only caption and alt_text", raw)
+    caption, alt_text = payload["caption"], payload["alt_text"]
+    if not isinstance(caption, str) or not 1 <= len(caption := caption.strip()) <= CAPTION_MAX or "#" in caption:
+        raise CaptionResponseError(f"oMLX caption must contain 1 to {CAPTION_MAX} characters and no hashtags", raw)
+    if not isinstance(alt_text, str) or not 1 <= len(alt_text := alt_text.strip()) <= ALT_TEXT_MAX:
+        raise CaptionResponseError(f"oMLX alt_text must contain 1 to {ALT_TEXT_MAX} characters", raw)
+    return Caption(caption, alt_text, raw)
+
+
+def parse_digest_response(raw: str) -> str:
+    payload = _json_object(raw, DigestResponseError)
+    narrative = payload.get("narrative")
+    if set(payload) != {"narrative"} or not isinstance(narrative, str) or not 1 <= len(narrative := narrative.strip()) <= NARRATIVE_MAX:
+        raise DigestResponseError(f"oMLX digest response must contain only a narrative of 1 to {NARRATIVE_MAX} characters", raw)
+    return narrative
+
+
+def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
     text = raw.strip()
     if text.startswith("```"):
         first_newline = text.find("\n")
@@ -63,6 +227,11 @@ def parse_tag_response(raw: str) -> TagResult:
         raise TagResponseError(f"oMLX did not return valid JSON: {error.msg}", raw) from error
     if not isinstance(payload, dict):
         raise TagResponseError("oMLX tag response must be a JSON object", raw)
+    allowed = {"description", "subjects", "scene", "technical", "confidence"}
+    if allow_species:
+        allowed |= {"species", "conditions"}
+    if set(payload) - allowed:
+        raise TagResponseError("oMLX tag response contains unexpected fields", raw)
     description = payload.get("description")
     subjects = payload.get("subjects")
     scene = payload.get("scene", "")
@@ -78,6 +247,16 @@ def parse_tag_response(raw: str) -> TagResult:
         raise TagResponseError("oMLX technical observations must be strings", raw)
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0 <= confidence <= 1:
         raise TagResponseError("oMLX confidence must be between 0 and 1", raw)
+    species = payload.get("species", [])
+    if not isinstance(species, list) or not all(
+            isinstance(item, dict) and set(item) == {"name", "confidence"}
+            and isinstance(item["name"], str) and item["name"].strip()
+            and isinstance(item["confidence"], (int, float)) and not isinstance(item["confidence"], bool)
+            and math.isfinite(item["confidence"]) and 0 <= item["confidence"] <= 1 for item in species):
+        raise TagResponseError("oMLX species must be a list of {name, confidence} objects", raw)
+    conditions = payload.get("conditions", [])
+    if not isinstance(conditions, list) or not all(isinstance(value, str) for value in conditions):
+        raise TagResponseError("oMLX conditions must be a list of strings", raw)
     return TagResult(
         description=description.strip(),
         subjects=[value.strip() for value in subjects if value.strip()],
@@ -85,6 +264,8 @@ def parse_tag_response(raw: str) -> TagResult:
         technical=[value.strip() for value in technical if value.strip()],
         confidence=float(confidence),
         raw_response=raw,
+        species=[{"name": item["name"].strip(), "confidence": float(item["confidence"])} for item in species],
+        conditions=[value.strip() for value in conditions if value.strip()],
     )
 
 
@@ -117,21 +298,29 @@ def parse_composition_response(raw: str, candidate_ids: set[str]) -> Composition
 
 
 class OmlxTagger:
-    def __init__(self, base_url: str, model: str, api_key: str | None = None):
+    def __init__(self, base_url: str, model: str, api_key: str | None = None, *, role: str = "review"):
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("oMLX endpoint must be a loopback http(s) URL")
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.role = role
         self.api_key = api_key or self._local_api_key()
 
-    def tag(self, preview: Path, timeout: float = 240) -> TagResult:
+    def tag(self, preview: Path, timeout: float = 240, *, vocabulary: dict[str, list[str]] | None = None) -> TagResult:
         prompt = (
             "Analyze this photograph for a local photo catalog. Return JSON only with: "
             'description (string), subjects (string array), scene (string), '
             "technical (string array of visible focus/exposure/motion observations), "
             "and confidence (number 0 to 1). Do not identify a person."
         )
+        if vocabulary:
+            prompt += (
+                " Also return species (array of {name, confidence 0 to 1} for animals you can name) and "
+                "conditions (string array of light and weather). Keyword list by category: "
+                + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
+                + ". Choose keywords from the list where one fits; add at most three others. Do not identify a person."
+            )
         content = self._complete([
             {"type": "text", "text": prompt},
             self._image_content(preview),
@@ -174,6 +363,47 @@ class OmlxTagger:
         response = self._complete(content, timeout)
         return parse_composition_response(response, set(ids))
 
+    def review_rejects(self, preview: Path, timeout: float = 240) -> RejectReview:
+        prompt = ("Look for technical failures only: " + ", ".join(PROBLEMS) + ". Return JSON only with problems "
+                  "(array of {kind, confidence}), suggest_reject (boolean), confidence (0 to 1). Do not identify a person.")
+        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=300)
+        return parse_reject_response(content)
+
+    def triage_astro(self, preview: Path, timeout: float = 240) -> AstroTriage:
+        prompt = ("Classify the sky in this long exposure as one of: " + ", ".join(SKY_CLASSES) + ". List any issues "
+                  "from: " + ", ".join(SKY_ISSUES) + ". Return JSON only with sky, confidence (0 to 1), issues "
+                  "(array, may be empty). Do not identify a person.")
+        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
+        return parse_astro_response(content)
+
+    def caption(self, preview: Path, timeout: float = 240) -> Caption:
+        prompt = ("Write caption (under 200 characters, no hashtags, no emoji) and alt_text (under 125 characters, a "
+                  "literal description of what is visible for a screen reader). Return JSON only. Do not identify a person.")
+        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
+        return parse_caption_response(content)
+
+    def write_digest(self, facts_markdown: str, timeout: float = 240) -> DigestNarrative:
+        """Text only: the facts table goes to the model, never an image."""
+        prompt = ("Write a short field-notes narrative (3 to 6 sentences, plain prose, no lists, no hashtags) from these "
+                  "facts only. Do not invent species, places, or counts. Return JSON only with narrative.")
+        content = [{"type": "text", "text": prompt}, {"type": "text", "text": facts_markdown}]
+        raw = self._complete(content, timeout, max_tokens=600)
+        return DigestNarrative(parse_digest_response(raw), raw)
+
+    def critique_burst(self, frames: list[tuple[str, Path]], timeout: float = 240) -> BurstCritique:
+        ids = [frame_id for frame_id, _ in frames]
+        if not 2 <= len(frames) <= 8:
+            raise ValueError("burst critique needs 2 to 8 frames")
+        if any(not isinstance(frame_id, str) or not frame_id.strip() for frame_id in ids) or len(set(ids)) != len(ids):
+            raise ValueError("burst frame IDs must be unique, non-empty strings")
+        content = [{"type": "text", "text": (
+            "Compare these frames from one burst for sharpness, expression or pose, timing, framing, and distracting "
+            f"elements. Select exactly one frame_id from: {', '.join(ids)}. Return JSON only with frame_id, rationale "
+            "(at most 300 characters), confidence (0 to 1). Do not identify a person.")}]
+        for frame_id, path in frames:
+            content.extend(({"type": "text", "text": f"Frame {frame_id}"}, self._image_content(path)))
+        return parse_burst_response(self._complete(content, timeout, max_tokens=400), set(ids))
+
     @staticmethod
     def _image_content(path: Path) -> dict:
         if not isinstance(path, Path) or not path.is_file():
@@ -182,12 +412,12 @@ class OmlxTagger:
         image = base64.b64encode(path.read_bytes()).decode("ascii")
         return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}}
 
-    def _complete(self, content: list[dict], timeout: float) -> str:
+    def _complete(self, content: list[dict], timeout: float, *, max_tokens: int = 500) -> str:
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
             "temperature": 0,
-            "max_tokens": 500,
+            "max_tokens": max_tokens,
             "chat_template_kwargs": {"enable_thinking": False},  # Qwen-style thinking otherwise eats the budget and returns no content.
         }
         headers = {"Content-Type": "application/json"}

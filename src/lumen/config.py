@@ -11,6 +11,8 @@ class Settings:
     omlx_url: str = "http://127.0.0.1:8000"
     omlx_model: str = "Qwen3.8-27B-4bit"
     burst_gap_seconds: float = 2.0
+    omlx_fast_model: str = "Qwen3-VL-8B-Instruct-4bit"
+    omlx_review_model: str | None = None
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -19,7 +21,21 @@ class Settings:
             library_dir=root,
             omlx_url=os.environ.get("LUMEN_OMLX_URL", "http://127.0.0.1:8000"),
             omlx_model=os.environ.get("LUMEN_OMLX_MODEL", "Qwen3.8-27B-4bit"),
+            omlx_fast_model=os.environ.get("LUMEN_OMLX_FAST_MODEL", "Qwen3-VL-8B-Instruct-4bit"),
+            omlx_review_model=os.environ.get("LUMEN_OMLX_REVIEW_MODEL") or None,
         )
+
+    @property
+    def review_model(self) -> str:
+        return self.omlx_review_model or self.omlx_model
+
+    @property
+    def vocabulary_path(self) -> Path:
+        return self.library_dir / "vocabulary.json"
+
+    @property
+    def digest_dir(self) -> Path:
+        return self.library_dir / "digests"
 
     @property
     def database_path(self) -> Path:

@@ -104,6 +104,8 @@ main { min-width: 0; }
 .burst-header .quiet { font-variant-numeric: tabular-nums; }
 .burst-selected { color: var(--amber); font-weight: 700; }
 .burst-selected:empty { display: none; }
+.astro-cue { color: var(--cyan); border: 1px solid var(--cyan); border-radius: 999px; padding: .1rem .5rem; font-size: .85rem; }
+#astro-lights .triage { margin-left: .5rem; }
 .burst-header .toggle { margin-left: auto; }
 .burst-frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
 
@@ -282,3 +284,12 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
 #ingest-verdict { font-weight: 700; color: var(--amber); }
+#keywords, #suggested-keywords { margin: .25rem 0 1rem; padding: 0; list-style: none; }
+#keywords li, #suggested-keywords li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; min-height: 44px; }
+#suggested-keywords li { color: var(--muted); }
+.inspector h4 { margin: 1rem 0 0; font-size: .9rem; }
+
+#reject-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.reject-row { display: grid; grid-template-columns: 96px 1fr auto; align-items: center; gap: .75rem; padding: .5rem; border: 1px solid var(--line); border-radius: 4px; }
+.reject-row img { width: 96px; height: 64px; object-fit: cover; background: var(--black); }
+.reject-row p { margin: 0; }

@@ -4,15 +4,15 @@ import argparse
 import json
 import sys
 import webbrowser
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
 from .catalog import GroupFilters
 from .config import Settings
 from .diagnostics import doctor_report
+from .digest import parse_day
 from .library import CleanupError, ExportRequest, Library, public_message
-from .omlx import OmlxTagger
 from .pipelines import PipelineRegistry
 
 
@@ -49,8 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
     selection = tag.add_mutually_exclusive_group(required=True)
     selection.add_argument("--photo", type=int)
     selection.add_argument("--all", action="store_true")
-    tag.add_argument("--retag", action="store_true", help="with --all, also re-tag photos that already have tags")
+    selection.add_argument("--keepers", action="store_true")
+    tag.add_argument("--retag", action="store_true", help="with --all or --keepers, also re-tag photos that already have tags")
     tag.add_argument("--json", action="store_true")
+
+    review = commands.add_parser("review-rejects", help="suggest rejects with the fast oMLX model (never rejects)")
+    selection = review.add_mutually_exclusive_group()
+    selection.add_argument("--keepers", action="store_true", help="review keepers (default)")
+    selection.add_argument("--all", action="store_true")
+    review.add_argument("--json", action="store_true")
 
     jobs = commands.add_parser("jobs", help="list recent background jobs")
     jobs.add_argument("--json", action="store_true")
@@ -58,6 +65,23 @@ def build_parser() -> argparse.ArgumentParser:
     cancel = commands.add_parser("cancel", help="cancel a queued job, or a running job owned by this process")
     cancel.add_argument("job_id", type=int)
     cancel.add_argument("--json", action="store_true")
+
+    critique = commands.add_parser("critique", help="ask the review oMLX model which burst frame is best (never picks)")
+    critique.add_argument("group_id", type=int)
+    critique.add_argument("--json", action="store_true")
+
+    caption = commands.add_parser("caption", help="draft a caption and alt text with the review oMLX model (advisory)")
+    caption.add_argument("photo_id", type=int)
+    caption.add_argument("--json", action="store_true")
+
+    digest = commands.add_parser("digest", help="write a day's facts digest, with a review-model narrative when loaded")
+    digest.add_argument("date", help="capture day as YYYY-MM-DD")
+    digest.add_argument("--overwrite", action="store_true", help="replace an existing digest for this day")
+    digest.add_argument("--json", action="store_true")
+
+    triage = commands.add_parser("triage", help="classify a group's sky frames with the fast oMLX model (never excludes)")
+    triage.add_argument("group_id", type=int)
+    triage.add_argument("--json", action="store_true")
 
     pick = commands.add_parser("pick", help="make a frame the manual best shot for its group")
     pick.add_argument("photo_id", type=int)
@@ -150,16 +174,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = Settings.from_environment()
     if args.library:
-        settings = Settings(
-            library_dir=args.library.expanduser(),
-            omlx_url=settings.omlx_url,
-            omlx_model=settings.omlx_model,
-            burst_gap_seconds=settings.burst_gap_seconds,
-        )
+        settings = replace(settings, library_dir=args.library.expanduser())
 
     if args.command == "doctor":
         report = doctor_report(settings)
         _print(report, args.json)
+        if not args.json:
+            for role, item in report["omlx_roles"].items():
+                print(f"{role}: {item['model']} ({'loaded' if item['loaded'] else 'not loaded'})")
         return 0 if report["tools"]["exiftool"]["available"] and report["omlx_model"]["complete"] else 2
 
     if args.command == "ingest":
@@ -174,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         verified = payload.get("status") == "succeeded" and payload.get("ingest", {}).get("card_verified_everywhere") is True
         return 0 if verified else 2
 
-    if args.command in {"import", "jobs", "cancel", "refine-previews"} or (args.command == "tag" and args.all):
+    if args.command in {"import", "jobs", "cancel", "refine-previews", "review-rejects"} or (args.command == "tag" and (args.all or args.keepers)):
         try:
             with Library(settings) as library:
                 if args.command == "jobs":
@@ -192,8 +214,12 @@ def main(argv: list[str] | None = None) -> int:
                                                        filters=filters if filtered else None)
                     elif args.command == "import":
                         job = library.start_import_job(args.path)
+                    elif args.command == "review-rejects":
+                        job = library.start_reject_review_job(library.tagger_for("fast"),
+                                                              scope="all" if args.all else "keepers")
                     else:
-                        job = library.start_tag_job(OmlxTagger(settings.omlx_url, settings.omlx_model), retag=args.retag)
+                        job = library.start_tag_job(library.tagger_for("fast"), scope="all" if args.all else "keepers",
+                                                    retag=args.retag)
                     library.wait_for_job(job.id)
                     payload = library.job_status(job.id)
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
@@ -217,10 +243,62 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "tag":
-        with Library(settings) as library:
-            result = library.tag_photo(args.photo, OmlxTagger(settings.omlx_url, settings.omlx_model))
+        try:
+            with Library(settings) as library:
+                result = library.tag_photo(args.photo, library.tagger_for("fast"))
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": public_message(str(error))}, args.json)
+            return 2
         _print({"tagged": [{"photo_id": args.photo, **asdict(result)}]}, args.json)
         return 0
+
+    if args.command == "critique":
+        try:
+            with Library(settings) as library:
+                payload = library.critique_burst(args.group_id, library.tagger_for("review"))
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": public_message(str(error))}, args.json)
+            return 2
+        _print(payload, args.json)
+        return 0
+
+    if args.command == "caption":
+        try:
+            with Library(settings) as library:
+                payload = library.caption_photo(args.photo_id, library.tagger_for("review"))
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": public_message(str(error))}, args.json)
+            return 2
+        _print(payload, args.json)
+        return 0
+
+    if args.command == "digest":
+        try:
+            day = parse_day(args.date)
+            with Library(settings) as library:
+                try:  # Soft gate: without the review model the digest is facts only.
+                    tagger, reason = library.tagger_for("review"), None
+                except RuntimeError as error:
+                    tagger, reason = None, str(error)
+                payload = library.digest_day(day, tagger, overwrite=args.overwrite, unavailable_reason=reason)
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:  # Includes FileExistsError.
+            _print({"error": public_message(str(error))}, args.json)
+            return 2
+        _print(payload, args.json)
+        return 0
+
+    if args.command == "triage":
+        try:
+            with Library(settings) as library:
+                job = library.start_triage_job(library.tagger_for("fast"), group_id=args.group_id)
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                payload = library.astro_triage(args.group_id)
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            _print({"error": _job_error(error)}, args.json)
+            return 2
+        _print(payload, args.json)
+        return 0 if status["status"] == "succeeded" and not (status.get("result") or {}).get("failed") else 2
 
     if args.command == "pick":
         with Library(settings) as library:

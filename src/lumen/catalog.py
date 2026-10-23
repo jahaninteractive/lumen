@@ -80,12 +80,16 @@ class GroupFilters:
         if self.keepers_only:  # Same rule as Library.keeper_ids.
             conditions.append("p.decision != 'reject' AND (p.decision = 'flag' OR p.id = g.automatic_pick_id)")
         if self.tagged_only or self.text:
+            # String arrays are searched as their JSON text; species by name only (not its "confidence" key);
+            # problem kinds also match their human form, so "motion blur" finds motion_blur.
+            fields = [f"json_extract(t.data_json, '$.{key}')" for key in ("description", "subjects", "suggested", "caption", "problems.kinds")]
+            fields += ["(SELECT group_concat(CASE WHEN s.type = 'object' THEN json_extract(s.value, '$.name') END, ' | ') FROM json_each(t.data_json, '$.species') s)",
+                       "replace(json_extract(t.data_json, '$.problems.kinds'), '_', ' ')"]
             conditions.append("EXISTS (SELECT 1 FROM tags t WHERE t.photo_id = p.id"
-                              + (" AND (json_extract(t.data_json, '$.description') LIKE ? ESCAPE '\\'"
-                                 " OR json_extract(t.data_json, '$.subjects') LIKE ? ESCAPE '\\'))" if self.text else ")"))
+                              + (" AND (" + " OR ".join(f"{field} LIKE ? ESCAPE '\\'" for field in fields) + "))" if self.text else ")"))
             if self.text:
                 pattern = "%" + self.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-                params += [pattern, pattern]
+                params += [pattern] * len(fields)
         return " AND ".join(conditions), params
 
 
@@ -705,6 +709,27 @@ class Catalog:
         if not row:
             return None
         return {"model": row["model"], "data": json.loads(row["data_json"]), "tagged_at": row["tagged_at"]}
+
+    def match_terms(self, photo_id: int, text: str) -> list[str]:
+        """Labels for the stored local-AI fields that contain `text` (case-insensitive), in a fixed order."""
+        needle = text.strip().casefold()
+        tags = self.get_tags(photo_id) if needle else None
+        if not tags:
+            return []
+        data = tags["data"]
+
+        def strings(value: Any) -> list[str]:
+            return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+        problems = data.get("problems")
+        species = [item.get("name") for item in data.get("species") or [] if isinstance(item, dict)]
+        candidates = [("description", data.get("description"))]
+        candidates += [(f"keyword: {k}", k) for k in strings(data.get("subjects"))]
+        candidates += [(f"suggested: {k}", k) for k in strings(data.get("suggested"))]
+        candidates += [(f"species: {name}", name) for name in strings(species)]
+        candidates.append(("caption", data.get("caption")))
+        kinds = strings(problems.get("kinds")) if isinstance(problems, dict) else []
+        candidates += [(f"problem: {kind.replace('_', ' ')}", f"{kind} {kind.replace('_', ' ')}") for kind in kinds]
+        return [label for label, value in candidates if isinstance(value, str) and needle in value.casefold()]
 
     def clear_tags(self, photo_id: int) -> None:
         self.connection.execute("DELETE FROM tags WHERE photo_id = ?", (photo_id,))

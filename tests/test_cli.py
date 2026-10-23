@@ -14,6 +14,7 @@ from lumen.cli import main
 from lumen.config import Settings
 from lumen.diagnostics import doctor_report
 from lumen.library import Library
+from lumen.omlx import AstroTriage, BurstCritique, Caption
 from lumen.pipelines import DarktablePipeline, PipelineResult
 from lumen.tools import ToolStatus
 
@@ -131,10 +132,10 @@ class CliTests(unittest.TestCase):
         class FakeTagger:
             calls = 0
 
-            def __init__(self, *args):
-                self.model = "test-vlm"
+            def __init__(self, *args, **kwargs):
+                self.model, self.role = "test-vlm", kwargs.get("role")
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 FakeTagger.calls += 1
                 return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
 
@@ -144,7 +145,8 @@ class CliTests(unittest.TestCase):
             source = root / "photo.jpg"
             Image.new("RGB", (60, 40), (1, 2, 3)).save(source)
             self.run_json(library_dir, "import", str(source))
-            with patch("lumen.cli.OmlxTagger", FakeTagger):
+            live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live):
                 tag_code, tagged = self.run_json(library_dir, "tag", "--all")
                 skip_code, skipped = self.run_json(library_dir, "tag", "--all")
                 retag_code, retagged = self.run_json(library_dir, "tag", "--all", "--retag")
@@ -326,6 +328,141 @@ class CliTests(unittest.TestCase):
             self.assertNotIn(str(root), json.dumps(payload))
             for fingerprint in fingerprints:
                 self.assertNotIn(fingerprint, json.dumps(payload))
+    def test_review_rejects_command_runs_job_and_reports_summary(self):
+        from lumen.omlx import RejectReview
+
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def review_rejects(self, preview):
+                return RejectReview([], False, 0.7, "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "review-rejects", "--json"])
+        self.assertEqual(0, code)
+        # job_status exposes the manifest summary as result (see the tag --keepers test).
+        self.assertEqual({"reviewed": 1, "skipped": 0, "failed": 0, "suggested": 0}, json.loads(output.getvalue())["result"])
+
+    def test_tag_keepers_runs_job_and_doctor_reports_both_roles(self):
+        from lumen.omlx import TagResult
+
+        class FakeTagger:
+            calls = 0
+            def __init__(self, *args, **kwargs):
+                self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def tag(self, preview, *, vocabulary=None):
+                FakeTagger.calls += 1
+                return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        live = {"version": "0.7.2", "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                Image.new("RGB", (120, 90), (index, 0, 0)).save(root / f"p{index}.jpg")
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "tag", "--keepers", "--json"])
+            self.assertEqual(0, code)
+            self.assertEqual(2, FakeTagger.calls)
+            self.assertEqual({"tagged": 2, "skipped": 0, "failed": 0}, json.loads(output.getvalue())["result"])  # job_status exposes the manifest summary as result
+            output = io.StringIO()
+            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), redirect_stdout(output):
+                main(["--library", str(root / "library"), "doctor", "--json"])
+            roles = json.loads(output.getvalue())["omlx_roles"]
+            self.assertEqual({"fast": {"model": "Qwen3-VL-8B-Instruct-4bit", "loaded": True}, "review": {"model": "Qwen3.8-27B-4bit", "loaded": False}}, roles)
+            output = io.StringIO()
+            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), redirect_stdout(output):
+                main(["--library", str(root / "library"), "doctor"])
+            self.assertIn("fast: Qwen3-VL-8B-Instruct-4bit (loaded)", output.getvalue())
+            self.assertIn("review: Qwen3.8-27B-4bit (not loaded)", output.getvalue())
+
+    def test_triage_command_runs_job_and_prints_lights(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def triage_astro(self, preview):
+                return AstroTriage("aurora", 0.8, [], "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                image = Image.new("RGB", (120, 90)); exif = Image.Exif(); exif[36867] = f"2026:10:22 22:00:{index * 10:02d}"; exif[33434] = 15
+                image.save(root / f"l{index}.jpg", exif=exif)
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "triage", "1", "--json"])
+        self.assertEqual(0, code)
+        payload = json.loads(output.getvalue())
+        self.assertEqual((2, True), (len(payload["lights"]), payload["astro_cue"]))
+
+    def test_caption_command_prints_caption_and_alt_text(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def caption(self, preview):
+                return Caption("A caption.", "Alt text.", "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root / "p.jpg")])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "caption", "1", "--json"])
+        self.assertEqual((0, "Alt text."), (code, json.loads(output.getvalue())["alt_text"]))
+
+    def test_digest_command_writes_file_and_requires_overwrite_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = Image.new("RGB", (120, 90)); exif = Image.Exif(); exif[36867] = "2026:10:22 10:00:00"; image.save(root / "d.jpg", exif=exif)
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root / "d.jpg")])
+            offline = {"version": None, "default_model": None, "loaded_models": []}
+            output = io.StringIO()
+            with patch("lumen.library.get_server_status", return_value=offline), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "digest", "2026-10-22", "--json"])
+            self.assertEqual((0, False), (code, json.loads(output.getvalue())["narrative"]))
+            self.assertTrue((root / "library" / "digests" / "2026-10-22.md").exists())
+            output = io.StringIO()
+            with patch("lumen.library.get_server_status", return_value=offline), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "digest", "2026-10-22", "--json"])
+            self.assertEqual((2, "digest exists; confirm overwrite"), (code, json.loads(output.getvalue())["error"]))
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(2, main(["--library", str(root / "library"), "digest", "22-10-2026", "--json"]))
+
+    def test_critique_command_prints_suggestion_and_exits_two_on_failure(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def critique_burst(self, frames):
+                return BurstCritique(frames[0][0], "Sharpest.", 0.8, "{}")
+
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                image = Image.new("RGB", (120, 90), (index * 30, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+                image.save(root / f"b{index}.jpg", exif=exif)
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "critique", "1", "--json"])
+            self.assertEqual(0, code)
+            self.assertEqual("Sharpest.", json.loads(output.getvalue())["rationale"])
+            output = io.StringIO()
+            with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "critique", "1", "--json"])
+            self.assertEqual((2, "review model Qwen3.8-27B-4bit is not loaded in oMLX"), (code, json.loads(output.getvalue())["error"]))
 
 
 class ExportCleanupCliTests(unittest.TestCase):

@@ -22,17 +22,19 @@ from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, app
 from .catalog import Catalog, GroupFilters
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
+from .digest import day_facts, render_facts_table
 from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
-from .omlx import OmlxError
+from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
 from .pipelines import EXPORT_PRESETS, PipelineRegistry
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
+from .vocabulary import load_vocabulary, match_keywords
 
 
 _MUTATION_LOCKS = {}
@@ -54,6 +56,14 @@ _ABSOLUTE_PATH = re.compile(r"'?/[^\s'\"]+'?")
 def _job_detail(job_id: int | None) -> dict:
     """Provenance link to the background job that did the work; synchronous calls record none."""
     return {} if job_id is None else {"job_id": job_id}
+
+
+def _check_caption(caption: str | None, alt_text: str | None) -> None:
+    """Photographer edits share the model limits; None leaves a field unchanged and "" clears it."""
+    if caption and (len(caption) > CAPTION_MAX or "#" in caption):
+        raise ValueError(f"caption must contain at most {CAPTION_MAX} characters and no hashtags")
+    if alt_text and len(alt_text) > ALT_TEXT_MAX:
+        raise ValueError(f"alt text must contain at most {ALT_TEXT_MAX} characters")
 
 
 def _stable_key(first: Photo) -> str:
@@ -249,41 +259,221 @@ class Library:
         self._submit_job(runner, job, work)
         return job
 
-    def start_tag_job(self, tagger, *, retag: bool = False) -> Job:
+    def tagger_for(self, role: str) -> OmlxTagger:
+        """A tagger for a model role, only when oMLX reports that role's model loaded right now."""
+        if role not in ROLES:
+            raise ValueError(f"unknown model role: {role}")
+        model = getattr(self.settings, ROLES[role])
+        try:
+            loaded = get_server_status(self.settings.omlx_url)["loaded_models"]
+        except (OmlxError, ValueError):
+            raise RuntimeError(f"{role} model {model} is not loaded in oMLX; oMLX is offline") from None
+        if model not in loaded:
+            raise RuntimeError(f"{role} model {model} is not loaded in oMLX")
+        return OmlxTagger(self.settings.omlx_url, model, role=role)
+
+    def start_tag_job(self, tagger, *, scope: str | list[int] = "keepers", retag: bool = False) -> Job:
         if type(retag) is not bool:
             raise ValueError("retag must be true or false")
+
+        def per_photo(worker, photo, job) -> tuple[str, ...]:
+            existing = worker.catalog.get_tags(photo.id)
+            if not retag and existing is not None and "description" in existing["data"]:  # A reject-only row is untagged.
+                return ("skipped",)
+            worker.tag_photo(photo.id, tagger, job_id=job.id)  # A model failure appends tag_failed itself.
+            if photo.exposure_seconds is not None and photo.exposure_seconds >= 1.0:
+                try:  # A long exposure is also triaged; a triage failure never fails the tag.
+                    worker._triage_one(photo, tagger, job_id=job.id)
+                except Exception as error:
+                    worker._log_job(job, f"{Path(photo.path).name}: triage {type(error).__name__}: {error}")
+                    return ("tagged", "triage_failed")
+            return ("tagged",)
+
+        return self._run_photo_job("tag", tagger, scope, per_photo, counters=("tagged", "skipped", "failed"),
+                                   manifest={"retag": retag})
+
+    def start_reject_review_job(self, tagger, *, scope: str | list[int] = "keepers") -> Job:
+        """Advisory: stores problems and a reject suggestion per photo; never changes a decision."""
+        def per_photo(worker, photo, job) -> tuple[str, ...]:
+            existing = worker.catalog.get_tags(photo.id)
+            if existing is not None and "problems" in existing["data"]:
+                return ("skipped",)
+            review = worker._review_rejects_one(photo.id, tagger, job_id=job.id)
+            return ("reviewed", "suggested") if review.suggest_reject else ("reviewed",)
+
+        return self._run_photo_job("review_rejects", tagger, scope, per_photo,
+                                   counters=("reviewed", "skipped", "failed", "suggested"))
+
+    def start_triage_job(self, tagger, *, group_id: int) -> Job:
+        """Advisory sky triage of every frame in one group, whatever its exposure; exclusions never change."""
+        group = self._group(group_id)
+        if group is None:
+            raise ValueError(f"unknown group ID: {group_id}")
+
+        def per_photo(worker, photo, job) -> tuple[str, ...]:
+            worker._triage_one(photo, tagger, job_id=job.id)
+            return ("triaged",)
+
+        return self._run_photo_job("triage", tagger, [photo["id"] for photo in group["photos"]], per_photo,
+                                   counters=("triaged", "failed"), manifest={"group_id": group_id})
+
+    def _run_photo_job(self, kind: str, tagger, scope, per_photo, *, counters: tuple[str, ...],
+                       manifest: dict | None = None) -> Job:
+        """One worker loop for per-photo model jobs; per_photo returns names from counters to increment ("failed" required)."""
+        if scope == "keepers":
+            ids = self.keeper_ids()
+        elif scope == "all":
+            ids = None
+        elif (isinstance(scope, list) and scope and all(type(item) is int for item in scope)
+              and len(set(scope)) == len(scope)):
+            for photo_id in scope:
+                if self.catalog.get_photo(photo_id) is None:
+                    raise ValueError(f"unknown photo ID: {photo_id}")
+            ids = list(scope)
+        else:
+            raise ValueError("scope must be keepers, all, or a non-empty list of distinct photo IDs")
+        manifest = {"kind": kind, "scope": scope} | (manifest or {}) | {
+            "role": getattr(tagger, "role", None), "model": tagger.model}
         runner = self.job_runner
-        job = self.catalog.create_prepared_job(
-            "tag", lambda job_id: self._write_job_files(job_id, {"kind": "tag", "retag": retag}))
+        job = self.catalog.create_prepared_job(kind, lambda job_id: self._write_job_files(job_id, manifest))
 
         def work(context) -> None:
             with Library(self.settings, job_runner=runner) as worker:
-                photos = worker.catalog.list_photos()
-                counts = {"tagged": 0, "skipped": 0, "failed": 0}
+                photos = worker.catalog.list_photos() if ids is None else [
+                    photo for photo_id in ids if (photo := worker.catalog.get_photo(photo_id))]
+                counts = dict.fromkeys(counters, 0)
                 failed_photo_ids = []
                 for index, photo in enumerate(photos, 1):
                     if context.cancelled:
                         break
                     with worker._mutation():
-                        if not retag and worker.catalog.get_tags(photo.id) is not None:
-                            counts["skipped"] += 1
-                        else:
-                            try:
-                                worker.tag_photo(photo.id, tagger, job_id=job.id)  # A model failure appends tag_failed itself.
-                                counts["tagged"] += 1
-                            except (OmlxError, ValueError, OSError) as error:
-                                counts["failed"] += 1
-                                failed_photo_ids.append(photo.id)
-                                worker._log_job(job, f"{Path(photo.path).name}: {type(error).__name__}: {error}")
+                        try:
+                            for name in per_photo(worker, photo, job):  # names outside counters appear once used
+                                counts[name] = counts.get(name, 0) + 1
+                        except (OmlxError, ValueError, OSError) as error:
+                            counts["failed"] += 1
+                            failed_photo_ids.append(photo.id)
+                            worker._log_job(job, f"{Path(photo.path).name}: {type(error).__name__}: {error}")
                     context.update_progress(index / len(photos), label=Path(photo.path).name[:200],
                                             processed=index, total=len(photos))
                 with worker._mutation():
                     worker._regroup_and_write_sidecars()
-                worker._write_job_files(job.id, {"kind": "tag", "retag": retag,
-                                                 "failed_photo_ids": failed_photo_ids, "summary": counts})
+                worker._write_job_files(job.id, manifest | {"failed_photo_ids": failed_photo_ids, "summary": counts})
 
         self._submit_job(runner, job, work)
         return job
+
+    def _review_rejects_one(self, photo_id: int, tagger, *, job_id: int | None = None):
+        photo = self.catalog.get_photo(photo_id)
+        if not photo or not photo.preview_path:
+            raise ValueError(f"photo {photo_id} has no preview")
+        role = getattr(tagger, "role", None)
+        try:
+            review = tagger.review_rejects(Path(photo.preview_path))
+        except Exception as error:
+            self.catalog.append_event(photo_id, "reject_review_failed", {
+                "model": getattr(tagger, "model", "unknown"), "role": role, "error": str(error),
+                "raw_response": getattr(error, "raw_response", None)} | _job_detail(job_id))
+            self._write_sidecar(photo_id)
+            raise
+        existing = self.catalog.get_tags(photo_id)
+        problems = {"items": review.problems, "kinds": [item["kind"] for item in review.problems],
+                    "suggest_reject": review.suggest_reject, "confidence": review.confidence,
+                    "reviewed_at": datetime.now(timezone.utc).isoformat()}
+        self.catalog.save_tags(photo_id, (existing["data"] if existing else {}) | {"problems": problems},
+                               existing["model"] if existing else tagger.model)
+        self.catalog.append_event(photo_id, "reject_suggested", {
+            "model": tagger.model, "role": role, "problems": review.problems, "suggest_reject": review.suggest_reject,
+            "confidence": review.confidence, "raw_response": review.raw_response} | _job_detail(job_id))
+        self._write_sidecar(photo_id)
+        return review
+
+    def _triage_one(self, photo: Photo, tagger, *, job_id: int | None = None):
+        if not photo.preview_path:
+            raise ValueError(f"photo {photo.id} has no preview")
+        role = getattr(tagger, "role", None)
+        try:
+            triage = tagger.triage_astro(Path(photo.preview_path))
+        except Exception as error:
+            self.catalog.append_event(photo.id, "astro_triage_failed", {
+                "model": getattr(tagger, "model", "unknown"), "role": role, "error": str(error),
+                "raw_response": getattr(error, "raw_response", None)} | _job_detail(job_id))
+            self._write_sidecar(photo.id)
+            raise
+        existing = self.catalog.get_tags(photo.id)
+        self.catalog.save_tags(photo.id, (existing["data"] if existing else {}) | {
+            "sky": {"class": triage.sky, "confidence": triage.confidence}, "issues": list(triage.issues)},
+            existing["model"] if existing else tagger.model)
+        self.catalog.append_event(photo.id, "astro_triaged", {
+            "model": tagger.model, "role": role, "sky": triage.sky, "confidence": triage.confidence,
+            "issues": list(triage.issues), "raw_response": triage.raw_response} | _job_detail(job_id))
+        self._write_sidecar(photo.id)
+        return triage
+
+    def astro_cue(self, photo_ids: Sequence[int]) -> bool:
+        """True when stored triage says more than half these frames are night sky, aurora, or Milky Way."""
+        skies = [((self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("sky") or {}).get("class")
+                 for photo_id in photo_ids]  # ponytail: per-photo tag reads; batch with json_extract if the sheet slows
+        return sum(sky in {"night_sky", "aurora", "milky_way"} for sky in skies) * 2 > len(skies)
+
+    def astro_triage(self, group_id: int) -> dict:
+        """Per-light sky triage plus metric warnings for the Astro tab; advisory, without raw model output."""
+        group = self._group(group_id)
+        if group is None:
+            raise ValueError(f"unknown group ID: {group_id}")
+        lights = []
+        for photo in group["photos"]:
+            data = (self.catalog.get_tags(photo["id"]) or {"data": {}})["data"]
+            astro = json.loads(photo["astro_json"]) if photo["astro_json"] else {}
+            sky, issues = data.get("sky"), data.get("issues", [])
+            trailing = bool(astro.get("trailing_warning"))
+            lights.append({"photo_id": photo["id"], "name": Path(photo["path"]).name, "sky": sky, "issues": issues,
+                           "confidence": sky["confidence"] if sky else None, "star_count": astro.get("star_count"),
+                           "trailing_warning": trailing,
+                           "flagged": (sky or {}).get("class") in {"cloud", "not_sky"}
+                           or bool({"trailing", "cloud_band"} & set(issues)) or trailing})
+        return {"group_id": group_id, "lights": lights, "astro_cue": self.astro_cue([p["id"] for p in group["photos"]])}
+
+    def reject_suggestions(self) -> list[dict]:
+        """Advisory reject suggestions still awaiting the photographer; web turns fingerprint16 into preview_url."""
+        rows = self.catalog.connection.execute("""
+            SELECT photos.id, photos.path, photos.group_id, photos.fingerprint, photos.preview_kind, tags.data_json
+            FROM tags JOIN photos ON photos.id = tags.photo_id
+            WHERE json_extract(tags.data_json, '$.problems.suggest_reject') = 1
+              AND json_extract(tags.data_json, '$.problems.dismissed_at') IS NULL
+              AND photos.decision != 'reject'
+            ORDER BY json_extract(tags.data_json, '$.problems.confidence') DESC, photos.id
+        """).fetchall()
+        result = []
+        for row in rows:
+            problems = json.loads(row["data_json"])["problems"]
+            result.append({"photo_id": row["id"], "name": Path(row["path"]).name, "group_id": row["group_id"],
+                           "problems": problems["items"], "confidence": problems["confidence"],
+                           "fingerprint16": row["fingerprint"][:16], "preview_kind": row["preview_kind"]})
+        return result
+
+    @_coordinated
+    def apply_reject_suggestions(self, photo_ids: list[int], decision: str) -> dict:
+        """Apply the photographer's choice to exactly these ids; any id no longer suggested changes nothing."""
+        if decision not in {"reject", "keep"}:
+            raise ValueError("decision must be reject or keep")
+        if not isinstance(photo_ids, list) or not photo_ids or len(set(photo_ids)) != len(photo_ids):
+            raise ValueError("photo_ids must be a non-empty list of distinct photo IDs")
+        current = {item["photo_id"] for item in self.reject_suggestions()}
+        for photo_id in photo_ids:
+            if photo_id not in current:
+                raise ValueError(f"photo {photo_id} is not a current reject suggestion")
+        decided = []
+        for photo_id in photo_ids:
+            if decision == "reject":
+                decided.append(self.set_decision(photo_id, "reject"))
+            else:
+                tags = self.catalog.get_tags(photo_id)
+                problems = tags["data"]["problems"] | {"dismissed_at": datetime.now(timezone.utc).isoformat()}
+                self.catalog.save_tags(photo_id, tags["data"] | {"problems": problems}, tags["model"])
+                decided.append(self._decided(self.catalog.get_photo(photo_id)))  # unchanged decision, same shape
+            self.catalog.append_event(photo_id, "reject_suggestion_decided", {"decision": decision})
+        return {"decided": decided, "remaining": len(self.reject_suggestions())}
 
     def start_refine_job(self, *, group_id: int | None = None, filters: GroupFilters | None = None,
                          all_photos: bool = False) -> Job:
@@ -611,6 +801,7 @@ class Library:
         except Exception as error:
             self.catalog.append_event(photo_id, "composition_review_failed", {
                 "model": model,
+                "role": getattr(tagger, "role", None),
                 "error": str(error),
                 "raw_response": getattr(error, "raw_response", None),
                 "candidate_ids": candidate_ids,
@@ -622,6 +813,7 @@ class Library:
             raise
         self.catalog.append_event(photo_id, "composition_reviewed", {
             "model": model,
+            "role": getattr(tagger, "role", None),
             "candidate_id": result.candidate_id,
             "rationale": result.rationale,
             "confidence": result.confidence,
@@ -629,6 +821,129 @@ class Library:
         })
         self._write_sidecar(photo_id)
         return result
+
+    def _group(self, group_id: int) -> dict | None:
+        return next((group for group in self.catalog.list_groups() if group["id"] == group_id), None)
+
+    @staticmethod
+    def _critique(group_id: int, frame: dict, details: dict) -> dict:
+        """Public burst-critique shape; raw model output stays in provenance."""
+        return {"group_id": group_id, "photo_id": int(frame["id"]), "name": Path(frame["path"]).name,
+                "rationale": details["rationale"], "confidence": details["confidence"],
+                "candidate_ids": details["candidate_ids"]}
+
+    @_coordinated
+    def critique_burst(self, group_id: int, tagger) -> dict:
+        """Advisory: ask the review model for the best frame of a burst; the pick is never changed here."""
+        group = self._group(group_id)
+        if group is None:
+            raise ValueError(f"unknown group ID: {group_id}")
+        kept = [photo for photo in group["photos"] if photo["decision"] != "reject"]  # rank order; rejected never sent
+        if len(kept) < 2:
+            raise ValueError("burst critique needs at least two frames that are not rejected")
+        frames = kept[:8]
+        if any(not photo["preview_path"] or not Path(photo["preview_path"]).is_file() for photo in frames):
+            raise ValueError(f"burst {group_id} has a frame without a preview")
+        candidate_ids = [int(photo["id"]) for photo in frames]
+        model, role, raw = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None), None
+        try:
+            result = tagger.critique_burst([(str(photo["id"]), Path(photo["preview_path"])) for photo in frames])
+            raw = result.raw_response
+            if result.frame_id not in {str(photo_id) for photo_id in candidate_ids}:
+                raise BurstResponseError("oMLX returned a frame that was not supplied", raw)
+            current = self._group(group_id)
+            chosen = next((photo for photo in (current or {}).get("photos", [])
+                           if photo["id"] == int(result.frame_id) and photo["decision"] != "reject"), None)
+            if chosen is None:
+                raise ValueError("burst changed during review")
+        except Exception as error:
+            self.catalog.append_event(None, "burst_review_failed", {
+                "model": model, "role": role, "group_id": group_id, "error": str(error),
+                "raw_response": getattr(error, "raw_response", None) or raw, "candidate_ids": candidate_ids})
+            raise
+        details = {"model": model, "role": role, "group_id": group_id, "frame_id": int(chosen["id"]),
+                   "candidate_ids": candidate_ids, "rationale": result.rationale, "confidence": result.confidence,
+                   "raw_response": raw}
+        self.catalog.append_event(int(chosen["id"]), "burst_reviewed", details)
+        for photo in current["photos"]:
+            self._write_sidecar(int(photo["id"]))
+        return self._critique(group_id, chosen, details)
+
+    def latest_critique(self, group_id: int) -> dict | None:
+        """The newest stored burst critique whose chosen frame is still a non-rejected member, without raw output."""
+        row = self.catalog.connection.execute("""
+            SELECT photos.id, photos.path, provenance.details_json FROM provenance
+            JOIN photos ON photos.id = json_extract(provenance.details_json, '$.frame_id')
+            WHERE provenance.kind = 'burst_reviewed' AND json_extract(provenance.details_json, '$.group_id') = ?
+              AND photos.group_id = ? AND photos.decision != 'reject'
+            ORDER BY provenance.id DESC LIMIT 1
+        """, (group_id, group_id)).fetchone()
+        return self._critique(group_id, dict(row), json.loads(row["details_json"])) if row else None
+
+    @_coordinated
+    def caption_photo(self, photo_id: int, tagger) -> dict:
+        """Advisory: store the review model's caption and alt text for the photographer to edit."""
+        photo = self.catalog.get_photo(photo_id)
+        if not photo or not photo.preview_path or not Path(photo.preview_path).is_file():
+            raise ValueError(f"photo {photo_id} has no preview")
+        model, role = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None)
+        try:
+            result = tagger.caption(Path(photo.preview_path))
+        except Exception as error:
+            self.catalog.append_event(photo_id, "caption_failed", {
+                "model": model, "role": role, "error": str(error), "raw_response": getattr(error, "raw_response", None)})
+            self._write_sidecar(photo_id)
+            raise
+        return self._save_caption(photo_id, {"caption": result.caption, "alt_text": result.alt_text}, model, {
+            "model": model, "role": role, "raw_response": result.raw_response, "author": "model"})
+
+    @_coordinated
+    def set_caption(self, photo_id: int, *, caption: str | None, alt_text: str | None) -> dict:
+        """Photographer edit: None leaves a field unchanged, an empty string clears it."""
+        if not self.catalog.get_photo(photo_id):
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        caption, alt_text = (None if value is None else value.strip() for value in (caption, alt_text))
+        _check_caption(caption, alt_text)
+        changes = {key: value for key, value in (("caption", caption), ("alt_text", alt_text)) if value is not None}
+        return self._save_caption(photo_id, changes, "photographer", {"author": "photographer"})
+
+    def _save_caption(self, photo_id: int, changes: dict, model: str, details: dict) -> dict:
+        existing = self.catalog.get_tags(photo_id)
+        data = (existing["data"] if existing else {}) | changes
+        data = {key: value for key, value in data.items() if not (key in changes and value == "")}
+        self.catalog.save_tags(photo_id, data, existing["model"] if existing else model)
+        shape = {"photo_id": photo_id, "caption": data.get("caption"), "alt_text": data.get("alt_text")}
+        self.catalog.append_event(photo_id, "caption_written", details | {
+            "caption": shape["caption"], "alt_text": shape["alt_text"]})
+        self._write_sidecar(photo_id)
+        return shape
+
+    @_coordinated
+    def digest_day(self, day: date, tagger=None, *, overwrite: bool = False, unavailable_reason: str | None = None) -> dict:
+        """Facts first: the table is always written; the review model's narrative is appended only when it answers."""
+        path = self.settings.digest_dir / f"{day.isoformat()}.md"
+        existed = path.exists()
+        if existed and not overwrite:
+            raise FileExistsError("digest exists; confirm overwrite")
+        facts = day_facts(self, day)
+        text = render_facts_table(facts)
+        narrative, raw = False, None
+        if facts["frames"]:
+            if tagger is None:
+                body = f"Narrative unavailable: {unavailable_reason or 'review model is not loaded in oMLX'}"
+            else:
+                try:
+                    result = tagger.write_digest(text)
+                    body, raw, narrative = result.narrative, result.raw_response, True
+                except Exception as error:  # A model failure never costs the facts.
+                    body, raw = f"Narrative unavailable: {public_message(str(error))}", getattr(error, "raw_response", None)
+            text += f"\n## Narrative\n\n{body}\n"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        SidecarWriter._atomic_write(path, text)
+        self.catalog.append_event(None, "digest_written", {
+            "date": facts["date"], "path_name": path.name, "frames": facts["frames"], "narrative": narrative,
+            "model": getattr(tagger, "model", None), "role": getattr(tagger, "role", None), "raw_response": raw})
+        return {"date": facts["date"], "file": path.name, "frames": facts["frames"], "narrative": narrative, "overwritten": existed}
 
     def _change_crop(self, photo_id: int, edit: PhotoEdit | None) -> None:
         previous = self.catalog.get_crop(photo_id)
@@ -822,9 +1137,13 @@ class Library:
                         "author": edit.author, "rationale": edit.rationale,
                         "selected_at": edit.selected_at.isoformat(),
                     }
+                share = request.preset == "share"  # Full keeps the photographer's description and no alt text.
+                caption = data.get("caption")
+                caption_used = share and bool(caption)
                 rendered = pipeline.export_jpeg(Path(photo.path), request.profile,
                     crop=crop,
-                    description=data.get("description"), keywords=data.get("subjects"),
+                    description=caption if caption_used else data.get("description"),
+                    keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
                     rating=-1 if photo.decision == "reject" else photo.rating,
                     reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
                     preset=request.preset, decoder=decoder)
@@ -1050,8 +1369,10 @@ class Library:
         photo = self.catalog.get_photo(photo_id)
         if not photo or not photo.preview_path:
             raise ValueError(f"photo {photo_id} has no preview")
+        role = getattr(tagger, "role", None)
         try:
-            result = tagger.tag(Path(photo.preview_path))
+            vocab = load_vocabulary(self.settings)
+            result = tagger.tag(Path(photo.preview_path), vocabulary=vocab)
         except Exception as error:
             raw_response = getattr(error, "raw_response", None)
             self.catalog.append_event(
@@ -1059,27 +1380,65 @@ class Library:
                 "tag_failed",
                 {
                     "model": getattr(tagger, "model", "unknown"),
+                    "role": role,
                     "error": str(error),
                     "raw_response": raw_response,
                 } | _job_detail(job_id),
             )
             self._write_sidecar(photo_id)
             raise
-        payload = {
+        # A species below 0.6 is never applied, even when the model also lists it as a subject; it stays a suggestion.
+        weak = {item["name"].casefold() for item in result.species if item["confidence"] < 0.6}
+        candidates = list(result.subjects) + ([result.scene] if result.scene else []) + list(result.conditions)
+        applied, suggested = match_keywords([word for word in candidates if word.strip().casefold() not in weak], vocab)
+        vocabulary_names = {word.casefold() for words in vocab.values() for word in words}
+        for item in result.species:  # Species are labelled suggestions unless confident and in the vocabulary.
+            name = item["name"]
+            confident = item["confidence"] >= 0.6 and name.casefold() in vocabulary_names
+            target = applied if confident else suggested
+            if name.casefold() not in {word.casefold() for word in applied + suggested}:
+                target.append(match_keywords([name], vocab)[0][0] if confident else name)
+        existing = self.catalog.get_tags(photo_id)
+        payload = (existing["data"] if existing else {}) | {
             "description": result.description,
-            "subjects": result.subjects,
+            "subjects": applied,
             "scene": result.scene,
             "technical": result.technical,
             "confidence": result.confidence,
+            "species": list(result.species),
+            "conditions": list(result.conditions),
+            "suggested": suggested,
         }
         self.catalog.save_tags(photo_id, payload, tagger.model)
         self.catalog.append_event(
             photo_id,
             "tagged",
-            {"model": tagger.model, "confidence": result.confidence, "raw_response": result.raw_response} | _job_detail(job_id),
+            {"model": tagger.model, "role": role, "confidence": result.confidence, "applied": applied,
+             "suggested": suggested, "raw_response": result.raw_response} | _job_detail(job_id),
         )
         self._write_sidecar(photo_id)
         return result
+
+    @_coordinated
+    def add_suggested_keyword(self, photo_id: int, keyword: str) -> dict:
+        return self._move_keyword(photo_id, keyword, "suggested", "subjects", "keyword_added")
+
+    @_coordinated
+    def remove_keyword(self, photo_id: int, keyword: str) -> dict:
+        return self._move_keyword(photo_id, keyword, "subjects", "suggested", "keyword_removed")
+
+    def _move_keyword(self, photo_id: int, keyword: str, source: str, target: str, kind: str) -> dict:
+        """Photographer's per-keyword accept or undo; the only way a suggestion reaches the sidecar keywords."""
+        tags = self.catalog.get_tags(photo_id)
+        data = tags["data"] if tags else {}
+        if keyword not in data.get(source, []):
+            raise ValueError(f"keyword is not {'suggested' if source == 'suggested' else 'applied'} for photo {photo_id}")
+        data[source] = [word for word in data[source] if word != keyword]
+        data[target] = data.get(target, []) + ([] if keyword in data.get(target, []) else [keyword])
+        self.catalog.save_tags(photo_id, data, tags["model"])
+        self.catalog.append_event(photo_id, kind, {"keyword": keyword})
+        self._write_sidecar(photo_id)
+        return {"photo_id": photo_id, "subjects": data["subjects"], "suggested": data["suggested"]}
 
     @_coordinated
     def set_pick(self, photo_id: int) -> None:
@@ -1211,6 +1570,7 @@ class Library:
             selected=selected,
             description=data.get("description", ""),
             keywords=data.get("subjects", []),
+            alt_text=data.get("alt_text"),
             artifacts=[artifact for artifact in catalog.list_artifacts() if artifact.photo_id == photo_id],
             active_crop=catalog.get_crop(photo_id),
             decision=photo.decision,

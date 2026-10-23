@@ -93,6 +93,27 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pipeline.export_jpeg(source, decoder="gimp", runner=render)
 
+    def test_jpeg_export_embeds_alt_text_only_when_given(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00713.ARW"
+            source.write_bytes(b"raw")
+
+            def render(command, **kwargs):
+                if command[0].endswith("sw_vers"):
+                    return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
+                Image.new("RGB", (80, 60), "red").save(command[command.index("--out") + 1], format="TIFF",
+                                                     icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            with_alt = pipeline.export_jpeg(source, decoder="macos", runner=render, alt_text="Red square")
+            without = pipeline.export_jpeg(source, decoder="macos", runner=render)
+            with Image.open(with_alt.output) as image:
+                self.assertIn(b"<Iptc4xmpCore:AltTextAccessibility><rdf:Alt><rdf:li xml:lang=\"x-default\">Red square", image.info["xmp"])
+            with Image.open(without.output) as image:
+                self.assertNotIn(b"AltTextAccessibility", image.info["xmp"])
+
     def test_jpeg_export_preserves_metadata_and_original_with_collision_suffix(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

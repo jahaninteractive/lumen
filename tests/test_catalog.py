@@ -670,6 +670,27 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(sorted(library.keeper_ids()), filtered)
             self.assertEqual(sorted([ids["a2"], ids["c1"]]), sorted(library.keeper_ids()))
 
+    def test_text_filter_searches_every_local_ai_field_and_match_terms_explains(self):
+        named, _ = seed_filter_photos(self.catalog)  # returns ({name: id}, groups), not a list
+        ids = [named["a1"], named["b2"], named["c1"]]
+        self.catalog.save_tags(ids[0], {"description": "Penguins on ice", "subjects": ["gentoo penguin"], "suggested": ["krill"],
+                                        "species": [{"name": "gentoo penguin", "confidence": 0.8}], "caption": "Porpoising gentoos",
+                                        "problems": {"kinds": ["motion_blur"], "suggest_reject": True}}, "m")
+        self.catalog.save_tags(ids[1], {"description": "Ship at anchor", "subjects": ["ship"]}, "m")
+
+        def hits(text):
+            return sorted(p["id"] for g in self.catalog.list_groups(GroupFilters(text=text, show_rejected=True)) for p in g["photos"])
+        self.assertEqual([ids[0]], hits("krill"))
+        self.assertEqual([ids[0]], hits("gentoo"))
+        self.assertEqual([ids[0]], hits("porpoising"))
+        self.assertEqual([ids[0]], hits("motion blur"))
+        self.assertEqual([ids[0]], hits("motion_blur"))
+        self.assertEqual([ids[1]], hits("ship"))
+        self.assertEqual([], hits("100%"))  # LIKE wildcards are escaped
+        self.assertEqual(["keyword: gentoo penguin", "species: gentoo penguin", "caption"], self.catalog.match_terms(ids[0], "gentoo"))
+        self.assertEqual(["problem: motion blur"], self.catalog.match_terms(ids[0], "blur"))
+        self.assertEqual([], self.catalog.match_terms(ids[2], "blur"))
+
 
 if __name__ == "__main__":
     unittest.main()

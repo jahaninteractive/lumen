@@ -1,9 +1,9 @@
 const JOB_ACTIVE = ['queued', 'running'];
 const CULLING_JOBS = ['import', 'ingest'];  // jobs that only add frames, so culling may continue alongside them
 const state = {
-  groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
-  job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
-  astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null },
+  groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, critique: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
+  rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
+  astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   mergeSelection: new Set(),
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -29,6 +29,16 @@ async function request(url, options = {}) {
 
 function post(url, payload = {}) {
   return request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+}
+
+// Every AI control waits for its role's model to be loaded in oMLX right now; the reason is spelled out, never only greyed.
+function roleReady(role) {
+  return state.status?.omlx_roles?.[role]?.loaded === true;
+}
+
+function roleUnavailable(role) {
+  const item = state.status?.omlx_roles?.[role];
+  return item && !item.loaded ? `${role === 'fast' ? 'Fast' : 'Review'} model ${item.model} is not loaded in oMLX. Load it in oMLX, then reload this page.` : '';
 }
 
 function announce(message) {
@@ -109,7 +119,7 @@ function renderComposition() {
   document.querySelector('#more-crop-shapes').hidden = alternatives.children.length === 0;
   document.querySelector('#compose-empty').hidden = true;
   document.querySelector('#compose-workspace').hidden = false;
-  document.querySelector('#ask-composition-ai').disabled = state.busy;
+  document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review');
 }
 
 async function loadComposition() {
@@ -315,6 +325,12 @@ function burstSection(group, groupIndex, frames) {
   astro.setAttribute('aria-label', `Stack Burst ${groupIndex + 1} in the Astro tab`);
   astro.addEventListener('click', () => selectGroup(group).then(() => selectTab(document.querySelector('#astro-tab'))).catch(error => announce(error.message)));
   header.append(heading, facts, selected, toggle, remove, astro);
+  if (group.astro_cue) {  // advisory text from stored triage; it never switches the tab
+    const cue = document.createElement('span');
+    cue.className = 'astro-cue';
+    cue.textContent = 'Looks like astro';
+    header.append(cue);
+  }
   const grid = document.createElement('div');
   grid.className = 'burst-frames';
   grid.append(...frames);
@@ -337,11 +353,34 @@ function cullingBlockedText() {
   return state.acting ? 'Wait for the current change to finish.' : `Culling is paused while ${(JOB_NAMES[state.job.kind] || 'a job').toLowerCase()} runs.`;
 }
 
-async function decide(photo, field, value, focusAfter = null) {
-  if (state.cullingBlocked) return announce(cullingBlockedText());
+// Applies a server-confirmed decision to the cards, counts, rail, and inspector in place, without load().
+function recordDecision(photo, result) {
   const previous = photo.decision;
   const owner = state.groups.find(item => item.photos.includes(photo));
   const keepersBefore = owner ? keepersIn(owner) : 0;
+  photo.decision = result.decision;
+  photo.rating = result.rating;
+  const delta = (result.decision === 'reject') - (previous === 'reject');
+  state.rejectedCount += delta;
+  const groupIndex = state.groups.findIndex(item => item.id === result.group_id);
+  const group = state.groups[groupIndex];
+  if (group) {
+    group.automatic_pick_id = result.automatic_pick_id;
+    group.rejected_count += delta;
+    // ponytail: library-wide count adjusted by the visible burst; exact unfiltered, may drift under a filter until the next load.
+    if (group === owner) state.keeperCount += keepersIn(group) - keepersBefore;
+    refreshFrames(group);
+    refreshPanes(photo.id);
+    const batch = document.querySelectorAll('.batch-button')[groupIndex];
+    if (batch) batch.textContent = batchText(group, groupIndex);
+    refreshDays();
+  }
+  if (state.selectedId === photo.id) renderInspector(photo);
+}
+
+async function decide(photo, field, value, focusAfter = null) {
+  if (state.cullingBlocked) return announce(cullingBlockedText());
+  const previous = photo.decision;
   state.busy = true;
   updateWorkflow();
   try {
@@ -351,30 +390,11 @@ async function decide(photo, field, value, focusAfter = null) {
       const group = state.groups.find(item => item.photos.includes(photo));
       result = { decision: previous === 'reject' ? 'none' : previous, rating: photo.rating, group_id: group?.id, automatic_pick_id: photo.id };
     } else result = await post(`/api/photos/${photo.id}/${field}`, { [field]: value });
-    photo.decision = result.decision;
-    photo.rating = result.rating;
-    const delta = (result.decision === 'reject') - (previous === 'reject');
-    state.rejectedCount += delta;
-    const groupIndex = state.groups.findIndex(item => item.id === result.group_id);
-    const group = state.groups[groupIndex];
-    if (group) {
-      group.automatic_pick_id = result.automatic_pick_id;
-      group.rejected_count += delta;
-      // ponytail: library-wide count adjusted by the visible burst; exact unfiltered, may drift under a filter until the next load.
-      if (group === owner) state.keeperCount += keepersIn(group) - keepersBefore;
-      refreshFrames(group);
-      refreshPanes(photo.id);
-      const batch = document.querySelectorAll('.batch-button')[groupIndex];
-      if (batch) batch.textContent = batchText(group, groupIndex);
-      refreshDays();
-    }
+    recordDecision(photo, result);
     const name = photo.name.replace(/\.[^.]+$/, '');
     announce(field === 'pick' ? `${photo.name} is now your best frame.`
       : field === 'rating' ? `Rating ${result.rating} set for ${name}` : `${name} ${DECISION_ANNOUNCEMENTS[result.decision]}`);
-    if (state.selectedId === photo.id) {
-      renderInspector(photo);
-      if (focusAfter) document.querySelector(focusAfter)?.focus();
-    }
+    if (state.selectedId === photo.id && focusAfter) document.querySelector(focusAfter)?.focus();
   } catch (error) {
     announce(error.message);
   } finally {
@@ -433,8 +453,13 @@ async function inspect(photo) {
   updateWorkflow();
   const compositionLoad = document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true' ? loadComposition() : null;
   document.querySelectorAll('.frame').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.id) === photo.id)));
+  const groupId = state.selectedGroupId;
+  const critiqueLoad = groupId !== null && state.critique?.groupId !== groupId
+    ? request(`/api/groups/${groupId}/critique`).then(payload => payload.critique, () => null) : null;
   const details = await request(`/api/photos/${photo.id}`);
+  const critique = critiqueLoad && await critiqueLoad;
   if (state.selectedId !== photo.id) return;
+  if (critiqueLoad) state.critique = { groupId, data: critique };
   state.details = details;
   renderInspector(photo);
   if (compositionLoad) await compositionLoad;
@@ -452,6 +477,65 @@ function rankingExplanation(photo, group) {
   return paragraph;
 }
 
+// Advisory only: the stored or fresh suggestion is shown; the pick changes only through "Use this pick".
+function burstCritique(photo, group) {
+  if (group.photos.filter(item => item.decision !== 'reject').length < 2) return null;
+  const block = document.createElement('div');
+  block.id = 'burst-critique';
+  const ask = document.createElement('button');
+  ask.type = 'button';
+  ask.className = 'secondary';
+  ask.id = 'ask-burst-ai';
+  ask.textContent = 'Ask local AI which frame is best';
+  ask.disabled = !roleReady('review');
+  ask.addEventListener('click', async () => {
+    ask.disabled = true;
+    state.busy = true;  // The server holds the library lock for the whole model call, so culling waits visibly.
+    updateWorkflow();
+    announce('Asking local AI to compare this burst');
+    try {
+      const data = await post(`/api/groups/${group.id}/critique`);
+      state.critique = { groupId: group.id, data };
+      if (state.selectedId === photo.id) renderInspector(photo);
+      announce(document.querySelector('#burst-advice')?.textContent || `Local AI suggests ${data.name}`);
+    } catch (error) {
+      announce(error.message);
+      ask.disabled = !roleReady('review');
+    } finally {
+      state.busy = false;
+      updateWorkflow();
+    }
+  });
+  block.append(ask);
+  if (roleUnavailable('review')) {
+    const reason = document.createElement('p');
+    reason.className = 'quiet';
+    reason.id = 'burst-ai-availability';
+    reason.textContent = roleUnavailable('review');
+    ask.setAttribute('aria-describedby', reason.id);
+    block.append(reason);
+  }
+  const data = state.critique?.groupId === group.id ? state.critique.data : null;
+  const index = data ? group.photos.findIndex(item => item.id === data.photo_id) : -1;
+  if (index >= 0) {
+    const suggested = group.photos[index];
+    const advice = document.createElement('p');
+    advice.id = 'burst-advice';
+    const rejected = suggested.decision === 'reject';
+    advice.textContent = `Local AI suggests frame ${index + 1} (${data.name}): ${data.rationale} (confidence ${Math.round(data.confidence * 100)}%)${rejected ? ' (frame is rejected)' : ''}`;
+    block.append(advice);
+    if (rejected) return block;
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'secondary';
+    use.id = 'use-burst-pick';
+    use.textContent = 'Use this pick';
+    use.addEventListener('click', () => decide(suggested, 'pick', null, `.frame[data-id="${suggested.id}"]`));
+    block.append(use);
+  }
+  return block;
+}
+
 function renderInspector(photo) {
   const details = state.details;
   inspection.replaceChildren();
@@ -463,7 +547,15 @@ function renderInspector(photo) {
   verdict.textContent = group && allRejected(group) ? NO_KEEPER
     : photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
   inspection.append(heading, verdict);
+  if (photo.matched?.length) {
+    const reasons = document.createElement('p');
+    reasons.id = 'match-reasons';
+    reasons.textContent = `Matches: ${photo.matched.join(', ')}`;
+    inspection.append(reasons);
+  }
   if (group) inspection.append(rankingExplanation(photo, group));
+  const critique = group && burstCritique(photo, group);
+  if (critique) inspection.append(critique);
   inspection.append(decisionControls(photo));
   for (const text of details.warnings || []) {
     const warning = document.createElement('p');
@@ -476,8 +568,9 @@ function renderInspector(photo) {
   if (details.tags?.data) {
     const description = document.createElement('p');
     description.textContent = details.tags.data.description;
-    inspection.append(description);
+    inspection.append(description, ...keywordLists(photo, details.tags.data));
   }
+  inspection.append(captionControls(photo, details.tags?.data || {}));
   const actions = document.createElement('div');
   actions.className = 'actions';
   if (photo.id !== photo.groupPick || photo.decision === 'reject') {  // Choosing a rejected frame clears its rejection.
@@ -491,8 +584,12 @@ function renderInspector(photo) {
   const tag = document.createElement('button');
   tag.type = 'button';
   tag.textContent = 'Add local AI tags';
+  tag.dataset.tagPhoto = 'true';
+  tag.disabled = !roleReady('fast');
   tag.addEventListener('click', async () => {
     tag.disabled = true;
+    state.busy = true;  // The server holds the library lock for the whole model call.
+    updateWorkflow();
     try {
       await request(`/api/photos/${photo.id}/tag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       announce(`Tags added to ${photo.name}`);
@@ -500,10 +597,153 @@ function renderInspector(photo) {
     } catch (error) {
       announce(error.message);
       tag.disabled = false;
+    } finally {
+      state.busy = false;
+      updateWorkflow();
     }
   });
   actions.append(tag);
   inspection.append(actions);
+  if (roleUnavailable('fast')) {
+    const reason = document.createElement('p');
+    reason.className = 'quiet';
+    reason.id = 'tag-photo-availability';
+    reason.textContent = roleUnavailable('fast');
+    tag.setAttribute('aria-describedby', reason.id);
+    inspection.append(reason);
+  }
+}
+
+// Advisory: a local AI draft is stored as the model's and shown for editing; only the Share export uses it.
+function captionControls(photo, data) {
+  const block = document.createElement('div');
+  block.id = 'caption-controls';
+  const heading = document.createElement('h4');
+  heading.textContent = 'Caption and alt text';
+  const note = document.createElement('p');
+  note.className = 'quiet';
+  note.id = 'caption-note';
+  note.textContent = 'Used only by the Share export. A local AI draft is a suggestion: edit it, then save.';
+  block.append(heading, note);
+  const fields = [['caption-input', 'Caption', data.caption], ['alt-input', 'Alt text', data.alt_text]].map(([id, text, value]) => {
+    const label = document.createElement('label');
+    label.htmlFor = id;
+    label.textContent = text;
+    const input = document.createElement('input');
+    input.id = id;
+    input.autocomplete = 'off';
+    input.value = value || '';
+    input.setAttribute('aria-describedby', note.id);
+    block.append(label, input);
+    return input;
+  });
+  const [caption, alt] = fields;
+  caption.maxLength = 200;  // CAPTION_MAX in omlx.py; the server enforces the same limit.
+  alt.maxLength = 125;  // ALT_TEXT_MAX in omlx.py.
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.id = 'save-caption';
+  save.textContent = 'Save caption';
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      const saved = await post(`/api/photos/${photo.id}/caption/edit`, { caption: caption.value, alt_text: alt.value });
+      Object.assign(data, { caption: saved.caption, alt_text: saved.alt_text });
+      announce(`Caption saved for ${photo.name}`);
+    } catch (error) {
+      announce(error.message);
+    } finally {
+      save.disabled = false;
+    }
+  });
+  const ask = document.createElement('button');
+  ask.type = 'button';
+  ask.className = 'secondary';
+  ask.id = 'ask-caption-ai';
+  ask.textContent = 'Write caption with local AI';
+  ask.disabled = !roleReady('review');
+  ask.addEventListener('click', async () => {
+    ask.disabled = true;
+    state.busy = true;  // The server holds the library lock for the whole model call.
+    updateWorkflow();
+    announce(`Asking local AI to caption ${photo.name}`);
+    try {
+      const drafted = await post(`/api/photos/${photo.id}/caption`);
+      caption.value = drafted.caption || '';
+      alt.value = drafted.alt_text || '';
+      Object.assign(data, { caption: drafted.caption, alt_text: drafted.alt_text });
+      announce(`Local AI caption written for ${photo.name}; edit and save to change it`);
+    } catch (error) {
+      announce(error.message);
+    } finally {
+      ask.disabled = !roleReady('review');
+      state.busy = false;
+      updateWorkflow();
+    }
+  });
+  actions.append(save, ask);
+  block.append(actions);
+  if (roleUnavailable('review')) {
+    const reason = document.createElement('p');
+    reason.className = 'quiet';
+    reason.id = 'caption-ai-availability';
+    reason.textContent = roleUnavailable('review');
+    ask.setAttribute('aria-describedby', reason.id);
+    block.append(reason);
+  }
+  return block;
+}
+
+// Applied keywords each carry a Remove (undo); suggestions carry an Add. Species ride along as labelled text.
+function keywordLists(photo, data) {
+  const subjects = data.subjects || [];
+  const applied = new Set(subjects.map(word => word.toLowerCase()));
+  const lists = [];
+  for (const [id, label, words, action] of [['keywords', 'Keywords', subjects, 'remove'], ['suggested-keywords', 'Suggested keywords', data.suggested || [], 'add']]) {
+    const heading = document.createElement('h4');
+    heading.id = `${id}-heading`;
+    heading.textContent = label;
+    const list = document.createElement('ul');
+    list.id = id;
+    list.setAttribute('aria-labelledby', heading.id);
+    for (const word of words) {
+      const item = document.createElement('li');
+      const text = document.createElement('span');
+      text.textContent = word;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary';
+      button.textContent = action === 'add' ? 'Add' : 'Remove';
+      button.setAttribute('aria-label', `${action === 'add' ? 'Add' : 'Remove'} keyword ${word}`);
+      button.addEventListener('click', () => changeKeyword(photo, action, word));
+      item.append(text, button);
+      list.append(item);
+      if (state.keywordFocus === `${action}:${word}`) { state.keywordFocus = null; window.setTimeout(() => button.focus(), 0); }
+    }
+    for (const species of data.species || []) {
+      if (applied.has(species.name.toLowerCase()) !== (action === 'remove')) continue;
+      const item = document.createElement('li');
+      item.textContent = `Species: ${species.name} (${Math.round(species.confidence * 100)}%)`;
+      list.append(item);
+    }
+    lists.push(heading, list);
+  }
+  return lists;
+}
+
+async function changeKeyword(photo, action, keyword) {
+  try {
+    const result = await post(`/api/photos/${photo.id}/keywords`, { action, keyword });
+    if (state.selectedId !== photo.id) return;
+    Object.assign(state.details.tags.data, { subjects: result.subjects, suggested: result.suggested });
+    state.keywordFocus = `${action === 'add' ? 'remove' : 'add'}:${keyword}`;  // focus lands on the undo control
+    renderInspector(photo);
+    announce(`Keyword ${keyword} ${action === 'add' ? 'added to' : 'removed from'} ${photo.name}`);
+  } catch (error) {
+    announce(error.message);
+  }
 }
 
 function fillFrame(button, photo, group) {
@@ -742,6 +982,12 @@ const FILTER_CONTROLS = {
 };
 const FLAG_FILTERS = ['keepers_only', 'tagged_only', 'show_rejected'];
 const FILTER_DEFAULTS = { decision: 'any', min_rating: '0' };
+let findTimer = null;  // pending debounced apply from #find / #filter-text
+
+function cancelFind() {
+  window.clearTimeout(findTimer);
+  findTimer = null;
+}
 
 function filterQuery() {
   const params = new URLSearchParams();
@@ -764,11 +1010,20 @@ function syncFilters(cameras) {
     option.textContent = camera;
     return option;
   }));
+  // A pending find apply owns both text fields, as does a mirror that matches the field being typed in.
+  const text = ['#find', '#filter-text'].map(selector => document.querySelector(selector));
+  const holdText = findTimer !== null || (text.includes(document.activeElement) && text[0].value === text[1].value);
   Object.entries(FILTER_CONTROLS).forEach(([name, selector]) => {
     const control = document.querySelector(selector);
     if (FLAG_FILTERS.includes(name)) control.checked = params.get(name) === '1';
-    else control.value = params.get(name) ?? FILTER_DEFAULTS[name] ?? '';
+    else if (!(name === 'text' && holdText)) keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');
   });
+  if (!holdText) keepTyping(text[0], params.get('text') ?? '');
+}
+
+// A reload never rewrites the field being typed in, nor one that differs from the URL only by spaces.
+function keepTyping(control, value) {
+  if (control !== document.activeElement && control.value.trim() !== value) control.value = value;
 }
 
 async function applyFilters(query = filterQuery()) {
@@ -800,7 +1055,8 @@ async function load() {
     state.selectedId = null;
     inspection.textContent = 'Select a frame to see why it ranked where it did.';
   }
-  document.querySelector('#system-status').textContent = status.omlx_live.summary;
+  const roleText = role => `${role} ${status.omlx_roles[role].model} ${status.omlx_roles[role].loaded ? 'loaded' : 'not loaded'}`;
+  document.querySelector('#system-status').textContent = `${status.omlx_live.summary} · ${roleText('fast')} · ${roleText('review')}`;
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
   if (!state.astro.job) {
@@ -814,6 +1070,7 @@ async function load() {
     if (active) watchJob(active);
   }
   if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
+  if (document.querySelector('#review-tab').getAttribute('aria-selected') === 'true') await loadRejectSuggestions();
 }
 
 document.querySelector('#import-form').addEventListener('submit', async event => {
@@ -833,26 +1090,147 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   }
 });
 
-document.querySelector('#tag-all').addEventListener('click', async () => {
+async function startTagJob(url, payload) {
   state.busy = true;
   updateWorkflow();
   try {
-    watchJob(await post('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
+    watchJob(await post(url, payload));
   } catch (error) {
     announce(error.message);
   } finally {
     state.busy = false;
     updateWorkflow();
   }
+}
+document.querySelector('#tag-all').addEventListener('click', () => startTagJob('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
+document.querySelector('#tag-keepers').addEventListener('click', () => startTagJob('/api/photos/tag', { scope: 'keepers' }));
+
+document.querySelector('#scan-rejects').addEventListener('click', () => startTagJob('/api/photos/review-rejects', { scope: 'keepers' }));
+
+// Review tab: advisory reject suggestions. Rendering and polling never post; only Reject/Keep, X/K, and the counted confirm do.
+const rejectList = document.querySelector('#reject-list');
+const rejectConfirm = document.querySelector('#reject-all-confirm');
+
+function problemText(problems) {
+  return problems.map(item => `${item.kind.replace(/_/g, ' ')} ${Math.round(item.confidence * 100)}%`).join(', ') || 'No specific problem named';
+}
+
+function renderRejectList(suggestions) {
+  state.rejectSuggestions = suggestions;
+  const count = suggestions.length;
+  document.querySelector('#review-count').textContent = `${count} suggested reject${count === 1 ? '' : 's'}`;
+  rejectList.replaceChildren(...suggestions.map(item => {
+    const row = document.createElement('li');
+    row.className = 'reject-row';
+    row.dataset.photoId = String(item.photo_id);
+    const image = document.createElement('img');
+    image.loading = 'lazy';
+    image.alt = '';
+    image.src = item.preview_url;
+    const text = document.createElement('div');
+    const name = document.createElement('p');
+    name.textContent = item.name;
+    const problems = document.createElement('p');
+    problems.className = 'quiet';
+    problems.textContent = problemText(item.problems);
+    text.append(name, problems);
+    const buttons = document.createElement('div');
+    buttons.className = 'button-row';
+    for (const [action, label] of [['reject', 'Reject'], ['keep', 'Keep']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = action === 'keep' ? 'secondary' : '';
+      button.dataset.rejectAction = action;
+      button.textContent = label;
+      button.setAttribute('aria-label', `${label} ${item.name}`);
+      button.addEventListener('click', () => decideSuggestions([item.photo_id], action));
+      buttons.append(button);
+    }
+    row.append(image, text, buttons);
+    return row;
+  }));
+  updateWorkflow();
+}
+
+async function loadRejectSuggestions() {
+  try {
+    renderRejectList((await request('/api/photos/reject-suggestions')).suggestions);
+  } catch (error) {
+    announce(error.message);
+  }
+}
+
+function rowButton(index, action) {
+  const row = rejectList.children[Math.max(0, Math.min(rejectList.children.length - 1, index))];
+  return row?.children[2].children[action === 'keep' ? 1 : 0] || null;
+}
+
+async function decideSuggestions(ids, decision) {
+  if (state.cullingBlocked) return announce(cullingBlockedText());
+  const index = state.rejectSuggestions.findIndex(item => item.photo_id === ids[0]);
+  const names = new Map(state.rejectSuggestions.map(item => [item.photo_id, item.name]));
+  state.busy = true;
+  updateWorkflow();
+  try {
+    const result = await post('/api/photos/reject-suggestions/decide', { photo_ids: ids, decision });
+    for (const item of result.decided) {  // the server's decision and burst pick, as after decide()
+      const photo = photoById(item.photo_id);
+      if (photo) recordDecision(photo, item);
+    }
+    const decidedIds = result.decided.map(item => item.photo_id);
+    renderRejectList(state.rejectSuggestions.filter(item => !decidedIds.includes(item.photo_id)));
+    const verb = decision === 'reject' ? 'rejected' : 'kept';
+    announce(decidedIds.length === 1 ? `${names.get(decidedIds[0])} ${verb}` : `${decidedIds.length} frames ${verb}`);
+    (rowButton(index, decision) || document.querySelector('#scan-rejects')).focus();
+  } catch (error) {
+    announce(error.message);
+    await loadRejectSuggestions();  // a stale list (decided elsewhere) is refreshed, never applied by count
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+function handleRejectKey(event) {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.target?.closest('input, textarea, select')) return;
+  const row = event.target?.closest('.reject-row');
+  if (!row || event.target.tagName !== 'BUTTON') return;
+  const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
+  const index = Array.from(rejectList.children).indexOf(row);
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    event.preventDefault();
+    return rowButton(index + (key === 'ArrowDown' ? 1 : -1), event.target.dataset.rejectAction)?.focus();
+  }
+  const decision = { x: 'reject', k: 'keep' }[key];
+  if (!decision) return;
+  event.preventDefault();
+  return decideSuggestions([Number(row.dataset.photoId)], decision);
+}
+rejectList.addEventListener('keydown', handleRejectKey);
+
+document.querySelector('#reject-all-shown').addEventListener('click', () => {
+  const ids = state.rejectSuggestions.map(item => item.photo_id);
+  if (!ids.length) return;
+  rejectConfirm.dataset.ids = ids.join(',');  // the ids shown at open time, not a count
+  document.querySelector('#reject-all-text').textContent = `Reject all ${ids.length} shown frames? This marks them rejected; you can restore any frame from the inspector.`;
+  if (rejectConfirm.showModal) rejectConfirm.showModal();
+  else rejectConfirm.hidden = false;
+});
+document.querySelector('#reject-all-yes').addEventListener('click', () => {
+  if (rejectConfirm.close) rejectConfirm.close();
+  else rejectConfirm.hidden = true;
+  return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
 });
 
-const JOB_NAMES = { import: 'Import', tag: 'Tagging', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+const JOB_NAMES = { import: 'Import', tag: 'Tagging', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
+    : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
+    : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.` : '';
   const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
   return {
@@ -886,7 +1264,10 @@ function watchJob(job) {
   if (JOB_ACTIVE.includes(job.status)) startJobPolling();
   else {
     stopJobPolling();
-    if (JOB_ACTIVE.includes(previous)) load().catch(error => announce(error.message));
+    if (JOB_ACTIVE.includes(previous)) {
+      load().catch(error => announce(error.message));
+      if (['triage', 'tag'].includes(job.kind) && state.selectedGroupId !== null) loadAstroTriage(state.selectedGroupId);
+    }
   }
   updateWorkflow();
 }
@@ -1022,15 +1403,72 @@ function renderAstroLights(group) {
     input.addEventListener('change', updateWorkflow);
     const name = document.createElement('span');
     name.textContent = photo.name;
-    label.append(input, name);
+    const triage = document.createElement('span');
+    triage.className = 'triage quiet';
+    triage.textContent = 'not triaged';
+    label.append(input, name, triage);
     list.append(label);
   });
+  if (group) loadAstroTriage(group.id);
+}
+
+// Astro triage is advice: it only writes text; checkboxes change only through the counted confirm below.
+function triageText(light) {
+  if (!light) return 'not triaged';
+  const parts = [light.sky ? `${light.sky.class.replace(/_/g, ' ')} ${Math.round(light.sky.confidence * 100)}%` : 'not triaged',
+    ...light.issues.map(issue => issue.replace(/_/g, ' '))];
+  if (light.trailing_warning && !light.issues.includes('trailing')) parts.push('trailing measured');
+  if (light.flagged) parts.push('flagged');
+  return parts.join(' · ');
+}
+
+async function loadAstroTriage(groupId) {
+  try {
+    const triage = await request(`/api/groups/${groupId}/triage`);
+    if (groupId !== state.selectedGroupId) return;
+    state.astro.triage = triage;
+  } catch (error) {
+    return announce(error.message);
+  }
+  const lights = new Map(state.astro.triage.lights.map(light => [light.photo_id, light]));
+  Array.from(document.querySelector('#astro-lights').children).forEach(label => {
+    label.children[2].textContent = triageText(lights.get(Number(label.children[0].dataset.id)));
+  });
+  updateWorkflow();
+}
+
+function flaggedLights() {
+  const flagged = new Set((state.astro.triage?.lights || []).filter(light => light.flagged).map(light => String(light.photo_id)));
+  return Array.from(document.querySelectorAll('#astro-lights input')).filter(input => input.checked && flagged.has(String(input.dataset.id)));
 }
 
 function astroLights() {
   const inputs = Array.from(document.querySelectorAll('#astro-lights input'));
   return { included: inputs.filter(input => input.checked).length, excluded: inputs.filter(input => !input.checked).map(input => Number(input.dataset.id)) };
 }
+
+const excludeConfirm = document.querySelector('#exclude-confirm');
+const lightsText = count => `${count} light${count === 1 ? '' : 's'}`;
+document.querySelector('#triage-astro').addEventListener('click', () => {
+  if (state.selectedGroupId !== null) return startTagJob(`/api/groups/${state.selectedGroupId}/triage`, {});
+});
+document.querySelector('#exclude-flagged').addEventListener('click', () => {
+  const ids = flaggedLights().map(input => String(input.dataset.id));
+  if (!ids.length) return;
+  excludeConfirm.dataset.ids = ids.join(',');  // the lights flagged at open time, not a count
+  document.querySelector('#exclude-confirm-text').textContent = `Uncheck ${ids.length} flagged light${ids.length === 1 ? '' : 's'}? Flagged means cloud, not sky, trailing, or a cloud band. Nothing is stacked until you prepare and run.`;
+  if (excludeConfirm.showModal) excludeConfirm.showModal();
+  else excludeConfirm.hidden = false;
+});
+document.querySelector('#exclude-confirm-yes').addEventListener('click', () => {
+  if (excludeConfirm.close) excludeConfirm.close();
+  else excludeConfirm.hidden = true;
+  const ids = new Set(excludeConfirm.dataset.ids.split(','));
+  const unchecked = Array.from(document.querySelectorAll('#astro-lights input')).filter(input => input.checked && !input.disabled && ids.has(String(input.dataset.id)));
+  unchecked.forEach(input => { input.checked = false; });  // client state only; prepare sends it as excluded_photo_ids
+  updateWorkflow();
+  announce(`${lightsText(unchecked.length)} excluded`);
+});
 
 function astroPath(name) {
   return `${state.status?.astro_output_dir || '<library>/outputs/astro'}/${state.astro.job.job_id}/${name}`;
@@ -1148,6 +1586,7 @@ function updateWorkflow() {
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
   document.querySelector('#merge-batches').disabled = state.busy || state.mergeSelection.size < 2;
+  document.querySelector('#write-digest').disabled = state.busy;
   document.querySelector('#merge-count').textContent = `${state.mergeSelection.size} batch${state.mergeSelection.size === 1 ? '' : 'es'} selected`;
   document.querySelectorAll('[data-merge-group]').forEach(box => { box.checked = state.mergeSelection.has(Number(box.dataset.mergeGroup)); });
   document.querySelectorAll('[data-burst]').forEach(section => {
@@ -1161,9 +1600,18 @@ function updateWorkflow() {
   document.querySelector('#import-form button[type="submit"]').disabled = state.busy;
   document.querySelector('#browse-path').disabled = state.busy;
   document.querySelector('#open-compare').disabled = state.cullingBlocked || state.compare.length !== 2;
-  document.querySelector('#tag-all').disabled = state.busy;
+  const fastLoaded = roleReady('fast');
+  document.querySelector('#tag-all').disabled = state.busy || !fastLoaded;
+  document.querySelector('#tag-all-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;
+  document.querySelector('#tag-keepers').disabled = state.busy || !keepers || !fastLoaded;
+  document.querySelector('#tag-keepers-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#scan-rejects').disabled = state.busy || !keepers || !fastLoaded;
+  document.querySelector('#scan-rejects-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#reject-all-shown').disabled = state.cullingBlocked || !state.rejectSuggestions.length;
+  document.querySelector('#composition-availability').textContent = roleUnavailable('review');
   document.querySelector('#retag-all').disabled = state.busy;
-  document.querySelector('#ask-composition-ai').disabled = state.busy || !state.composition || state.composition.photo_id !== state.selectedId;
+  document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review') || !state.composition || state.composition.photo_id !== state.selectedId;
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
 
@@ -1176,6 +1624,11 @@ function updateWorkflow() {
   document.querySelector('#prepare-astro').disabled = state.busy || !siril || !group || !document.querySelector('#astro-confirm').checked || astroLights().included < 2 || activeJob;
   document.querySelector('#run-astro').disabled = state.busy || job?.status !== 'queued';
   document.querySelectorAll('#astro-lights input').forEach(input => { input.disabled = activeJob; });
+  const flagged = flaggedLights().length;
+  document.querySelector('#triage-astro').disabled = state.busy || !group || !roleReady('fast');
+  document.querySelector('#triage-astro-availability').textContent = roleUnavailable('fast');
+  document.querySelector('#exclude-flagged').textContent = `Exclude flagged lights (${flagged})`;
+  document.querySelector('#exclude-flagged').disabled = activeJob || !flagged;
   document.querySelector('#astro-confirm').disabled = activeJob;
   document.querySelector('#cancel-astro').disabled = state.acting || !activeJob;
   document.querySelector('#cancel-job').disabled = state.acting || !JOB_ACTIVE.includes(state.job?.status);
@@ -1199,6 +1652,7 @@ function selectTab(tab) {
   });
   collapsePanel(false);  // choosing a tab always shows its panel
   if (tab.id === 'compose-tab') loadComposition();
+  if (tab.id === 'review-tab') loadRejectSuggestions();
 }
 
 function collapsePanel(collapsed) {
@@ -1278,9 +1732,22 @@ document.querySelector('#clear-confirmation').addEventListener('input', updateWo
 document.querySelector('#show-rejected').addEventListener('change', () => applyFilters().catch(error => announce(error.message)));
 document.querySelector('#filter-form').addEventListener('submit', event => {
   event.preventDefault();
+  cancelFind();
   return applyFilters().catch(error => announce(error.message));
 });
-document.querySelector('#reset-filters').addEventListener('click', () => applyFilters('').catch(error => announce(error.message)));
+// The rail find and the form's tag text are one `text` filter; typing in either mirrors the other and applies it.
+[['#find', '#filter-text'], ['#filter-text', '#find']].forEach(([source, mirror]) => document.querySelector(source).addEventListener('input', () => {
+  document.querySelector(mirror).value = document.querySelector(source).value;
+  window.clearTimeout(findTimer);
+  findTimer = window.setTimeout(() => {
+    findTimer = null;
+    applyFilters().catch(error => announce(error.message));
+  }, 300);
+}));
+document.querySelector('#reset-filters').addEventListener('click', () => {
+  cancelFind();
+  return applyFilters('').catch(error => announce(error.message));
+});
 document.querySelector('#show-more').addEventListener('click', showMore);
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
 sheet.addEventListener('keydown', handleCullingKey);
@@ -1586,3 +2053,31 @@ try {
   document.querySelector('#export-status').textContent = 'Browser storage is unavailable; choose an XMP for this visit.';
 }
 load().catch(error => announce(error.message));
+
+// Daily digest: facts always, narrative only when the review model answers; an existing file is replaced only after Confirm.
+const digestButton = document.querySelector('#write-digest');
+const digestConfirm = document.querySelector('#digest-confirm');
+async function writeDigest(day, overwrite = false) {
+  state.busy = true;  // The server holds the library lock for the whole model call, so culling waits visibly.
+  updateWorkflow();
+  try {
+    const result = await post('/api/digests', overwrite ? { date: day, overwrite: true } : { date: day });
+    document.querySelector('#digest-result').textContent = result.file;
+    announce(`Digest written for ${result.date}: ${result.file} (${result.narrative ? 'narrative included' : 'facts only'})`);
+  } catch (error) {
+    if (!error.payload?.exists) return announce(`Could not write the digest: ${error.message}`);
+    digestConfirm.dataset.date = day;  // the day asked about at open time
+    document.querySelector('#digest-confirm-text').textContent = `A digest for ${day} already exists. Overwrite it?`;
+    if (digestConfirm.showModal) digestConfirm.showModal();
+    else digestConfirm.hidden = false;
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+digestButton.addEventListener('click', () => writeDigest(new Date().toLocaleDateString('sv-SE')));
+document.querySelector('#digest-confirm-yes').addEventListener('click', () => {
+  if (digestConfirm.close) digestConfirm.close();
+  else digestConfirm.hidden = true;
+  return writeDigest(digestConfirm.dataset.date, true);
+});

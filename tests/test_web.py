@@ -29,6 +29,9 @@ except ModuleNotFoundError:  # discovered with -s tests
     from test_previews import write_fake_darktable
 
 
+REVIEW_LOADED = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+
+
 class LandmarkParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -267,16 +270,18 @@ class WebTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def __init__(self, *args):
+            def __init__(self, *args, **kwargs):
                 pass
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 from lumen.omlx import TagResult
                 return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
 
         changed = self.root / "photo.jpg"
         Image.new("RGB", (120, 90), (1, 2, 3)).save(changed)
-        with patch.object(Library, "_import_one", held), patch("lumen.web.OmlxTagger", FakeTagger):
+        live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch.object(Library, "_import_one", held), patch("lumen.library.OmlxTagger", FakeTagger), patch(
+                "lumen.library.get_server_status", return_value=live):
             code, started = self.post_json("/api/import", {"path": str(changed)})
             self.assertEqual(202, code)
             code, body = self.post_json("/api/photos/tag-all", {})
@@ -581,7 +586,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -600,7 +605,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -614,7 +619,7 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab"]
-        self.assertEqual(["Compose", "Export", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
+        self.assertEqual(["Compose", "Export", "Review", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for index, tab in enumerate(tabs):
             self.assertEqual("button", tab["tag"])
@@ -758,7 +763,7 @@ class WebTests(unittest.TestCase):
             def review_composition(self, original, candidates):
                 return CompositionReview(candidates[0][0], "The original keeps useful context.", 0.75)
 
-        with patch("lumen.web.OmlxTagger", return_value=Tagger()):
+        with patch("lumen.library.OmlxTagger", return_value=Tagger()), patch("lumen.library.get_server_status", return_value=REVIEW_LOADED):
             code, payload = self.post_json("/api/photos/1/composition-review", {})
         self.assertEqual(200, code, payload)
         self.assertEqual({"candidate_id", "rationale", "confidence"}, set(payload))
@@ -779,7 +784,7 @@ class WebTests(unittest.TestCase):
             with urllib.request.urlopen(self.base + "/api/photos/1/crops", timeout=3) as response:
                 candidate = next(item for item in json.load(response)["candidates"] if item["kind"] != "original")
             self.assertEqual(200, self.post_json("/api/photos/1/crop", {"candidate_id": candidate["id"]})[0])
-            with patch("lumen.web.OmlxTagger", return_value=BrokenTagger()):
+            with patch("lumen.library.OmlxTagger", return_value=BrokenTagger()), patch("lumen.library.get_server_status", return_value=REVIEW_LOADED):
                 code, payload = self.post_json("/api/photos/1/composition-review", {})
         self.assertEqual(400, code, payload)
         self.assertEqual("local composition review is unavailable for this photo", payload["error"])
@@ -877,6 +882,230 @@ class WebTests(unittest.TestCase):
         self.assertNotRegex(javascript, r"composition[^\n]*\.innerHTML|rationale[^\n]*\.innerHTML")
         self.assertIn("loadComposition", javascript)
 
+    def test_tag_scope_route_gates_on_live_model_and_never_creates_a_job_when_refused(self):  # Review Focus
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def __init__(self, *args, **kwargs): self.role = kwargs.get("role", "review")
+            def tag(self, preview, *, vocabulary=None):
+                from lumen.omlx import TagResult
+                return TagResult("A frame", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        offline = {"version": None, "default_model": None, "loaded_models": []}
+        with patch("lumen.library.get_server_status", return_value=offline):
+            code, body = self.post_json("/api/photos/tag", {"scope": "keepers"})
+            self.assertEqual((400, {"error": "fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX"}), (code, body))
+            self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"])
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        Image.new("RGB", (120, 90)).save(self.root / "photo.jpg")
+        # /api/status reads oMLX through diagnostics; patch it too so the test never contacts a real server.
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.diagnostics.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root / "photo.jpg")})[1]["job_id"])
+            for payload in ({"scope": "some"}, {"scope": [1, 1]}, {"scope": ["1"]}, {"scope": "keepers", "extra": 1}, {}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/tag", payload)[0])
+            code, job = self.post_json("/api/photos/tag", {"scope": "keepers"})
+            self.assertEqual(202, code)
+            final = self.wait_job(job["job_id"])
+            self.assertEqual("succeeded", final["status"])
+            self.assertNotIn("raw_response", json.dumps(final))
+            code, status = self.get_json("/api/status")
+            self.assertEqual({"model": "Qwen3-VL-8B-Instruct-4bit", "loaded": True}, status["omlx_roles"]["fast"])
+            self.assertFalse(status["omlx_roles"]["review"]["loaded"])
+            code, vocab = self.get_json("/api/vocabulary")
+            self.assertIn("wildlife", vocab["categories"])
+            photo = self.get_json("/api/photos/1")[1]
+            self.assertEqual(["ice"], photo["tags"]["data"]["subjects"])
+            self.assertNotIn("raw_response", json.dumps(photo))
+            self.assertEqual(403, self.post_json("/api/photos/1/keywords", {"action": "remove", "keyword": "ice"}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json("/api/photos/1/keywords", {"action": "drop", "keyword": "ice"})[0])
+            code, body = self.post_json("/api/photos/1/keywords", {"action": "remove", "keyword": "ice"})
+            self.assertEqual((200, [], ["ice"]), (code, body["subjects"], body["suggested"]))
+
+    def test_export_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('id="tag-keepers"', html)
+        self.assertIn('id="tag-keepers-availability"', html)
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("omlx_roles", js)
+        self.assertIn("suggested-keywords", js)
+
+    def test_reject_suggestion_routes_gate_validate_and_decide_by_ids(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def review_rejects(self, preview):
+                from lumen.omlx import RejectReview
+                return RejectReview([{"kind": "misfire", "confidence": 0.9}], True, 0.9, "{}")
+
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        for index in range(2):
+            Image.new("RGB", (120, 90), (index, 0, 0)).save(self.root / f"p{index}.jpg")
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            code, job = self.post_json("/api/photos/review-rejects", {"scope": "keepers"})
+            self.assertEqual(202, code)
+            self.assertEqual("succeeded", self.wait_job(job["job_id"])["status"])
+            code, body = self.get_json("/api/photos/reject-suggestions")
+            self.assertEqual(3, body["count"])  # setUp's photo.jpg is a keeper too, beside the two new frames
+            self.assertNotIn("raw_response", json.dumps(body))
+            self.assertTrue(all(s["preview_url"].startswith("/preview/") for s in body["suggestions"]))
+            ids = [s["photo_id"] for s in body["suggestions"]]
+            self.assertEqual(403, self.post_json("/api/photos/reject-suggestions/decide", {"photo_ids": ids, "decision": "reject"}, headers={"Origin": "https://attacker.example"})[0])
+            for payload in ({"photo_ids": ids}, {"photo_ids": [], "decision": "reject"}, {"photo_ids": ids, "decision": "reject", "count": 2}, {"photo_ids": [ids[0], 99], "decision": "reject"}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/reject-suggestions/decide", payload)[0])
+            self.assertEqual("none", self.get_json(f"/api/photos/{ids[0]}")[1]["photo"]["decision"])
+            code, body = self.post_json("/api/photos/reject-suggestions/decide", {"photo_ids": ids, "decision": "reject"})
+            self.assertEqual((200, sorted(ids), 0), (code, sorted(d["photo_id"] for d in body["decided"]), body["remaining"]))
+            self.assertTrue(all(d["decision"] == "reject" and "automatic_pick_id" in d and "group_id" in d for d in body["decided"]))
+        with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}):
+            self.assertEqual(400, self.post_json("/api/photos/review-rejects", {"scope": "keepers"})[0])
+            self.assertFalse(any(j["kind"] == "review_rejects" and j["status"] in ("queued", "running") for j in self.get_json("/api/jobs")[1]["jobs"]))
+
+    def test_review_panel_has_native_rows_keys_and_counted_confirmation(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        for needle in ('id="review-tab"', 'id="review-panel"', 'id="scan-rejects"', 'id="reject-list"', 'id="reject-all-shown"', 'id="reject-all-confirm"'):
+            self.assertIn(needle, html)
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("Reject all ${", js)
+
+    def test_javascript_review_panel_decides_rows_by_button_and_key_and_confirms_count(self):
+        self.run_javascript_cleanup_regression("review-rejects")
+
+    def test_critique_routes_gate_on_review_model_and_never_change_the_pick(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def critique_burst(self, frames):
+                from lumen.omlx import BurstCritique
+                return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
+
+        for index in range(3):
+            image = Image.new("RGB", (120, 90), (index * 30, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+            image.save(self.root / f"b{index}.jpg", exif=exif)
+        fast_only = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=fast_only), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            group = self.get_json("/api/groups")[1]["groups"][0]
+            self.assertEqual((400, {"error": "review model Qwen3.8-27B-4bit is not loaded in oMLX"}), self.post_json(f"/api/groups/{group['id']}/critique", {}))
+            self.assertEqual({"critique": None}, self.get_json(f"/api/groups/{group['id']}/critique")[1])
+        with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.assertEqual(403, self.post_json(f"/api/groups/{group['id']}/critique", {}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json(f"/api/groups/{group['id']}/critique", {"pick": True})[0])
+            self.assertEqual(404, self.post_json("/api/groups/999/critique", {})[0])
+            code, body = self.post_json(f"/api/groups/{group['id']}/critique", {})
+            self.assertEqual(200, code)
+            self.assertEqual({"group_id", "photo_id", "name", "rationale", "confidence", "candidate_ids"}, set(body))
+            self.assertEqual(group["automatic_pick_id"], self.get_json("/api/groups")[1]["groups"][0]["automatic_pick_id"])
+            self.assertEqual(body, self.get_json(f"/api/groups/{group['id']}/critique")[1]["critique"])
+
+    def test_triage_routes_and_groups_cue_never_switch_mode_or_change_exclusions(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def triage_astro(self, preview):
+                from lumen.omlx import AstroTriage
+                return AstroTriage("night_sky", 0.9, [], "{}")
+
+        for index in range(3):
+            image = Image.new("RGB", (120, 90), (0, 0, index * 20)); exif = Image.Exif(); exif[36867] = f"2026:10:22 22:00:{index * 10:02d}"; exif[33434] = 15
+            image.save(self.root / f"l{index}.jpg", exif=exif)
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            group = self.get_json("/api/groups")[1]["groups"][0]
+            self.assertFalse(group["astro_cue"])
+            self.assertEqual(403, self.post_json(f"/api/groups/{group['id']}/triage", {}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json(f"/api/groups/{group['id']}/triage", {"all": True})[0])
+            code, job = self.post_json(f"/api/groups/{group['id']}/triage", {})
+            self.assertEqual(202, code)
+            self.assertEqual("succeeded", self.wait_job(job["job_id"])["status"])
+            self.assertTrue(self.get_json("/api/groups")[1]["groups"][0]["astro_cue"])
+            code, triage = self.get_json(f"/api/groups/{group['id']}/triage")
+            self.assertEqual(3, len(triage["lights"]))
+            self.assertNotIn("raw_response", json.dumps(triage))
+        with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}):
+            code, body = self.post_json(f"/api/groups/{group['id']}/triage", {})
+            self.assertEqual((400, "fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX"), (code, body["error"]))
+            self.assertEqual(404, self.get_json("/api/groups/999/triage")[0])
+
+    def test_astro_panel_has_triage_text_and_counted_exclude_confirmation(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        for needle in ('id="triage-astro"', 'id="exclude-flagged"', 'id="exclude-confirm"'):
+            self.assertIn(needle, html)
+
+    def test_javascript_astro_triage_excludes_only_after_confirmation_and_cue_is_text(self):
+        self.run_javascript_cleanup_regression("astro-triage")
+
+    def test_javascript_burst_critique_shows_advice_and_only_use_this_pick_changes_the_pick(self):
+        self.run_javascript_cleanup_regression("critique")
+
+    def test_caption_routes_gate_validate_and_inspector_has_native_inputs(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
+            def caption(self, preview):
+                from lumen.omlx import Caption
+                return Caption("A caption.", "Alt text.", "{}")
+
+        Image.new("RGB", (120, 90)).save(self.root / "p.jpg")
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root / "p.jpg")})[1]["job_id"])
+            self.assertEqual(403, self.post_json("/api/photos/1/caption", {}, headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual(400, self.post_json("/api/photos/1/caption", {"style": "fun"})[0])
+            self.assertEqual((200, {"photo_id": 1, "caption": "A caption.", "alt_text": "Alt text."}), self.post_json("/api/photos/1/caption", {}))
+            for payload in ({"caption": "x" * 201, "alt_text": None}, {"caption": "a"}, {"caption": "a", "alt_text": "b", "tone": "x"}, {"caption": 1, "alt_text": None}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/1/caption/edit", payload)[0])
+            self.assertEqual("Edited.", self.post_json("/api/photos/1/caption/edit", {"caption": "Edited.", "alt_text": None})[1]["caption"])
+            self.assertEqual("Edited.", self.get_json("/api/photos/1")[1]["tags"]["data"]["caption"])
+        with patch("lumen.library.get_server_status", return_value={"version": None, "default_model": None, "loaded_models": []}):
+            self.assertEqual((400, {"error": "review model Qwen3.8-27B-4bit is not loaded in oMLX"}), self.post_json("/api/photos/1/caption", {}))
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("caption-input", js); self.assertIn("alt-input", js); self.assertIn("maxLength = 125", js)
+
+    def test_javascript_caption_inputs_save_and_never_trigger_culling_keys(self):
+        self.run_javascript_cleanup_regression("caption")
+
+    def test_javascript_keywords_add_and_remove_without_reload_and_tag_keepers_gates_on_role(self):
+        self.run_javascript_cleanup_regression("keywords")
+
+    def test_javascript_tag_keepers_disabled_when_fast_model_unloaded(self):
+        self.run_javascript_cleanup_regression("keywords-unloaded")
+
+    def test_digest_route_confirms_overwrite_and_degrades_without_review_model(self):
+        for index in range(2):
+            image = Image.new("RGB", (120, 90), (index * 40, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 10:00:0{index}"
+            image.save(self.root / f"d{index}.jpg", exif=exif)
+        none = {"version": None, "default_model": None, "loaded_models": []}
+        with patch("lumen.library.get_server_status", return_value=none):
+            self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+            self.assertEqual(403, self.post_json("/api/digests", {"date": "2026-10-22"}, headers={"Origin": "https://attacker.example"})[0])
+            for payload in ({"date": "22/10/2026"}, {"date": "2026-10-22", "overwrite": "yes"}, {}, {"date": "2026-10-22", "model": "x"}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/digests", payload)[0])
+            code, body = self.post_json("/api/digests", {"date": "2026-10-22"})
+            self.assertEqual((200, {"date": "2026-10-22", "file": "2026-10-22.md", "frames": 2, "narrative": False, "overwritten": False}), (code, body))
+            self.assertEqual((409, True), (lambda r: (r[0], r[1]["exists"]))(self.post_json("/api/digests", {"date": "2026-10-22"})))
+            self.assertTrue(self.post_json("/api/digests", {"date": "2026-10-22", "overwrite": True})[1]["overwritten"])
+            self.assertIn("digest_dir", self.get_json("/api/status")[1])
+            text = (self.root / "library" / "digests" / "2026-10-22.md").read_text()
+            self.assertIn("Narrative unavailable: review model Qwen3.8-27B-4bit is not loaded in oMLX", text)
+
+    def test_digest_route_strips_absolute_paths_from_os_errors(self):
+        none = {"version": None, "default_model": None, "loaded_models": []}
+        failure = OSError("/Users/someone/Pictures/Lumen Library/digests: permission denied")
+        with patch("lumen.library.get_server_status", return_value=none), patch("lumen.library.Library.digest_day", side_effect=failure):
+            code, body = self.post_json("/api/digests", {"date": "2026-10-22"})
+        self.assertEqual(400, code)
+        self.assertNotIn("/Users", body["error"])
+        self.assertIn("<path>", body["error"])
+
+    def test_javascript_digest_button_confirms_overwrite_and_announces_result(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        for needle in ('id="write-digest"', '<p id="digest-result"', '<dialog id="digest-confirm"', 'id="digest-confirm-yes"'):
+            self.assertIn(needle, html)
+        self.run_javascript_cleanup_regression("digest")
+
     def run_javascript_cleanup_regression(self, scenario):
         script = r"""
 const fs = require('node:fs');
@@ -897,7 +1126,7 @@ class Element {
   addEventListener(name, callback) { this.listeners[name] = callback; }
   querySelector(selector) { return element('#import-form ' + selector); }
   closest(selector) {
-    const test = { '.crop-card': node => node.classList.contains('crop-card'), dialog: node => node.tagName === 'DIALOG', 'dialog form': node => node.tagName === 'FORM' && Boolean(node.parent?.closest('dialog')) }[selector];
+    const test = { '.crop-card': node => node.classList.contains('crop-card'), '.reject-row': node => node.classList.contains('reject-row'), 'input, textarea, select': node => ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName), dialog: node => node.tagName === 'DIALOG', 'dialog form': node => node.tagName === 'FORM' && Boolean(node.parent?.closest('dialog')) }[selector];
     for (let node = this; node; node = node.parent) if (test?.(node)) return node;
     return null;
   }
@@ -926,7 +1155,7 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['compose', 'export', 'astro', 'ingest', 'clear'].map((name, index) => {
+const tabElements = ['compose', 'export', 'review', 'astro', 'ingest', 'clear'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -935,6 +1164,7 @@ const tabElements = ['compose', 'export', 'astro', 'ingest', 'clear'].map((name,
 });
 const scope = new Element(); scope.value = 'current';
 const document = {
+  get activeElement() { return focused; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
   querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
@@ -951,7 +1181,10 @@ const document = {
 let activeTimers = 0;
 let nextTimer = 0;
 const timers = new Map();
-const window = { setTimeout: callback => callback(), setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
+// The find scenario records timeouts so its debounce is real; elsewhere they run at once.
+const timeouts = new Map();
+let nextTimeout = 0;
+const window = { setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
 // pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
 async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
@@ -964,7 +1197,22 @@ const decisions = { 1: 'none', 2: 'none' };
 const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
 const picks = [];
-let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+const critiqueRequests = [];
+const captionPosts = [];
+const digestPosts = [];
+const digestBusy = [];
+let deferCritique = false;
+const pendingTags = [];
+let deferGroups = false;
+const pendingGroups = [];
+const pendingCritiques = [];
+const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
+let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+if (scenario === 'astro-triage') groups[0].astro_cue = true;
+const triageRequests = [];
+const triagePayload = () => ({ group_id: 1, astro_cue: scenario === 'astro-triage', lights: [1, 2, 3].map(id => ({
+  photo_id: id, name: 'photo-' + id + '.jpg', sky: { class: id === 2 ? 'cloud' : 'night_sky', confidence: 0.91 }, confidence: 0.91,
+  issues: id === 2 ? ['cloud_band'] : [], star_count: 40, trailing_warning: false, flagged: scenario === 'astro-triage' && id === 2 })) });
 const astroPosts = [];
 let polls = 0;
 let cancels = 0;
@@ -993,6 +1241,11 @@ let importPolls = 0;
 const tagPosts = [];
 let tagPolls = 0;
 const tagJob = (status, progress, extra = {}) => ({ job_id: 15, kind: 'tag', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
+const suggestionRows = () => [1, 2].map(id => ({ photo_id: id, name: 'photo-' + id + '.jpg', group_id: 1, problems: [{ kind: 'motion_blur', confidence: 0.84 }, { kind: 'eyes_closed', confidence: 0.61 }], confidence: 0.9, preview_url: '/preview/' + id + '?v=x' }));
+let rejectRows = suggestionRows();
+const rejectPosts = [];
+const keywordPosts = [];
+const keywordData = { subjects: ['ice'], suggested: ['krill'] };
 const removals = [];
 const mergePosts = [];
 const compositionReviews = [];
@@ -1017,8 +1270,15 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest' };
+  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
+  else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
+    critiqueRequests.push([url, options.method]);
+    if (options.method === 'POST') assert.deepEqual(JSON.parse(options.body), {});
+    if (options.method === 'POST' && deferCritique) return new Promise(resolve => pendingCritiques.push(() => resolve({ ok: true, json: async () => ({ ...storedCritique, rationale: 'Fresh look.' }) })));
+    payload = options.method === 'POST' ? { ...storedCritique, rationale: 'Fresh look.' } : { critique: scenario === 'critique' ? storedCritique : null };
+  }
+  else if (/^\/api\/groups\/\d+\/triage$/.test(url)) { assert.notEqual(options.method, 'POST'); triageRequests.push(url); payload = triagePayload(); }
   else if (groupsError && url.startsWith('/api/groups')) { lastGroupsUrl = url; ok = false; payload = { error: groupsError }; groupsError = null; }
   else if (url === '/api/groups' || url.startsWith('/api/groups?')) {
     groupLoads += 1; lastGroupsUrl = url;
@@ -1059,7 +1319,42 @@ async function fetch(url, options = {}) {
     if ('decision' in body) decisions[id] = body.decision; else ratings[id] = body.rating;
     payload = { photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 };
   }
-  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null }, tags: null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
+  else if (url === '/api/photos/reject-suggestions') { assert.equal(options.method, undefined); payload = { suggestions: rejectRows.map(row => ({ ...row })), count: rejectRows.length }; }
+  else if (url === '/api/photos/reject-suggestions/decide') {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    rejectPosts.push(body);
+    if (body.decision === 'reject') body.photo_ids.forEach(id => { decisions[id] = 'reject'; });
+    rejectRows = rejectRows.filter(row => !body.photo_ids.includes(row.photo_id));
+    payload = { decided: body.photo_ids.map(id => ({ photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 })), remaining: rejectRows.length };
+  }
+  else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
+  else if (url === '/api/photos/1/tag') { assert.equal(options.method, 'POST'); return new Promise(resolve => pendingTags.push(() => resolve({ ok: true, json: async () => ({ photo_id: 1 }) }))); }
+  else if (url === '/api/photos/1/keywords') {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    keywordPosts.push(body);
+    const [from, to] = body.action === 'add' ? [keywordData.suggested, keywordData.subjects] : [keywordData.subjects, keywordData.suggested];
+    from.splice(from.indexOf(body.keyword), 1);
+    to.push(body.keyword);
+    payload = { photo_id: 1, subjects: [...keywordData.subjects], suggested: [...keywordData.suggested] };
+  }
+  else if (url === '/api/digests') {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    digestPosts.push(body);
+    digestBusy.push([state.busy, element('#write-digest').disabled]);
+    if (body.overwrite === true) payload = { date: body.date, file: body.date + '.md', frames: 2, narrative: false, overwritten: true };
+    else { ok = false; payload = { error: 'digest exists; confirm overwrite', exists: true }; }
+  }
+  else if (/^\/api\/photos\/1\/caption(\/edit)?$/.test(url)) {
+    const body = JSON.parse(options.body);
+    captionPosts.push({ url, body });
+    payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
+  }
+  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
+    tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
+      : scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (url === '/api/photos/2/crops') {
     cropLoads += 1;
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
@@ -1108,6 +1403,7 @@ async function fetch(url, options = {}) {
     else if (scenario === 'astro-fail') payload = jobPayload('failed', 0.5, { error: 'Siril exited with exit code 3' });
     else payload = jobPayload('succeeded', 1, { result: { artifact_id: 1, name: 'result.tif' } });
   } else throw new Error('Unexpected request: ' + url);
+  if (deferGroups && url.startsWith('/api/groups')) { const reply = { ok, json: async () => payload }; return new Promise(resolve => pendingGroups.push(() => resolve(reply))); }
   return { ok, json: async () => payload };
 }
 `;
@@ -1262,6 +1558,218 @@ const regression = `
     assert.equal(lastGroupsUrl, '/api/groups?show_rejected=1');
     return;
   }
+  if (scenario === 'keywords' || scenario === 'keywords-unloaded') {
+    keeperOverride = 2;
+    await load();
+    const loaded = scenario === 'keywords';
+    assert.equal(element('#tag-keepers').textContent, 'Tag keepers with local AI (2 keepers)');
+    const state_ = loaded ? 'loaded' : 'not loaded';
+    assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + state_ + ' · review Qwen3.8-27B-4bit ' + state_);
+    const aiTree = node => [node, ...(node.children || []).flatMap(aiTree)];
+    if (!loaded) {
+      for (const id of ['#tag-keepers', '#tag-all']) {
+        assert.equal(element(id).disabled, true, id + ' waits for the fast model');
+        assert.ok(element(id + '-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX'));
+      }
+      await inspect(state.groups[0].photos[0]);
+      const tagPhoto = aiTree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true');
+      assert.equal(tagPhoto.disabled, true, 'the per-photo tag button waits for the fast model');
+      assert.ok(aiTree(element('#inspection')).some(node => node.id === 'tag-photo-availability' && node.textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded')));
+      state.composition = { photo_id: state.selectedId };
+      updateWorkflow();
+      assert.equal(element('#ask-composition-ai').disabled, true, 'composition review waits for the review model');
+      assert.ok(element('#composition-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX'));
+      return;
+    }
+    assert.equal(element('#tag-all').disabled, false);
+    assert.equal(element('#tag-all-availability').textContent, '');
+    assert.equal(element('#composition-availability').textContent, '');
+    assert.equal(element('#tag-keepers').disabled, false);
+    assert.equal(element('#tag-keepers-availability').textContent, '');
+    const loadsBefore = groupLoads;
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const list = id => tree(element('#inspection')).find(node => node.id === id);
+    const texts = id => tree(list(id)).map(node => node.textContent);
+    const labelled = label => tree(element('#inspection')).find(node => node.getAttribute?.('aria-label') === label);
+    await inspect(state.groups[0].photos[0]);
+    assert.ok(texts('keywords').includes('ice'));
+    assert.ok(texts('suggested-keywords').includes('krill'));
+    assert.ok(texts('suggested-keywords').includes('Species: gentoo penguin (82%)'), 'a species below the vocabulary threshold stays a suggestion');
+    await labelled('Add keyword krill').listeners.click();
+    assert.deepEqual(keywordPosts, [{ action: 'add', keyword: 'krill' }]);
+    assert.ok(texts('keywords').includes('krill'));
+    assert.ok(!texts('suggested-keywords').includes('krill'));
+    assert.equal(focused, labelled('Remove keyword krill'), 'focus moves to the undo control');
+    assert.equal(element('#announcer').textContent, 'Keyword krill added to photo-1.jpg');
+    await labelled('Remove keyword ice').listeners.click();
+    assert.deepEqual(keywordPosts.at(-1), { action: 'remove', keyword: 'ice' });
+    assert.ok(texts('suggested-keywords').includes('ice'));
+    assert.equal(element('#announcer').textContent, 'Keyword ice removed from photo-1.jpg');
+    assert.equal(groupLoads, loadsBefore, 'keyword changes re-render in place without load()');
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
+    const tagging = tree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true').listeners.click();
+    await new Promise(setImmediate);
+    assert.equal(control('reject').disabled, true, 'culling waits while the fast model holds the library');
+    pendingTags.shift()();
+    await tagging;
+    assert.equal(control('reject').disabled, false);
+    await element('#tag-keepers').listeners.click();
+    assert.deepEqual(tagPosts, [{ scope: 'keepers' }]);
+    assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
+    await settle();
+    assert.equal(state.job.status, 'succeeded');
+    return;
+  }
+  if (scenario === 'digest') {
+    await load();
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    const today = new Date().toLocaleDateString('sv-SE');
+    await element('#write-digest').listeners.click();
+    assert.deepEqual(digestPosts, [{ date: today }]);
+    assert.equal(element('#digest-confirm').hidden, false, 'an existing digest asks before overwriting');
+    assert.equal(element('#digest-confirm-text').textContent, 'A digest for ' + today + ' already exists. Overwrite it?');
+    await element('#digest-confirm-yes').listeners.click();
+    assert.deepEqual(digestPosts.at(-1), { date: today, overwrite: true });
+    assert.equal(element('#digest-confirm').hidden, true);
+    assert.equal(announcements.at(-1), 'Digest written for ' + today + ': ' + today + '.md (facts only)');
+    assert.equal(element('#digest-result').textContent, today + '.md');
+    assert.deepEqual(digestBusy, [[true, true], [true, true]], 'culling and the button wait while the digest request runs');
+    assert.deepEqual([state.busy, element('#write-digest').disabled], [false, false]);
+    return;
+  }
+  if (scenario === 'caption') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    await inspect(state.groups[0].photos[0]);
+    const caption = byId('caption-input');
+    const alt = byId('alt-input');
+    assert.deepEqual([caption.tagName, caption.value, caption.maxLength], ['INPUT', 'Porpoising.', 200]);
+    assert.deepEqual([alt.tagName, alt.value, alt.maxLength], ['INPUT', 'Penguins leaping.', 125]);
+    const labels = tree(element('#inspection')).filter(node => node.tagName === 'LABEL' && node.htmlFor !== 'rating');
+    assert.deepEqual(labels.map(node => [node.htmlFor, node.textContent]), [['caption-input', 'Caption'], ['alt-input', 'Alt text']]);
+    const posts = decisionPosts.length;
+    await element('#contact-sheet').listeners.keydown({ key: 'x', metaKey: false, ctrlKey: false, altKey: false, target: caption, preventDefault() {} });
+    assert.equal(decisionPosts.length, posts, 'typing in the caption never culls');
+    caption.value = 'Edited.';
+    alt.value = 'Alt.';
+    assert.equal(byId('save-caption').textContent, 'Save caption');
+    await byId('save-caption').listeners.click();
+    assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption/edit', body: { caption: 'Edited.', alt_text: 'Alt.' } });
+    assert.ok(announcements.includes('Caption saved for photo-1.jpg'));
+    assert.equal(byId('ask-caption-ai').textContent, 'Write caption with local AI');
+    assert.equal(byId('ask-caption-ai').disabled, false);
+    await byId('ask-caption-ai').listeners.click();
+    assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption', body: {} });
+    assert.deepEqual([caption.value, alt.value], ['Drafted.', 'Drafted alt.']);
+    state.status.omlx_roles.review.loaded = false;
+    renderInspector(state.groups[0].photos[0]);
+    assert.equal(byId('ask-caption-ai').disabled, true);
+    assert.equal(byId('ask-caption-ai').getAttribute('aria-describedby'), 'caption-ai-availability');
+    assert.ok(byId('caption-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
+    return;
+  }
+  if (scenario === 'critique') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Best timing. (confidence 72%)');
+    assert.equal(byId('ask-burst-ai').textContent, 'Ask local AI which frame is best');
+    assert.equal(byId('ask-burst-ai').disabled, false);
+    assert.deepEqual(picks, [], 'rendering stored advice never changes the pick');
+    await inspect(state.groups[0].photos[1]);
+    assert.equal(critiqueRequests.filter(([, method]) => method !== 'POST').length, 1, 'stored advice is fetched once per burst');
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
+    deferCritique = true;
+    const asking = byId('ask-burst-ai').listeners.click();
+    await new Promise(setImmediate);
+    assert.equal(control('reject').disabled, true, 'culling waits while the review model holds the library');
+    pendingCritiques.shift()();
+    await asking;
+    assert.equal(control('reject').disabled, false);
+    assert.deepEqual(critiqueRequests.at(-1), ['/api/groups/1/critique', 'POST']);
+    assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Fresh look. (confidence 72%)');
+    assert.deepEqual(picks, [], 'asking for advice never changes the pick');
+    await byId('use-burst-pick').listeners.click();
+    assert.deepEqual(picks, ['/api/photos/3/pick']);
+    assert.equal(state.groups[0].automatic_pick_id, 3);
+    state.groups[0].photos[2].decision = 'reject';
+    renderInspector(state.groups[0].photos[1]);
+    assert.ok(byId('burst-advice').textContent.endsWith('(frame is rejected)'));
+    assert.equal(byId('use-burst-pick'), undefined, 'a rejected suggestion offers no Use this pick');
+    state.status.omlx_roles.review.loaded = false;
+    renderInspector(state.groups[0].photos[1]);
+    assert.equal(byId('ask-burst-ai').disabled, true);
+    assert.ok(byId('burst-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
+    assert.equal(byId('ask-burst-ai').getAttribute('aria-describedby'), 'burst-ai-availability');
+    return;
+  }
+  if (scenario === 'review-rejects') {
+    await load();
+    const loadsBefore = groupLoads;
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    element('#review-tab').listeners.click();
+    await new Promise(setImmediate);
+    await loadRejectSuggestions();
+    await tick();
+    const rows = () => element('#reject-list').children;
+    const button = (label) => rows().flatMap(row => row.children[2].children).find(node => node.getAttribute('aria-label') === label);
+    assert.equal(rows().length, 2);
+    assert.deepEqual(rejectPosts, [], 'rendering and polling never post a decision');
+    assert.equal(element('#review-count').textContent, '2 suggested rejects');
+    assert.equal(rows()[0].className, 'reject-row');
+    assert.equal(rows()[0].dataset.photoId, '1');
+    assert.equal(rows()[0].children[0].alt, '');
+    assert.equal(rows()[0].children[0].loading, 'lazy');
+    assert.equal(rows()[0].children[1].children[1].textContent, 'motion blur 84%, eyes closed 61%');
+    assert.equal(element('#scan-rejects').disabled, false, 'the fast role is loaded');
+    assert.equal(element('#scan-rejects-availability').textContent, '');
+    const typing = { key: 'x', target: Object.assign(document.createElement('input'), { parent: rows()[0] }), preventDefault() {} };
+    await element('#reject-list').listeners.keydown(typing);
+    assert.deepEqual(rejectPosts, [], 'X typed in a field is ignored');
+    await element('#reject-list').listeners.keydown({ key: 'ArrowDown', target: button('Reject photo-1.jpg'), preventDefault() {} });
+    assert.equal(focused, button('Reject photo-2.jpg'), 'ArrowDown moves to the next row');
+    await element('#reject-list').listeners.keydown({ key: 'ArrowUp', target: button('Reject photo-2.jpg'), preventDefault() {} });
+    assert.equal(focused, button('Reject photo-1.jpg'));
+    await element('#reject-list').listeners.keydown({ key: 'X', target: button('Reject photo-1.jpg'), preventDefault() {} });
+    await tick();
+    assert.deepEqual(rejectPosts, [{ photo_ids: [1], decision: 'reject' }]);
+    assert.equal(rows().length, 1);
+    assert.equal(element('#review-count').textContent, '1 suggested reject');
+    assert.equal(state.groups[0].photos[0].decision, 'reject', 'the frame is marked through the decide bookkeeping');
+    assert.equal(state.rejectedCount, 1);
+    assert.equal(state.groups[0].automatic_pick_id, 2, 'the next frame becomes best in place');
+    assert.ok(document.querySelectorAll('.frame').find(card => Number(card.dataset.id) === 1).getAttribute('aria-label').includes('rejected'));
+    assert.equal(announcements.at(-1), 'photo-1.jpg rejected');
+    await button('Keep photo-2.jpg').listeners.click();
+    await tick();
+    assert.deepEqual(rejectPosts.at(-1), { photo_ids: [2], decision: 'keep' });
+    assert.equal(rows().length, 0);
+    assert.equal(state.groups[0].photos[1].decision, 'none', 'Keep never changes a decision');
+    assert.equal(announcements.at(-1), 'photo-2.jpg kept');
+    rejectRows = suggestionRows();
+    await loadRejectSuggestions();
+    assert.equal(rows().length, 2);
+    const posted = rejectPosts.length;
+    element('#reject-all-shown').listeners.click();
+    assert.equal(rejectPosts.length, posted, 'opening the confirmation posts nothing');
+    assert.equal(element('#reject-all-confirm').hidden, false);
+    assert.ok(element('#reject-all-text').textContent.includes('Reject all 2 shown frames?'));
+    assert.equal(element('#reject-all-text').textContent, 'Reject all 2 shown frames? This marks them rejected; you can restore any frame from the inspector.');
+    await element('#reject-all-yes').listeners.click();
+    await tick();
+    assert.deepEqual(rejectPosts.at(-1), { photo_ids: [1, 2], decision: 'reject' });
+    assert.equal(rows().length, 0);
+    assert.equal(element('#reject-all-confirm').hidden, true);
+    assert.equal(announcements.at(-1), '2 frames rejected');
+    assert.equal(groupLoads, loadsBefore, 'decisions update in place without load()');
+    return;
+  }
   if (scenario === 'culling-keys') {
     groups = [group(1, [1, 2, 3])];
     await load();
@@ -1320,7 +1828,7 @@ const regression = `
     const posts = decisionPosts.length;
     const before = prevented;
     for (const modifier of ['metaKey', 'ctrlKey', 'altKey']) await key('x', { [modifier]: true });
-    for (const name of ['#import-path', '#clear-confirmation']) {
+    for (const name of ['#import-path', '#clear-confirmation', '#caption-input', '#alt-input']) {
       element(name).tagName = 'INPUT';
       await key('x', { target: element(name) });
       await key('Home', { target: element(name) });
@@ -1439,6 +1947,72 @@ const regression = `
     assert.equal(dialog.hidden, true);
     assert.equal(focused, card(2), 'closing returns focus to the originating frame');
     assert.equal(state.focusedId, 2);
+    return;
+  }
+  if (scenario === 'find') {
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const reasons = () => tree(element('#inspection')).find(node => node.id === 'match-reasons');
+    await load();
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(reasons(), undefined, 'no match line without a find');
+    groups[0].photos[0].matched = ['keyword: ice'];
+    const find = element('#find');
+    find.tagName = 'INPUT';
+    find.value = 'ice';
+    const flush = () => new Promise(setImmediate);
+    const type = async (control, value) => { control.value = value; control.listeners.input(); await flush(); };
+    const fire = async () => { const due = [...timeouts.values()]; timeouts.clear(); due.forEach(callback => callback()); await flush(); };  // never await: an apply may wait on a deferred reply
+    await type(find, 'ice');
+    assert.equal(lastGroupsUrl, '/api/groups', 'find is debounced');
+    assert.equal(element('#filter-text').value, 'ice', 'the form mirrors find at once');
+    await fire();
+    assert.equal(lastGroupsUrl, '/api/groups?text=ice');
+    assert.equal(location.search, '?text=ice');
+    assert.equal(find.value, 'ice', 'syncFilters keeps the rail find in step with the URL');
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(reasons().textContent, 'Matches: keyword: ice');
+    const posts = decisionPosts.length;
+    await element('#contact-sheet').listeners.keydown({ key: 'x', metaKey: false, ctrlKey: false, altKey: false, target: find, preventDefault() {} });
+    assert.equal(decisionPosts.length, posts, 'typing in find never culls');
+    await type(element('#filter-text'), 'krill');
+    assert.equal(find.value, 'krill');
+    await fire();
+    assert.equal(lastGroupsUrl, '/api/groups?text=krill');
+
+    // Responses land while the photographer keeps typing.
+    deferGroups = true;
+    find.focus();
+    await type(find, 'ab');
+    await fire();
+    assert.equal(pendingGroups.length, 1);
+    await type(find, 'abc');  // its apply is still pending when the "ab" reply lands
+    pendingGroups.shift()();
+    await flush();
+    assert.deepEqual([find.value, element('#filter-text').value], ['abc', 'abc'], 'a reply never rewrites either field while an apply is pending');
+    await fire();
+    assert.equal(lastGroupsUrl, '/api/groups?text=abc', 'the later keystroke reaches the query');
+    pendingGroups.shift()();
+    await flush();
+    assert.deepEqual([find.value, element('#filter-text').value], ['abc', 'abc']);
+    await type(find, 'motion ');
+    await fire();
+    pendingGroups.shift()();
+    await flush();
+    assert.deepEqual([find.value, element('#filter-text').value], ['motion ', 'motion '], 'a trailing space survives the reload');
+
+    // Reset drops a pending find apply.
+    await type(find, 'zodiac');
+    element('#reset-filters').focus();
+    const loads = groupLoads;
+    element('#reset-filters').listeners.click();
+    await flush();
+    pendingGroups.shift()();
+    await flush();
+    await fire();
+    assert.equal(groupLoads, loads + 1, 'only the reset fetches');
+    assert.equal(lastGroupsUrl, '/api/groups');
+    assert.deepEqual([find.value, element('#filter-text').value], ['', '']);
+    deferGroups = false;
     return;
   }
   if (scenario === 'filters') {
@@ -1651,6 +2225,37 @@ const regression = `
     return;
   }
   const pathsText = () => element('#astro-paths').children.map(child => child.textContent).join(' ');
+  if (scenario === 'astro-triage') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const cue = tree(element('#contact-sheet')).find(node => node.className === 'astro-cue');
+    assert.equal(cue?.textContent, 'Looks like astro', 'the cue is text in the burst header');
+    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
+    await inspect(state.groups[0].photos[0]);
+    await new Promise(setImmediate);
+    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
+    assert.deepEqual(triageRequests, ['/api/groups/1/triage']);
+    const lights = document.querySelectorAll('#astro-lights input');
+    const triageTexts = element('#astro-lights').children.map(label => label.children[2].textContent);
+    assert.deepEqual(triageTexts, ['night sky 91%', 'cloud 91% · cloud band · flagged', 'night sky 91%']);
+    assert.equal(element('#exclude-flagged').textContent, 'Exclude flagged lights (1)');
+    assert.equal(element('#exclude-flagged').disabled, false);
+    assert.equal(element('#triage-astro').disabled, false, 'fast model ready');
+    element('#exclude-flagged').listeners.click();
+    assert.equal(element('#exclude-confirm').hidden, false);
+    assert.ok(element('#exclude-confirm-text').textContent.startsWith('Uncheck 1 flagged light? Flagged means cloud, not sky, trailing, or a cloud band.'));
+    assert.ok(lights.every(input => input.checked), 'opening the confirmation changes nothing');
+    element('#exclude-confirm').hidden = true;  // Cancel: the form closes the dialog; no listener runs
+    assert.ok(lights.every(input => input.checked), 'cancel leaves every light checked');
+    element('#exclude-flagged').listeners.click();
+    element('#exclude-confirm-yes').listeners.click();
+    assert.deepEqual(lights.map(input => input.checked), [true, false, true]);
+    assert.deepEqual(astroLights().excluded, [2]);
+    assert.equal(element('#announcer').textContent, '1 light excluded');
+    assert.equal(element('#exclude-flagged').textContent, 'Exclude flagged lights (0)');
+    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true');
+    return;
+  }
   if (scenario === 'astro-resume') {
     await load();
     assert.equal(state.astro.job.status, 'running', 'a remembered job is refetched on load');
@@ -1963,9 +2568,11 @@ const regression = `
   }
 })()
 `;
+let finished = false;  // Timers are stubbed, so a never-settling await would otherwise exit 0 with assertions skipped.
+process.on('exit', () => { if (!finished) { console.error('scenario did not finish'); process.exitCode = 1; } });
 vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regression, {
   assert: require('node:assert/strict'), URLSearchParams, setImmediate, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
-}).catch(error => { console.error(error); process.exitCode = 1; });
+}).then(() => { finished = true; }, error => { finished = true; console.error(error); process.exitCode = 1; });
 """
         app = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js"
         result = subprocess.run(["node", "-e", script, str(app), scenario, self.base], capture_output=True, text=True, timeout=10)
@@ -1976,6 +2583,14 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_filters_write_url_group_days_and_page_frames(self):
         self.run_javascript_cleanup_regression("filters")
+
+    def test_javascript_find_input_filters_and_inspector_shows_match_reasons(self):
+        self.run_javascript_cleanup_regression("find")
+
+    def test_rail_find_input_is_labelled_and_mirrors_the_text_filter(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('<label for="find">Find</label>', html)
+        self.assertIn('id="find"', html)
 
     def test_javascript_all_rejected_burst_explains_no_keeper_and_offers_pick(self):
         self.run_javascript_cleanup_regression("all-rejected")
@@ -2099,6 +2714,15 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         code, restored = self.get_json("/api/groups")
         self.assertEqual((1, 0, 1, 0), (len(restored["groups"][0]["photos"]), restored["rejected_count"],
                                         restored["groups"][0]["frame_count"], restored["groups"][0]["rejected_count"]))
+
+    def test_groups_report_match_reasons_only_when_text_filter_is_set(self):
+        with Library(Settings(library_dir=self.root / "library")) as library:  # setUp already imported photo 1
+            library.catalog.save_tags(1, {"description": "d", "subjects": ["ice"], "caption": "Ice floe"}, "m")
+        plain = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]
+        self.assertEqual([], plain["matched"])
+        found = self.get_json("/api/groups?text=ice")[1]["groups"][0]["photos"][0]
+        self.assertEqual(["keyword: ice", "caption"], found["matched"])
+        self.assertEqual([], self.get_json("/api/groups?text=zodiac")[1]["groups"])
 
     def test_groups_filters_round_trip_and_reject_invalid_repeated_or_inverted_params_publicly(self):
         with Library(Settings(library_dir=self.root / "library")) as library:

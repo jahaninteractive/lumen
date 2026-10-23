@@ -2,7 +2,8 @@ import tempfile
 import fcntl
 import json
 import os
-from datetime import datetime
+from dataclasses import replace
+from datetime import date, datetime
 import sqlite3
 import subprocess
 import unittest
@@ -14,6 +15,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
+from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
 from lumen import library as library_module
 from lumen import ingest as ingest_module
 from lumen.pipelines import DarktablePipeline
@@ -21,8 +23,8 @@ from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
 from lumen.domain import PhotoEdit
-from lumen.omlx import CompositionResponseError, CompositionReview, TagResult
-from lumen.omlx import TagResponseError, parse_composition_response, parse_tag_response
+from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, RejectReview, TagResult
+from lumen.omlx import AstroResponseError, TagResponseError, parse_composition_response, parse_tag_response
 from lumen.catalog import GroupFilters
 
 try:
@@ -35,6 +37,7 @@ class LibraryTests(unittest.TestCase):
     def test_composition_review_records_original_recommendation_without_selecting_crop(self):
         class FakeTagger:
             model = "test-vlm"
+            role = "review"
 
             def review_composition(self, original, candidates):
                 self.original = original
@@ -65,6 +68,7 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual([candidate.id for candidate in before], event.details["candidate_ids"])
         self.assertEqual("crop-original", event.details["candidate_id"])
         self.assertEqual("test-vlm", event.details["model"])
+        self.assertEqual("review", event.details["role"])
         self.assertEqual("composition_reviewed", sidecar["provenance"][-1]["kind"])
         self.assertTrue(tagger.original_was_file)
         self.assertTrue(all(not path.exists() for _, path in tagger.candidates if path != tagger.original))
@@ -118,6 +122,7 @@ class LibraryTests(unittest.TestCase):
 
         self.assertEqual(before, after)
         self.assertEqual("composition_review_failed", event.kind)
+        self.assertIsNone(event.details["role"])
         self.assertEqual("not model json", event.details["raw_response"])
         self.assertEqual([candidate.id for candidate in before], event.details["candidate_ids"])
         self.assertTrue(all(not path.exists() for _, path in tagger.candidates if path != tagger.original))
@@ -810,6 +815,96 @@ class LibraryTests(unittest.TestCase):
             event = next(event for event in sidecar["provenance"] if event["kind"] == "exported")
             self.assertEqual(expected, {key: event["details"][key] for key in expected})
 
+    def test_caption_is_advisory_editable_and_only_share_export_uses_it(self):
+        class FakeTagger:
+            model, role = "review-model", "review"
+            def caption(self, preview):
+                return Caption("Penguins porpoise beside the zodiac.", "Three penguins leaping from grey water.", '{"c":1}')
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            library.catalog.save_tags(photo.id, {"description": "Original description", "subjects": ["ice"]}, "fast-model")
+            result = library.caption_photo(photo.id, FakeTagger())
+            self.assertEqual("Three penguins leaping from grey water.", result["alt_text"])
+            event = [e for e in library.catalog.events_for(photo.id) if e.kind == "caption_written"][-1]
+            self.assertEqual(("model", '{"c":1}'), (event.details["author"], event.details["raw_response"]))
+            edited = library.set_caption(photo.id, caption="Porpoising gentoos.", alt_text=None)
+            self.assertEqual(("Porpoising gentoos.", "Three penguins leaping from grey water."), (edited["caption"], edited["alt_text"]))
+            self.assertEqual("photographer", [e for e in library.catalog.events_for(photo.id) if e.kind == "caption_written"][-1].details["author"])
+            with self.assertRaises(ValueError):
+                library.set_caption(photo.id, caption="#nope", alt_text=None)
+            with self.assertRaises(ValueError):
+                library.set_caption(photo.id, caption=None, alt_text="x" * 126)
+            self.assertIn("AltTextAccessibility", library.sidecars.paths(photo)[1].read_text())
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
+                share = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "share"))[0]
+                full = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "full"))[0]
+            with Image.open(share.output) as image:
+                self.assertEqual("Porpoising gentoos.", image.getexif()[270])
+                self.assertIn("Three penguins leaping from grey water.", image.info["xmp"].decode())
+            with Image.open(full.output) as image:
+                self.assertEqual("Original description", image.getexif()[270])
+                self.assertNotIn("AltTextAccessibility", image.info["xmp"].decode())
+            self.assertTrue(share.artifact.settings["caption_used"]); self.assertFalse(full.artifact.settings["caption_used"])
+            cleared = library.set_caption(photo.id, caption="", alt_text="")
+            self.assertEqual((None, None), (cleared["caption"], cleared["alt_text"]))
+            self.assertNotIn("AltTextAccessibility", library.sidecars.paths(photo)[1].read_text())
+
+    def test_caption_failure_records_raw_response_and_reraises(self):
+        class BadTagger:
+            model, role = "review-model", "review"
+            def caption(self, preview):
+                raise CaptionResponseError("bad caption", "#raw")
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            with self.assertRaises(CaptionResponseError):
+                library.caption_photo(photo.id, BadTagger())
+            event = [e for e in library.catalog.events_for(photo.id) if e.kind == "caption_failed"][-1]
+            self.assertEqual(("review", "#raw"), (event.details["role"], event.details["raw_response"]))
+            self.assertIsNone(library.catalog.get_tags(photo.id))
+
+    def test_digest_writes_facts_first_and_narrative_only_when_the_model_answers(self):  # Review Focus
+        RAW_DIGEST = json.dumps({"narrative": "A calm day with gentoos."})
+
+        class FakeTagger:
+            model, role = "review-model", "review"
+            def __init__(self, fail=False): self.fail = fail; self.prompt = None
+            def write_digest(self, facts_markdown):
+                self.prompt = facts_markdown
+                if self.fail: raise OmlxError("Local oMLX request failed: boom")
+                return DigestNarrative("A calm day with gentoos.", RAW_DIGEST)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                image = Image.new("RGB", (120, 90), (index * 40, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 10:00:0{index}"
+                image.save(root / f"d{index}.jpg", exif=exif)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                tagger = FakeTagger()
+                result = library.digest_day(date(2026, 10, 22), tagger)
+                path = library.settings.digest_dir / "2026-10-22.md"
+                text = path.read_text()
+                self.assertTrue(result["narrative"]); self.assertIn("| Frames | 2 |", text); self.assertLess(text.index("| Frames"), text.index("## Narrative"))
+                self.assertIn("A calm day with gentoos.", text); self.assertIn("| Frames | 2 |", tagger.prompt)
+                with self.assertRaises(FileExistsError):
+                    library.digest_day(date(2026, 10, 22), tagger)
+                result = library.digest_day(date(2026, 10, 22), FakeTagger(fail=True), overwrite=True)
+                text = path.read_text()
+                self.assertFalse(result["narrative"]); self.assertIn("| Frames | 2 |", text); self.assertIn("Narrative unavailable: Local oMLX request failed: boom", text)
+                result = library.digest_day(date(2026, 10, 22), None, overwrite=True, unavailable_reason="review model Qwen3.8-27B-4bit is not loaded in oMLX")
+                self.assertIn("Narrative unavailable: review model Qwen3.8-27B-4bit is not loaded in oMLX", path.read_text())
+                empty = library.digest_day(date(2026, 10, 23), FakeTagger(fail=True))
+                self.assertEqual((0, False), (empty["frames"], empty["narrative"]))
+                self.assertIn("No frames were imported for this day.", (library.settings.digest_dir / "2026-10-23.md").read_text())
+                events = [e for e in library.catalog.events_for(None) if e.kind == "digest_written"]
+                self.assertEqual(4, len(events)); self.assertEqual("2026-10-22.md", events[0].details["path_name"]); self.assertNotIn("/", events[0].details["path_name"])
+                self.assertEqual([RAW_DIGEST, None, None, None], [event.details["raw_response"] for event in events])
+
     def test_export_validates_all_ids_before_starting(self):
         self.assertTrue(hasattr(library_module, "ExportRequest"), "ExportRequest is missing")
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -933,7 +1028,7 @@ class LibraryTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 return TagResult("A red bird", ["bird", "red"], "garden", ["sharp"], 0.9, "{}")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1075,7 +1170,7 @@ class LibraryTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 return TagResult("Old image", ["old"], "room", [], 0.8, "{}")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1112,7 +1207,7 @@ class LibraryTests(unittest.TestCase):
         class BrokenTagger:
             model = "broken-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 raise TagResponseError("invalid response")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1131,7 +1226,7 @@ class LibraryTests(unittest.TestCase):
         class BrokenTagger:
             model = "broken-vlm"
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 return parse_tag_response("not model json")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1424,7 +1519,7 @@ class LibraryTests(unittest.TestCase):
                 self.failing = failing
                 self.calls = []
 
-            def tag(self, preview):
+            def tag(self, preview, *, vocabulary=None):
                 self.calls.append(preview)
                 if preview == self.failing:
                     raise TagResponseError(f"bad response for {preview}")
@@ -1435,13 +1530,13 @@ class LibraryTests(unittest.TestCase):
             first, second, third = library.catalog.list_photos()
             library.tag_photo(first.id, FlakyTagger(None))
             tagger = FlakyTagger(Path(second.preview_path))
-            status = self.run_job(library, library.start_tag_job(tagger))
+            status = self.run_job(library, library.start_tag_job(tagger, scope="all"))
             manifest = json.loads((self.library_dir / "outputs" / "jobs" / str(status["job_id"]) / "manifest.json").read_text())
             second_kinds = library.catalog.events_for(second.id)
             third_event = library.catalog.events_for(third.id)[-1]
             third_tags = library.catalog.get_tags(third.id)
             retagger = FlakyTagger(None)
-            retag_status = self.run_job(library, library.start_tag_job(retagger, retag=True))
+            retag_status = self.run_job(library, library.start_tag_job(retagger, scope="all", retag=True))
             with self.assertRaises(ValueError):
                 library.start_tag_job(retagger, retag="yes")
 
@@ -1649,6 +1744,368 @@ class LibraryTests(unittest.TestCase):
                 with self.subTest(primary=primary, mirror=mirror), self.assertRaises(ValueError):
                     library.start_ingest_job(card, primary, mirror)
             self.assertEqual([], library.catalog.list_jobs())
+
+
+    def test_tagger_for_refuses_roles_whose_model_is_not_loaded(self):
+        live = {"version": "0.7.2", "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.library.get_server_status", return_value=live):
+            with Library(Settings(library_dir=Path(directory))) as library:
+                self.assertEqual(("fast", "Qwen3-VL-8B-Instruct-4bit"), (library.tagger_for("fast").role, library.tagger_for("fast").model))
+                with self.assertRaisesRegex(RuntimeError, "review model Qwen3.8-27B-4bit is not loaded in oMLX"):
+                    library.tagger_for("review")
+                with self.assertRaises(ValueError):
+                    library.tagger_for("judge")
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.library.get_server_status", side_effect=OmlxError("down")):
+            with Library(Settings(library_dir=Path(directory))) as library:
+                with self.assertRaisesRegex(RuntimeError, "fast model .* is not loaded in oMLX; oMLX is offline"):
+                    library.tagger_for("fast")
+
+    def test_tag_job_keepers_scope_applies_vocabulary_and_high_confidence_species_only(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            calls = []
+
+            def tag(self, preview, *, vocabulary=None):
+                FakeTagger.calls.append(sorted(vocabulary))
+                return TagResult("Penguins", ["Gentoo Penguin", "snow", "krill"], "ice", [], 0.9, '{"raw": true}',
+                                 species=[{"name": "gentoo penguin", "confidence": 0.82}, {"name": "chinstrap penguin", "confidence": 0.4}],
+                                 conditions=["overcast", "spindrift"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(3):
+                Image.new("RGB", (120, 90), (index, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                photos = library.catalog.list_photos()
+                library.set_decision(photos[2].id, "reject")  # three single-frame bursts: two keepers, one rejected
+                job = library.start_tag_job(FakeTagger(), scope="keepers")
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                data = library.catalog.get_tags(photos[0].id)["data"]
+                event = [e for e in library.catalog.events_for(photos[0].id) if e.kind == "tagged"][-1]
+                sidecar = json.loads(library.sidecars.paths(photos[0])[0].read_text())
+                xmp = library.sidecars.paths(photos[0])[1].read_text()
+                self.assertIsNone(library.catalog.get_tags(photos[2].id))
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual(2, status["processed"])
+        self.assertEqual(["gentoo penguin", "ice", "overcast"], data["subjects"])
+        self.assertEqual(["snow", "krill", "spindrift"], data["suggested"][:3])
+        self.assertIn("chinstrap penguin", data["suggested"])
+        self.assertEqual("fast", event.details["role"])
+        self.assertEqual('{"raw": true}', event.details["raw_response"])
+        self.assertEqual(["gentoo penguin", "ice", "overcast"], sidecar["keywords"])
+        self.assertIn("<rdf:li>gentoo penguin</rdf:li>", xmp)
+        self.assertNotIn("krill", xmp)
+        self.assertEqual(2, len(FakeTagger.calls))
+        self.assertIn("wildlife", FakeTagger.calls[0])
+
+    def test_tag_job_explicit_ids_validate_and_keyword_add_remove_round_trip(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root / "p.jpg")
+                photo_id = library.catalog.list_photos()[0].id
+                with self.assertRaisesRegex(ValueError, "unknown photo ID: 99"):
+                    library.start_tag_job(FakeTagger(), scope=[photo_id, 99])
+                with self.assertRaises(ValueError):
+                    library.start_tag_job(FakeTagger(), scope=[])
+                job = library.start_tag_job(FakeTagger(), scope=[photo_id])
+                library.wait_for_job(job.id)
+                library.catalog.save_tags(photo_id, library.catalog.get_tags(photo_id)["data"] | {"suggested": ["krill"]}, "fast-model")
+                added = library.add_suggested_keyword(photo_id, "krill")
+                self.assertEqual((["ice", "krill"], []), (added["subjects"], added["suggested"]))
+                removed = library.remove_keyword(photo_id, "ice")
+                self.assertEqual((["krill"], ["ice"]), (removed["subjects"], removed["suggested"]))
+                with self.assertRaises(ValueError):
+                    library.add_suggested_keyword(photo_id, "orca")
+                kinds = [e.kind for e in library.catalog.events_for(photo_id)]
+                self.assertEqual(["keyword_added", "keyword_removed"], kinds[-2:])
+
+    def test_reject_review_job_stores_problems_and_never_changes_decisions(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                blurry = preview.stat().st_size % 2 == 0  # deterministic per generated preview
+                return RejectReview([{"kind": "motion_blur", "confidence": 0.84}] if blurry else [], blurry, 0.8, '{"r":1}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(4):
+                Image.new("RGB", (120 + index, 90), (index * 20, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                job = library.start_reject_review_job(FakeTagger(), scope="all")
+                library.wait_for_job(job.id)
+                photos = library.catalog.list_photos()
+                self.assertTrue(all(photo.decision == "none" for photo in photos))
+                suggestions = library.reject_suggestions()
+                self.assertEqual(sorted(s["photo_id"] for s in suggestions),
+                                 sorted(p.id for p in photos if library.catalog.get_tags(p.id)["data"]["problems"]["suggest_reject"]))
+                first = photos[0].id
+                event = [e for e in library.catalog.events_for(first) if e.kind == "reject_suggested"][-1]
+                self.assertEqual(("fast", '{"r":1}'), (event.details["role"], event.details["raw_response"]))
+                self.assertEqual("succeeded", library.job_status(job.id)["status"])
+
+    def test_apply_reject_suggestions_uses_ids_not_counts_and_keep_dismisses(self):  # Review Focus
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                return RejectReview([{"kind": "misfire", "confidence": 0.9}], True, 0.9, "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(3):
+                Image.new("RGB", (120, 90), (index, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                library.wait_for_job(library.start_reject_review_job(FakeTagger(), scope="all").id)
+                a, b, c = [s["photo_id"] for s in library.reject_suggestions()]
+                library.set_decision(c, "reject")  # decided elsewhere while the list was on screen
+                with self.assertRaisesRegex(ValueError, f"photo {c} is not a current reject suggestion"):
+                    library.apply_reject_suggestions([a, c], "reject")
+                self.assertEqual("none", library.catalog.get_photo(a).decision)
+                result = library.apply_reject_suggestions([a], "reject")
+                self.assertEqual(([a], ["reject"], 1), ([d["photo_id"] for d in result["decided"]], [d["decision"] for d in result["decided"]], result["remaining"]))
+                self.assertEqual({"photo_id", "decision", "rating", "group_id", "automatic_pick_id"}, set(result["decided"][0]))
+                self.assertEqual("reject", library.catalog.get_photo(a).decision)
+                result = library.apply_reject_suggestions([b], "keep")
+                self.assertEqual(([b], ["none"], 0), ([d["photo_id"] for d in result["decided"]], [d["decision"] for d in result["decided"]], result["remaining"]))
+                self.assertEqual("none", library.catalog.get_photo(b).decision)
+                self.assertIn("dismissed_at", library.catalog.get_tags(b)["data"]["problems"])
+                with self.assertRaises(ValueError):
+                    library.apply_reject_suggestions([b], "maybe")
+
+    def test_reject_review_merges_into_existing_tags_and_records_failures(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                raise OmlxError("offline")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                photo_id = library.catalog.list_photos()[0].id
+                library.catalog.save_tags(photo_id, {"subjects": ["ice"]}, "other")
+                job = library.start_reject_review_job(FakeTagger(), scope=[photo_id])
+                library.wait_for_job(job.id)
+                self.assertEqual({"reviewed": 0, "skipped": 0, "failed": 1, "suggested": 0}, library.job_status(job.id)["result"])
+                self.assertEqual("reject_review_failed", library.catalog.events_for(photo_id)[-1].kind)
+                FakeTagger.review_rejects = lambda self, preview: RejectReview([], False, 0.7, "{}")
+                library.wait_for_job(library.start_reject_review_job(FakeTagger(), scope=[photo_id]).id)
+                data = library.catalog.get_tags(photo_id)["data"]
+                self.assertEqual((["ice"], False, []), (data["subjects"], data["problems"]["suggest_reject"], data["problems"]["kinds"]))
+
+    def test_tag_job_still_tags_a_photo_that_only_has_reject_problems(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def review_rejects(self, preview):
+                return RejectReview([], False, 0.7, "{}")
+            def tag(self, preview, vocabulary=None):
+                return TagResult("ice", ["ice"], "", [], 0.9, "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                library.wait_for_job(library.start_reject_review_job(FakeTagger(), scope="all").id)
+                job = library.start_tag_job(FakeTagger(), scope="all")
+                library.wait_for_job(job.id)
+                self.assertEqual(1, library.job_status(job.id)["result"]["tagged"])
+                self.assertIn("problems", library.catalog.get_tags(library.catalog.list_photos()[0].id)["data"])
+
+    def test_low_confidence_species_named_in_subjects_stays_suggested(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("d", ["Chinstrap Penguin", "ice"], "", [], 0.9, "{}",
+                                 species=[{"name": "chinstrap penguin", "confidence": 0.4}], conditions=[])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root / "p.jpg")
+                photo_id = library.catalog.list_photos()[0].id
+                library.tag_photo(photo_id, FakeTagger())
+                data = library.catalog.get_tags(photo_id)["data"]
+        self.assertEqual(["ice"], data["subjects"])
+        self.assertEqual(1, [word.casefold() for word in data["suggested"]].count("chinstrap penguin"))
+
+    def _lights(self, root, count=4, exposure="15"):
+        for index in range(count):
+            image = Image.new("RGB", (120, 90), (0, 0, index * 20)); exif = Image.Exif()
+            exif[36867] = f"2026:10:22 22:00:{index * 10:02d}"; exif[33434] = int(exposure)  # one rational; a (15, 1) tuple is two values
+            image.save(root / f"l{index}.jpg", exif=exif)
+
+    def test_tag_job_triages_long_exposures_and_triage_job_covers_a_group(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            triaged = []
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("stars", [], "", [], 0.9, "{}", species=[], conditions=[])
+            def triage_astro(self, preview):
+                FakeTagger.triaged.append(preview.name)
+                cloudy = len(FakeTagger.triaged) == 2
+                return AstroTriage("cloud" if cloudy else "night_sky", 0.9, ["cloud_band"] if cloudy else [], '{"t":1}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._lights(root)
+            Image.new("RGB", (120, 90)).save(root / "day.jpg")  # no exposure → not triaged
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                self.assertTrue(all(p.exposure_seconds == 15.0 for p in library.catalog.list_photos() if p.path.endswith(".jpg") and "day" not in p.path))
+                library.wait_for_job(library.start_tag_job(FakeTagger(), scope="all").id)
+                self.assertEqual(4, len(FakeTagger.triaged))
+                group = next(g for g in library.list_groups() if len(g["photos"]) == 4)
+                triage = library.astro_triage(group["id"])
+                self.assertTrue(triage["astro_cue"])
+                self.assertEqual(1, sum(light["flagged"] for light in triage["lights"]))
+                flagged = next(light for light in triage["lights"] if light["flagged"])
+                self.assertEqual(("cloud", ["cloud_band"]), (flagged["sky"]["class"], flagged["issues"]))
+                event = [e for e in library.catalog.events_for(flagged["photo_id"]) if e.kind == "astro_triaged"][-1]
+                self.assertEqual('{"t":1}', event.details["raw_response"])
+                self.assertNotIn("raw_response", json.dumps(triage))
+                FakeTagger.triaged.clear()
+                library.wait_for_job(library.start_triage_job(FakeTagger(), group_id=group["id"]).id)
+                self.assertEqual(4, len(FakeTagger.triaged))
+                self.assertEqual(sorted(l["photo_id"] for l in triage["lights"]), sorted(p["id"] for p in group["photos"]))
+
+    def test_tag_job_counts_triage_failure_separately_and_keeps_the_tag(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def tag(self, preview, *, vocabulary=None):
+                return TagResult("stars", [], "", [], 0.9, "{}", species=[], conditions=[])
+            def triage_astro(self, preview):
+                raise AstroResponseError("bad sky", '{"sky":"day"}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._lights(root, 2)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                job = library.start_tag_job(FakeTagger(), scope="all")
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                self.assertEqual("succeeded", status["status"])
+                self.assertEqual({"tagged": 2, "skipped": 0, "failed": 0, "triage_failed": 2}, status["result"])
+                photo = library.catalog.list_photos()[0]
+                self.assertEqual("stars", library.catalog.get_tags(photo.id)["data"]["description"])
+                self.assertIn("astro_triage_failed", [e.kind for e in library.catalog.events_for(photo.id)])
+                with self.assertRaises(ValueError):
+                    library.start_triage_job(FakeTagger(), group_id=999)
+
+    def test_astro_triage_flags_from_metrics_without_a_model_and_cue_needs_a_majority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._lights(root, 3)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                group = library.list_groups()[0]
+                photo = group["photos"][0]
+                metrics = library.catalog.get_metrics(photo["id"])
+                library.catalog.save_metrics(photo["id"], replace(metrics, astro=metrics.astro | {"trailing_warning": True}), photo["total_score"])
+                triage = library.astro_triage(group["id"])
+                self.assertFalse(triage["astro_cue"])
+                self.assertEqual([photo["id"]], [l["photo_id"] for l in triage["lights"] if l["flagged"]])
+                self.assertIsNone(triage["lights"][0]["sky"])
+
+    def _burst(self, root, count=3):
+        for index in range(count):
+            image = Image.new("RGB", (120, 90), (index * 30, 0, 0))
+            exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+            image.save(root / f"b{index}.jpg", exif=exif)
+
+    def test_burst_critique_records_suggestion_without_changing_the_pick(self):
+        class FakeTagger:
+            model, role = "review-model", "review"
+            def critique_burst(self, frames):
+                self.frames = list(frames)
+                return BurstCritique(frames[-1][0], "Best timing.", 0.72, '{"r":1}')
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._burst(root)
+            tagger = FakeTagger()
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                group = library.list_groups()[0]
+                self.assertEqual(3, len(group["photos"]))
+                pick_before = group["automatic_pick_id"]
+                result = library.critique_burst(group["id"], tagger)
+                group_after = library.list_groups()[0]
+                self.assertEqual(pick_before, group_after["automatic_pick_id"])
+                self.assertEqual(int(tagger.frames[-1][0]), result["photo_id"])
+                self.assertEqual([str(p["id"]) for p in group["photos"]], [fid for fid, _ in tagger.frames])
+                event = [e for e in library.catalog.events_for(result["photo_id"]) if e.kind == "burst_reviewed"][-1]
+                self.assertEqual(("review", '{"r":1}', group["id"]), (event.details["role"], event.details["raw_response"], event.details["group_id"]))
+                self.assertEqual(result | {"raw_response": None}, (library.latest_critique(group["id"]) or {}) | {"raw_response": None})
+                self.assertNotIn("raw_response", result)
+                library.set_decision(result["photo_id"], "reject")
+                self.assertIsNone(library.latest_critique(group["id"]), "a critique of a since-rejected frame is not offered")
+                library.set_decision(result["photo_id"], "none")
+                library.set_decision(group["photos"][1]["id"], "reject")
+                library.set_decision(group["photos"][2]["id"], "reject")
+                with self.assertRaisesRegex(ValueError, "at least two frames"):
+                    library.critique_burst(group["id"], tagger)
+
+    def test_burst_critique_caps_at_eight_frames_ranked_and_fails_cleanly_when_burst_changes(self):  # Review Focus
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._burst(root, 10)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                group = library.list_groups()[0]
+                last = group["photos"][-1]["id"]  # ranked last, so outside the 8-frame cap
+
+                class ChangingTagger:
+                    model, role = "review-model", "review"
+                    def critique_burst(self, frames):
+                        self.frames = list(frames)
+                        return BurstCritique(str(last), "ok", 0.5, '{"r":2}')  # a member of the burst but not of the supplied set
+
+                tagger = ChangingTagger()
+                with self.assertRaises((ValueError, BurstResponseError)):
+                    library.critique_burst(group["id"], tagger)
+                self.assertEqual([str(p["id"]) for p in group["photos"][:8]], [fid for fid, _ in tagger.frames])
+                failed = [e for e in library.catalog.events_for(None) if e.kind == "burst_review_failed"][-1]
+                self.assertEqual(([p["id"] for p in group["photos"][:8]], '{"r":2}'), (failed.details["candidate_ids"], failed.details["raw_response"]))
+
+                class RemovingTagger:
+                    model, role = "review-model", "review"
+                    def critique_burst(self, frames):
+                        chosen = int(frames[0][0])
+                        with Library(Settings(library_dir=root / "library")) as other:  # the photographer rejects that frame mid-call
+                            other.set_decision(chosen, "reject")
+                            self.pick_after_reject = other.list_groups()[0]["automatic_pick_id"]
+                        return BurstCritique(frames[0][0], "ok", 0.5, "{}")
+
+                removing = RemovingTagger()
+                with self.assertRaisesRegex(ValueError, "burst changed during review"):
+                    library.critique_burst(group["id"], removing)
+                self.assertEqual("burst_review_failed", [e for e in library.catalog.events_for(None)][-1].kind)
+                # Rejecting the top frame legitimately reranks; the failed critique leaves that pick alone.
+                self.assertEqual(removing.pick_after_reject, library.list_groups()[0]["automatic_pick_id"])
+
+                for photo in group["photos"][1:4]:  # with the mid-call reject, 4 of 10 rejected
+                    library.set_decision(photo["id"], "reject")
+
+                class RecordingTagger:
+                    model, role = "review-model", "review"
+                    def critique_burst(self, frames):
+                        self.frames = list(frames)
+                        return BurstCritique(frames[0][0], "ok", 0.5, "{}")
+
+                recording = RecordingTagger()
+                library.critique_burst(group["id"], recording)
+                kept = [p["id"] for p in library.list_groups()[0]["photos"] if p["decision"] != "reject"]
+                self.assertEqual(kept, [int(fid) for fid, _ in recording.frames])  # never padded with rejected frames
+                self.assertEqual(6, len(kept))
 
 
 if __name__ == "__main__":

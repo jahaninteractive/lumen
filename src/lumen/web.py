@@ -15,10 +15,11 @@ from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups
 from .config import Settings
 from .diagnostics import doctor_report
+from .digest import parse_day
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .pipelines import EXPORT_PRESETS
-from .omlx import OmlxTagger
+from .vocabulary import load_vocabulary
 
 
 STATIC_FILES = {
@@ -69,6 +70,21 @@ def _refine_selector(payload: dict) -> dict:
             raise ValueError("all scope takes no other fields")
         return {"all_photos": True}
     raise ValueError("scope must be group, filtered, or all")
+
+
+def _tag_scope(payload: dict) -> tuple[str | list[int], bool]:
+    """Strict `/api/photos/tag` body: scope is keepers, all, or distinct positive photo IDs; retag is optional."""
+    if payload.keys() - {"scope", "retag"} or "scope" not in payload:
+        raise ValueError("tag requires scope and optional retag only")
+    scope, retag = payload["scope"], payload.get("retag", False)
+    if type(retag) is not bool:
+        raise ValueError("retag must be true or false")
+    if scope in ("keepers", "all"):
+        return scope, retag
+    if (isinstance(scope, list) and scope and len(set(scope)) == len(scope)
+            and all(type(item) is int and item > 0 for item in scope)):
+        return scope, retag
+    raise ValueError("scope must be keepers, all, or a list of distinct photo IDs")
 
 
 def choose_macos_folder() -> str | None:
@@ -198,6 +214,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
                     "astro_output_dir": str((settings.output_dir / "astro").resolve()),
                     "ingest_output_dir": str((settings.output_dir / "ingest").resolve()),
+                    "digest_dir": str(settings.digest_dir.resolve()),
                 })
                 return
             if path == "/api/groups":
@@ -210,6 +227,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     # Rejected frames are fetched so an all-rejected burst stays listed and its counts cover them.
                     groups = _serializable_groups(library.list_groups(replace(filters, show_rejected=True)))
                     frame_counts = library.catalog.group_frame_counts()
+                    for group in groups:  # Advisory text cue from stored triage; never a model call or mode switch.
+                        group["astro_cue"] = library.astro_cue([photo["id"] for photo in group["photos"]])
+                        for photo in group["photos"]:  # Why each frame matched the find text; always present.
+                            photo["matched"] = library.catalog.match_terms(photo["id"], filters.text) if filters.text else []
                     payload = {"photo_count": library.photo_count(), "counts": library.catalog.group_counts(filters),
                                "cameras": library.cameras(), "keeper_count": len(library.keeper_ids())}
                 hide_rejected = not filters.show_rejected and filters.decision == "any"
@@ -223,6 +244,20 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 groups = [group for group in groups if group["photos"] or group["rejected_count"] == group["frame_count"]]
                 self._send_json({"groups": groups, "rejected_count": rejected_count, **payload})
                 return
+            if path == "/api/vocabulary":
+                try:
+                    self._send_json({"categories": load_vocabulary(settings)})
+                except (ValueError, OSError) as error:
+                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if path == "/api/photos/reject-suggestions":
+                with Library(settings) as library:
+                    suggestions = library.reject_suggestions()
+                for item in suggestions:  # The fingerprint only versions the preview URL; it never reaches the browser.
+                    version = f"{item.pop('fingerprint16')}-{item.pop('preview_kind')}"
+                    item["preview_url"] = f"/preview/{item['photo_id']}?v={version}"
+                self._send_json({"suggestions": suggestions, "count": len(suggestions)})
+                return
             if path == "/api/jobs":
                 with Library(settings) as library:
                     self._send_json({"jobs": library.list_job_status()})
@@ -234,6 +269,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json(library.job_status(int(match.group(2))))
                 except (ValueError, OverflowError, OSError, RuntimeError):
                     self._send_json({"error": "astro job is unavailable" if match.group(1) else "job is unavailable"}, status=HTTPStatus.NOT_FOUND)
+                return
+            match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
+            if match:
+                try:
+                    with Library(settings) as library:
+                        self._send_json(library.astro_triage(int(match.group(1))))
+                except (ValueError, OverflowError):
+                    self._send_json({"error": "unknown burst"}, status=HTTPStatus.NOT_FOUND)
+                return
+            match = re.fullmatch(r"/api/groups/(\d+)/critique", path)
+            if match:
+                with Library(settings) as library:
+                    self._send_json({"critique": library.latest_critique(int(match.group(1)))})
                 return
             match = re.fullmatch(r"/api/photos/(\d+)/crops", path)
             if match:
@@ -331,16 +379,32 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                                                        Path(mirror) if mirror is not None else None)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
-                if path == "/api/photos/tag-all":
-                    if payload.keys() - {"retag"}:
-                        raise ValueError("unexpected tag fields")
-                    retag = payload.get("retag", False)
-                    if type(retag) is not bool:
-                        raise ValueError("retag must be true or false")
-                    tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
+                if path in ("/api/photos/tag", "/api/photos/tag-all"):
+                    if path.endswith("-all"):  # Older alias: the whole catalog.
+                        if "scope" in payload:
+                            raise ValueError("unexpected tag fields")
+                        payload = payload | {"scope": "all"}
+                    scope, retag = _tag_scope(payload)
                     with Library(settings, job_runner=self.server.job_runner()) as library:
-                        job = library.start_tag_job(tagger, retag=retag)
+                        job = library.start_tag_job(library.tagger_for("fast"), scope=scope, retag=retag)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/photos/review-rejects":
+                    if payload.keys() != {"scope"}:
+                        raise ValueError("review-rejects requires only scope")
+                    scope, _ = _tag_scope(payload)
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        job = library.start_reject_review_job(library.tagger_for("fast"), scope=scope)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/photos/reject-suggestions/decide":
+                    if payload.keys() != {"photo_ids", "decision"}:
+                        raise ValueError("decide requires exactly photo_ids and decision")
+                    ids = payload["photo_ids"]
+                    if not isinstance(ids, list) or not ids or not all(type(item) is int and item > 0 for item in ids):
+                        raise ValueError("photo_ids must be a non-empty list of photo IDs")
+                    with Library(settings) as library:
+                        self._send_json(library.apply_reject_suggestions(ids, payload["decision"]))
                     return
                 if path == "/api/previews/refine":
                     with Library(settings, job_runner=self.server.job_runner()) as library:
@@ -411,10 +475,18 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/tag", path)
                 if match:
-                    tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
                     with Library(settings) as library:
-                        result = library.tag_photo(int(match.group(1)), tagger)
+                        result = library.tag_photo(int(match.group(1)), library.tagger_for("fast"))
                     self._send_json(asdict(result) | {"raw_response": None})
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/keywords", path)
+                if match:
+                    if (payload.keys() != {"action", "keyword"} or payload["action"] not in ("add", "remove")
+                            or not isinstance(payload["keyword"], str)):
+                        raise ValueError("keywords requires action add or remove and a string keyword")
+                    with Library(settings) as library:
+                        change = library.add_suggested_keyword if payload["action"] == "add" else library.remove_keyword
+                        self._send_json(change(int(match.group(1)), payload["keyword"]))
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/crop", path)
                 if match:
@@ -443,7 +515,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if match:
                     if payload:
                         raise ValueError("composition review requires an empty JSON object")
-                    tagger = OmlxTagger(settings.omlx_url, settings.omlx_model)
+                    with Library(settings) as library:
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
                     try:
                         with Library(settings) as library:
                             review = library.review_composition(int(match.group(1)), tagger)
@@ -454,6 +527,71 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "rationale": review.rationale,
                         "confidence": review.confidence,
                     })
+                    return
+                if path == "/api/digests":
+                    if payload.keys() - {"date", "overwrite"} or type(payload.get("overwrite", False)) is not bool:
+                        raise ValueError("digest requires date (YYYY-MM-DD) and an optional boolean overwrite")
+                    day = parse_day(payload.get("date"))
+                    with Library(settings) as library:
+                        try:  # Soft gate: without the review model the digest is facts only.
+                            tagger, reason = library.tagger_for("review"), None
+                        except RuntimeError as error:
+                            tagger, reason = None, str(error)
+                        try:
+                            result = library.digest_day(day, tagger, overwrite=payload.get("overwrite", False), unavailable_reason=reason)
+                        except FileExistsError as error:
+                            self._send_json({"error": str(error), "exists": True}, status=HTTPStatus.CONFLICT)
+                            return
+                    self._send_json(result)
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/caption", path)
+                if match:
+                    if payload:
+                        raise ValueError("caption requires an empty JSON object")
+                    with Library(settings) as library:
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
+                        try:
+                            caption = library.caption_photo(int(match.group(1)), tagger)
+                        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+                            raise ValueError(public_message(str(error))) from error
+                    self._send_json(caption)
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/caption/edit", path)
+                if match:
+                    if payload.keys() != {"caption", "alt_text"} or not all(
+                            value is None or isinstance(value, str) for value in payload.values()):
+                        raise ValueError("caption edit requires caption and alt_text, each a string or null")
+                    with Library(settings) as library:
+                        self._send_json(library.set_caption(
+                            int(match.group(1)), caption=payload["caption"], alt_text=payload["alt_text"]))
+                    return
+                match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
+                if match:
+                    if payload:
+                        raise ValueError("astro triage requires an empty JSON object")
+                    group_id = int(match.group(1))
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        if not any(group["id"] == group_id for group in library.list_groups()):
+                            self._send_json({"error": "unknown burst"}, status=HTTPStatus.NOT_FOUND)
+                            return
+                        job = library.start_triage_job(library.tagger_for("fast"), group_id=group_id)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                match = re.fullmatch(r"/api/groups/(\d+)/critique", path)
+                if match:
+                    if payload:
+                        raise ValueError("burst critique requires an empty JSON object")
+                    group_id = int(match.group(1))
+                    with Library(settings) as library:
+                        if not any(group["id"] == group_id for group in library.list_groups()):
+                            self._send_json({"error": "unknown burst"}, status=HTTPStatus.NOT_FOUND)
+                            return
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
+                        try:
+                            critique = library.critique_burst(group_id, tagger)
+                        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+                            raise ValueError(public_message(str(error))) from error
+                    self._send_json(critique)
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/(decision|rating)", path)
                 if match:
@@ -500,8 +638,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if isinstance(error, RuntimeError) and "another heavy job" in str(error):
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
-                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag-all",
-                                             "/api/previews/"))
+                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag",
+                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/"))
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 

@@ -9,12 +9,24 @@ from PIL import Image
 
 import lumen.omlx as omlx
 from lumen.omlx import (
+    AstroResponseError,
+    BurstResponseError,
+    CaptionResponseError,
+    DigestNarrative,
+    DigestResponseError,
     CompositionResponseError,
     NoRedirectHandler,
     OmlxError,
     OmlxTagger,
+    PROBLEMS,
+    RejectResponseError,
     TagResponseError,
+    parse_astro_response,
+    parse_burst_response,
+    parse_caption_response,
     parse_composition_response,
+    parse_digest_response,
+    parse_reject_response,
     parse_tag_response,
 )
 
@@ -158,6 +170,32 @@ class OmlxTests(unittest.TestCase):
                         tagger.review_composition(preview, candidates)
             build.assert_not_called()
 
+    def test_reject_response_requires_known_problem_kinds_and_exact_fields(self):
+        good = json.dumps({"problems": [{"kind": "motion_blur", "confidence": 0.84}], "suggest_reject": True, "confidence": 0.8})
+        result = parse_reject_response(good)
+        self.assertEqual(([{"kind": "motion_blur", "confidence": 0.84}], True), (result.problems, result.suggest_reject))
+        for bad in ({"problems": [{"kind": "ugly", "confidence": 0.5}], "suggest_reject": False, "confidence": 0.5},
+                    {"problems": [], "suggest_reject": "yes", "confidence": 0.5},
+                    {"problems": [], "suggest_reject": False, "confidence": 0.5, "note": "x"},
+                    {"problems": [{"kind": "misfire", "confidence": 0.5}, {"kind": "misfire", "confidence": 0.6}], "suggest_reject": True, "confidence": 0.5}):
+            with self.subTest(bad=bad), self.assertRaises(RejectResponseError):
+                parse_reject_response(json.dumps(bad))
+
+    def test_review_rejects_sends_one_image_listing_every_problem_with_small_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"
+            Image.new("RGB", (8, 8)).save(preview)
+            tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", "key", role="fast")
+            reply = '{"problems": [], "suggest_reject": false, "confidence": 0.7}'
+            with patch.object(tagger, "_complete", return_value=reply) as complete:
+                result = tagger.review_rejects(preview)
+        content = complete.call_args.args[0]
+        self.assertEqual(["text", "image_url"], [part["type"] for part in content])
+        self.assertTrue(all(kind in content[0]["text"] for kind in PROBLEMS))
+        self.assertIn("Do not identify a person.", content[0]["text"])
+        self.assertEqual(300, complete.call_args.kwargs["max_tokens"])
+        self.assertFalse(result.suggest_reject)
+
     def test_remote_endpoint_is_rejected(self):
         with self.assertRaises(ValueError):
             OmlxTagger("https://example.com", "model", api_key="secret")
@@ -213,6 +251,121 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual(["Qwen3.5-9B-4bit"], status["loaded_models"])
         self.assertEqual("Qwen3.6-35B-A3B-4bit", status["default_model"])
         self.assertEqual("Bearer secret", opener.request.headers["Authorization"])
+
+
+    def test_tag_response_accepts_species_and_conditions_and_rejects_extra_fields(self):
+        raw = json.dumps({"description": "Two penguins on ice", "subjects": ["gentoo penguin"], "scene": "ice",
+                          "technical": [], "confidence": 0.9,
+                          "species": [{"name": "gentoo penguin", "confidence": 0.82}], "conditions": ["overcast"]})
+        result = parse_tag_response(raw)
+        self.assertEqual([{"name": "gentoo penguin", "confidence": 0.82}], result.species)
+        self.assertEqual(["overcast"], result.conditions)
+        for bad in ({"species": [{"name": "x"}]}, {"species": [{"name": "x", "confidence": 2}]}, {"people": ["a"]}):
+            with self.subTest(bad=bad), self.assertRaises(TagResponseError):
+                parse_tag_response(json.dumps({"description": "d", "subjects": [], "scene": "", "technical": [], "confidence": 0.5} | bad))
+
+    def test_tag_prompt_lists_vocabulary_and_forbids_identifying_people(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k", role="fast")
+        captured = {}
+
+        def fake_complete(content, timeout, **kwargs):
+            captured["content"] = content
+            captured["kwargs"] = kwargs
+            return json.dumps({"description": "d", "subjects": [], "scene": "", "technical": [], "confidence": 0.5, "species": [], "conditions": []})
+
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"
+            Image.new("RGB", (8, 8)).save(preview)
+            with patch.object(tagger, "_complete", fake_complete):
+                tagger.tag(preview, vocabulary={"wildlife": ["gentoo penguin"], "scene": ["ice"]})
+        text = captured["content"][0]["text"]
+        self.assertIn("wildlife: gentoo penguin", text)
+        self.assertIn("Do not identify a person.", text)
+        self.assertEqual("fast", tagger.role)
+
+    def test_astro_response_requires_known_sky_class_and_issues(self):
+        good = json.dumps({"sky": "milky_way", "confidence": 0.91, "issues": ["haze"]})
+        self.assertEqual(("milky_way", ["haze"]), (parse_astro_response(good).sky, parse_astro_response(good).issues))
+        for bad in ({"sky": "day", "confidence": 0.5, "issues": []}, {"sky": "cloud", "confidence": 0.5, "issues": ["rain"]},
+                    {"sky": "cloud", "confidence": 0.5, "issues": ["haze", "haze"]}, {"sky": "cloud", "confidence": 0.5}):
+            with self.subTest(bad=bad), self.assertRaises(AstroResponseError):
+                parse_astro_response(json.dumps(bad))
+
+    def test_caption_response_enforces_lengths_and_no_hashtags(self):
+        good = json.dumps({"caption": "Gentoo penguins porpoise beside the zodiac.", "alt_text": "Three penguins leaping from grey water near a black inflatable boat."})
+        self.assertEqual("Gentoo penguins porpoise beside the zodiac.", parse_caption_response(good).caption)
+        for bad in ({"caption": "x" * 201, "alt_text": "a"}, {"caption": "fun #trip", "alt_text": "a"}, {"caption": "a", "alt_text": "x" * 126},
+                    {"caption": "a", "alt_text": "b", "hashtags": []}, {"caption": "", "alt_text": "b"}):
+            with self.subTest(bad=bad), self.assertRaises(CaptionResponseError):
+                parse_caption_response(json.dumps(bad))
+
+    def test_caption_prompt_forbids_identification_with_short_budget(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "c.jpg"; Image.new("RGB", (8, 8)).save(path)
+            reply = json.dumps({"caption": "Ice.", "alt_text": "White ice."})
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), reply)[1]):
+                result = tagger.caption(path)
+        self.assertEqual(("Ice.", "White ice."), (result.caption, result.alt_text))
+        self.assertIn("Do not identify a person.", captured["content"][0]["text"])
+        self.assertEqual(200, captured["kw"]["max_tokens"])
+
+    def test_digest_response_is_a_single_bounded_narrative_and_request_sends_no_image(self):
+        self.assertEqual("Calm.", parse_digest_response(json.dumps({"narrative": "Calm."})))
+        for bad in ({"narrative": ""}, {"narrative": "x" * 1501}, {"narrative": "a", "title": "b"}, ["a"]):
+            with self.subTest(bad=bad), self.assertRaises(DigestResponseError):
+                parse_digest_response(json.dumps(bad))
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), json.dumps({"narrative": "Calm."}))[1]):
+            result = tagger.write_digest("| Frames | 2 |")
+        self.assertEqual(DigestNarrative("Calm.", json.dumps({"narrative": "Calm."})), result)
+        self.assertTrue(all(part["type"] == "text" for part in captured["content"]))
+        self.assertIn("Do not invent species, places, or counts.", captured["content"][0]["text"])
+
+    def test_burst_response_requires_supplied_frame_and_bounded_rationale(self):
+        good = json.dumps({"frame_id": "7", "rationale": "Sharpest eye, wing fully extended.", "confidence": 0.72})
+        self.assertEqual("7", parse_burst_response(good, {"7", "8"}).frame_id)
+        for bad in ({"frame_id": "9", "rationale": "x", "confidence": 0.5}, {"frame_id": "7", "rationale": "x" * 301, "confidence": 0.5},
+                    {"frame_id": "7", "rationale": "x", "confidence": 0.5, "second": "8"}, {"frame_id": 7, "rationale": "x", "confidence": 0.5}):
+            with self.subTest(bad=bad), self.assertRaises(BurstResponseError):
+                parse_burst_response(json.dumps(bad), {"7", "8"})
+
+    def test_critique_burst_sends_labeled_frames_and_validates_count(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            frames = []
+            for index in range(3):
+                path = Path(directory) / f"{index}.jpg"; Image.new("RGB", (8, 8)).save(path); frames.append((str(index + 1), path))
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), json.dumps({"frame_id": "2", "rationale": "ok", "confidence": 0.6}))[1]):
+                result = tagger.critique_burst(frames)
+            with self.assertRaises(ValueError):
+                tagger.critique_burst(frames[:1])
+            with self.assertRaises(ValueError):
+                tagger.critique_burst(frames * 3)
+        self.assertEqual("2", result.frame_id)
+        texts = [part["text"] for part in captured["content"] if part["type"] == "text"]
+        self.assertIn("Do not identify a person.", texts[0])
+        self.assertEqual(["Frame 1", "Frame 2", "Frame 3"], texts[1:])
+        self.assertEqual(3, sum(part["type"] == "image_url" for part in captured["content"]))
+        self.assertEqual(400, captured["kw"]["max_tokens"])
+
+    def test_triage_astro_sends_one_image_with_classes_and_short_budget(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k", role="fast")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "l.jpg"; Image.new("RGB", (8, 8)).save(path)
+            reply = json.dumps({"sky": "aurora", "confidence": 0.7, "issues": ["trailing"]})
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), reply)[1]):
+                result = tagger.triage_astro(path)
+        self.assertEqual(("aurora", ["trailing"], reply), (result.sky, result.issues, result.raw_response))
+        prompt = captured["content"][0]["text"]
+        self.assertIn("Do not identify a person.", prompt)
+        self.assertTrue(all(name in prompt for name in omlx.SKY_CLASSES + omlx.SKY_ISSUES))
+        self.assertEqual(1, sum(part["type"] == "image_url" for part in captured["content"]))
+        self.assertEqual(200, captured["kw"]["max_tokens"])
 
 
 if __name__ == "__main__":
