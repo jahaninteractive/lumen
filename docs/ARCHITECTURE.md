@@ -8,16 +8,19 @@ RAW/JPEG folder
     ├─ metadata + embedded preview ── ExifTool / sips / darktable
     │                                  │
     │                                  ▼
-    │                           managed JPEG cache
+    │                           managed JPEG cache ── 480 px thumbnail tier
     │                                  │
     ├─ SQLite catalog ◀──── analysis / grouping / scoring
     │         │                        │
     │         ├─ provenance            ├─ Pillow measurements
     │         ├─ groups + picks        ├─ macOS Vision faces/eyes
-    │         └─ tags                  └─ astro screening
+    │         ├─ tags + location       └─ astro screening
+    │         └─ jobs
     │
     ├─ JSON + XMP sidecars
-    ├─ oMLX loopback vision tags
+    ├─ oMLX loopback (fast + review roles) ── tags, suggested rejects,
+    │      critique, captions, digests, triage, composition advice
+    ├─ vocabulary.json (photographer-owned, learns from tags)
     ├─ managed JPEG exports ── darktable-cli (crop applied at export)
     └─ managed astro stacks ── jobs table + one worker ── siril-cli
 ```
@@ -31,7 +34,17 @@ RAW/JPEG folder
 - `grouping.py` owns the replaceable burst policy.
 - `scoring.py` owns explainable ranking and missing-signal renormalization.
 - `sidecars.py` atomically writes portable JSON/XMP metadata.
-- `omlx.py` is the strict local VLM adapter and response validator.
+- `omlx.py` is the strict local VLM adapter and response validator: one
+  `OmlxTagger` per model role, lenient on unknown keys, clips over-long text.
+- `vocabulary.py` loads the photographer-owned keyword list (copied once from
+  `data/vocabulary.json`), matches model words to it, and appends learned words.
+- `digest.py` computes one capture day's facts and renders them as Markdown
+  before any model narrates them.
+- `diagnostics.py` builds the `lumen doctor` / `/api/status` report, including
+  live `omlx_roles`.
+- `tools.py` resolves `darktable-cli` and `siril-cli` from `PATH`, then the
+  project-local `vendor/apps/` bundles, never outside the bundle.
+- `domain.py` holds the shared dataclasses (`Photo`, `TagResult`, requests).
 - `pipelines.py` runs allow-listed processors with argument arrays.
 - `composition.py` derives deterministic, non-destructive crop candidates.
 - `jobs.py` is the persisted job lifecycle: validated transitions, restart
@@ -41,13 +54,17 @@ RAW/JPEG folder
   manifest, writes the version-gated `stack.ssf`, and executes/verifies a job.
 - `ingest.py` plans a card copy, copies with SHA-256 verification to each
   destination, classifies reruns, and writes the resumable manifest.
-- `library.py` orchestrates imports while keeping domain modules independent.
+- `library.py` orchestrates imports and every job while keeping domain modules
+  independent; `Library.tagger_for(role)` is the only `OmlxTagger` constructor
+  and refuses a model oMLX has not loaded.
 - `cli.py` and `web.py` are two interfaces over the same library facade.
 
 ## Previews
 
 Imports cache the embedded camera JPEG as `previews/<fingerprint>.jpg`
-(`preview_kind = "embedded"`). The `refine_previews` job renders each selected
+(`preview_kind = "embedded"`). `GET /thumb/<id>` serves a lazily built 480 px
+JPEG from `cache/thumbs/<preview stem>-<preview mtime_ns>.jpg` for the contact
+sheet; a refined preview gets a fresh thumb and the old file is stale cache. The `refine_previews` job renders each selected
 original with `darktable-cli` (2048 px, `--core --conf
 plugins/lighttable/export/metadata_flags=5`) into a temporary folder beside the
 cache, normalises it to `previews/<fingerprint>-2048.jpg`, and renames it into
@@ -87,10 +104,26 @@ launch command. The Astro tab polls that view only while a job is queued or
 running and keeps the manifest/log locations visible after failure or
 cancellation.
 
-The same runner carries the generic job kinds `import`, `ingest`, `tag`, and
-`refine_previews`. Each job's work opens its own `Library` on the worker thread
-and takes `_mutation()` around every catalog write, so request handlers only
-create the job and return its ID.
+The same runner carries the generic job kinds `import`, `ingest`,
+`refine_previews`, `export` (keepers), and the per-photo model jobs `tag`,
+`review_rejects`, `assist`, and `triage`, all built on
+`Library._run_photo_job(kind, tagger, scope, per_photo, counters=)`. Each job's
+work opens its own `Library` on the worker thread and takes `_mutation()`
+around every catalog write (one photo per lock for export), so request handlers
+only create the job and return its ID. One-shot model calls (`critique_burst`,
+`caption_photo`, `digest_day`, `review_composition`) run inline under the
+mutation lock; the browser marks itself busy for their duration.
+
+## Local AI contract
+
+Model output is advisory. `tags.data` is a read-modify-write JSON blob with
+optional keys (`description, subjects, scene, technical, confidence, species,
+conditions, suggested, problems, sky, issues, caption, alt_text`); a photo is
+"tagged" only when it has a `description`, and `assist` skips each step whose
+key is already present. A caption typed by the photographer is never
+overwritten. Suggested rejects live under `problems` until confirmed or
+dismissed; critique and triage never change picks or exclusions. Browser
+responses carry public messages only, never raw model text.
 
 ## Add a feature
 
