@@ -7,7 +7,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable, Any, Iterable
 
 from .composition import CropRect
 from .domain import DECISIONS, PREVIEW_KINDS, Artifact, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
@@ -200,6 +200,10 @@ class Catalog:
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs(status, id);
+            CREATE TABLE IF NOT EXISTS cleared_fingerprints (
+                fingerprint TEXT PRIMARY KEY,
+                cleared_at TEXT NOT NULL
+            );
             """
         )
         self.connection.commit()
@@ -609,6 +613,21 @@ class Catalog:
                 "DELETE FROM photos WHERE id = ?", ((photo_id,) for photo_id in photo_ids)
             )
         return photo_ids
+
+    def record_cleared(self, fingerprints: Iterable[str], cleared_at: str) -> int:
+        """Remember cleared frames by fingerprint; returns how many were new. The ledger outlives photo rows."""
+        with self.connection:
+            before = self.connection.total_changes
+            self.connection.executemany("INSERT OR IGNORE INTO cleared_fingerprints (fingerprint, cleared_at) VALUES (?, ?)",
+                                        ((fingerprint, cleared_at) for fingerprint in fingerprints))
+            return self.connection.total_changes - before
+
+    def cleared_fingerprints(self) -> set[str]:
+        return {row["fingerprint"] for row in self.connection.execute("SELECT fingerprint FROM cleared_fingerprints")}
+
+    def live_cleared_photo_ids(self) -> list[int]:
+        return [row["id"] for row in self.connection.execute(
+            "SELECT id FROM photos WHERE fingerprint IN (SELECT fingerprint FROM cleared_fingerprints) ORDER BY id")]
 
     def delete_photos(self, photo_ids: list[int], *, group_ids: list[int] | None = None) -> int:
         with self.connection:

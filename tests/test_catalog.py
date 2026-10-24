@@ -615,6 +615,19 @@ class CatalogTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(remaining_id, group["automatic_pick_id"])
 
+    def test_cleared_ledger_records_new_fingerprints_and_survives_photo_deletion(self):
+        self.assertEqual(2, self.catalog.record_cleared(["a", "b"], "t"))
+        self.assertEqual(1, self.catalog.record_cleared(["b", "c"], "t"))
+        self.assertEqual({"a", "b", "c"}, self.catalog.cleared_fingerprints())
+        first = self.catalog.upsert_photo(Photo(path="/photos/a1.ARW", fingerprint="a", captured_at=None, camera_id="A"))
+        self.catalog.upsert_photo(Photo(path="/photos/z.ARW", fingerprint="z", captured_at=None, camera_id="A"))
+        second = self.catalog.upsert_photo(Photo(path="/photos/a2.ARW", fingerprint="a", captured_at=None, camera_id="A"))
+
+        self.assertEqual([first, second], self.catalog.live_cleared_photo_ids())
+        self.catalog.delete_photos([first, second])
+        self.assertEqual([], self.catalog.live_cleared_photo_ids())
+        self.assertEqual({"a", "b", "c"}, self.catalog.cleared_fingerprints())
+
     def test_delete_photos_rolls_back_dependents_on_sqlite_failure(self):
         photo_id = self.catalog.upsert_photo(
             Photo(path="/photos/a.ARW", fingerprint="a", captured_at=None, camera_id="A")

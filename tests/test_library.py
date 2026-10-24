@@ -2,6 +2,7 @@ import tempfile
 import fcntl
 import json
 import os
+import shutil
 from dataclasses import replace
 from datetime import date, datetime
 import sqlite3
@@ -618,6 +619,47 @@ class LibraryTests(unittest.TestCase):
             self.assertNotEqual(result.trash_path, empty.trash_path)
             self.assertTrue(empty.snapshot_path.is_file())
         self.assertEqual(originals, {path: path.read_bytes() for path in originals})
+
+    def test_cleanup_records_cleared_fingerprints_in_the_ledger(self):
+        Image.new("RGB", (40, 30), "blue").save(self.source_dir / "second.jpg")
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            selected, retained = library.catalog.list_photos()
+            library.remove_group(selected.group_id)
+            self.assertEqual({selected.fingerprint}, library.catalog.cleared_fingerprints())
+            library.clear_workspace("CLEAR")
+            self.assertEqual({selected.fingerprint, retained.fingerprint}, library.catalog.cleared_fingerprints())
+
+    def test_seed_cleared_from_trash_reads_cleared_frames_and_skips_unreadable_snapshots(self):
+        Image.new("RGB", (40, 30), "blue").save(self.source_dir / "second.jpg")
+        with Library(Settings(library_dir=self.root / "other")) as other:
+            other.import_path(self.source_dir)
+            selected, retained = other.catalog.list_photos()
+            partial = other.remove_group(selected.group_id)
+            full = other.clear_workspace("CLEAR")
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            trash = library.settings.trash_dir
+            shutil.copytree(full.trash_path, trash / full.trash_path.name)
+            (trash / "20261024T000000.000000Z-empty").mkdir()
+            (trash / "20261024T000000.000000Z-empty" / "catalog.sqlite3").touch()
+            legacy = trash / "20261024T000001.000000Z-legacy"
+            legacy.mkdir()
+            with closing(sqlite3.connect(legacy / "catalog.sqlite3")) as connection:
+                connection.execute("CREATE TABLE photos (id INTEGER PRIMARY KEY, path TEXT)")
+                connection.execute("INSERT INTO photos (id, path) VALUES (1, '/x.ARW')")
+                connection.commit()
+            (legacy / "manifest.json").write_text(json.dumps({"photo_ids": [1], "group_ids": [], "files": []}))
+
+            self.assertEqual({"snapshots": 1, "skipped": 2, "added": 1}, library.seed_cleared_from_trash())
+            self.assertEqual({retained.fingerprint}, library.catalog.cleared_fingerprints())
+            cleared_at = library.catalog.connection.execute("SELECT cleared_at FROM cleared_fingerprints").fetchone()[0]
+            self.assertEqual(full.trash_path.name.split("-", 1)[0], cleared_at)
+            self.assertEqual({"snapshots": 1, "skipped": 2, "added": 0}, library.seed_cleared_from_trash())
+
+            # A group removal snapshots the whole catalog; only the frames it removed count as cleared.
+            shutil.copytree(partial.trash_path, trash / partial.trash_path.name)
+            self.assertEqual({"snapshots": 2, "skipped": 2, "added": 1}, library.seed_cleared_from_trash())
+            self.assertEqual({selected.fingerprint, retained.fingerprint}, library.catalog.cleared_fingerprints())
 
     def test_clear_requires_exact_confirmation_without_any_mutation(self):
         with Library(Settings(library_dir=self.library_dir)) as library:

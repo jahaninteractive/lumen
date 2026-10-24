@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Sequence
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from functools import wraps
@@ -1127,6 +1127,8 @@ class Library:
                     raise FileExistsError(f"staging destination already exists: {target}")
                 staged.append((source, target))
                 source.rename(target)
+            self.catalog.record_cleared({photo.fingerprint for photo in photos if photo.id in selected},
+                                        datetime.now(timezone.utc).isoformat())
             self.catalog.delete_photos(photo_ids, group_ids=group_ids)
         except BaseException as error:
             failures = []
@@ -1146,6 +1148,25 @@ class Library:
             raise
         self._prune_thumbnails()
         return CleanupResult(len(photo_ids), len(moves), trash, snapshot)
+
+    @_coordinated
+    def seed_cleared_from_trash(self) -> dict:
+        """Fill the ledger from earlier cleanup snapshots; idempotent, and an unreadable snapshot is only counted."""
+        snapshots = skipped = added = 0
+        for path in sorted(self.settings.trash_dir.glob("*/catalog.sqlite3")):
+            try:
+                # The snapshot holds the whole catalog; the manifest names the photos that cleanup removed.
+                photo_ids = json.loads((path.parent / "manifest.json").read_text(encoding="utf-8"))["photo_ids"]
+                placeholders = ",".join("?" for _ in photo_ids)
+                with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as snapshot:
+                    fingerprints = [row[0] for row in snapshot.execute(
+                        f"SELECT fingerprint FROM photos WHERE id IN ({placeholders})", photo_ids)]
+            except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+                skipped += 1
+                continue
+            snapshots += 1
+            added += self.catalog.record_cleared(fingerprints, path.parent.name.split("-", 1)[0])
+        return {"snapshots": snapshots, "skipped": skipped, "added": added}
 
     def _prune_thumbnails(self) -> int:
         """Best effort: thumbnails are a cache, so a failed unlink never fails the caller."""
