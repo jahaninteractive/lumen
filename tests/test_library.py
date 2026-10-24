@@ -1886,7 +1886,7 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(manifest["finished_at"])
         self.assertEqual(snapshot, manifest["snapshot"])
         self.assertEqual(3, len(manifest["files"]))
-        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0}, manifest["import"])
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 0}, manifest["import"])
         self.assertNotIn(str(self.root), json.dumps(status))
 
     def test_ingest_job_cancel_between_files_leaves_no_partial_or_final_half_file(self):
@@ -1954,6 +1954,22 @@ class LibraryTests(unittest.TestCase):
         with closing(sqlite3.connect(backups / status["ingest"]["snapshot"])) as snapshot:
             self.assertEqual(2, snapshot.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
         self.assertTrue(status["ingest"]["card_verified_everywhere"], "one destination is every requested destination")
+
+    def test_ingest_job_copies_cleared_frames_but_does_not_import_them(self):
+        card = self.make_card()
+        cleared = card / "DCIM" / "100MSDCF" / "DSC00001.JPG"
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.catalog.record_cleared([library_module.fingerprint_file(cleared)], "2026-10-24T00:00:00+00:00")
+            status = self.run_job(library, library.start_ingest_job(card, self.primary))
+            names = [Path(photo.path).name for photo in library.catalog.list_photos()]
+            job = library.catalog.get_job(status["job_id"])
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual(cleared.read_bytes(), next(self.primary.rglob("DSC00001.JPG")).read_bytes(), "ingest never drops a file")
+        self.assertEqual(["DSC00002.JPG"], names)
+        manifest = json.loads(Path(job.result_path).read_text())
+        self.assertEqual({"discovered": 2, "imported": 1, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 1},
+                         manifest["import"])
 
     def test_ingest_job_with_primary_failure_skips_import_and_snapshot(self):
         card = self.make_card()

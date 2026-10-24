@@ -681,12 +681,13 @@ class Library:
         """Import each verified primary photo copy (never the card; videos and other files are only copied)."""
         photos = [(item, entry) for item, entry in zip(items, files) if item.source.suffix.lower() in SUPPORTED_EXTENSIONS]
         summary = ImportSummary(discovered=len(photos))
+        cleared = self.catalog.cleared_fingerprints()  # Copied, never imported; Import with the tick brings them back.
         for index, (item, entry) in enumerate(photos, 1):
             if context.cancelled:
                 break
             mirrored = len(roots) > 1 and entry["outcomes"][str(roots[1])] in ingest.VERIFIED
             with self._mutation():
-                self._import_candidate(item.destinations[0], summary, skip_unchanged=True, job_id=job.id)
+                self._import_candidate(item.destinations[0], summary, skip_unchanged=True, job_id=job.id, cleared=cleared)
                 if photo := self.catalog.photo_by_path(str(item.destinations[0])):
                     self.catalog.set_mirror_path(photo.id, str(item.destinations[1]) if mirrored else None)
                     self.catalog.append_event(photo.id, "ingested", {
@@ -700,7 +701,7 @@ class Library:
                                     processed=index, total=len(photos))
         with self._mutation():
             self._regroup_and_write_sidecars()
-        return {key: getattr(summary, key) for key in ("discovered", "imported", "updated", "skipped", "failed")}
+        return {key: getattr(summary, key) for key in ("discovered", "imported", "updated", "skipped", "failed", "previously_cleared")}
 
     def _snapshot_catalog(self, primary: Path) -> str:
         """Catalog copy beside the primary originals, written to a temporary name and renamed into place."""
