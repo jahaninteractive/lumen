@@ -17,6 +17,7 @@ class Settings:
     omlx_review_model: str | None = None
     near_duplicate_distance: int = 12
     geonames_dir: Path | None = None  # set by from_environment; None means no place index
+    geocode_online: bool = False  # opt-in: send coordinates to Nominatim when the local index has no close place
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -36,6 +37,7 @@ class Settings:
             omlx_review_model=os.environ.get("LUMEN_OMLX_REVIEW_MODEL") or None,
             near_duplicate_distance=distance,
             geonames_dir=Path(os.environ.get("LUMEN_GEONAMES_DIR", str(DEFAULT_GEONAMES_DIR))).expanduser(),
+            geocode_online=os.environ.get("LUMEN_GEOCODE_ONLINE", "").strip().lower() in {"1", "true", "yes"},
         )
 
     @property

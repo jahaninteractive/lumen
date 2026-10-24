@@ -196,7 +196,8 @@ class CliTests(unittest.TestCase):
             geonames = Path(directory) / "geonames"
             write_geonames_fixture(geonames)
             output = io.StringIO()
-            with patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(geonames)}), redirect_stdout(output):
+            with patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(geonames), "LUMEN_GEOCODE_ONLINE": "Yes"}), \
+                    redirect_stdout(output):
                 code = main(["--library", str(Path(directory) / "library"), "doctor", "--json"])
 
         self.assertIn(code, (0, 2))
@@ -204,7 +205,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual("Qwen3.8-27B-4bit", payload["omlx_model"]["name"])
         self.assertIn("exiftool", payload["tools"])
         self.assertIn("darktable-cli", payload["tools"])
-        self.assertEqual({"dir": str(geonames), "files": 2, "places": 7}, payload["geonames"])
+        self.assertEqual({"dir": str(geonames), "files": 2, "places": 7, "online": True}, payload["geonames"])
 
     def test_siril_command_runs_managed_script_hook(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -233,7 +234,7 @@ class CliTests(unittest.TestCase):
             report = doctor_report(Settings(library_dir=Path(directory)))
 
         self.assertNotIn("--vision-test", report["omlx_model"]["recommendation"])
-        self.assertEqual({"dir": None, "files": 0, "places": 0}, report["geonames"])
+        self.assertEqual({"dir": None, "files": 0, "places": 0, "online": False}, report["geonames"])
 
     def test_doctor_distinguishes_loaded_model_from_lumen_target(self):
         missing = ToolStatus(name="tool", available=False, path=None, version=None)

@@ -1,8 +1,14 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-24 (Africa/Johannesburg) — cleared-frame ledger complete on branch `cleared-ledger` (not yet merged)
+Last updated: 2026-10-24 (Africa/Johannesburg) — places complete on branch `places` (not yet merged)
 
 ## Resume here
+
+**Places (branch `places`, not yet merged to `main`).** Spec `docs/superpowers/specs/2026-10-24-places-design.md`. Shipped:
+- `geonames.py` local index (`<library>/cache/geonames.sqlite`, R-tree) from the `*.txt` files in `LUMEN_GEONAMES_DIR` (default `vendor/data/geonames/`: `AQ.txt`, `ZA.txt`, `cities500.txt`, `countryInfo.txt`); tiered lookup (landmarks within 25 km, then "near" a town within 200 km, then any feature within 500 km).
+- `photos.place` / `place_country` resolved on import and backfilled on reimport; inspector, text filter, JSON/XMP sidecars, exported JPEG XMP; tag/caption prompts, `places` keywords, digests.
+- Opt-in online lookup: `LUMEN_GEOCODE_ONLINE=1` asks Nominatim (1 request/s, `User-Agent: Lumen/1.0 (local photo manager)`) only when the local result is missing or "near"; answers are cached as `source='online'` rows that survive index rebuilds. `lumen doctor` reports `geonames.online`. Off by default; tests never touch the network.
+- Deferred: hand-editing places in the UI (`docs/BACKLOG.md`).
 
 **Cleared-frame ledger (branch `cleared-ledger`, not yet merged to `main`).** Spec `docs/superpowers/specs/2026-10-24-cleared-ledger-design.md`. Shipped:
 - Remove-batch and clear-workspace record every removed frame's fingerprint in `cleared_fingerprints`; the ledger outlives photo rows.

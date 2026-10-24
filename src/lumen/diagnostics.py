@@ -72,7 +72,8 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
     roles = {role: {"model": (model := getattr(settings, attribute)), "loaded": model in live_report["loaded_models"]}
              for role, attribute in ROLES.items()}
     geonames_dir = settings.geonames_dir
-    geonames = {"dir": str(geonames_dir) if geonames_dir else None, "files": 0, "places": 0}
+    geonames = {"dir": str(geonames_dir) if geonames_dir else None, "files": 0, "places": 0,
+                "online": settings.geocode_online}
     if geonames_dir and geonames_dir.is_dir():
         with PlaceIndex(geonames_dir, settings.geonames_index_path) as index:
             counts = index.ensure()

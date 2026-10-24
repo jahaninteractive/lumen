@@ -8,3 +8,7 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 - **Whole-catalog payload.** `/api/groups` returns every photo of every burst on each `load()` (600 KB, 282 ms for 1001 frames; client render 23 ms). Paging is client-side only. Fine to ~5 k frames; add server paging keyed by burst when a real library crosses that or the fetch exceeds ~1 s.
 - **Safari and VoiceOver pass.** No manual pass was done for the sticky-layout, thumbnail, and tab changes; the headless checks ran in Chromium only.
 - **Crop-load latency on real ARW.** Compose fetches `/api/photos/<id>/crops` on every frame click while the tab is active; synthetic JPEGs answered in 3 ms, but real ARW files run the Vision analyzer. Measure on the user's library before deciding whether to debounce or move the load behind a button.
+
+## From the 2026-10-24 places work
+
+- **Hand-editing places in the UI.** A wrong nearest-feature name (a town across a border, a reserve the index lacks) can only be fixed by adding the country file or opting into online lookup. The spec lists editing as a later feature. Pick up when the photographer reports a wrong place they want to correct per frame or per burst.

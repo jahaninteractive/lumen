@@ -202,6 +202,37 @@ uv run lumen groups --from 2026-10-21 --to 2026-10-22 --camera ILCE-7M4:123 --mi
 uv run lumen groups --keepers --tagged --text heron --json
 ```
 
+## Places
+
+Every frame with a GPS fix gets a place name and country, resolved on import
+and backfilled for earlier frames on the next import: "Madikwe Game Reserve,
+South Africa" or "Neko Harbour, Antarctica". Protected areas, parks, islands,
+bays, and other landmarks within 25 km win over towns; past that the inspector
+says "near <town>" (populated places within 200 km, then any feature within
+500 km for open sea). The place shows in the inspector beside the coordinates,
+the tag-text filter searches it, and tag and caption prompts, keywords (a
+`places` vocabulary category), and day digests use it.
+
+Names come from a local GeoNames index built from the text files in
+`vendor/data/geonames/` (or `LUMEN_GEONAMES_DIR`) into
+`<library>/cache/geonames.sqlite`; it rebuilds itself when those files change.
+`AQ.txt` (Antarctica), `ZA.txt` (South Africa), `cities500.txt` (towns of 500+
+people worldwide), and `countryInfo.txt` are present. Before a trip somewhere
+else, download that country's `<CC>.zip` from
+<https://download.geonames.org/export/dump/> and unzip its `<CC>.txt` into the
+folder. `lumen doctor --json` reports the folder, file count, and place count
+under `geonames`.
+
+The place is written to the JSON sidecar (`place`, `place_country`), to the XMP
+sidecar as `Iptc4xmpCore:Location` and `photoshop:Country`, and to exported
+JPEG XMP.
+
+Online lookup is off by default. With `LUMEN_GEOCODE_ONLINE=1` (or `true`,
+`yes`), a frame with no local place within 25 km asks OpenStreetMap Nominatim
+instead, at most one request per second. Privacy: only then do coordinates leave
+the Mac. Each answer is cached into the local index, so later frames nearby
+resolve offline without asking again.
+
 ## Local AI
 
 Everything below runs through your local oMLX server and is advisory: the

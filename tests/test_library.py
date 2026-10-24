@@ -1,5 +1,6 @@
 import tempfile
 import fcntl
+import io
 import json
 import os
 import shutil
@@ -18,6 +19,7 @@ from lumen.config import Settings
 from lumen.vocabulary import load_blocked as load_vocabulary_blocked, load_vocabulary
 from lumen.library import Library
 from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
+from lumen import geonames as geonames_module
 from lumen import library as library_module
 from lumen import ingest as ingest_module
 from lumen.pipelines import DarktablePipeline
@@ -501,6 +503,38 @@ class LibraryTests(unittest.TestCase):
                     patch("lumen.geonames.PlaceIndex.lookup", side_effect=AssertionError("re-resolved")) as lookup:
                 library.wait_for_job(library.start_import_job(self.image_path).id)
             lookup.assert_not_called()
+
+    def test_online_place_lookup_is_opt_in_and_cached_into_the_index(self):
+        geonames = self.library_dir.parent / "geonames"
+        write_geonames_fixture(geonames)
+        base = {"captured_at": None, "camera_id": "ILCE-7CM2:1", "exposure_seconds": None, "raw_warning": None,
+                "latitude": 0.0, "longitude": 0.0, "altitude": None}
+        with Library(Settings(library_dir=self.library_dir, geonames_dir=geonames)) as library, \
+                patch("lumen.library.read_metadata", return_value=base), \
+                patch("urllib.request.urlopen", side_effect=AssertionError("network used while opted out")) as urlopen:
+            library.import_path(self.image_path)
+            self.assertIsNone(library.catalog.photo_by_path(str(self.image_path.resolve())).place)
+        urlopen.assert_not_called()
+
+        def answer(request, timeout):
+            return io.BytesIO(json.dumps({"name": "Kaapsehoop", "address": {"country": "South Africa"}}).encode())
+        second = self.image_path.with_name("DSC0002.jpg")
+        shutil.copyfile(self.image_path, second)
+        second.write_bytes(second.read_bytes() + b"distinct")
+        settings = Settings(library_dir=self.library_dir, geonames_dir=geonames, geocode_online=True)
+        with Library(settings) as library, patch.object(geonames_module, "_last_online_call", None), \
+                patch("lumen.geonames.time.sleep"):
+            with patch("lumen.library.read_metadata", return_value=base | {"latitude": 10.0, "longitude": 10.0}), \
+                    patch("urllib.request.urlopen", side_effect=answer) as urlopen:
+                library.import_path(self.image_path)
+            urlopen.assert_called_once()
+            first = library.catalog.photo_by_path(str(self.image_path.resolve()))
+            self.assertEqual(("Kaapsehoop", "South Africa"), (first.place, first.place_country))
+            with patch("lumen.library.read_metadata", return_value=base | {"latitude": 10.018, "longitude": 10.0}), \
+                    patch("urllib.request.urlopen", side_effect=AssertionError("cached place not reused")) as urlopen:
+                library.import_path(second)
+            urlopen.assert_not_called()
+            self.assertEqual("Kaapsehoop", library.catalog.photo_by_path(str(second.resolve())).place)
 
     def test_unsupported_raw_is_flagged_at_import_and_exports_through_the_macos_decoder(self):
         warning = "Sony reduced-size lossless raw; darktable cannot decode it"

@@ -1,9 +1,14 @@
 import os
 import tempfile
 import unittest
+import io
+import json
+import urllib.error
 from pathlib import Path
+from unittest.mock import patch
 
-from lumen.geonames import Place, PlaceIndex, distance_km
+from lumen import geonames
+from lumen.geonames import Place, PlaceIndex, distance_km, online_lookup
 
 
 def row(geonameid, name, lat, lon, feature_class, feature_code, country, population=0):
@@ -101,6 +106,53 @@ class PlaceIndexTests(unittest.TestCase):
     def test_distance_is_equirectangular_km(self):
         self.assertAlmostEqual(111.2, distance_km(0, 0, 1, 0), places=1)
         self.assertEqual(Place("A", "B", 1.0, "PPL", "geonames").near, False)
+
+
+def nominatim(payload):
+    calls = []
+
+    def opener(request, timeout):
+        calls.append((request.full_url, request.get_header("User-agent"), timeout))
+        return io.BytesIO(json.dumps(payload).encode())
+    return opener, calls
+
+
+class OnlineLookupTests(unittest.TestCase):
+    def setUp(self):
+        for patcher in (patch.object(geonames, "_last_online_call", None), patch("lumen.geonames.time.sleep")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_reserve_beats_town_and_is_an_online_place(self):
+        opener, calls = nominatim({"name": "", "address": {"town": "Zeerust", "nature_reserve": "Madikwe",
+                                                           "country": "South Africa"}})
+        place = online_lookup(-24.8, 26.2, opener=opener)
+        self.assertEqual(Place("Madikwe", "South Africa", 0.0, "ONLINE", "online"), place)
+        self.assertFalse(place.near)
+        url, agent, timeout = calls[0]
+        self.assertEqual("https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=-24.8&lon=26.2&zoom=10", url)
+        self.assertEqual(("Lumen/1.0 (local photo manager)", 5.0), (agent, timeout))
+
+    def test_name_then_missing_country(self):
+        opener, _ = nominatim({"name": "Somewhere", "address": {"village": "Elsewhere"}})
+        self.assertEqual(("Somewhere", ""), (lambda p: (p.name, p.country))(online_lookup(1, 1, opener=opener)))
+
+    def test_network_error_or_no_name_is_none(self):
+        def broken(request, timeout):
+            raise urllib.error.URLError("offline")
+        self.assertIsNone(online_lookup(1, 1, opener=broken))
+        opener, _ = nominatim({"error": "Unable to geocode"})
+        self.assertIsNone(online_lookup(1, 1, opener=opener))
+
+    def test_back_to_back_calls_wait_one_second(self):
+        opener, _ = nominatim({"name": "A", "address": {"country": "B"}})
+        with patch("lumen.geonames.time.monotonic", side_effect=[100.0, 100.0, 100.25, 100.25]), \
+                patch("lumen.geonames.time.sleep") as sleep:
+            online_lookup(1, 1, opener=opener)
+            sleep.assert_not_called()
+            online_lookup(1, 1, opener=opener)
+        sleep.assert_called_once()
+        self.assertGreaterEqual(sleep.call_args.args[0], 0.75)
 
 
 if __name__ == "__main__":

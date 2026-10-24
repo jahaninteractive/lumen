@@ -1,4 +1,4 @@
-"""Local GeoNames place index: nearest named place for a coordinate, fully offline."""
+"""Local GeoNames place index: nearest named place for a coordinate, offline unless online lookup is opted in."""
 
 from __future__ import annotations
 
@@ -6,6 +6,9 @@ import json
 import math
 import re
 import sqlite3
+import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +24,11 @@ TIER_ONE_NAME = re.compile(
 )
 LANDMARK_CLASSES = frozenset("LTHP")
 NON_FEATURE_FILES = frozenset({"countryInfo.txt", "readme.txt"})
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+USER_AGENT = "Lumen/1.0 (local photo manager)"
+ONLINE_INTERVAL_SECONDS = 1.0  # Nominatim usage policy: at most one request per second
+ONLINE_NAME_FIELDS = ("nature_reserve", "national_park", "protected_area", "name", "town", "village", "city", "county")
+_last_online_call: float | None = None
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS places(id INTEGER PRIMARY KEY, name TEXT, country TEXT, feature_class TEXT,
     feature_code TEXT, population INTEGER, lat REAL, lon REAL, source TEXT);
@@ -175,6 +183,32 @@ class PlaceIndex:
                 distance, name, country, code, source, _ = min(found)
                 return Place(name, country, distance, code, source, near=True)
         return None
+
+
+def online_lookup(lat: float, lon: float, *, timeout: float = 5.0, opener=None) -> Place | None:
+    """Ask Nominatim for a place name; any failure or a nameless answer is None. Callers gate this on opt-in."""
+    global _last_online_call
+    if _last_online_call is not None:
+        wait = ONLINE_INTERVAL_SECONDS - (time.monotonic() - _last_online_call)
+        if wait > 0:
+            time.sleep(wait)
+    _last_online_call = time.monotonic()
+    query = urllib.parse.urlencode({"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 10})
+    request = urllib.request.Request(f"{NOMINATIM_URL}?{query}", headers={"User-Agent": USER_AGENT})
+    try:
+        with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
+            payload = json.loads(response.read())
+    except (OSError, ValueError):  # URLError/HTTPError/timeouts are OSError; bad JSON is ValueError
+        return None
+    if not isinstance(payload, dict):
+        return None
+    address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
+    fields = {**address, "name": payload.get("name")}
+    name = next((value for key in ONLINE_NAME_FIELDS if isinstance(value := fields.get(key), str) and value.strip()), None)
+    if name is None:
+        return None
+    country = address.get("country")
+    return Place(name.strip(), country if isinstance(country, str) else "", 0.0, "ONLINE", "online")
 
 
 def _rows(path: Path, names: dict[str, str]):

@@ -24,7 +24,7 @@ from .config import Settings
 from .composition import CropCandidate, generate_candidates
 from .digest import day_facts, render_facts_table
 from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
-from .geonames import Place, PlaceIndex
+from .geonames import Place, PlaceIndex, online_lookup
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
@@ -176,6 +176,11 @@ class Library:
         if self.places is None:
             return None
         place = self.places.lookup(latitude, longitude) if latitude is not None and longitude is not None else None
+        if self.settings.geocode_online and latitude is not None and longitude is not None and (place is None or place.near):
+            online = online_lookup(latitude, longitude)
+            if online is not None:
+                self.places.add(online.name, online.country, latitude, longitude)  # cached: nearby frames resolve locally
+                place = online
         self.catalog.update_place(photo_id, place=place.name if place else None, country=place.country if place else None)
         if place:
             self.catalog.append_event(photo_id, "place_resolved", {"name": place.name, "country": place.country,
