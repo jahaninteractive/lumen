@@ -1246,15 +1246,17 @@ const tabElements = ['compose', 'export', 'review', 'astro', 'ingest', 'clear'].
   return tab;
 });
 const scope = new Element(); scope.value = 'current';
+const recipes = ['tracked', 'untracked'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const document = {
   get activeElement() { return focused; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
-  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : selector === '.burst-frames' ? (() => { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).find(node => node.className === 'burst-frames') ?? null; })() : byData(selector) ? byData(selector)[0] ?? null
+  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : selector === 'input[name="astro-recipe"]:checked' ? recipes.find(input => input.checked) : selector === '.burst-frames' ? (() => { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).find(node => node.className === 'burst-frames') ?? null; })() : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
     if (selector === '.frame') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).filter(item => item.className === 'frame'); }
     if (selector === '.batch-button' || selector === '.batch-select') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === selector.slice(1)); }
     if (selector === '[role="tab"]') return tabElements;
+    if (selector === 'input[name="astro-recipe"]') return recipes;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
     return byData(selector) || [];
@@ -1517,7 +1519,7 @@ async function fetch(url, options = {}) {
     payload = exportPolls < 3 || scenario === 'export-cancel' ? exportJob('running', 0.5, { label: 'photo-1.jpg', processed: 1, total: 2 })
       : exportJob('succeeded', 1, { label: 'photo-2.jpg', processed: 2, total: 2, result: { exported: 1, failed: 1, skipped: 0 }, log_tail: ['photo-2.jpg: bad render'] });
   }
-  else if (url === '/api/astro/jobs') { assert.equal(options.method, 'POST'); astroPosts.push(JSON.parse(options.body)); payload = jobPayload('queued', 0); }
+  else if (url === '/api/astro/jobs') { assert.equal(options.method, 'POST'); astroPosts.push(JSON.parse(options.body)); payload = jobPayload('queued', 0, { recipe: astroPosts.at(-1).recipe }); }
   else if (url === '/api/astro/jobs/7/run') { assert.deepEqual(JSON.parse(options.body), {}); runs += 1; payload = jobPayload('queued', 0); }
   else if (url === '/api/astro/jobs/7/cancel') { assert.deepEqual(JSON.parse(options.body), {}); cancels += 1; payload = jobPayload('cancelled', 0.5); }
   else if (url === '/api/astro/jobs/7/reveal') { assert.deepEqual(JSON.parse(options.body), {}); payload = { path: '/managed/outputs/astro/7' }; }
@@ -2524,8 +2526,12 @@ const regression = `
     lights[1].checked = true; lights[1].listeners.change();
     await element('#browse-astro-darks').listeners.click();
     assert.equal(element('#astro-darks-path').textContent, '/cal/darks');
+    const recipe = scenario === 'astro-recipe' ? 'untracked' : 'tracked';
+    recipes.forEach(input => { input.checked = input.value === recipe; });
     await element('#prepare-astro').listeners.click();
-    assert.deepEqual(astroPosts, [{ group_id: 1, confirmed: true, excluded_photo_ids: [3], darks: '/cal/darks', flats: null, biases: null }]);
+    assert.deepEqual(astroPosts, [{ group_id: 1, confirmed: true, excluded_photo_ids: [3], recipe, darks: '/cal/darks', flats: null, biases: null }]);
+    assert.ok(element('#astro-summary').textContent.endsWith('Recipe: ' + recipe));
+    assert.ok(recipes.every(input => input.disabled), 'a prepared job locks the recipe');
     assert.ok(element('#astro-warnings').children[0].textContent.startsWith('Warning: No flat frames'));
     assert.ok(element('#astro-summary').textContent.includes('2 lights'));
     assert.ok(pathsText().includes('/managed/outputs/astro/7/manifest.json'));
@@ -3306,7 +3312,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertRegex(styles, r"select:focus-visible")
 
     def test_javascript_astro_tab_confirms_includes_polls_and_retains_failure_context(self):
-        for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume"):
+        for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume", "astro-recipe"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
 
@@ -3435,6 +3441,10 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn(panel, confirm["parents"])
         self.assertTrue(any(node["tag"] == "label" and node["attrs"].get("for") == "astro-confirm" and "confirm" in node["text"].lower() for node in parser.nodes))
         self.assertEqual("fieldset", by_id["astro-lights-group"]["tag"])
+        radios = [node for node in parser.nodes if node["attrs"].get("name") == "astro-recipe"]
+        self.assertEqual([("radio", "tracked"), ("radio", "untracked")], [(node["attrs"].get("type"), node["attrs"].get("value")) for node in radios])
+        self.assertTrue(all(by_id["astro-recipe"] in node["parents"] for node in radios))
+        self.assertIn("checked", radios[0]["attrs"])
         self.assertIn("legend", [child["tag"] for child in parser.nodes if by_id["astro-lights-group"] in child["parents"]])
         for kind in ("darks", "flats", "biases"):
             browse = by_id[f"browse-astro-{kind}"]
@@ -3780,6 +3790,8 @@ class AstroWebTests(unittest.TestCase):
             {"group_id": self.group["id"], "confirmed": True, "darks": 5},
             {"group_id": self.group["id"], "confirmed": True, "extra": 1},
             {"group_id": 999, "confirmed": True},
+            {"group_id": self.group["id"], "confirmed": True, "recipe": "fast"},
+            {"group_id": self.group["id"], "confirmed": True, "recipe": None},
         )
         for payload in bad:
             with self.subTest(payload=payload):
@@ -3806,6 +3818,15 @@ class AstroWebTests(unittest.TestCase):
         self.assert_safe(payload)
         code, status = self.get_json(f"/api/astro/jobs/{payload['job_id']}")
         self.assertEqual((200, payload), (code, status))
+
+    def test_prepare_passes_the_recipe_through_and_reports_it(self):
+        code, payload = self.prepare(recipe="untracked")
+        self.assertEqual((201, "untracked"), (code, payload["recipe"]))
+        script = self.settings.output_dir / "astro" / str(payload["job_id"]) / "stack.ssf"
+        self.assertIn("register light -2pass\nseqapplyreg light -framing=min\n", script.read_text())
+        self.assert_safe(payload)
+        code, payload = self.prepare()
+        self.assertEqual((201, "tracked"), (code, payload["recipe"]))
 
     def test_run_then_poll_reports_progress_log_tail_and_result_artifact(self):
         code, prepared = self.prepare()

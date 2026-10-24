@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlsplit
 
+from .astro import RECIPES
 from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups
 from .config import Settings
@@ -683,7 +684,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 
         def _prepare_astro(self, payload: dict) -> dict:
-            allowed = {"group_id", "confirmed", "excluded_photo_ids", "darks", "flats", "biases"}
+            allowed = {"group_id", "confirmed", "excluded_photo_ids", "darks", "flats", "biases", "recipe"}
             if payload.keys() - allowed:
                 raise ValueError("unexpected astro fields")
             if payload.get("confirmed") is not True:
@@ -699,8 +700,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if folder is not None and (not isinstance(folder, str) or not folder.strip()):
                     raise ValueError(f"{kind} must be a folder path string or null")
                 folders[kind] = Path(folder) if folder is not None else None
+            recipe = payload.get("recipe", "tracked")
+            if type(recipe) is not str or recipe not in RECIPES:
+                raise ValueError("unknown recipe")
             with Library(settings) as library:
-                job = library.prepare_astro_job(payload["group_id"], confirmed=True, excluded_photo_ids=excluded, **folders)
+                job = library.prepare_astro_job(payload["group_id"], confirmed=True, excluded_photo_ids=excluded,
+                                                recipe=recipe, **folders)
                 return library.job_status(job.id)
 
         def _trusted_mutation(self) -> bool:

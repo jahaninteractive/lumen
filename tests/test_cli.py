@@ -784,6 +784,14 @@ class AstroCliTests(unittest.TestCase):
         code, status = self.run_cli("status", str(payload["job_id"]))
         self.assertEqual((0, payload), (code, status))
 
+    def test_prepare_passes_the_recipe_through(self):
+        code, payload = self.run_cli("prepare", str(self.group["id"]), "--recipe", "untracked", "--confirm")
+        self.assertEqual((0, "untracked"), (code, payload["recipe"]))
+        script = Settings(library_dir=self.library_dir).output_dir / "astro" / str(payload["job_id"]) / "stack.ssf"
+        self.assertIn("register light -2pass\nseqapplyreg light -framing=min\n", script.read_text())
+        _, payload = self.run_cli("prepare", str(self.group["id"]), "--confirm")
+        self.assertEqual("tracked", payload["recipe"])
+
     def test_run_waits_for_completion_and_status_reports_result(self):
         _, prepared = self.run_cli("prepare", str(self.group["id"]), "--confirm")
         code, finished = self.run_cli("run", str(prepared["job_id"]))

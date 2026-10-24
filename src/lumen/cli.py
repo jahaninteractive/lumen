@@ -8,6 +8,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
+from .astro import RECIPES
 from .catalog import GroupFilters
 from .config import Settings
 from .diagnostics import doctor_report
@@ -144,6 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--exclude", type=int, action="append", default=[], metavar="PHOTO_ID")
     for kind in ("darks", "flats", "biases"):
         prepare.add_argument(f"--{kind}", type=Path, help=f"folder of {kind[:-1]} calibration frames")
+    prepare.add_argument("--recipe", choices=RECIPES, default="tracked",
+                         help="tracked: global star alignment; untracked: two-pass alignment cropped to the common area")
     prepare.add_argument("--json", action="store_true")
     for action, help_text in (("run", "run a queued job and wait for it"), ("status", "show a job's progress"),
                               ("cancel", "cancel a queued or running job owned by this process")):
@@ -379,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
                         raise ValueError("astro stacking requires explicit photographer confirmation (--confirm)")
                     job_id = library.prepare_astro_job(
                         args.group_id, confirmed=True, excluded_photo_ids=args.exclude,
-                        darks=args.darks, flats=args.flats, biases=args.biases,
+                        darks=args.darks, flats=args.flats, biases=args.biases, recipe=args.recipe,
                     ).id
                 elif args.action == "run":
                     job_id = library.run_astro_job(args.job_id).id

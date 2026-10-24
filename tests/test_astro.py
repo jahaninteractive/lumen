@@ -200,6 +200,41 @@ class AstroPreparationTests(unittest.TestCase):
         self.assertEqual(FULL_SCRIPT, (Path(manifest.job_dir) / "stack.ssf").read_text())
         self.assertEqual(hashlib.sha256(FULL_SCRIPT.encode()).hexdigest(), manifest.script_sha256)
 
+    def test_recipes_tracked_is_unchanged_and_untracked_uses_two_pass_min_framing(self):
+        self.assertEqual(FULL_SCRIPT, siril_script(SIRIL, darks=True, flats=True, biases=True, recipe="tracked"))
+        self.assertEqual(LIGHTS_ONLY_SCRIPT, siril_script(SIRIL, darks=False, flats=False, biases=False))
+        untracked = siril_script(SIRIL, darks=False, flats=False, biases=False, recipe="untracked")
+        self.assertEqual(LIGHTS_ONLY_SCRIPT.replace(
+            "register light\n", "register light -2pass\nseqapplyreg light -framing=min\n"), untracked)
+        self.assertIn("register pp_light -2pass\nseqapplyreg pp_light -framing=min\nstack r_pp_light ",
+                      siril_script(SIRIL, darks=True, flats=True, biases=True, recipe="untracked"))
+        with self.assertRaisesRegex(ValueError, "unknown recipe"):
+            siril_script(SIRIL, darks=False, flats=False, biases=False, recipe="x")
+        with self.assertRaisesRegex(ValueError, "unknown recipe"):
+            self.prepare(recipe="x")
+        self.assertFalse((self.outputs / "astro" / "7").exists())
+
+    def test_manifest_records_recipe_and_older_manifests_load_as_tracked(self):
+        manifest = self.prepare(recipe="untracked")
+        job = Path(manifest.job_dir)
+        self.assertEqual("untracked", manifest.recipe)
+        self.assertIn("seqapplyreg light -framing=min\n", (job / "stack.ssf").read_text())
+        payload = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual("untracked", payload["recipe"])
+        self.assertEqual(manifest, load_manifest(job / "manifest.json", self.outputs))
+        (job / "manifest.json").chmod(0o644)
+        (job / "manifest.json").write_text(json.dumps(payload | {"recipe": "fast"}), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            load_manifest(job / "manifest.json", self.outputs)
+        older = self.prepare(job_id=8)
+        self.assertEqual("tracked", older.recipe)
+        path = Path(older.job_dir) / "manifest.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        del payload["recipe"]
+        path.chmod(0o644)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        self.assertEqual("tracked", load_manifest(path, self.outputs).recipe)
+
     def test_bias_without_darks_calibrates_lights_and_flats_without_bias_stack_plainly(self):
         script = siril_script(SIRIL, darks=False, flats=False, biases=True)
         self.assertIn("calibrate light -bias=../masters/bias_stacked -debayer\nregister pp_light\n", script)

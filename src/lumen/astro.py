@@ -31,6 +31,8 @@ MISSING_WARNINGS = {
 STAGES = (("Running command: calibrate", 0.3), ("Running command: register", 0.5), ("Running command: savetif", 0.9))
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
+# tracked: global star alignment; untracked: two-pass registration cropped to the common area (drifting wide fields).
+RECIPES = ("tracked", "untracked")
 STACK_OPTIONS = "rej w 3 3 -norm=addscale -output_norm -rgb_equal -filter-wfwhm=3k -filter-round=3k -out=result"
 
 
@@ -87,6 +89,7 @@ class AstroManifest:
     script_sha256: str
     log: str
     result: str
+    recipe: str = "tracked"  # Manifests written before recipes existed are tracked.
 
 
 def probe_siril(executable: str, *, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> SirilCapabilities:
@@ -101,8 +104,10 @@ def probe_siril(executable: str, *, runner: Callable[..., subprocess.CompletedPr
     return SirilCapabilities(executable, tuple(int(part) for part in match.groups()))
 
 
-def siril_script(siril: SirilCapabilities, *, darks: bool, flats: bool, biases: bool) -> str:
+def siril_script(siril: SirilCapabilities, *, darks: bool, flats: bool, biases: bool, recipe: str = "tracked") -> str:
     _require_supported(siril)
+    if recipe not in RECIPES:
+        raise ValueError("unknown recipe")
     low, high = (".".join(map(str, version)) for version in SUPPORTED_SIRIL)
     lines = [f"requires {low} {high}"]
     if biases:
@@ -136,7 +141,11 @@ def siril_script(siril: SirilCapabilities, *, darks: bool, flats: bool, biases: 
         lines += ["convert light -debayer -out=../process", "cd ../process"]
         sequence = "light"
     # register defaults to global star alignment; the stack filters drop k-sigma wFWHM/roundness outliers.
-    lines += [f"register {sequence}", f"stack r_{sequence} {STACK_OPTIONS}",
+    if recipe == "untracked":  # Both flags verified against Siril 1.4.4's built-in command help.
+        lines += [f"register {sequence} -2pass", f"seqapplyreg {sequence} -framing=min"]
+    else:
+        lines.append(f"register {sequence}")
+    lines += [f"stack r_{sequence} {STACK_OPTIONS}",
               "load result", "mirrorx -bottomup", "savetif ../result", "cd ..", "close"]
     return "\n".join(lines) + "\n"
 
@@ -144,7 +153,7 @@ def siril_script(siril: SirilCapabilities, *, darks: bool, flats: bool, biases: 
 def prepare_siril_job(
     *, output_root: Path, job_id: int, lights: Sequence[Path], siril: SirilCapabilities,
     excluded: Collection[Path] = (), darks: Path | None = None, flats: Path | None = None,
-    biases: Path | None = None, astro_metrics: Mapping[Path, Mapping] | None = None,
+    biases: Path | None = None, astro_metrics: Mapping[Path, Mapping] | None = None, recipe: str = "tracked",
 ) -> AstroManifest:
     if type(job_id) is not int or job_id <= 0:
         raise ValueError("job ID must be a positive integer")
@@ -181,7 +190,7 @@ def prepare_siril_job(
     metrics = {Path(path).resolve(): values for path, values in (astro_metrics or {}).items()}
     warnings += [f"Light {path.name} shows star trailing." for path in selected if metrics.get(path, {}).get("trailing_warning")]
 
-    script = siril_script(siril, darks=bool(sources["dark"]), flats=bool(sources["flat"]), biases=bool(sources["bias"]))
+    script = siril_script(siril, darks=bool(sources["dark"]), flats=bool(sources["flat"]), biases=bool(sources["bias"]), recipe=recipe)
     frame_sets = {kind: AstroFrameSet(kind, str(folders[kind]) if folders.get(kind) else None,
                                       tuple(_fingerprinted(kind, index, path) for index, path in enumerate(paths, 1)))
                   for kind, paths in sources.items()}
@@ -208,7 +217,7 @@ def prepare_siril_job(
             lights=frame_sets["light"], excluded_lights=tuple(str(path) for path in light_paths if path in excluded_paths),
             darks=frame_sets["dark"], flats=frame_sets["flat"], biases=frame_sets["bias"], warnings=tuple(warnings),
             script="stack.ssf", script_sha256=hashlib.sha256(script.encode("ascii")).hexdigest(),
-            log="siril.log", result="result.tif",
+            log="siril.log", result="result.tif", recipe=recipe,
         )
         _write_once(job / "manifest.json", json.dumps(_manifest_payload(manifest), ensure_ascii=False, indent=2) + "\n")
     except BaseException:
@@ -241,6 +250,8 @@ def load_manifest(path: Path, output_root: Path) -> AstroManifest:
         raise ValueError("astro manifest does not belong to its managed job directory")
     if (manifest.script, manifest.log, manifest.result) != ("stack.ssf", "siril.log", "result.tif"):
         raise ValueError("astro manifest names unexpected job files")
+    if manifest.recipe not in RECIPES:
+        raise ValueError("astro manifest names an unknown recipe")
     for name, kind in (("lights", "light"), ("darks", "dark"), ("flats", "flat"), ("biases", "bias")):
         frame_set = getattr(manifest, name)
         if frame_set.kind != kind or any(frame.kind != kind or not isinstance(frame.link, str) or not re.fullmatch(rf"{name}/{kind}_\d{{5}}\.[a-z]+", frame.link)

@@ -1682,7 +1682,7 @@ function setAstroJob(job) {
   const percent = Math.round((job.progress || 0) * 100);
   progress.value = percent;
   progress.setAttribute('aria-valuetext', `${percent}% complete`);
-  document.querySelector('#astro-summary').textContent = `Job ${job.job_id} · ${job.lights} lights, ${job.excluded_lights} excluded · ${job.darks} darks · ${job.flats} flats · ${job.biases} biases`;
+  document.querySelector('#astro-summary').textContent = `Job ${job.job_id} · ${job.lights} lights, ${job.excluded_lights} excluded · ${job.darks} darks · ${job.flats} flats · ${job.biases} biases${job.recipe ? ` · Recipe: ${job.recipe}` : ''}`;
   const warnings = document.querySelector('#astro-warnings');
   warnings.replaceChildren();
   job.warnings.forEach(text => {
@@ -1736,7 +1736,8 @@ async function astroAction(label, action) {
 
 document.querySelector('#prepare-astro').addEventListener('click', () => astroAction('Prepare stack', async () => {
   const { excluded } = astroLights();
-  setAstroJob(await post('/api/astro/jobs', { group_id: state.selectedGroupId, confirmed: true, excluded_photo_ids: excluded, ...state.astro.folders }));
+  const recipe = document.querySelector('input[name="astro-recipe"]:checked').value;
+  setAstroJob(await post('/api/astro/jobs', { group_id: state.selectedGroupId, confirmed: true, excluded_photo_ids: excluded, recipe, ...state.astro.folders }));
 }));
 document.querySelector('#run-astro').addEventListener('click', () => astroAction('Run stack', async () => {
   watchJob(await post(`/api/astro/jobs/${state.astro.job.job_id}/run`));  // queued until the worker flips the row; polling starts now
@@ -1835,6 +1836,7 @@ function updateWorkflow() {
   document.querySelector('#exclude-flagged').textContent = `Exclude flagged lights (${flagged})`;
   document.querySelector('#exclude-flagged').disabled = activeJob || !flagged;
   document.querySelector('#astro-confirm').disabled = activeJob;
+  document.querySelectorAll('input[name="astro-recipe"]').forEach(input => { input.disabled = activeJob; });
   document.querySelector('#cancel-astro').disabled = state.acting || !activeJob;
   document.querySelector('#cancel-job').disabled = state.acting || !JOB_ACTIVE.includes(state.job?.status);
   document.querySelector('#reveal-astro').disabled = state.busy || !job;

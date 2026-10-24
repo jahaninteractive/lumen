@@ -1269,7 +1269,8 @@ class Library:
 
     @_coordinated
     def prepare_astro_job(self, group_id: int, *, confirmed: bool, excluded_photo_ids: Sequence[int] = (),
-                          darks: Path | None = None, flats: Path | None = None, biases: Path | None = None) -> Job:
+                          darks: Path | None = None, flats: Path | None = None, biases: Path | None = None,
+                          recipe: str = "tracked") -> Job:
         if confirmed is not True:
             raise ValueError("astro stacking requires explicit photographer confirmation")
         if type(group_id) is not int or not (photo_ids := self.catalog.group_photo_ids(group_id)):
@@ -1294,7 +1295,7 @@ class Library:
                 output_root=self.settings.output_dir, job_id=job_id, siril=siril,
                 lights=[Path(photo.path) for photo in photos],
                 excluded=[Path(photo.path) for photo in photos if photo.id in excluded],
-                darks=darks, flats=flats, biases=biases, astro_metrics=metrics,
+                darks=darks, flats=flats, biases=biases, astro_metrics=metrics, recipe=recipe,
             )
             job_dir = Path(manifest.job_dir)
             return str(job_dir / "manifest.json"), str(job_dir / manifest.log)
@@ -1354,7 +1355,8 @@ class Library:
                 else:
                     counts = {"warnings": list(manifest.warnings), "lights": len(manifest.lights.frames),
                               "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
-                              "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames)}
+                              "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames),
+                              "recipe": manifest.recipe}
         elif job.manifest_path != "pending":
             try:  # Import, tag, and ingest jobs record their counts in the manifest.
                 manifest = json.loads(Path(job.manifest_path).read_text(encoding="utf-8"))
