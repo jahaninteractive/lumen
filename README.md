@@ -6,8 +6,10 @@ extracts previews, groups bursts, explains a best-shot choice, optionally tags
 previews through oMLX, writes portable sidecars, checks astrophotography frames,
 and hands exports to local tools such as darktable.
 
-The included defaults target a 48 GB M4 Mac and the already-installed
-`Qwen3.8-27B-4bit` model.
+The included defaults target a 48 GB M4 Mac with two oMLX models: a fast
+vision model (`Qwen3-VL-8B-Instruct-4bit`) for tagging, problem scans, and
+astro triage, and a review model (`Qwen3.8-27B-4bit`) for critique, captions,
+digests, and composition advice.
 
 ## What is working
 
@@ -19,11 +21,20 @@ The included defaults target a 48 GB M4 Mac and the already-installed
   Vision face/eye quality.
 - Approximate sky background, highlight clipping, star count, and trailing
   checks for astrophotography frames.
-- Local oMLX image tagging using the OpenAI-compatible vision request format.
+- Local oMLX image tagging using the OpenAI-compatible vision request format,
+  against a photographer-owned keyword vocabulary that learns from the model.
+- One-button local AI assist for keepers: tags, a problem scan with suggested
+  rejects, and a draft caption plus alt text, all advisory and skipped when
+  already done.
+- Burst critique (which frame is best and why), per-day digests, and sky-frame
+  triage from the local models; none of them pick, reject, or exclude for you.
+- GPS location read from the original and kept in the catalog and Full exports.
+- 480 px thumbnail tier for the contact sheet, with Small/Medium/Large tiles.
 - Non-destructive crop suggestions with optional local oMLX composition advice.
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
 - Quality-92, full-resolution sRGB JPEG export for the current photo or all
-  group keepers, with an optional darktable XMP profile.
+  keepers, with an optional darktable XMP profile; the keepers export runs as a
+  cancellable background job with a progress dialog.
 - Guided, reproducible Siril stacking of a confirmed night-sky batch with
   optional darks/flats/biases, progress, cancellation, and retained job logs.
 - Recoverable batch removal and workspace clearing that retain completed exports.
@@ -34,7 +45,9 @@ The included defaults target a 48 GB M4 Mac and the already-installed
 Prerequisites:
 
 1. macOS 13.5 or newer on Apple Silicon.
-2. oMLX installed with `Qwen3.8-27B-4bit` available.
+2. oMLX installed with `Qwen3-VL-8B-Instruct-4bit` (fast, vision) and
+   `Qwen3.8-27B-4bit` (review) available. Both must be loaded in oMLX for the
+   **Run all local AI** button; `lumen doctor` reports which roles are loaded.
 3. `uv`, ExifTool, and the Apple command-line developer tools:
 
    ```sh
@@ -56,9 +69,12 @@ macOS Vision helper into `~/Pictures/Lumen Library/cache/bin`. Set
 Optional processors:
 
 - Install the current Apple Silicon darktable disk image from
-  <https://www.darktable.org/install/>. Lumen looks for `darktable-cli`; if the
+  <https://www.darktable.org/install/>. Lumen looks for `darktable-cli` on
+  `PATH`, then inside a project-local `vendor/apps/darktable.app`. If the
   application bundle does not put it on `PATH`, add
-  `/Applications/darktable.app/Contents/MacOS` to `PATH`.
+  `/Applications/darktable.app/Contents/MacOS` to `PATH`. Exports keep EXIF and
+  GPS, so Lumen pins darktable's metadata flags regardless of your darktable
+  preferences.
 - Install the Apple Silicon build of Siril from <https://siril.org/download/>.
   Lumen looks for `siril-cli` on `PATH`, then inside a project-local
   `vendor/apps/Siril.app`. The managed stacking workflow is validated against
@@ -140,11 +156,16 @@ In the contact sheet, with a frame focused (**Shortcuts** lists these):
 
 - Arrow keys move between frames; Up/Down and Page Up/Page Down move by row;
   Home and End jump to the first or last frame.
-- `P` chooses the frame as best in its burst; `X` rejects; `F` flags; `U`
-  clears the decision; `0`–`5` set the rating.
+- `P` chooses the frame as best in its burst; `R` keeps it and rejects every
+  other frame of the burst; `X` rejects; `F` flags; `U` clears the decision;
+  `0`–`5` set the rating.
 - `C` marks or unmarks a frame for compare (two at most); **Compare marked** opens
   both at 100 percent with panes that pan together.
 - `Enter` opens the loupe at 100 percent; `Esc` closes compare or loupe.
+
+The **Tile size** select (Small/Medium/Large) is remembered by the browser, as
+is the chosen tab. The left rail opens only the selected burst's day; days you
+open by hand stay open across reloads.
 
 Culling keeps working while an import or ingest runs. It pauses while tagging,
 preview refinement, or a stack runs.
@@ -163,20 +184,61 @@ uv run lumen groups --from 2026-10-21 --to 2026-10-22 --camera ILCE-7M4:123 --mi
 uv run lumen groups --keepers --tagged --text heron --json
 ```
 
-## Local vision tags
+## Local AI
 
-Start oMLX, then tag one frame or the whole catalog:
+Everything below runs through your local oMLX server and is advisory: the
+models tag, suggest, draft, and explain, but never pick, reject, crop, export,
+or delete. Two model roles are used:
+
+| Role | Env var | Default | Used for |
+|------|---------|---------|----------|
+| fast | `LUMEN_OMLX_FAST_MODEL` | `Qwen3-VL-8B-Instruct-4bit` | tags, problem scan, astro triage |
+| review | `LUMEN_OMLX_REVIEW_MODEL` (falls back to `LUMEN_OMLX_MODEL`) | `Qwen3.8-27B-4bit` | burst critique, captions, digests, composition advice |
+
+Every action checks oMLX's live status first and refuses with a message naming
+the unloaded model; the UI disables the matching buttons with the same reason.
+Trust `lumen doctor` (`omlx_roles`) over the configured names.
+
+Start oMLX, then tag:
 
 ```sh
 omlx start
 uv run lumen tag --photo 1
+uv run lumen tag --keepers           # frames that are flagged or best and not rejected
 uv run lumen tag --all
-uv run lumen tag --all --retag
+uv run lumen tag --keepers --retag   # also re-tag already tagged frames
 ```
 
-`tag --all` skips photos that already have tags unless `--retag` is given. In
-the UI, **Tag all untagged** (below the import bar) does the same; tick
-**Re-tag already tagged** to include tagged photos.
+Tagging skips frames that already have a description unless `--retag` is
+given. Keywords come from `<library>/vocabulary.json`, copied once from the
+packaged starter and then yours to edit; confident model words are added back
+to it so the vocabulary grows with your shoots. In the UI the **Export** tab has
+**Tag keepers with local AI** and, below it, **Tag all untagged** with a
+**Re-tag already tagged** toggle. The inspector offers **Add local AI tags** for
+one frame, with suggested keywords you can add or remove.
+
+Run the whole assist in one job (tags, problem scan, caption; finished work is
+skipped, a failing step is logged and the next still runs):
+
+```sh
+uv run lumen assist --keepers        # or --all
+```
+
+The UI button is **Run all local AI on keepers** in the Export tab. The other
+model actions, each also available from the UI:
+
+```sh
+uv run lumen review-rejects --keepers   # Review tab: Scan keepers for problems
+uv run lumen critique 12                # inspector: Ask local AI which frame is best
+uv run lumen caption 42                 # inspector: Write caption with local AI
+uv run lumen digest 2026-10-23          # rail: Write today's digest → <library>/digests/
+uv run lumen triage 12                  # Astro tab: Triage lights with local AI
+```
+
+Suggested rejects appear in the **Review** tab for you to confirm or dismiss;
+nothing is rejected until you say so. A caption is a draft until you save it,
+and a caption you wrote is never replaced. Captions and alt text are used only
+by the Share export preset.
 
 Lumen reads the local oMLX API key from `LUMEN_OMLX_API_KEY`, or from the local
 `~/.omlx/settings.json` written by oMLX. It rejects non-loopback model URLs.
@@ -185,7 +247,13 @@ Override the defaults only when needed:
 ```sh
 export LUMEN_OMLX_URL="http://127.0.0.1:8000"
 export LUMEN_OMLX_MODEL="Qwen3.8-27B-4bit"
+export LUMEN_OMLX_FAST_MODEL="Qwen3-VL-8B-Instruct-4bit"
 ```
+
+Tagging sends the vocabulary as a stable system prefix so oMLX can cache it.
+oMLX's default settings (`hot_cache_only: true`, `hot_cache_max_size: "0"`)
+cache nothing; set `hot_cache_only: false` and a real `hot_cache_max_size` in
+`~/.omlx/settings.json` and restart oMLX to benefit.
 
 See [docs/MODELS.md](docs/MODELS.md) for the validation evidence and model
 recommendation.
@@ -227,7 +295,9 @@ The panel shows the managed destination and every successful output's exact
 path. **Show outputs in Finder** opens only `<library>/outputs/jpeg/`, whose
 default location is `~/Pictures/Lumen Library/outputs/jpeg/`. Filenames such as
 `photo-lumen.jpg`, `photo-lumen-1.jpg`, and `photo-lumen-2.jpg` avoid overwriting
-earlier exports. Partial failures keep successful JPEGs and report each failed
+earlier exports. A keepers export runs as a background job with a progress
+dialog and a **Cancel export** button; cancelling keeps the JPEGs already
+written. Partial failures keep successful JPEGs and report each failed
 photo so you can resolve the problem and retry that photo.
 
 Equivalent CLI commands:
