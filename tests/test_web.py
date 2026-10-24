@@ -600,6 +600,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
+            "/api/vocabulary/forget",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -619,6 +620,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
+            "/api/vocabulary/forget",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -934,6 +936,21 @@ class WebTests(unittest.TestCase):
             code, body = self.post_json("/api/photos/1/keywords", {"action": "remove", "keyword": "ice"})
             self.assertEqual((200, [], ["ice"]), (code, body["subjects"], body["suggested"]))
 
+    def test_vocabulary_reports_counts_and_forget_strips_keyword(self):
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            photo_id = library.catalog.list_photos()[0].id
+            library.catalog.save_tags(photo_id, {"subjects": ["Ice", "bay"], "suggested": []}, "fast-model")
+        code, vocab = self.get_json("/api/vocabulary")
+        self.assertEqual((200, 1, []), (code, vocab["counts"]["ice"], vocab["blocked"]))
+        for payload in ({}, {"word": "  "}, {"word": 3}, {"word": "x", "extra": 1}):
+            with self.subTest(payload=payload):
+                self.assertEqual(400, self.post_json("/api/vocabulary/forget", payload)[0])
+        code, body = self.post_json("/api/vocabulary/forget", {"word": "ICE"})
+        self.assertEqual((200, {"word": "ice", "removed_from": 1}), (code, body))
+        code, vocab = self.get_json("/api/vocabulary")
+        self.assertEqual((["ice"], None), (vocab["blocked"], vocab["counts"].get("ice")))
+        self.assertEqual(["bay"], self.get_json(f"/api/photos/{photo_id}")[1]["tags"]["data"]["subjects"])
+
     def test_export_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
         self.assertIn('id="tag-keepers"', html)
@@ -1008,6 +1025,12 @@ class WebTests(unittest.TestCase):
             self.assertIn(needle, html)
         js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
         self.assertIn("Reject all ${", js)
+
+    def test_javascript_learned_keywords_panel_lists_and_forgets(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        for needle in ('<details id="vocabulary-panel">', 'id="vocabulary-count"', '<ul id="vocabulary-list" aria-label="Learned keywords">'):
+            self.assertIn(needle, html)
+        self.run_javascript_cleanup_regression("vocabulary")
 
     def test_javascript_review_panel_decides_rows_by_button_and_key_and_confirms_count(self):
         self.run_javascript_cleanup_regression("review-rejects")
@@ -1291,7 +1314,9 @@ const suggestionRows = () => [1, 2].map(id => ({ photo_id: id, name: 'photo-' + 
 let rejectRows = suggestionRows();
 const rejectPosts = [];
 const keywordPosts = [];
-const keywordData = { subjects: ['ice'], suggested: ['krill'] };
+const keywordData = { subjects: ['ice'], suggested: ['krill', 'gentoo penguin'] };
+const vocabState = { categories: { wildlife: ['gentoo penguin'], learned: ['spindrift', 'krill'] }, counts: { spindrift: 3, krill: 1 }, blocked: [] };
+const vocabularyPosts = [];
 const removals = [];
 const mergePosts = [];
 const compositionReviews = [];
@@ -1367,6 +1392,14 @@ async function fetch(url, options = {}) {
     decisionPosts.push({ url, body });
     if ('decision' in body) decisions[id] = body.decision; else ratings[id] = body.rating;
     payload = { photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 };
+  }
+  else if (url === '/api/vocabulary') { assert.equal(options.method, undefined); payload = JSON.parse(JSON.stringify(vocabState)); }
+  else if (url === '/api/vocabulary/forget') {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    vocabularyPosts.push(body);
+    vocabState.categories.learned = vocabState.categories.learned.filter(word => word !== body.word);
+    payload = { word: body.word, removed_from: vocabState.counts[body.word] };
   }
   else if (url === '/api/photos/reject-suggestions') { assert.equal(options.method, undefined); payload = { suggestions: rejectRows.map(row => ({ ...row })), count: rejectRows.length }; }
   else if (url === '/api/photos/reject-suggestions/decide') {
@@ -1655,7 +1688,9 @@ const regression = `
     await inspect(state.groups[0].photos[0]);
     assert.ok(texts('keywords').includes('ice'));
     assert.ok(texts('suggested-keywords').includes('krill'));
-    assert.ok(texts('suggested-keywords').includes('Species: gentoo penguin (82%)'), 'a species below the vocabulary threshold stays a suggestion');
+    assert.ok(texts('suggested-keywords').includes('gentoo penguin (species, 82%)'), 'a species below the vocabulary threshold stays a labelled suggestion');
+    assert.ok(!texts('suggested-keywords').some(text => text?.startsWith('Species:')), 'no separate species line');
+    assert.ok(labelled('Add keyword gentoo penguin'));
     await labelled('Add keyword krill').listeners.click();
     assert.deepEqual(keywordPosts, [{ action: 'add', keyword: 'krill' }]);
     assert.ok(texts('keywords').includes('krill'));
@@ -1767,6 +1802,24 @@ const regression = `
     assert.equal(byId('ask-burst-ai').disabled, true);
     assert.ok(byId('burst-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
     assert.equal(byId('ask-burst-ai').getAttribute('aria-describedby'), 'burst-ai-availability');
+    return;
+  }
+  if (scenario === 'vocabulary') {
+    await load();
+    element('#review-tab').listeners.click();
+    await new Promise(setImmediate);
+    const rows = () => element('#vocabulary-list').children;
+    assert.equal(rows().length, 2);
+    assert.equal(element('#vocabulary-count').textContent, '(2)');
+    assert.equal(rows()[0].children[0].textContent, 'spindrift (3 frames)');
+    assert.equal(rows()[1].children[0].textContent, 'krill (1 frame)');
+    assert.deepEqual(vocabularyPosts, [], 'listing never forgets');
+    await rows()[0].children[1].listeners.click();
+    assert.deepEqual(vocabularyPosts, [{ word: 'spindrift' }]);
+    assert.equal(rows().length, 1);
+    assert.equal(rows()[0].children[1].getAttribute('aria-label'), 'Forget keyword krill');
+    assert.equal(focused, rows()[0].children[1], 'focus moves to the next Forget button');
+    assert.equal(element('#announcer').textContent, 'spindrift forgotten; removed from 3 frames');
     return;
   }
   if (scenario === 'review-rejects') {

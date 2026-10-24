@@ -47,10 +47,36 @@ def match_keywords(candidates: list[str], vocab: dict[str, list[str]]) -> tuple[
     return applied, suggested
 
 
+def load_blocked(settings: Settings) -> list[str]:
+    """Casefolded words the photographer forgot; they are never learned again."""
+    load_vocabulary(settings)  # copies the starter in and validates the file
+    blocked = json.loads(settings.vocabulary_path.read_text(encoding="utf-8")).get("blocked", [])
+    if not isinstance(blocked, list) or not all(isinstance(word, str) for word in blocked):
+        raise ValueError("vocabulary.json is invalid: blocked must be a list of keywords")
+    return [word.strip().casefold() for word in blocked]
+
+
+def _save(settings: Settings, **fields) -> None:
+    payload = json.loads(settings.vocabulary_path.read_text(encoding="utf-8")) | fields
+    SidecarWriter._atomic_write(settings.vocabulary_path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def forget_keyword(settings: Settings, word: str) -> bool:
+    """Drop a word (any case) from every category and block it; True when anything changed."""
+    key = word.strip().casefold()
+    vocab = load_vocabulary(settings)
+    blocked = load_blocked(settings)
+    kept = {name: [w for w in words if w.casefold() != key] for name, words in vocab.items()}
+    if kept == vocab and key in blocked:
+        return False
+    _save(settings, categories=kept, blocked=blocked + ([] if key in blocked else [key]))
+    return True
+
+
 def learn_keywords(settings: Settings, words_by_category: dict[str, list[str]]) -> list[str]:
     """Append words the model (or the photographer) used to <library>/vocabulary.json; returns the words actually added."""
     vocab = load_vocabulary(settings)
-    known = {word.casefold() for word in all_keywords(vocab)}
+    known = {word.casefold() for word in all_keywords(vocab)} | set(load_blocked(settings))
     added = []
     for category, words in words_by_category.items():
         for word in words:
@@ -61,6 +87,5 @@ def learn_keywords(settings: Settings, words_by_category: dict[str, list[str]]) 
             known.add(clean.casefold())
             added.append(clean)
     if added:
-        payload = json.loads(settings.vocabulary_path.read_text(encoding="utf-8")) | {"categories": vocab}
-        SidecarWriter._atomic_write(settings.vocabulary_path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        _save(settings, categories=vocab)
     return added

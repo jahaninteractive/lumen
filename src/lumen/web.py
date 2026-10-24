@@ -20,7 +20,6 @@ from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .pipelines import EXPORT_PRESETS
 from .previews import thumbnail_for
-from .vocabulary import load_vocabulary
 
 
 STATIC_FILES = {
@@ -247,7 +246,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 return
             if path == "/api/vocabulary":
                 try:
-                    self._send_json({"categories": load_vocabulary(settings)})
+                    with Library(settings) as library:
+                        self._send_json(library.vocabulary_report())
                 except (ValueError, OSError) as error:
                     self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -499,6 +499,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     with Library(settings) as library:
                         result = library.tag_photo(int(match.group(1)), library.tagger_for("fast"))
                     self._send_json(asdict(result) | {"raw_response": None})
+                    return
+                if path == "/api/vocabulary/forget":
+                    if payload.keys() != {"word"} or not isinstance(payload["word"], str) or not payload["word"].strip():
+                        raise ValueError("forget requires exactly one non-blank string word")
+                    with Library(settings) as library:
+                        self._send_json(library.forget_keyword(payload["word"]))
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/keywords", path)
                 if match:

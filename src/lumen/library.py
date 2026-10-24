@@ -34,7 +34,7 @@ from .grouping import TimeGapGroupingPolicy
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
-from .vocabulary import learn_keywords, load_vocabulary, match_keywords
+from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywords, load_blocked, load_vocabulary, match_keywords
 
 
 _MUTATION_LOCKS = {}
@@ -1492,9 +1492,42 @@ class Library:
 
     @_coordinated
     def add_suggested_keyword(self, photo_id: int, keyword: str) -> dict:
+        species = {item.get("name", "").casefold() for item in (self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("species", [])
+                   if isinstance(item, dict) and isinstance(item.get("name"), str)}
         result = self._move_keyword(photo_id, keyword, "suggested", "subjects", "keyword_added")
-        if learned := learn_keywords(self.settings, {"learned": [keyword]}):  # a hand-accepted word teaches the vocabulary
+        category = "wildlife" if keyword.strip().casefold() in species else "learned"  # a confirmed species is wildlife
+        if learned := learn_keywords(self.settings, {category: [keyword]}):  # a hand-accepted word teaches the vocabulary
             self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned})
+        return result
+
+    def vocabulary_report(self) -> dict:
+        """Vocabulary plus how many photos carry each applied word (case-insensitive)."""
+        counts: dict[str, int] = {}
+        for photo in self.catalog.list_photos():  # ponytail: full scan per request, fine to ~10k photos
+            tags = self.catalog.get_tags(photo.id)
+            for word in {word.casefold() for word in (tags["data"].get("subjects", []) if tags else [])}:
+                counts[word] = counts.get(word, 0) + 1
+        return {"categories": load_vocabulary(self.settings), "counts": counts, "blocked": load_blocked(self.settings)}
+
+    @_coordinated
+    def forget_keyword(self, word: str) -> dict:
+        """Remove a word from every photo's applied keywords and block it from the vocabulary."""
+        key = word.strip().casefold()
+        if not key:
+            raise ValueError("keyword must not be blank")
+        forget_vocabulary_keyword(self.settings, key)
+        changed = []
+        for photo in self.catalog.list_photos():
+            tags = self.catalog.get_tags(photo.id)
+            subjects = tags["data"].get("subjects", []) if tags else []
+            kept = [subject for subject in subjects if subject.casefold() != key]
+            if kept != subjects:
+                self.catalog.save_tags(photo.id, tags["data"] | {"subjects": kept}, tags["model"])
+                changed.append(photo.id)
+        result = {"word": key, "removed_from": len(changed)}
+        self.catalog.append_event(None, "keyword_forgotten", result)
+        for photo_id in changed:
+            self._write_sidecar(photo_id)
         return result
 
     @_coordinated

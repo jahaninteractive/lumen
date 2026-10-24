@@ -778,7 +778,8 @@ function keywordLists(photo, data) {
     for (const word of words) {
       const item = document.createElement('li');
       const text = document.createElement('span');
-      text.textContent = word;
+      const species = action === 'add' && (data.species || []).find(entry => entry.name.toLowerCase() === word.toLowerCase());
+      text.textContent = species ? `${word} (species, ${Math.round(species.confidence * 100)}%)` : word;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'secondary';
@@ -789,8 +790,8 @@ function keywordLists(photo, data) {
       list.append(item);
       if (state.keywordFocus === `${action}:${word}`) { state.keywordFocus = null; window.setTimeout(() => button.focus(), 0); }
     }
-    for (const species of data.species || []) {
-      if (applied.has(species.name.toLowerCase()) !== (action === 'remove')) continue;
+    for (const species of action === 'remove' ? data.species || [] : []) {  // a suggested species is labelled on its Add row
+      if (!applied.has(species.name.toLowerCase())) continue;
       const item = document.createElement('li');
       item.textContent = `Species: ${species.name} (${Math.round(species.confidence * 100)}%)`;
       list.append(item);
@@ -1156,7 +1157,7 @@ async function load() {
     if (active) watchJob(active);
   }
   if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
-  if (document.querySelector('#review-tab').getAttribute('aria-selected') === 'true') await loadRejectSuggestions();
+  if (document.querySelector('#review-tab').getAttribute('aria-selected') === 'true') await Promise.all([loadRejectSuggestions(), loadVocabulary()]);
 }
 
 // Import lives in a dialog opened from the tab row, so the sheet keeps the space.
@@ -1305,6 +1306,54 @@ function handleRejectKey(event) {
   return decideSuggestions([Number(row.dataset.photoId)], decision);
 }
 rejectList.addEventListener('keydown', handleRejectKey);
+
+// Learned keywords: the words local models taught the vocabulary; Forget strips one from every frame and blocks it.
+const vocabularyList = document.querySelector('#vocabulary-list');
+
+async function loadVocabulary() {
+  try {
+    renderVocabulary(await request('/api/vocabulary'));
+  } catch (error) {
+    announce(error.message);
+  }
+}
+
+function renderVocabulary(vocab) {
+  const words = vocab.categories.learned || [];
+  document.querySelector('#vocabulary-count').textContent = `(${words.length})`;
+  vocabularyList.replaceChildren(...words.map((word, index) => {
+    const item = document.createElement('li');
+    const text = document.createElement('span');
+    const frames = vocab.counts[word.toLowerCase()] || 0;
+    text.textContent = `${word} (${frames} frame${frames === 1 ? '' : 's'})`;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'Forget';
+    button.setAttribute('aria-label', `Forget keyword ${word}`);
+    button.addEventListener('click', () => forgetKeyword(word, index));
+    item.append(text, button);
+    return item;
+  }));
+}
+
+async function forgetKeyword(word, index) {
+  try {
+    const result = await post('/api/vocabulary/forget', { word });
+    await loadVocabulary();
+    announce(`${word} forgotten; removed from ${result.removed_from} frame${result.removed_from === 1 ? '' : 's'}`);
+    const rows = vocabularyList.children;
+    (rows[Math.min(index, rows.length - 1)]?.children[1] || document.querySelector('#vocabulary-panel summary')).focus();
+    const photo = state.selectedId === null ? null : photoById(state.selectedId);
+    if (photo) await inspect(photo);  // the inspector's keyword list drops the word too
+  } catch (error) {
+    announce(error.message);
+  }
+}
+
+document.querySelector('#vocabulary-panel').addEventListener('toggle', () => {
+  if (document.querySelector('#vocabulary-panel').open) loadVocabulary();
+});
 
 document.querySelector('#reject-all-shown').addEventListener('click', () => {
   const ids = state.rejectSuggestions.map(item => item.photo_id);
@@ -1789,7 +1838,7 @@ function selectTab(tab) {
   document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
   try { localStorage.setItem('lumen-tab', tab.id); } catch { /* per-visit only */ }
   if (tab.id === 'compose-tab') loadComposition();
-  if (tab.id === 'review-tab') loadRejectSuggestions();
+  if (tab.id === 'review-tab') { loadRejectSuggestions(); loadVocabulary(); }
 }
 
 function collapsePanel(collapsed) {

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from lumen.config import Settings
-from lumen.vocabulary import load_vocabulary
+from lumen.vocabulary import load_blocked as load_vocabulary_blocked, load_vocabulary
 from lumen.library import Library
 from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
 from lumen import library as library_module
@@ -1876,6 +1876,54 @@ class LibraryTests(unittest.TestCase):
                     library.add_suggested_keyword(photo_id, "orca")
                 kinds = [e.kind for e in library.catalog.events_for(photo_id)]
                 self.assertEqual(["keyword_added", "vocabulary_learned", "keyword_removed"], kinds[-3:])
+
+    def _two_tagged_photos(self, root: Path, library: Library) -> tuple[int, int]:
+        for index in range(2):
+            Image.new("RGB", (120 + index, 90), (index * 40, 0, 0)).save(root / f"k{index}.jpg")
+        library.import_path(root)
+        a, b = sorted(photo.id for photo in library.catalog.list_photos())
+        library.catalog.save_tags(a, {"subjects": ["ice", "bay"], "suggested": []}, "fast-model")
+        library.catalog.save_tags(b, {"subjects": ["Ice"], "suggested": []}, "fast-model")
+        return a, b
+
+    def test_forget_keyword_strips_every_photo_and_rewrites_sidecars(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with Library(Settings(library_dir=root / "library")) as library:
+                a, b = self._two_tagged_photos(root, library)
+                result = library.forget_keyword("ice")
+                self.assertEqual({"word": "ice", "removed_from": 2}, result)
+                self.assertEqual(["bay"], library.catalog.get_tags(a)["data"]["subjects"])
+                self.assertEqual([], library.catalog.get_tags(b)["data"]["subjects"])
+                sidecar = json.loads(library.sidecars.paths(library.catalog.get_photo(a))[0].read_text())
+                self.assertEqual(["bay"], sidecar["keywords"])
+                event = [e for e in library.catalog.events_for(None) if e.kind == "keyword_forgotten"][-1]
+                self.assertEqual({"word": "ice", "removed_from": 2}, event.details)
+                self.assertIn("ice", load_vocabulary_blocked(library.settings))
+                self.assertEqual({"word": "ice", "removed_from": 0}, library.forget_keyword("ice"))
+
+    def test_vocabulary_report_counts_photos_per_word(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with Library(Settings(library_dir=root / "library")) as library:
+                self._two_tagged_photos(root, library)
+                report = library.vocabulary_report()
+                self.assertEqual(2, report["counts"]["ice"])
+                self.assertEqual(1, report["counts"]["bay"])
+                self.assertEqual([], report["blocked"])
+                self.assertIn("gentoo penguin", report["categories"]["wildlife"])
+
+    def test_add_suggested_species_learns_as_wildlife(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with Library(Settings(library_dir=root / "library")) as library:
+                a, _ = self._two_tagged_photos(root, library)
+                library.catalog.save_tags(a, {"subjects": [], "suggested": ["skua chick"],
+                                              "species": [{"name": "Skua Chick", "confidence": 0.4}]}, "fast-model")
+                library.add_suggested_keyword(a, "skua chick")
+                vocab = load_vocabulary(library.settings)
+                self.assertIn("skua chick", vocab["wildlife"])
+                self.assertNotIn("skua chick", vocab.get("learned", []))
 
     def test_reject_review_job_stores_problems_and_never_changes_decisions(self):
         class FakeTagger:
