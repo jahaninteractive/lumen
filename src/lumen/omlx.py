@@ -242,7 +242,7 @@ def parse_expand_response(raw: str, vocabulary: dict[str, list[str]]) -> list[st
 
 def _place_sentence(place: str | None) -> str:
     """The place is stated context from the GPS fix; the model never infers it."""
-    return f" Taken at {place}." if place else ""
+    return f" Taken at {place}: name this place in the text you write." if place else ""
 
 
 def _vocabulary_system(vocabulary: dict[str, list[str]]) -> str:

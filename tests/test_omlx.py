@@ -363,7 +363,7 @@ class OmlxTests(unittest.TestCase):
                             tagger, "_complete", lambda content, timeout, **kw: (captured.update(text=content[0]["text"]), replies[method])[1]):
                         getattr(tagger, method)(preview, place=given)
                         if given:
-                            self.assertIn("Taken at Madikwe Game Reserve, South Africa.", captured["text"])
+                            self.assertIn("Taken at Madikwe Game Reserve, South Africa: name this place in the text you write.", captured["text"])
                         else:
                             self.assertNotIn("Taken at", captured["text"])
 
