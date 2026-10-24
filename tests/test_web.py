@@ -422,6 +422,7 @@ class WebTests(unittest.TestCase):
             self.assertIn(text, html)
         javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
         self.assertIn('input[name="export-preset"]:checked', javascript)
+        self.assertIn("Used only by the Share and Web exports.", javascript)
         self.assertRegex(javascript, r"payload = \{ scope, profile: state.profile, preset \}")
 
     def test_export_accepts_web_preset_with_watermark_and_rejects_bad_ones(self):
@@ -1273,17 +1274,20 @@ const tabElements = ['compose', 'export', 'review', 'astro', 'ingest', 'clear'].
   return tab;
 });
 const scope = new Element(); scope.value = 'current';
+const presetRadios = ['full', 'share', 'web'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
+const webRadio = presetRadios[2];
 const recipes = ['tracked', 'untracked'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const document = {
   get activeElement() { return focused; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
-  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : selector === 'input[name="astro-recipe"]:checked' ? recipes.find(input => input.checked) : selector === '.burst-frames' ? (() => { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).find(node => node.className === 'burst-frames') ?? null; })() : byData(selector) ? byData(selector)[0] ?? null
+  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : selector === 'input[name="astro-recipe"]:checked' ? recipes.find(input => input.checked) : selector === 'input[name="export-preset"]:checked' ? presetRadios.find(input => input.checked) : selector === '.burst-frames' ? (() => { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).find(node => node.className === 'burst-frames') ?? null; })() : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
     if (selector === '.frame') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).filter(item => item.className === 'frame'); }
     if (selector === '.batch-button' || selector === '.batch-select') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === selector.slice(1)); }
     if (selector === '[role="tab"]') return tabElements;
     if (selector === 'input[name="astro-recipe"]') return recipes;
+    if (selector === 'input[name="export-preset"]') return presetRadios;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
     return byData(selector) || [];
@@ -1322,7 +1326,8 @@ const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
 let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
-if (scenario === 'export-watermark') stored['lumen-watermark'] = '\u00a9 N. David';  // a remembered field from an earlier visit
+if (scenario === 'export-watermark') Object.assign(stored, { 'lumen-watermark': '\u00a9 N. David', 'lumen-export-preset': 'web' });  // remembered from an earlier visit
+if (scenario === 'export-bad-preset') stored['lumen-export-preset'] = 'huge';
 if (scenario.startsWith('resume')) {  // seeded before the startup load, which is the only one that resumes
   const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
   groups = [group(1, [...range(1000, 249), 2]), group(2, [1, 3])];  // photo 2 is the 250th frame, past the first page
@@ -2616,12 +2621,23 @@ const regression = `
     assert.equal(confirm.disabled, false);
     return;
   }
+  if (scenario === 'export-bad-preset') {
+    assert.equal(document.querySelector('input[name="export-preset"]:checked').value, 'full', 'an unknown remembered preset is ignored');
+    return;
+  }
   if (scenario === 'export-watermark') {
     const watermark = element('#export-watermark');
     assert.equal(watermark.value, '\u00a9 N. David', 'a reload restores the remembered watermark');
     await load();
     scope.value = 'keepers';
-    element('input[name="export-preset"]:checked').value = 'web';
+    assert.equal(webRadio.checked, true, 'a reload restores the remembered preset');
+    assert.equal(document.querySelector('input[name="export-preset"]:checked'), webRadio);
+    presetRadios[0].checked = true; webRadio.checked = false;
+    presetRadios[0].listeners.change();
+    assert.equal(stored['lumen-export-preset'], 'full', 'choosing a preset remembers it');
+    presetRadios[0].checked = false; webRadio.checked = true;
+    webRadio.listeners.change();
+    assert.equal(stored['lumen-export-preset'], 'web');
     state.keeperCount = 2;
     updateWorkflow();
     element('#export-dialog').hidden = true;
@@ -2642,7 +2658,7 @@ const regression = `
   if (scenario === 'export' || scenario === 'export-cancel') {
     await load();
     scope.value = 'keepers';
-    element('input[name="export-preset"]:checked').value = 'full';
+    assert.equal(document.querySelector('input[name="export-preset"]:checked').value, 'full', 'Full resolution is the default');
     state.keeperCount = 2;
     updateWorkflow();
     const dialog = element('#export-dialog');
@@ -3368,7 +3384,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                 self.run_javascript_cleanup_regression(scenario)
 
     def test_javascript_keepers_export_runs_as_a_job_with_progress_dialog_and_status_bar(self):
-        for scenario in ("export", "export-cancel", "export-watermark"):
+        for scenario in ("export", "export-cancel", "export-watermark", "export-bad-preset"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
 

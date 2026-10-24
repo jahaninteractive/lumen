@@ -1223,7 +1223,7 @@ class Library:
                     "author": edit.author, "rationale": edit.rationale,
                     "selected_at": edit.selected_at.isoformat(),
                 }
-            share = request.preset == "share"  # Full keeps the photographer's description and no alt text.
+            share = request.preset != "full"  # Share and Web use the caption; Full keeps the photographer's description and no alt text.
             caption = data.get("caption")
             caption_used = share and bool(caption)
             rendered = pipeline.export_jpeg(Path(photo.path), request.profile,

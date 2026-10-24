@@ -691,7 +691,7 @@ function captionControls(photo, data) {
   const note = document.createElement('p');
   note.className = 'quiet';
   note.id = 'caption-note';
-  note.textContent = 'Used only by the Share export. A local AI draft is a suggestion: edit it, then save.';
+  note.textContent = 'Used only by the Share and Web exports. A local AI draft is a suggestion: edit it, then save.';
   block.append(heading, note);
   const fields = [['caption-input', 'Caption', data.caption], ['alt-input', 'Alt text', data.alt_text]].map(([id, text, value]) => {
     const label = document.createElement('label');
@@ -2325,10 +2325,20 @@ function rememberWatermark() {
 }
 watermarkInput.addEventListener('input', rememberWatermark);
 watermarkInput.addEventListener('change', rememberWatermark);
+const exportPresetRadios = [...document.querySelectorAll('input[name="export-preset"]')];
+exportPresetRadios.forEach(radio => radio.addEventListener('change', () => {
+  try {
+    localStorage.setItem('lumen-export-preset', radio.value);
+  } catch {
+    // Storage is optional; the preset falls back to Full resolution next visit.
+  }
+}));
 try {
   watermarkInput.value = localStorage.getItem('lumen-watermark') || '';
+  const preset = exportPresetRadios.find(radio => radio.value === localStorage.getItem('lumen-export-preset'));
+  if (preset) exportPresetRadios.forEach(radio => { radio.checked = radio === preset; });
 } catch {
-  // Storage is optional; the field simply starts empty.
+  // Storage is optional; the fields keep their defaults.
 }
 try {
   const remembered = localStorage.getItem('lumen-xmp-profile');

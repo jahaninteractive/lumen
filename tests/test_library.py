@@ -888,15 +888,17 @@ class LibraryTests(unittest.TestCase):
             self.assertIn("AltTextAccessibility", library.sidecars.paths(photo)[1].read_text())
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
-                share = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "share"))[0]
+                sharing = [library.export_jpegs(library_module.ExportRequest((photo.id,), None, preset))[0] for preset in ("share", "web")]
                 full = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "full"))[0]
-            with Image.open(share.output) as image:
-                self.assertEqual("Porpoising gentoos.", image.getexif()[270])
-                self.assertIn("Three penguins leaping from grey water.", image.info["xmp"].decode())
+            for share in sharing:  # Web is a sharing preset too.
+                with self.subTest(preset=share.artifact.settings["preset"]), Image.open(share.output) as image:
+                    self.assertEqual("Porpoising gentoos.", image.getexif()[270])
+                    self.assertIn("Three penguins leaping from grey water.", image.info["xmp"].decode())
+                    self.assertTrue(share.artifact.settings["caption_used"])
             with Image.open(full.output) as image:
                 self.assertEqual("Original description", image.getexif()[270])
                 self.assertNotIn("AltTextAccessibility", image.info["xmp"].decode())
-            self.assertTrue(share.artifact.settings["caption_used"]); self.assertFalse(full.artifact.settings["caption_used"])
+            self.assertFalse(full.artifact.settings["caption_used"])
             cleared = library.set_caption(photo.id, caption="", alt_text="")
             self.assertEqual((None, None), (cleared["caption"], cleared["alt_text"]))
             self.assertNotIn("AltTextAccessibility", library.sidecars.paths(photo)[1].read_text())
