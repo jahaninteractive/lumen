@@ -65,6 +65,11 @@ class Photo:
     place: str | None = None  # nearest named place from the local GeoNames index
     place_country: str | None = None
 
+    @property
+    def place_label(self) -> str | None:
+        """"<place>, <country>" for prompts and digests; a country alone is not a place."""
+        return ", ".join(word for word in (self.place, self.place_country) if word) if self.place else None
+
 
 @dataclass(slots=True)
 class PhotoMetrics:

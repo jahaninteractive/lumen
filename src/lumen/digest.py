@@ -27,8 +27,11 @@ def day_facts(library, day: date) -> dict:
             if (photo["captured_at"] or "")[:10] == iso:
                 photos.append(photo | {"burst": group["id"]})
                 bursts.add(group["id"])
-    keywords = Counter()
+    keywords, places = Counter(), Counter()
     for photo in photos:
+        place = library.catalog.get_photo(photo["id"]).place_label
+        if place:
+            places[place] += 1
         tags = library.catalog.get_tags(photo["id"])
         subjects = (tags or {}).get("data", {}).get("subjects") or []
         keywords.update(subject for subject in set(subjects) if isinstance(subject, str))
@@ -43,6 +46,7 @@ def day_facts(library, day: date) -> dict:
         "rejects": len(photos) - len(kept),
         "bursts": len(bursts),
         "astro_jobs": [{"job_id": job["job_id"], "status": job["status"], "lights": job["lights"]} for job in astro],
+        "places": sorted(places.items(), key=lambda item: (-item[1], item[0])),
         "keywords": [[name, count] for name, count in sorted(keywords.items(), key=lambda item: (-item[1], item[0]))[:20]],
         "top_frames": [{"photo_id": photo["id"], "name": Path(photo["path"]).name, "score": photo["total_score"],
                         "burst": photo["burst"]} for photo in top],
@@ -67,6 +71,8 @@ def render_facts_table(facts: dict) -> str:
                                         ("Astro jobs", len(facts["astro_jobs"]))])
     lines += ["", "## Keywords", ""]
     lines += _table(("Keyword", "Frames"), facts["keywords"]) if facts["keywords"] else ["No keywords were tagged."]
+    lines += ["", "## Places", ""]
+    lines += _table(("Place", "Frames"), facts["places"]) if facts["places"] else ["No places recorded."]
     lines += ["", "## Top frames", ""]
     lines += _table(("Frame", "Score", "Burst"), [
         (frame["name"], "unscored" if frame["score"] is None else f"{frame['score']:.2f}", frame["burst"])

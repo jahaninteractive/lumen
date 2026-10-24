@@ -4,6 +4,7 @@
     "wildlife": ["gentoo penguin", "chinstrap penguin", "adelie penguin", "emperor penguin", "weddell seal", "crabeater seal", "leopard seal", "southern elephant seal", "antarctic fur seal", "humpback whale", "minke whale", "orca", "wandering albatross", "black-browed albatross", "southern giant petrel", "cape petrel", "snow petrel", "antarctic tern", "skua", "kelp gull", "blue-eyed shag"],
     "scene": ["ice", "iceberg", "sea ice", "glacier", "pack ice", "zodiac", "ship", "research station", "mountain", "bay", "beach", "colony"],
     "conditions": ["aurora", "milky way", "night sky", "twilight", "golden hour", "overcast", "fog", "snowfall", "wind", "calm water"],
-    "activity": ["feeding", "porpoising", "hauling out", "nesting", "swimming", "breaching", "landing", "hiking", "kayaking"]
+    "activity": ["feeding", "porpoising", "hauling out", "nesting", "swimming", "breaching", "landing", "hiking", "kayaking"],
+    "places": []
   }
 }

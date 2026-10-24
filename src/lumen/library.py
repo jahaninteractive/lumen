@@ -975,7 +975,7 @@ class Library:
             raise ValueError(f"photo {photo_id} has no preview")
         model, role = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None)
         try:
-            result = tagger.caption(Path(photo.preview_path))
+            result = tagger.caption(Path(photo.preview_path), place=photo.place_label)
         except Exception as error:
             self.catalog.append_event(photo_id, "caption_failed", {
                 "model": model, "role": role, "error": str(error), "raw_response": getattr(error, "raw_response", None)})
@@ -1561,7 +1561,7 @@ class Library:
         role = getattr(tagger, "role", None)
         try:
             vocab = load_vocabulary(self.settings)
-            result = tagger.tag(Path(photo.preview_path), vocabulary=vocab)
+            result = tagger.tag(Path(photo.preview_path), vocabulary=vocab, place=photo.place_label)
         except Exception as error:
             raw_response = getattr(error, "raw_response", None)
             self.catalog.append_event(
@@ -1584,11 +1584,13 @@ class Library:
         # Only a weak species (< 0.6) stays a suggestion for the photographer.
         confident_species = [item["name"] for item in result.species if item["confidence"] >= 0.6
                              and item["name"].casefold() not in {word.casefold() for word in applied + suggested}]
-        learned = learn_keywords(self.settings, {"learned": suggested, "wildlife": confident_species})
+        # The place is stated, not inferred: it is applied even when the model's reply never mentions it.
+        place_words = [word for word in (photo.place, photo.place_country) if word]
+        learned = learn_keywords(self.settings, {"places": place_words, "learned": suggested, "wildlife": confident_species})
         if learned:
             self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned} | _job_detail(job_id))
         vocab = load_vocabulary(self.settings)
-        applied = match_keywords(applied + suggested + confident_species, vocab)[0]
+        applied = match_keywords(applied + suggested + confident_species + place_words, vocab)[0]
         suggested = [item["name"] for item in result.species if item["confidence"] < 0.6
                      and item["name"].casefold() not in {word.casefold() for word in applied}]
         existing = self.catalog.get_tags(photo_id)

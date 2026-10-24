@@ -978,7 +978,7 @@ class LibraryTests(unittest.TestCase):
     def test_caption_is_advisory_editable_and_only_share_export_uses_it(self):
         class FakeTagger:
             model, role = "review-model", "review"
-            def caption(self, preview):
+            def caption(self, preview, *, place=None):
                 return Caption("Penguins porpoise beside the zodiac.", "Three penguins leaping from grey water.", '{"c":1}')
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1017,7 +1017,7 @@ class LibraryTests(unittest.TestCase):
     def test_caption_failure_records_raw_response_and_reraises(self):
         class BadTagger:
             model, role = "review-model", "review"
-            def caption(self, preview):
+            def caption(self, preview, *, place=None):
                 raise CaptionResponseError("bad caption", "#raw")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1216,7 +1216,7 @@ class LibraryTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 return TagResult("A red bird", ["bird", "red"], "garden", ["sharp"], 0.9, "{}")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1230,6 +1230,37 @@ class LibraryTests(unittest.TestCase):
         sidecar = next((self.library_dir / "sidecars").glob("*.lumen.json")).read_text()
         self.assertIn("A red bird", sidecar)
         self.assertIn('"bird"', sidecar)
+
+    def test_place_is_stated_to_the_model_and_applied_as_keywords(self):
+        class FakeTagger:
+            model = "test-vlm"
+            calls = []
+
+            def tag(self, preview, *, vocabulary=None, place=None):
+                self.calls.append(("tag", place))
+                return TagResult("A lion", ["lion"], "", [], 0.9, "{}")
+
+            def caption(self, preview, *, place=None):
+                self.calls.append(("caption", place))
+                return Caption("Lion.", "A lion.", "{}")
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            library.tag_photo(photo_id, FakeTagger())
+            placeless = library.catalog.get_tags(photo_id)["data"]["subjects"]
+            library.catalog.update_place(photo_id, place="Madikwe Game Reserve", country="South Africa")
+            library.tag_photo(photo_id, FakeTagger())
+            library.caption_photo(photo_id, FakeTagger())
+            subjects = library.catalog.get_tags(photo_id)["data"]["subjects"]
+        vocabulary = json.loads((self.library_dir / "vocabulary.json").read_text())
+
+        self.assertEqual(["lion"], placeless)
+        self.assertEqual([("tag", None), ("tag", "Madikwe Game Reserve, South Africa"),
+                          ("caption", "Madikwe Game Reserve, South Africa")], FakeTagger.calls)
+        self.assertIn("Madikwe Game Reserve", subjects)
+        self.assertIn("South Africa", subjects)
+        self.assertEqual({"madikwe game reserve", "south africa"}, {word.casefold() for word in vocabulary["categories"]["places"]})
 
     def test_manual_pick_becomes_group_winner_and_survives_reimport(self):
         exif = Image.Exif()
@@ -1421,7 +1452,7 @@ class LibraryTests(unittest.TestCase):
         class FakeTagger:
             model = "test-vlm"
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 return TagResult("Old image", ["old"], "room", [], 0.8, "{}")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1458,7 +1489,7 @@ class LibraryTests(unittest.TestCase):
         class BrokenTagger:
             model = "broken-vlm"
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 raise TagResponseError("invalid response")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1477,7 +1508,7 @@ class LibraryTests(unittest.TestCase):
         class BrokenTagger:
             model = "broken-vlm"
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 return parse_tag_response("not model json")
 
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1820,7 +1851,7 @@ class LibraryTests(unittest.TestCase):
                 self.failing = failing
                 self.calls = []
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 self.calls.append(preview)
                 if preview == self.failing:
                     raise TagResponseError(f"bad response for {preview}")
@@ -2082,7 +2113,7 @@ class LibraryTests(unittest.TestCase):
             model, role = "fast-model", "fast"
             calls = []
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 FakeTagger.calls.append(sorted(vocabulary))
                 return TagResult("Penguins", ["Gentoo Penguin", "snow", "krill"], "ice", [], 0.9, '{"raw": true}',
                                  species=[{"name": "gentoo penguin", "confidence": 0.82}, {"name": "chinstrap penguin", "confidence": 0.4}],
@@ -2126,7 +2157,7 @@ class LibraryTests(unittest.TestCase):
     def test_tag_job_explicit_ids_validate_and_keyword_add_remove_round_trip(self):
         class FakeTagger:
             model, role = "fast-model", "fast"
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
 
         with tempfile.TemporaryDirectory() as directory:
@@ -2281,7 +2312,7 @@ class LibraryTests(unittest.TestCase):
             model, role = "fast-model", "fast"
             def review_rejects(self, preview):
                 return RejectReview([], False, 0.7, "{}")
-            def tag(self, preview, vocabulary=None):
+            def tag(self, preview, vocabulary=None, place=None):
                 return TagResult("ice", ["ice"], "", [], 0.9, "{}")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -2300,7 +2331,7 @@ class LibraryTests(unittest.TestCase):
 
         class FakeFast:
             model, role, tags, reviews = "fast-model", "fast", 0, 0
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 FakeFast.tags += 1
                 return TagResult("A lion", ["lion"], "savanna", [], 0.9, "{}", species=[{"name": "lion", "confidence": 0.95}], conditions=[])
             def review_rejects(self, preview):
@@ -2309,7 +2340,7 @@ class LibraryTests(unittest.TestCase):
 
         class FakeReview:
             model, role, captions = "review-model", "review", 0
-            def caption(self, preview):
+            def caption(self, preview, *, place=None):
                 FakeReview.captions += 1
                 return Caption("Lion at rest.", "A lion lying in dry grass.", "{}")
 
@@ -2338,7 +2369,7 @@ class LibraryTests(unittest.TestCase):
     def test_low_confidence_species_named_in_subjects_stays_suggested(self):
         class FakeTagger:
             model, role = "fast-model", "fast"
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 return TagResult("d", ["Chinstrap Penguin", "ice"], "", [], 0.9, "{}",
                                  species=[{"name": "chinstrap penguin", "confidence": 0.4}], conditions=[])
 
@@ -2363,7 +2394,7 @@ class LibraryTests(unittest.TestCase):
         class FakeTagger:
             model, role = "fast-model", "fast"
             triaged = []
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 return TagResult("stars", [], "", [], 0.9, "{}", species=[], conditions=[])
             def triage_astro(self, preview):
                 FakeTagger.triaged.append(preview.name)
@@ -2395,7 +2426,7 @@ class LibraryTests(unittest.TestCase):
     def test_tag_job_counts_triage_failure_separately_and_keeps_the_tag(self):
         class FakeTagger:
             model, role = "fast-model", "fast"
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 return TagResult("stars", [], "", [], 0.9, "{}", species=[], conditions=[])
             def triage_astro(self, preview):
                 raise AstroResponseError("bad sky", '{"sky":"day"}')

@@ -42,6 +42,19 @@ class DigestTests(unittest.TestCase):
         text = render_facts_table(facts)
         self.assertIn("No frames were imported for this day.", text); self.assertNotIn("|", text)
 
+    def test_places_count_frames_per_place_and_skip_placeless_frames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); _frames(root)
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                bare = render_facts_table(day_facts(library, date(2026, 10, 22)))
+                for photo in sorted(library.catalog.list_photos(), key=lambda p: p.path)[:2]:
+                    library.catalog.update_place(photo.id, place="Madikwe Game Reserve", country="South Africa")
+                facts = day_facts(library, date(2026, 10, 22))
+        self.assertEqual([("Madikwe Game Reserve, South Africa", 2)], facts["places"])
+        table = render_facts_table(facts)
+        self.assertIn("| Place | Frames |", table); self.assertIn("| Madikwe Game Reserve, South Africa | 2 |", table)
+        self.assertIn("No places recorded.", bare)
 
 if __name__ == "__main__":
     unittest.main()

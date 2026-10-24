@@ -240,6 +240,11 @@ def parse_expand_response(raw: str, vocabulary: dict[str, list[str]]) -> list[st
     return list(dict.fromkeys(found))[:8]
 
 
+def _place_sentence(place: str | None) -> str:
+    """The place is stated context from the GPS fix; the model never infers it."""
+    return f" Taken at {place}." if place else ""
+
+
 def _vocabulary_system(vocabulary: dict[str, list[str]]) -> str:
     return ("Keyword list by category: "
             + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
@@ -338,7 +343,8 @@ class OmlxTagger:
         self.role = role
         self.api_key = api_key or self._local_api_key()
 
-    def tag(self, preview: Path, timeout: float = 240, *, vocabulary: dict[str, list[str]] | None = None) -> TagResult:
+    def tag(self, preview: Path, timeout: float = 240, *, vocabulary: dict[str, list[str]] | None = None,
+            place: str | None = None) -> TagResult:
         prompt = (
             "Analyze this photograph for a local photo catalog. Return JSON only with: "
             'description (string), subjects (string array), scene (string), '
@@ -352,6 +358,7 @@ class OmlxTagger:
                 " Also return species (array of {name, confidence 0 to 1} for animals you can name) and "
                 "conditions (string array of light and weather). Do not identify a person."
             )
+        prompt += _place_sentence(place)
         content = self._complete([
             {"type": "text", "text": prompt},
             self._image_content(preview),
@@ -413,9 +420,10 @@ class OmlxTagger:
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
         return parse_astro_response(content)
 
-    def caption(self, preview: Path, timeout: float = 240) -> Caption:
+    def caption(self, preview: Path, timeout: float = 240, *, place: str | None = None) -> Caption:
         prompt = ("Write caption (under 200 characters, no hashtags, no emoji) and alt_text (under 125 characters, a "
-                  "literal description of what is visible for a screen reader). Return JSON only. Do not identify a person.")
+                  "literal description of what is visible for a screen reader). Return JSON only. Do not identify a person."
+                  + _place_sentence(place))
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
         return parse_caption_response(content)
 

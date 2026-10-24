@@ -286,7 +286,7 @@ class WebTests(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 pass
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 from lumen.omlx import TagResult
                 return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
 
@@ -962,7 +962,7 @@ class WebTests(unittest.TestCase):
         class FakeTagger:
             model, role = "fast-model", "fast"
             def __init__(self, *args, **kwargs): self.role = kwargs.get("role", "review")
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 from lumen.omlx import TagResult
                 return TagResult("A frame", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
 
@@ -1057,9 +1057,9 @@ class WebTests(unittest.TestCase):
 
         class FakeTagger:
             def __init__(self, *args, **kwargs): self.model, self.role = kwargs.get("role") + "-model", kwargs.get("role")
-            def tag(self, preview, *, vocabulary=None): return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+            def tag(self, preview, *, vocabulary=None, place=None): return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
             def review_rejects(self, preview): return RejectReview([], False, 0.8, "{}")
-            def caption(self, preview): return Caption("Cap.", "Alt.", "{}")
+            def caption(self, preview, *, place=None): return Caption("Cap.", "Alt.", "{}")
 
         both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
         with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger):
@@ -1185,7 +1185,7 @@ class WebTests(unittest.TestCase):
     def test_caption_routes_gate_validate_and_inspector_has_native_inputs(self):
         class FakeTagger:
             def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
-            def caption(self, preview):
+            def caption(self, preview, *, place=None):
                 from lumen.omlx import Caption
                 return Caption("A caption.", "Alt text.", "{}")
 

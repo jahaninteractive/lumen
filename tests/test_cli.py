@@ -157,7 +157,7 @@ class CliTests(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 self.model, self.role = "test-vlm", kwargs.get("role")
 
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 FakeTagger.calls += 1
                 return TagResult("A frame", ["frame"], "room", [], 0.9, "{}")
 
@@ -381,9 +381,9 @@ class CliTests(unittest.TestCase):
         class FakeTagger:
             calls = []
             def __init__(self, *args, **kwargs): self.model, self.role = "m", kwargs.get("role")
-            def tag(self, preview, *, vocabulary=None): FakeTagger.calls.append("tag"); return TagResult("d", [], "", [], 0.9, "{}", species=[], conditions=[])
+            def tag(self, preview, *, vocabulary=None, place=None): FakeTagger.calls.append("tag"); return TagResult("d", [], "", [], 0.9, "{}", species=[], conditions=[])
             def review_rejects(self, preview): FakeTagger.calls.append("review"); return RejectReview([], False, 0.8, "{}")
-            def caption(self, preview): FakeTagger.calls.append("caption"); return Caption("c", "a", "{}")
+            def caption(self, preview, *, place=None): FakeTagger.calls.append("caption"); return Caption("c", "a", "{}")
 
         live = {"version": "0.7.2", "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
         with tempfile.TemporaryDirectory() as directory:
@@ -405,7 +405,7 @@ class CliTests(unittest.TestCase):
             calls = 0
             def __init__(self, *args, **kwargs):
                 self.model, self.role = "fast-model", kwargs.get("role", "review")
-            def tag(self, preview, *, vocabulary=None):
+            def tag(self, preview, *, vocabulary=None, place=None):
                 FakeTagger.calls += 1
                 return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
 
@@ -457,7 +457,7 @@ class CliTests(unittest.TestCase):
     def test_caption_command_prints_caption_and_alt_text(self):
         class FakeTagger:
             def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
-            def caption(self, preview):
+            def caption(self, preview, *, place=None):
                 return Caption("A caption.", "Alt text.", "{}")
 
         live = {"version": None, "default_model": None, "loaded_models": ["Qwen3.8-27B-4bit"]}

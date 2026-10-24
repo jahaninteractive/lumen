@@ -349,6 +349,24 @@ class OmlxTests(unittest.TestCase):
         self.assertIn("Do not identify a person.", captured["content"][0]["text"])
         self.assertEqual(200, captured["kw"]["max_tokens"])
 
+    def test_tag_and_caption_prompts_state_the_place_only_when_given(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "m", api_key="k", role="fast")
+        replies = {"tag": json.dumps({"description": "d", "subjects": [], "scene": "", "technical": [], "confidence": 0.5}),
+                   "caption": json.dumps({"caption": "Ice.", "alt_text": "White ice."})}
+        place = "Madikwe Game Reserve, South Africa"
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"; Image.new("RGB", (8, 8)).save(preview)
+            for method in ("tag", "caption"):
+                for given in (place, None):
+                    captured = {}
+                    with self.subTest(method=method, place=given), patch.object(
+                            tagger, "_complete", lambda content, timeout, **kw: (captured.update(text=content[0]["text"]), replies[method])[1]):
+                        getattr(tagger, method)(preview, place=given)
+                        if given:
+                            self.assertIn("Taken at Madikwe Game Reserve, South Africa.", captured["text"])
+                        else:
+                            self.assertNotIn("Taken at", captured["text"])
+
     def test_digest_response_is_a_single_bounded_narrative_and_request_sends_no_image(self):
         self.assertEqual("Calm.", parse_digest_response(json.dumps({"narrative": "Calm."})))
         for bad in ({"narrative": ""}, {"narrative": "x" * 1501}, {"narrative": "a", "title": "b"}, ["a"]):
