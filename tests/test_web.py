@@ -600,7 +600,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
-            "/api/vocabulary/forget",
+            "/api/vocabulary/forget", "/api/search/expand",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -620,7 +620,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
-            "/api/vocabulary/forget",
+            "/api/vocabulary/forget", "/api/search/expand",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -1102,6 +1102,25 @@ class WebTests(unittest.TestCase):
     def test_javascript_burst_critique_shows_advice_and_only_use_this_pick_changes_the_pick(self):
         self.run_javascript_cleanup_regression("critique")
 
+    def test_search_expand_route_returns_terms_only_and_refuses_without_the_fast_model(self):
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")
+            def expand_query(self, query, vocabulary): return ["tern", "gull"]
+
+        offline = {"version": None, "default_model": None, "loaded_models": []}
+        with patch("lumen.library.get_server_status", return_value=offline):
+            self.assertEqual((400, {"error": "fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX"}),
+                             self.post_json("/api/search/expand", {"query": "seabirds"}))
+            self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"])
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            self.assertEqual((200, {"query": "seabirds", "terms": ["tern", "gull"], "text": "seabirds | tern | gull"}),
+                             self.post_json("/api/search/expand", {"query": "seabirds"}))
+            for payload in ({"query": ""}, {"query": "x" * 81}, {"query": "a", "extra": 1}, {}, {"query": 3}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/search/expand", payload)[0])
+            self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"])
+
     def test_caption_routes_gate_validate_and_inspector_has_native_inputs(self):
         class FakeTagger:
             def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
@@ -1263,6 +1282,7 @@ const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.le
 const picks = [];
 const critiqueRequests = [];
 const captionPosts = [];
+const expandPosts = [];
 const digestPosts = [];
 const digestBusy = [];
 let deferCritique = false;
@@ -1435,6 +1455,11 @@ async function fetch(url, options = {}) {
     digestBusy.push([state.busy, element('#write-digest').disabled]);
     if (body.overwrite === true) payload = { date: body.date, file: body.date + '.md', frames: 2, narrative: false, overwritten: true };
     else { ok = false; payload = { error: 'digest exists; confirm overwrite', exists: true }; }
+  }
+  else if (url === '/api/search/expand') {
+    assert.equal(options.method, 'POST');
+    expandPosts.push(JSON.parse(options.body));
+    payload = { query: 'seabirds', terms: ['tern', 'gull'], text: 'seabirds | tern | gull' };
   }
   else if (/^\/api\/photos\/1\/caption(\/edit)?$/.test(url)) {
     const body = JSON.parse(options.body);
@@ -2117,6 +2142,29 @@ const regression = `
     assert.equal(prevented, before);
     await key(']', card(3), sheetNode);
     assert.equal(prevented, before, 'brackets do nothing on the sheet');
+    return;
+  }
+  if (scenario === 'expand-search') {
+    await load();
+    const button = element('#expand-search');
+    assert.equal(button.disabled, true, 'blank search fields leave nothing to expand');
+    const text = element('#filter-text');
+    text.value = 'seabirds';
+    text.listeners.input();
+    assert.equal(button.disabled, false);
+    await button.listeners.click();
+    await new Promise(setImmediate);
+    assert.deepEqual(expandPosts, [{ query: 'seabirds' }]);
+    assert.deepEqual([text.value, element('#find').value], ['seabirds | tern | gull', 'seabirds | tern | gull']);
+    assert.equal(new URLSearchParams(location.search).get('text'), 'seabirds | tern | gull');
+    assert.equal(lastGroupsUrl, '/api/groups?' + new URLSearchParams({ text: 'seabirds | tern | gull' }));
+    assert.equal(element('#announcer').textContent, 'Expanded to 3 terms');
+    assert.equal(element('#ai-status').textContent, 'Search expansion finished');
+    assert.equal(button.disabled, false);
+    state.status.omlx_roles.fast.loaded = false;
+    updateWorkflow();
+    assert.equal(button.disabled, true);
+    assert.ok(element('#expand-search-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX.'));
     return;
   }
   if (scenario === 'find') {
@@ -3005,6 +3053,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_reload_forgets_a_frame_that_is_gone(self):
         self.run_javascript_cleanup_regression("resume-gone")
 
+    def test_javascript_expand_search_posts_the_query_and_applies_the_or_text(self):
+        self.run_javascript_cleanup_regression("expand-search")
+
     def test_javascript_find_input_filters_and_inspector_shows_match_reasons(self):
         self.run_javascript_cleanup_regression("find")
 
@@ -3219,7 +3270,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(["any", "flag", "reject", "none"], options("filter-decision"))
         self.assertEqual(["0", "1", "2", "3", "4", "5"], options("filter-rating"))
         buttons = {node["text"].strip(): node["attrs"].get("type") for node in parser.nodes if node["tag"] == "button" and form in node["parents"]}
-        self.assertEqual({"Apply": "submit", "Reset": "button"}, buttons)
+        self.assertEqual({"Apply": "submit", "Reset": "button", "Expand with local AI": "button"}, buttons)
+        self.assertEqual("expand-search-availability", by_id["expand-search"]["attrs"].get("aria-describedby"))
+        self.assertIn(form, by_id["expand-search-availability"]["parents"])
         more = by_id["show-more"]
         self.assertEqual(("button", "button"), (more["tag"], more["attrs"].get("type")))
         self.assertIn("hidden", more["attrs"])

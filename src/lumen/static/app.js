@@ -1806,6 +1806,7 @@ function updateWorkflow() {
   document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;
   document.querySelector('#tag-keepers').disabled = state.busy || !keepers || !fastLoaded;
   document.querySelector('#tag-keepers-availability').textContent = roleUnavailable('fast');
+  updateExpandSearch();
   const bothLoaded = fastLoaded && roleReady('review');
   document.querySelector('#assist-keepers').textContent = `Run all local AI on keepers (${keepers} keeper${keepers === 1 ? '' : 's'})`;
   document.querySelector('#assist-keepers').disabled = state.busy || !keepers || !bothLoaded;
@@ -1946,12 +1947,37 @@ document.querySelector('#filter-form').addEventListener('submit', event => {
 // The rail find and the form's tag text are one `text` filter; typing in either mirrors the other and applies it.
 [['#find', '#filter-text'], ['#filter-text', '#find']].forEach(([source, mirror]) => document.querySelector(source).addEventListener('input', () => {
   document.querySelector(mirror).value = document.querySelector(source).value;
+  updateExpandSearch();
   window.clearTimeout(findTimer);
   findTimer = window.setTimeout(() => {
     findTimer = null;
     applyFilters().catch(error => announce(error.message));
   }, 300);
 }));
+// Advisory: the fast model adds vocabulary keywords to the search as OR terms; the photographer can edit or clear them.
+function updateExpandSearch() {
+  const blank = ['#find', '#filter-text'].every(selector => !document.querySelector(selector).value.trim());
+  document.querySelector('#expand-search').disabled = state.busy || blank || !roleReady('fast');
+  document.querySelector('#expand-search-availability').textContent = roleUnavailable('fast');
+}
+document.querySelector('#expand-search').addEventListener('click', async () => {
+  const query = (document.querySelector('#filter-text').value || document.querySelector('#find').value).trim();
+  state.busy = true;
+  updateWorkflow();
+  try {
+    const result = await aiCall('Search expansion', () => post('/api/search/expand', { query }));
+    cancelFind();
+    document.querySelector('#filter-text').value = result.text;
+    document.querySelector('#find').value = result.text;
+    await applyFilters();
+    announce(`Expanded to ${result.terms.length + 1} term${result.terms.length ? 's' : ''}`);
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+});
 document.querySelector('#reset-filters').addEventListener('click', () => {
   cancelFind();
   return applyFilters('').catch(error => announce(error.message));

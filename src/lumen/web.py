@@ -18,6 +18,7 @@ from .diagnostics import doctor_report
 from .digest import parse_day
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
+from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS
 from .previews import thumbnail_for
 
@@ -569,6 +570,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         except FileExistsError as error:
                             self._send_json({"error": str(error), "exists": True}, status=HTTPStatus.CONFLICT)
                             return
+                    self._send_json(result)
+                    return
+                if path == "/api/search/expand":
+                    if payload.keys() != {"query"}:
+                        raise ValueError("search expansion requires only a query")
+                    with Library(settings) as library:
+                        tagger = library.tagger_for("fast")  # A not-loaded refusal reaches the browser verbatim.
+                        try:
+                            result = library.expand_search(payload["query"], tagger)
+                        except OmlxError as error:
+                            raise ValueError(public_message(str(error))) from error
                     self._send_json(result)
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/caption", path)

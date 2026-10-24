@@ -15,6 +15,7 @@ from lumen.omlx import (
     CaptionResponseError,
     DigestNarrative,
     DigestResponseError,
+    ExpandResponseError,
     CompositionResponseError,
     NoRedirectHandler,
     OmlxError,
@@ -27,6 +28,7 @@ from lumen.omlx import (
     parse_caption_response,
     parse_composition_response,
     parse_digest_response,
+    parse_expand_response,
     parse_reject_response,
     parse_tag_response,
 )
@@ -359,6 +361,30 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual(DigestNarrative("Calm.", json.dumps({"narrative": "Calm."})), result)
         self.assertTrue(all(part["type"] == "text" for part in captured["content"]))
         self.assertIn("Do not invent species, places, or counts.", captured["content"][0]["text"])
+
+    def test_expand_response_keeps_vocabulary_words_only_in_vocabulary_spelling(self):
+        vocabulary = {"wildlife": ["gentoo penguin", "tern", "seal"], "scene": [f"w{i}" for i in range(10)]}
+        reply = {"terms": ["Gentoo Penguin", "dragon", "tern", "TERN", 3], "note": "ignored"}
+        self.assertEqual(["gentoo penguin", "tern"], parse_expand_response(json.dumps(reply), vocabulary))
+        many = json.dumps({"terms": [f"W{i}" for i in range(10)]})
+        self.assertEqual([f"w{i}" for i in range(8)], parse_expand_response(many, vocabulary))
+        for bad in ({"x": 1}, {"terms": "tern"}):
+            with self.subTest(bad=bad), self.assertRaises(ExpandResponseError):
+                parse_expand_response(json.dumps(bad), vocabulary)
+        self.assertTrue(issubclass(ExpandResponseError, OmlxError))
+
+    def test_expand_query_is_text_only_with_the_vocabulary_as_system_prefix(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k", role="fast")
+        captured = {}
+        reply = json.dumps({"terms": ["tern"]})
+        with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), reply)[1]):
+            terms = tagger.expand_query("seabirds", {"wildlife": ["tern"]})
+        self.assertEqual(["tern"], terms)
+        self.assertTrue(all(part["type"] == "text" for part in captured["content"]))
+        self.assertEqual('Which of these keywords describe photos matching "seabirds"? Answer {"terms": [...]} using only listed keywords.',
+                         captured["content"][0]["text"])
+        self.assertIn("wildlife: tern", captured["kw"]["system"])
+        self.assertEqual(200, captured["kw"]["max_tokens"])
 
     def test_burst_response_requires_supplied_frame_and_bounded_rationale(self):
         good = json.dumps({"frame_id": "7", "rationale": "Sharpest eye, wing fully extended.", "confidence": 0.72})

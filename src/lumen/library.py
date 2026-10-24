@@ -917,6 +917,17 @@ class Library:
         """, (group_id, group_id)).fetchone()
         return self._critique(group_id, dict(row), json.loads(row["details_json"])) if row else None
 
+    def expand_search(self, query: str, tagger) -> dict:
+        """Advisory: vocabulary keywords the fast model relates to `query`, as an OR text filter with the query first."""
+        if not isinstance(query, str) or not 1 <= len(query := query.strip()) <= 80:
+            raise ValueError("search expansion requires a query of 1 to 80 characters")
+        terms, seen = [], {query.casefold()}
+        for term in tagger.expand_query(query, load_vocabulary(self.settings)):
+            if term.casefold() not in seen:
+                seen.add(term.casefold())
+                terms.append(term)
+        return {"query": query, "terms": terms, "text": " | ".join([query, *terms])}
+
     @_coordinated
     def caption_photo(self, photo_id: int, tagger) -> dict:
         """Advisory: store the review model's caption and alt text for the photographer to edit."""

@@ -51,6 +51,8 @@ class GroupFilters:
         for name in ("camera", "text"):
             if getattr(self, name) is not None and not isinstance(getattr(self, name), str):
                 raise ValueError(f"invalid filter: {name}")
+        if self.text is not None:  # "a | b" ORs its terms; blank-only text is no filter.
+            object.__setattr__(self, "text", " | ".join(_text_terms(self.text)) or None)
         if not isinstance(self.decision, str) or self.decision not in DECISIONS | {"any"}:
             raise ValueError("invalid filter: decision")
         if type(self.min_rating) is not int or not 0 <= self.min_rating <= 5:
@@ -87,12 +89,17 @@ class GroupFilters:
             fields = [f"json_extract(t.data_json, '$.{key}')" for key in ("description", "subjects", "suggested", "caption", "problems.kinds")]
             fields += ["(SELECT group_concat(CASE WHEN s.type = 'object' THEN json_extract(s.value, '$.name') END, ' | ') FROM json_each(t.data_json, '$.species') s)",
                        "replace(json_extract(t.data_json, '$.problems.kinds'), '_', ' ')"]
+            terms = _text_terms(self.text or "")
             conditions.append("EXISTS (SELECT 1 FROM tags t WHERE t.photo_id = p.id"
-                              + (" AND (" + " OR ".join(f"{field} LIKE ? ESCAPE '\\'" for field in fields) + "))" if self.text else ")"))
-            if self.text:
-                pattern = "%" + self.text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                              + (" AND (" + " OR ".join(f"{field} LIKE ? ESCAPE '\\'" for _ in terms for field in fields) + "))" if terms else ")"))
+            for term in terms:
+                pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
                 params += [pattern] * len(fields)
         return " AND ".join(conditions), params
+
+
+def _text_terms(text: str) -> list[str]:
+    return [term for term in (piece.strip() for piece in text.split("|")) if term]
 
 
 def _canonical_date(value: str) -> bool:
@@ -727,9 +734,9 @@ class Catalog:
         return {"model": row["model"], "data": json.loads(row["data_json"]), "tagged_at": row["tagged_at"]}
 
     def match_terms(self, photo_id: int, text: str) -> list[str]:
-        """Labels for the stored local-AI fields that contain `text` (case-insensitive), in a fixed order."""
-        needle = text.strip().casefold()
-        tags = self.get_tags(photo_id) if needle else None
+        """Labels for the stored local-AI fields that contain any `|`-separated term of `text` (case-insensitive), in a fixed order."""
+        needles = [term.casefold() for term in _text_terms(text)]
+        tags = self.get_tags(photo_id) if needles else None
         if not tags:
             return []
         data = tags["data"]
@@ -745,7 +752,7 @@ class Catalog:
         candidates.append(("caption", data.get("caption")))
         kinds = strings(problems.get("kinds")) if isinstance(problems, dict) else []
         candidates += [(f"problem: {kind.replace('_', ' ')}", f"{kind} {kind.replace('_', ' ')}") for kind in kinds]
-        return [label for label, value in candidates if isinstance(value, str) and needle in value.casefold()]
+        return [label for label, value in candidates if isinstance(value, str) and any(needle in value.casefold() for needle in needles)]
 
     def clear_tags(self, photo_id: int) -> None:
         self.connection.execute("DELETE FROM tags WHERE photo_id = ?", (photo_id,))

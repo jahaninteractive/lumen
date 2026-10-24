@@ -732,6 +732,24 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(["problem: motion blur"], self.catalog.match_terms(ids[0], "blur"))
         self.assertEqual([], self.catalog.match_terms(ids[2], "blur"))
 
+    def test_text_filter_ors_pipe_separated_terms_and_blank_terms_are_no_filter(self):
+        named, _ = seed_filter_photos(self.catalog)
+        tern, ship = named["a1"], named["b2"]
+        self.catalog.save_tags(tern, {"description": "Bird", "subjects": ["tern"]}, "m")
+        self.catalog.save_tags(ship, {"description": "Ship at anchor", "subjects": ["ship"]}, "m")
+
+        def hits(text):
+            return sorted(p["id"] for g in self.catalog.list_groups(GroupFilters(text=text, show_rejected=True)) for p in g["photos"])
+        self.assertEqual([tern], hits("heron | tern"))
+        self.assertEqual(sorted([tern, ship]), hits("tern|ship"))
+        self.assertEqual("heron | tern", GroupFilters(text=" heron |tern | ").text)
+        blank = GroupFilters(text=" | ")
+        self.assertIsNone(blank.text)
+        self.assertEqual(GroupFilters().where(), blank.where())
+        self.assertNotIn("LIKE", blank.where()[0])
+        self.assertEqual(["keyword: tern"], self.catalog.match_terms(tern, "heron | tern"))
+        self.assertEqual([], self.catalog.match_terms(tern, " | "))
+
 
 if __name__ == "__main__":
     unittest.main()

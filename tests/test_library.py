@@ -831,6 +831,21 @@ class LibraryTests(unittest.TestCase):
             event = next(event for event in sidecar["provenance"] if event["kind"] == "exported")
             self.assertEqual(expected, {key: event["details"][key] for key in expected})
 
+    def test_expand_search_puts_the_query_first_and_dedupes_terms(self):
+        class FakeTagger:
+            def expand_query(self, query, vocabulary):
+                self.seen = (query, vocabulary)
+                return ["Seabirds", "tern", "TERN", "gull"]
+
+        tagger = FakeTagger()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            result = library.expand_search("  seabirds ", tagger)
+            self.assertEqual({"query": "seabirds", "terms": ["tern", "gull"], "text": "seabirds | tern | gull"}, result)
+            self.assertEqual(("seabirds", load_vocabulary(library.settings)), tagger.seen)
+            for bad in ("", "   ", "x" * 81, None):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    library.expand_search(bad, tagger)
+
     def test_caption_is_advisory_editable_and_only_share_export_uses_it(self):
         class FakeTagger:
             model, role = "review-model", "review"

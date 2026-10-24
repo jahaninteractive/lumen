@@ -67,6 +67,12 @@ class DigestResponseError(OmlxError):
         self.raw_response = raw_response
 
 
+class ExpandResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -224,6 +230,22 @@ def parse_digest_response(raw: str) -> str:
     return narrative
 
 
+def parse_expand_response(raw: str, vocabulary: dict[str, list[str]]) -> list[str]:
+    """Only words from the vocabulary survive, in its spelling, deduped and capped at 8; extra keys are ignored."""
+    terms = _json_object(raw, ExpandResponseError).get("terms")
+    if not isinstance(terms, list):
+        raise ExpandResponseError("oMLX expand response must contain a terms list", raw)
+    known = {word.casefold(): word for words in vocabulary.values() for word in words}
+    found = [known[term.casefold()] for term in terms if isinstance(term, str) and term.casefold() in known]
+    return list(dict.fromkeys(found))[:8]
+
+
+def _vocabulary_system(vocabulary: dict[str, list[str]]) -> str:
+    return ("Keyword list by category: "
+            + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
+            + ". Choose keywords from the list where one fits; add at most three others.")
+
+
 def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
     text = raw.strip()
     if text.startswith("```"):
@@ -325,11 +347,7 @@ class OmlxTagger:
         )
         system = None
         if vocabulary:  # Stable across a job, so it goes first as a system prefix oMLX can cache; the image changes per call.
-            system = (
-                "Keyword list by category: "
-                + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
-                + ". Choose keywords from the list where one fits; add at most three others."
-            )
+            system = _vocabulary_system(vocabulary)
             prompt += (
                 " Also return species (array of {name, confidence 0 to 1} for animals you can name) and "
                 "conditions (string array of light and weather). Do not identify a person."
@@ -339,6 +357,12 @@ class OmlxTagger:
             self._image_content(preview),
         ], timeout, system=system)
         return parse_tag_response(content)
+
+    def expand_query(self, query: str, vocabulary: dict[str, list[str]], timeout: float = 60) -> list[str]:
+        """Text only: which vocabulary keywords fit a free-text search."""
+        prompt = f'Which of these keywords describe photos matching "{query}"? Answer {{"terms": [...]}} using only listed keywords.'
+        raw = self._complete([{"type": "text", "text": prompt}], timeout, max_tokens=200, system=_vocabulary_system(vocabulary))
+        return parse_expand_response(raw, vocabulary)
 
     def review_composition(
         self,
