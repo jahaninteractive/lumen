@@ -211,6 +211,27 @@ def online_lookup(lat: float, lon: float, *, timeout: float = 5.0, opener=None) 
     return Place(name.strip(), country if isinstance(country, str) else "", 0.0, "ONLINE", "online")
 
 
+INVERTED_NAME = re.compile(r"^(.+), (\S+)$")
+ENGLISH_GENERIC = re.compile(
+    r" (Harbour|Harbor|Bay|Island|Islands|Point|Cove|Glacier|Lake|Peninsula|Cape|Strait|Sound|Rock|Rocks|Beach"
+    r"|Channel|Passage|Mount|Peak|Station|Base|Nunatak|Ridge|Hill|Hills|Shelf|Inlet|Bluff|Head)$"
+)
+
+
+def _english_name(name: str, alternates: str) -> str:
+    """'Neko, puerto' -> 'Neko Harbour' from the alternates; other names unchanged."""
+    if not INVERTED_NAME.match(name):
+        return name
+    candidates = [a for a in alternates.split(",")
+                  if a.isascii() and "  " not in a and ENGLISH_GENERIC.search(a)]
+    if not candidates:
+        return name
+    first_word = name.split()[0].rstrip(",")
+    chosen = min(candidates, key=lambda a: a.split()[0] != first_word)  # min keeps the first on ties
+    british = chosen[: -len("Harbor")] + "Harbour"
+    return british if chosen.endswith(" Harbor") and british in candidates else chosen
+
+
 def _rows(path: Path, names: dict[str, str]):
     with path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -219,6 +240,6 @@ def _rows(path: Path, names: dict[str, str]):
                 lat, lon = float(columns[4]), float(columns[5])
                 population = int(columns[14] or 0)
                 code = columns[8]
-                yield columns[1], names.get(code, code), columns[6], columns[7], population, lat, lon
+                yield _english_name(columns[1], columns[3]), names.get(code, code), columns[6], columns[7], population, lat, lon
             except (IndexError, ValueError):
                 continue

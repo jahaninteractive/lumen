@@ -11,8 +11,8 @@ from lumen import geonames
 from lumen.geonames import Place, PlaceIndex, distance_km, online_lookup
 
 
-def row(geonameid, name, lat, lon, feature_class, feature_code, country, population=0):
-    columns = [str(geonameid), name, name, "", str(lat), str(lon), feature_class, feature_code, country,
+def row(geonameid, name, lat, lon, feature_class, feature_code, country, population=0, alternates=""):
+    columns = [str(geonameid), name, name, alternates, str(lat), str(lon), feature_class, feature_code, country,
                "", "", "", "", "", str(population), "", "", "UTC", "2024-01-01"]
     return "\t".join(columns) + "\n"
 
@@ -102,6 +102,22 @@ class PlaceIndexTests(unittest.TestCase):
         with PlaceIndex(bare, root / "cache" / "bare.sqlite") as index:
             self.assertEqual("Antarctica", index.lookup(-64.84, -62.53).country)
             self.assertEqual("XX", index.lookup(1, 1).country)
+
+    def test_inverted_comma_names_take_the_english_alternate(self):
+        source = Path(self.tmp.name) / "inverted"
+        source.mkdir()
+        (source / "AQ.txt").write_text(
+            row(11, "Neko, puerto", -64.84, -62.53, "H", "HBR", "AQ",
+                alternates="Neko Harbor,Neko Harbour,Neko  puerto")
+            + row(12, "Irizar, isla", -65.0, -64.0, "T", "ISL", "AQ", alternates="Irizar Island,Irizar  isla")
+            + row(13, "Straggle, islas", -66.0, -66.0, "T", "ISLS", "AQ",
+                  alternates="Llanquihue Islands,Llanquihue  Islas,Straggle Islands,Straggle  islas")
+            + row(14, "Williams Field, Antarctic", -77.87, 167.06, "S", "AIRF", "AQ", alternates="NZWD"),
+            encoding="utf-8",
+        )
+        with PlaceIndex(source, Path(self.tmp.name) / "cache" / "inverted.sqlite") as index:
+            names = [index.lookup(*point).name for point in ((-64.84, -62.53), (-65.0, -64.0), (-66.0, -66.0), (-77.87, 167.06))]
+        self.assertEqual(["Neko Harbour", "Irizar Island", "Straggle Islands", "Williams Field, Antarctic"], names)
 
     def test_distance_is_equirectangular_km(self):
         self.assertAlmostEqual(111.2, distance_km(0, 0, 1, 0), places=1)
