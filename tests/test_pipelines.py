@@ -114,6 +114,29 @@ class PipelineTests(unittest.TestCase):
             with Image.open(without.output) as image:
                 self.assertNotIn(b"AltTextAccessibility", image.info["xmp"])
 
+    def test_jpeg_export_carries_place_in_xmp_only_with_gps_presets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00713.ARW"
+            source.write_bytes(b"raw")
+
+            def render(command, **kwargs):
+                if command[0].endswith("sw_vers"):
+                    return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
+                Image.new("RGB", (80, 60), "red").save(command[command.index("--out") + 1], format="TIFF",
+                                                     icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            full = pipeline.export_jpeg(source, decoder="macos", runner=render, place="Madikwe Game Reserve", country="South Africa")
+            web = pipeline.export_jpeg(source, decoder="macos", runner=render, preset="web", place="Madikwe Game Reserve", country="South Africa")
+            with Image.open(full.output) as image:
+                xmp = ElementTree.fromstring(image.info["xmp"])
+            self.assertEqual("Madikwe Game Reserve", xmp.find(".//{http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/}Location").text)
+            self.assertEqual("South Africa", xmp.find(".//{http://ns.adobe.com/photoshop/1.0/}Country").text)
+            with Image.open(web.output) as image:
+                self.assertNotIn(b"Madikwe", image.info["xmp"], "presets that strip GPS also drop the place")
+
     def test_jpeg_export_preserves_metadata_and_original_with_collision_suffix(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

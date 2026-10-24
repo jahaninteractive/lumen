@@ -62,6 +62,8 @@ class Photo:
     latitude: float | None = None  # camera GPS fix, signed decimal degrees; None when the file has none
     longitude: float | None = None
     altitude: float | None = None  # metres
+    place: str | None = None  # nearest named place from the local GeoNames index
+    place_country: str | None = None
 
 
 @dataclass(slots=True)

@@ -402,6 +402,44 @@ class CatalogTests(unittest.TestCase):
             migrated.update_location(1, latitude=-25.0, longitude=32.0, altitude=None)
             self.assertEqual((-25.0, 32.0, None), (migrated.list_photos()[0].latitude, migrated.list_photos()[0].longitude, migrated.list_photos()[0].altitude))
 
+    def test_migration_adds_place_columns_and_update_place_round_trips(self):
+        legacy_path = Path(self.tmp.name) / "pre-place.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE photos (
+                    id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL,
+                    captured_at TEXT, camera_id TEXT NOT NULL, preview_path TEXT,
+                    format TEXT NOT NULL DEFAULT 'ARW', group_id INTEGER,
+                    manual_pick INTEGER NOT NULL DEFAULT 0, imported_at TEXT NOT NULL
+                );
+                INSERT INTO photos (id, path, fingerprint, camera_id, imported_at)
+                    VALUES (1, '/photos/a.ARW', 'abc', 'A1', '2026-10-21T10:00:00+00:00');
+                """
+            )
+        with Catalog(legacy_path) as migrated:
+            self.assertEqual((None, None), (migrated.get_photo(1).place, migrated.get_photo(1).place_country))
+            migrated.update_place(1, place="Madikwe Game Reserve", country="South Africa")
+            self.assertEqual(("Madikwe Game Reserve", "South Africa"), (migrated.list_photos()[0].place, migrated.list_photos()[0].place_country))
+            migrated.upsert_photo(Photo(path="/photos/a.ARW", fingerprint="abc", captured_at=None, camera_id="A1"))
+            self.assertEqual("Madikwe Game Reserve", migrated.get_photo(1).place, "a re-import keeps the resolved place")
+            migrated.update_place(1, place=None, country=None)
+            self.assertIsNone(migrated.get_photo(1).place)
+
+    def test_text_filter_matches_place_on_untagged_photos_and_match_terms_explains(self):
+        named, _ = seed_filter_photos(self.catalog)
+        self.catalog.update_place(named["c1"], place="Madikwe Game Reserve", country="South Africa")
+        self.catalog.save_tags(named["b2"], {"description": "Ship at anchor", "subjects": ["ship"]}, "m")
+
+        def hits(text, **fields):
+            return sorted(p["id"] for g in self.catalog.list_groups(GroupFilters(text=text, show_rejected=True, **fields)) for p in g["photos"])
+        self.assertEqual([named["c1"]], hits("madikwe"))
+        self.assertEqual([named["c1"]], hits("south africa"))
+        self.assertEqual(sorted([named["c1"], named["b2"]]), hits("madikwe | ship"))
+        self.assertEqual([named["b2"]], hits("madikwe | ship", tagged_only=True), "tagged-only still needs tags")
+        self.assertEqual(["place: Madikwe Game Reserve"], self.catalog.match_terms(named["c1"], "madikwe"))
+        self.assertEqual([], self.catalog.match_terms(named["b2"], "madikwe"))
+
     def test_photos_for_filters_returns_matching_grouped_photo_ids(self):
         ids, _ = seed_filter_photos(self.catalog)
         self.assertEqual(sorted([ids["a1"], ids["a2"], ids["b2"], ids["c1"]]), self.catalog.photos_for_filters(GroupFilters()))

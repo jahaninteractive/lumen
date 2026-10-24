@@ -31,8 +31,10 @@ from lumen.catalog import GroupFilters
 
 try:
     from tests.test_previews import write_fake_darktable
+    from tests.test_geonames import write_fixture as write_geonames_fixture
 except ModuleNotFoundError:  # discovered with -s tests
     from test_previews import write_fake_darktable
+    from test_geonames import write_fixture as write_geonames_fixture
 
 
 class LibraryTests(unittest.TestCase):
@@ -467,6 +469,38 @@ class LibraryTests(unittest.TestCase):
             photo = library.catalog.get_photo(photo.id)
             self.assertEqual((-24.1234, 31.5678, 312.0), (photo.latitude, photo.longitude, photo.altitude), "an unchanged file still gains its fix")
             self.assertEqual((-24.1234, 31.5678), (library.get_photo(photo.id)["photo"].latitude, library.get_photo(photo.id)["photo"].longitude))
+
+    def test_import_resolves_place_from_the_local_index_and_backfills_unchanged_files(self):
+        geonames = self.library_dir.parent / "geonames"
+        write_geonames_fixture(geonames)
+        base = {"captured_at": None, "camera_id": "ILCE-7CM2:1", "exposure_seconds": None, "raw_warning": None,
+                "latitude": -24.74351, "longitude": 26.25732, "altitude": None}
+        nowhere = self.image_path.with_name("DSC0002.jpg")
+        shutil.copyfile(self.image_path, nowhere)
+        nowhere.write_bytes(nowhere.read_bytes() + b"distinct")
+        settings = Settings(library_dir=self.library_dir, geonames_dir=geonames)
+        with Library(settings) as library:
+            def metadata(path):
+                return base | ({"latitude": 0.0, "longitude": 0.0} if path.name == "DSC0002.jpg" else {})
+            with patch("lumen.library.read_metadata", side_effect=metadata):
+                library.import_path(self.image_path.parent)
+            madikwe = library.catalog.photo_by_path(str(self.image_path.resolve()))
+            self.assertEqual(("Madikwe Game Reserve", "South Africa"), (madikwe.place, madikwe.place_country))
+            self.assertEqual((madikwe.place, madikwe.place_country),
+                             (library.get_photo(madikwe.id)["photo"].place, library.get_photo(madikwe.id)["photo"].place_country))
+            resolved = [event.details for event in library.catalog.events_for(madikwe.id) if event.kind == "place_resolved"]
+            self.assertEqual([("Madikwe Game Reserve", "South Africa", False)], [(d["name"], d["country"], d["near"]) for d in resolved])
+            empty = library.catalog.photo_by_path(str(nowhere.resolve()))
+            self.assertEqual((None, None), (empty.place, empty.place_country), "no place near (0, 0) is no error")
+            library.catalog.connection.execute("UPDATE photos SET place = NULL, place_country = NULL WHERE id = ?", (madikwe.id,))
+            library.catalog.connection.commit()
+            with patch("lumen.library.read_metadata", side_effect=metadata):
+                library.wait_for_job(library.start_import_job(self.image_path.parent).id)
+            self.assertEqual("Madikwe Game Reserve", library.catalog.get_photo(madikwe.id).place, "an unchanged file gains its place")
+            with patch("lumen.library.read_metadata", side_effect=metadata), \
+                    patch("lumen.geonames.PlaceIndex.lookup", side_effect=AssertionError("re-resolved")) as lookup:
+                library.wait_for_job(library.start_import_job(self.image_path).id)
+            lookup.assert_not_called()
 
     def test_unsupported_raw_is_flagged_at_import_and_exports_through_the_macos_decoder(self):
         warning = "Sony reduced-size lossless raw; darktable cannot decode it"

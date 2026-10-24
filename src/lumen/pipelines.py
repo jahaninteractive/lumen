@@ -118,7 +118,7 @@ class DarktablePipeline:
         crop: dict[str, object] | None = None, description: str | None = None,
         keywords: list[str] | None = None, rating: int | None = None, alt_text: str | None = None,
         caption_used: bool = False, reserved_paths: set[Path] | None = None, preset: str = "full", decoder: str = "darktable",
-        watermark: str | None = None,
+        watermark: str | None = None, place: str | None = None, country: str | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
         if preset not in EXPORT_PRESETS:
@@ -224,6 +224,8 @@ class DarktablePipeline:
                                xmp=SidecarWriter._xmp(
                                    effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
                                    alt_text=alt_text,
+                                   # The place is location data: presets that strip GPS drop it too.
+                                   place=place if options["include_gps"] else None, country=country,
                                ).encode("utf-8"))
                 if 37500 in capture:
                     # Pillow copies MakerNote bytes but not their absolute offsets; exiftool rebases them.

@@ -24,6 +24,7 @@ from .config import Settings
 from .composition import CropCandidate, generate_candidates
 from .digest import day_facts, render_facts_table
 from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
+from .geonames import Place, PlaceIndex
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
@@ -143,6 +144,7 @@ class Library:
         # An injected runner outlives this Library (the web server shares one across requests).
         self._runner: LocalJobRunner | None = job_runner
         self._owns_runner = job_runner is None
+        self._places: PlaceIndex | None = None
 
     @property
     def job_runner(self) -> LocalJobRunner:
@@ -157,7 +159,28 @@ class Library:
                 self._runner.shutdown()
             self._runner = None
         finally:
+            if self._places is not None:
+                self._places.close()
             self.catalog.close()
+
+    @property
+    def places(self) -> PlaceIndex | None:
+        """The local GeoNames index, opened on first use; None when no GeoNames folder is configured."""
+        directory = self.settings.geonames_dir
+        if self._places is None and directory is not None and directory.is_dir():
+            self._places = PlaceIndex(directory, self.settings.geonames_index_path)
+        return self._places
+
+    def _resolve_place(self, photo_id: int, latitude: float | None, longitude: float | None) -> Place | None:
+        """Store the nearest named place for a GPS fix (or clear it for a frame without one); no index is a no-op."""
+        if self.places is None:
+            return None
+        place = self.places.lookup(latitude, longitude) if latitude is not None and longitude is not None else None
+        self.catalog.update_place(photo_id, place=place.name if place else None, country=place.country if place else None)
+        if place:
+            self.catalog.append_event(photo_id, "place_resolved", {"name": place.name, "country": place.country,
+                                                                   "distance_km": round(place.distance_km, 1), "near": place.near})
+        return place
 
     def __enter__(self) -> "Library":
         return self
@@ -215,10 +238,14 @@ class Library:
             fingerprint = fingerprint_file(source)
             if (skip_unchanged and previous and previous.fingerprint == fingerprint
                     and previous.preview_path and Path(previous.preview_path).is_file()):
+                latitude, longitude = previous.latitude, previous.longitude
                 if previous.latitude is None:  # ponytail: one exiftool call per unchanged file without a fix, every import
                     fix = read_metadata(source)
                     if fix["latitude"] is not None:
                         self.catalog.update_location(previous.id, latitude=fix["latitude"], longitude=fix["longitude"], altitude=fix["altitude"])
+                        latitude, longitude = fix["latitude"], fix["longitude"]
+                if previous.place is None and latitude is not None:  # ponytail: placeless fixes (open sea) re-look-up every import
+                    self._resolve_place(previous.id, latitude, longitude)
                 metrics = self.catalog.get_metrics(previous.id)
                 if metrics and metrics.dhash is None:  # ponytail: one preview decode per unhashed photo, every import, until hashed
                     metrics.dhash = difference_hash(Path(previous.preview_path))
@@ -1307,7 +1334,8 @@ class Library:
                 keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
                 rating=-1 if photo.decision == "reject" else photo.rating,
                 reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
-                preset=request.preset, decoder=decoder, watermark=request.watermark)
+                preset=request.preset, decoder=decoder, watermark=request.watermark,
+                place=photo.place, country=photo.place_country)
             if not rendered.success:
                 return ExportResult(photo.id, False, None, rendered.message)
             artifact = self.catalog.save_artifact(photo.id, Path(photo.path).name,
@@ -1692,6 +1720,7 @@ class Library:
             self.catalog.clear_tags(previous.id)
             self.catalog.invalidate_crop(previous.id, previous.fingerprint, fingerprint)
         photo_id = self.catalog.upsert_photo(photo)
+        self._resolve_place(photo_id, photo.latitude, photo.longitude)
         if previous and previous.fingerprint != fingerprint:
             self.catalog.append_event(
                 photo_id,
@@ -1783,4 +1812,6 @@ class Library:
             active_crop=catalog.get_crop(photo_id),
             decision=photo.decision,
             rating=photo.rating,
+            place=photo.place,
+            country=photo.place_country,
         )

@@ -1539,7 +1539,8 @@ async function fetch(url, options = {}) {
     payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
   }
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
-    photo: scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
+    photo: scenario === 'place-line' && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
+      : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
       : scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (url === '/api/photos/2/crops') {
@@ -2953,6 +2954,17 @@ const regression = `
     networkDown = false;
     return;
   }
+  if (scenario === 'place-line') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    await inspect(state.groups[0].photos[0]);
+    const line = tree(element('#inspection')).find(node => node.id === 'location');
+    assert.ok(line.textContent.startsWith('Place: Madikwe Game Reserve, South Africa'), line.textContent);
+    assert.ok(line.textContent.includes('24.7435° S, 26.2573° E'), line.textContent);
+    const link = tree(element('#inspection')).find(node => node.tagName === 'A');
+    assert.equal(link.href, 'https://maps.apple.com/?ll=-24.74351,26.25732&q=photo-1.jpg');
+    return;
+  }
   if (scenario === 'location') {
     await load();
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
@@ -3695,6 +3707,16 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_inspector_shows_gps_location_with_a_maps_link(self):
         self.run_javascript_cleanup_regression("location")
+
+    def test_javascript_inspector_shows_the_place_before_the_coordinates(self):
+        self.run_javascript_cleanup_regression("place-line")
+
+    def test_photo_detail_carries_place_and_country(self):
+        from lumen.catalog import Catalog
+        with Catalog(Settings(library_dir=self.root / "library").database_path) as catalog:
+            catalog.update_place(1, place="Madikwe Game Reserve", country="South Africa")
+        photo = self.get_json("/api/photos/1")[1]["photo"]
+        self.assertEqual(("Madikwe Game Reserve", "South Africa"), (photo["place"], photo["place_country"]))
 
     def test_javascript_contact_sheet_groups_frames_into_burst_sections(self):
         self.run_javascript_cleanup_regression("bursts")

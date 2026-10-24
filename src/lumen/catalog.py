@@ -24,7 +24,7 @@ _MIGRATIONS = {
     "metrics": {"dhash": "TEXT"},
     "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT",
                "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'", "exposure_seconds": "REAL", "merged_into": "TEXT",
-               "latitude": "REAL", "longitude": "REAL", "altitude": "REAL"},
+               "latitude": "REAL", "longitude": "REAL", "altitude": "REAL", "place": "TEXT", "place_country": "TEXT"},
 }
 
 
@@ -90,11 +90,16 @@ class GroupFilters:
             fields += ["(SELECT group_concat(CASE WHEN s.type = 'object' THEN json_extract(s.value, '$.name') END, ' | ') FROM json_each(t.data_json, '$.species') s)",
                        "replace(json_extract(t.data_json, '$.problems.kinds'), '_', ' ')"]
             terms = _text_terms(self.text or "")
-            conditions.append("EXISTS (SELECT 1 FROM tags t WHERE t.photo_id = p.id"
-                              + (" AND (" + " OR ".join(f"{field} LIKE ? ESCAPE '\\'" for _ in terms for field in fields) + "))" if terms else ")"))
+            if self.tagged_only:
+                conditions.append("EXISTS (SELECT 1 FROM tags t WHERE t.photo_id = p.id)")
+            if terms:  # Each term matches the tags or the frame's place, so untagged frames are found by place.
+                likes = " OR ".join(f"{field} LIKE ? ESCAPE '\\'" for field in fields)
+                conditions.append("(" + " OR ".join(f"EXISTS (SELECT 1 FROM tags t WHERE t.photo_id = p.id AND ({likes}))"
+                                                    " OR p.place LIKE ? ESCAPE '\\' OR p.place_country LIKE ? ESCAPE '\\'"
+                                                    for _ in terms) + ")")
             for term in terms:
                 pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-                params += [pattern] * len(fields)
+                params += [pattern] * (len(fields) + 2)
         return " AND ".join(conditions), params
 
 
@@ -237,8 +242,9 @@ class Catalog:
             """
             INSERT INTO photos
                 (path, fingerprint, captured_at, camera_id, preview_path, format,
-                 group_id, manual_pick, imported_at, preview_kind, exposure_seconds, latitude, longitude, altitude)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 group_id, manual_pick, imported_at, preview_kind, exposure_seconds, latitude, longitude, altitude,
+                 place, place_country)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 fingerprint=excluded.fingerprint,
                 captured_at=excluded.captured_at,
@@ -269,6 +275,8 @@ class Catalog:
                 photo.latitude,
                 photo.longitude,
                 photo.altitude,
+                photo.place,
+                photo.place_country,
             ),
         ).fetchone()
         self.connection.commit()
@@ -278,6 +286,10 @@ class Catalog:
         """Backfill a GPS fix read later for an otherwise unchanged file."""
         self.connection.execute("UPDATE photos SET latitude = ?, longitude = ?, altitude = ? WHERE id = ?",
                                 (latitude, longitude, altitude, photo_id))
+        self.connection.commit()
+
+    def update_place(self, photo_id: int, *, place: str | None, country: str | None) -> None:
+        self.connection.execute("UPDATE photos SET place = ?, place_country = ? WHERE id = ?", (place, country, photo_id))
         self.connection.commit()
 
     def list_photos(self) -> list[Photo]:
@@ -755,9 +767,14 @@ class Catalog:
     def match_terms(self, photo_id: int, text: str) -> list[str]:
         """Labels for the stored local-AI fields that contain any `|`-separated term of `text` (case-insensitive), in a fixed order."""
         needles = [term.casefold() for term in _text_terms(text)]
-        tags = self.get_tags(photo_id) if needles else None
-        if not tags:
+        if not needles:
             return []
+        row = self.connection.execute("SELECT place, place_country FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        place = [f"place: {row['place']}"] if row and row["place"] and any(
+            needle in f"{row['place']} {row['place_country'] or ''}".casefold() for needle in needles) else []
+        tags = self.get_tags(photo_id)
+        if not tags:
+            return place
         data = tags["data"]
 
         def strings(value: Any) -> list[str]:
@@ -771,7 +788,7 @@ class Catalog:
         candidates.append(("caption", data.get("caption")))
         kinds = strings(problems.get("kinds")) if isinstance(problems, dict) else []
         candidates += [(f"problem: {kind.replace('_', ' ')}", f"{kind} {kind.replace('_', ' ')}") for kind in kinds]
-        return [label for label, value in candidates if isinstance(value, str) and any(needle in value.casefold() for needle in needles)]
+        return place + [label for label, value in candidates if isinstance(value, str) and any(needle in value.casefold() for needle in needles)]
 
     def clear_tags(self, photo_id: int) -> None:
         self.connection.execute("DELETE FROM tags WHERE photo_id = ?", (photo_id,))
@@ -981,6 +998,8 @@ class Catalog:
             latitude=row["latitude"],
             longitude=row["longitude"],
             altitude=row["altitude"],
+            place=row["place"],
+            place_country=row["place_country"],
         )
 
     @staticmethod

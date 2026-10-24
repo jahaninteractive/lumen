@@ -586,7 +586,8 @@ function locationLine(photo, record) {
     return [line];
   }
   const degrees = (value, positive, negative) => `${Math.abs(value).toFixed(4)}° ${value < 0 ? negative : positive}`;
-  line.textContent = `Location: ${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
+  const place = record.place ? `Place: ${[record.place, record.place_country].filter(Boolean).join(', ')} · ` : 'Location: ';
+  line.textContent = `${place}${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
   const link = document.createElement('a');
   link.href = `https://maps.apple.com/?ll=${record.latitude},${record.longitude}&q=${encodeURIComponent(photo.name)}`;
   link.target = '_blank';

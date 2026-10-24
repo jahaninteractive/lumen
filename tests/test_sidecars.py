@@ -54,6 +54,27 @@ class SidecarTests(unittest.TestCase):
         self.assertIn("<Iptc4xmpCore:AltTextAccessibility><rdf:Alt><rdf:li xml:lang=\"x-default\">Two penguins on ice</rdf:li>", with_alt)
         self.assertNotIn("AltTextAccessibility", SidecarWriter._xmp("d", [], rating=0))
 
+    def test_place_is_in_json_and_xmp_location_and_country_only_when_present(self):
+        from xml.etree import ElementTree
+        with tempfile.TemporaryDirectory() as directory:
+            writer = SidecarWriter(Path(directory))
+            photo = Photo(id=9, path="/photos/a.ARW", fingerprint="abcdef123456", captured_at=None, camera_id="A1")
+            metrics = PhotoMetrics(sharpness=0.8, exposure=0.7, clipping=0.01)
+            json_path, xmp_path = writer.write(photo, metrics, [], selected=False, place="Madikwe Game Reserve", country="South Africa")
+            payload = json.loads(json_path.read_text())
+            self.assertEqual(("Madikwe Game Reserve", "South Africa"), (payload["place"], payload["place_country"]))
+            xmp = xmp_path.read_text()
+            self.assertIn("<Iptc4xmpCore:Location>Madikwe Game Reserve</Iptc4xmpCore:Location>", xmp)
+            self.assertIn("<photoshop:Country>South Africa</photoshop:Country>", xmp)
+            self.assertIn('xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"', xmp)
+        hostile = SidecarWriter._xmp("d", [], rating=0, place="R&D Reserve <test>", country="A & B")
+        root = ElementTree.fromstring(hostile)
+        self.assertEqual("R&D Reserve <test>", root.find(".//{http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/}Location").text)
+        self.assertEqual("A & B", root.find(".//{http://ns.adobe.com/photoshop/1.0/}Country").text)
+        bare = SidecarWriter._xmp("d", [], rating=0)
+        self.assertNotIn("Location", bare)
+        self.assertNotIn("photoshop", bare)
+
     def test_sidecars_carry_decision_and_minus_one_xmp_rating_for_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             writer = SidecarWriter(Path(directory))
