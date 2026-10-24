@@ -30,7 +30,7 @@ from .jobs import LocalJobRunner
 from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
 from .pipelines import EXPORT_PRESETS, PipelineRegistry
 from .tools import find_tool
-from .grouping import TimeGapGroupingPolicy
+from .grouping import TimeGapGroupingPolicy, split_near_duplicates
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
@@ -1628,7 +1628,11 @@ class Library:
     def _regroup_and_write_sidecars(self) -> None:
         photos = self.catalog.list_photos()
         groups = TimeGapGroupingPolicy(self.settings.burst_gap_seconds).group([photo for photo in photos if not photo.merged_into])
-        keyed = {_stable_key(group[0]): group for group in groups}
+        metrics_by_id = {photo.id: self.catalog.get_metrics(photo.id) for photo in photos if photo.id is not None}
+        hashes = {photo_id: metrics.dhash if metrics else None for photo_id, metrics in metrics_by_id.items()}
+        groups = [cluster for group in groups
+                  for cluster in split_near_duplicates(group, hashes, self.settings.near_duplicate_distance)]
+        keyed = {_stable_key(group[0]): group for group in groups}  # Merges attach after splitting, so they are never split.
         for photo in sorted((photo for photo in photos if photo.merged_into), key=lambda item: item.path):
             if photo.merged_into in keyed:
                 keyed[photo.merged_into].append(photo)
@@ -1641,7 +1645,7 @@ class Library:
             for photo in group:
                 if photo.id is None:
                     continue
-                metrics = self.catalog.get_metrics(photo.id)
+                metrics = metrics_by_id.get(photo.id)
                 if metrics:
                     scored_input.append((photo, metrics))
             if not scored_input:

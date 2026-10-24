@@ -13,16 +13,25 @@ class Settings:
     burst_gap_seconds: float = 2.0
     omlx_fast_model: str = "Qwen3-VL-8B-Instruct-4bit"
     omlx_review_model: str | None = None
+    near_duplicate_distance: int = 12
 
     @classmethod
     def from_environment(cls) -> "Settings":
         root = Path(os.environ.get("LUMEN_LIBRARY", "~/Pictures/Lumen Library")).expanduser()
+        raw_distance = os.environ.get("LUMEN_NEAR_DUP_DISTANCE", "12")
+        try:
+            distance = int(raw_distance)
+        except ValueError:
+            distance = -1
+        if distance < 0:
+            raise ValueError(f"LUMEN_NEAR_DUP_DISTANCE must be a non-negative integer, got {raw_distance!r}")
         return cls(
             library_dir=root,
             omlx_url=os.environ.get("LUMEN_OMLX_URL", "http://127.0.0.1:8000"),
             omlx_model=os.environ.get("LUMEN_OMLX_MODEL", "Qwen3.8-27B-4bit"),
             omlx_fast_model=os.environ.get("LUMEN_OMLX_FAST_MODEL", "Qwen3-VL-8B-Instruct-4bit"),
             omlx_review_model=os.environ.get("LUMEN_OMLX_REVIEW_MODEL") or None,
+            near_duplicate_distance=distance,
         )
 
     @property

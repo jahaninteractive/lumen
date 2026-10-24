@@ -1104,6 +1104,53 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(chosen_id, group["automatic_pick_id"])
         self.assertTrue(chosen.manual_pick)
 
+    def write_scene_change_burst(self):
+        """Three frames 1 s apart; the third is an inverted gradient, a different scene."""
+        gradient = Image.new("L", (320, 240))
+        gradient.putdata([255 - x * 255 // 319 for _ in range(240) for x in range(320)])
+        for index, frame in enumerate((gradient, gradient.point(lambda value: min(255, value + 4)), gradient.transpose(Image.Transpose.FLIP_LEFT_RIGHT))):
+            exif = Image.Exif(); exif[36867] = f"2026:10:21 12:00:0{index}"
+            frame.convert("RGB").save(self.source_dir / f"S{index}.jpg", exif=exif, quality=95)
+        return [(self.source_dir / f"S{index}.jpg").resolve() for index in range(3)]
+
+    def test_scene_change_inside_a_burst_splits_into_clusters_each_with_its_pick(self):
+        paths = self.write_scene_change_burst()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            ids = [library.catalog.photo_by_path(str(path)).id for path in paths]
+            groups = [group for group in library.list_groups() if {photo["id"] for photo in group["photos"]} & set(ids)]
+            self.assertEqual([{ids[0], ids[1]}, {ids[2]}], [{photo["id"] for photo in group["photos"]} for group in groups])
+            self.assertIn(groups[0]["automatic_pick_id"], {ids[0], ids[1]})
+            self.assertEqual(ids[2], groups[1]["automatic_pick_id"])
+
+            other = ({ids[0], ids[1]} - {groups[0]["automatic_pick_id"]}).pop()
+            library.set_pick(other)
+            library.set_decision(ids[2], "flag")
+            library.import_path(self.source_dir)
+            after = [group for group in library.list_groups() if {photo["id"] for photo in group["photos"]} & set(ids)]
+            self.assertEqual(2, len(after))
+            self.assertEqual(other, after[0]["automatic_pick_id"], "a manual pick survives the split")
+            self.assertTrue(library.catalog.get_photo(other).manual_pick)
+            self.assertEqual("flag", library.catalog.get_photo(ids[2]).decision)
+
+    def test_near_duplicate_distance_zero_keeps_the_time_burst_whole(self):
+        paths = self.write_scene_change_burst()
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            ids = {library.catalog.photo_by_path(str(path)).id for path in paths}
+            groups = [group for group in library.list_groups() if {photo["id"] for photo in group["photos"]} & ids]
+        self.assertEqual([ids], [{photo["id"] for photo in group["photos"]} for group in groups])
+
+    def test_near_duplicate_distance_reads_environment_and_rejects_bad_values(self):
+        with patch.dict(os.environ, {"LUMEN_NEAR_DUP_DISTANCE": "5"}):
+            self.assertEqual(5, Settings.from_environment().near_duplicate_distance)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LUMEN_NEAR_DUP_DISTANCE", None)
+            self.assertEqual(12, Settings.from_environment().near_duplicate_distance)
+        for bad in ("-1", "twelve", "1.5", ""):
+            with self.subTest(bad=bad), patch.dict(os.environ, {"LUMEN_NEAR_DUP_DISTANCE": bad}), self.assertRaises(ValueError):
+                Settings.from_environment()
+
     def import_burst(self, library, levels):
         """Import a dated burst beside the undated DSC0001 singleton; return burst IDs best-first."""
         exif = Image.Exif()

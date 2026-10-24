@@ -230,6 +230,25 @@ class CatalogTests(unittest.TestCase):
         finally:
             migrated.close()
 
+    def test_metrics_round_trip_dhash_and_migration_adds_the_column(self):
+        photo_id = self.catalog.upsert_photo(Photo(path="/photos/h.ARW", fingerprint="h" * 8, captured_at=None, camera_id="A"))
+        self.catalog.save_metrics(photo_id, PhotoMetrics(sharpness=0.5, exposure=0.5, clipping=0.0, dhash="00ff00ff00ff00ff"))
+        self.assertEqual("00ff00ff00ff00ff", self.catalog.get_metrics(photo_id).dhash)
+
+        legacy_path = Path(self.tmp.name) / "pre-dhash.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE metrics (
+                    photo_id INTEGER PRIMARY KEY, sharpness REAL NOT NULL, exposure REAL NOT NULL,
+                    clipping REAL NOT NULL, face_quality REAL, eye_quality REAL, astro_json TEXT NOT NULL, total_score REAL
+                );
+                """
+            )
+        with Catalog(legacy_path) as migrated:
+            columns = [row["name"] for row in migrated.connection.execute("PRAGMA table_info(metrics)")]
+        self.assertIn("dhash", columns)
+
     def test_migration_adds_job_label_and_counts_to_existing_database(self):
         legacy_path = Path(self.tmp.name) / "pre-migration.sqlite3"
         with closing(sqlite3.connect(legacy_path)) as legacy:

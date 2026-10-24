@@ -43,6 +43,24 @@ def _bounded_grayscale(path: Path, max_size: int = 1024) -> Image.Image:
     return image
 
 
+def _dhash(image: Image.Image) -> str:
+    pixels = image.resize((9, 8), Image.Resampling.LANCZOS).tobytes()
+    bits = 0
+    for row in range(8):
+        for column in range(8):
+            bits = bits << 1 | (pixels[row * 9 + column] > pixels[row * 9 + column + 1])
+    return f"{bits:016x}"
+
+
+def difference_hash(path: Path) -> str:
+    """16 hex chars: 9x8 grayscale, bit set where a pixel is brighter than its right neighbour, row-major."""
+    return _dhash(_bounded_grayscale(path))
+
+
+def hamming(a: str, b: str) -> int:
+    return (int(a, 16) ^ int(b, 16)).bit_count()
+
+
 def measure_image(path: Path) -> PhotoMetrics:
     image = _bounded_grayscale(path)
     edges = image.filter(
@@ -63,6 +81,7 @@ def measure_image(path: Path) -> PhotoMetrics:
         sharpness=_unit(sharpness),
         exposure=_unit(exposure),
         clipping=_unit(clipping),
+        dhash=_dhash(image),
     )
 
 

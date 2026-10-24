@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from .analysis import hamming
 from .domain import Photo
 
 
@@ -35,6 +36,21 @@ class TimeGapGroupingPolicy:
         groups.extend([[photo] for photo in missing])
         groups.sort(key=lambda group: (_utc(group[0].captured_at) if group[0].captured_at else datetime.max.replace(tzinfo=timezone.utc), group[0].camera_id, group[0].path))
         return groups
+
+
+def split_near_duplicates(group: list[Photo], hashes: dict[int, str | None], max_distance: int) -> list[list[Photo]]:
+    """Split a burst where a frame's hash is more than max_distance bits from its cluster's first frame; a missing hash never splits."""
+    if max_distance <= 0:
+        return [group]
+    clusters: list[list[Photo]] = []
+    for photo in group:
+        anchor = hashes.get(clusters[-1][0].id) if clusters else None
+        current = hashes.get(photo.id)
+        if not clusters or (anchor is not None and current is not None and hamming(anchor, current) > max_distance):
+            clusters.append([photo])
+        else:
+            clusters[-1].append(photo)
+    return clusters
 
 
 def _utc(value: datetime | None) -> datetime:

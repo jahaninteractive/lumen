@@ -10,6 +10,8 @@ from lumen.analysis import (
     analyze_astro,
     analyze_subject_regions,
     apply_vision_result,
+    difference_hash,
+    hamming,
     measure_image,
     parse_vision_result,
     parse_vision_regions,
@@ -28,6 +30,22 @@ class AnalysisTests(unittest.TestCase):
         path = self.root / name
         image.save(path, format="JPEG", quality=100)
         return path
+
+    def test_flat_frame_hashes_to_zero(self):
+        self.assertEqual("0000000000000000", difference_hash(self._save("flat.jpg", Image.new("L", (128, 128), 128))))
+
+    def test_bright_to_dark_gradient_sets_every_bit(self):
+        gradient = Image.new("L", (256, 64))
+        gradient.putdata([255 - x for _ in range(64) for x in range(256)])
+        self.assertEqual("ffffffffffffffff", difference_hash(self._save("gradient.jpg", gradient)))
+
+    def test_hamming_counts_differing_bits(self):
+        self.assertEqual(8, hamming("00ff", "0f0f"))
+        self.assertEqual(0, hamming("abcd", "abcd"))
+
+    def test_measure_image_records_difference_hash(self):
+        dhash = measure_image(self._save("flat.jpg", Image.new("L", (128, 128), 128))).dhash
+        self.assertRegex(dhash, r"^[0-9a-f]{16}$")
 
     def test_checkerboard_is_sharper_than_flat_frame(self):
         flat = Image.new("L", (128, 128), 128)

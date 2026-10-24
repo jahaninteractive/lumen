@@ -72,6 +72,7 @@ class PhotoMetrics:
     face_quality: float | None = None
     eye_quality: float | None = None
     astro: dict[str, Any] = field(default_factory=dict)
+    dhash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -21,6 +21,7 @@ _JOB_TRANSITIONS = {
 # Columns added after a table first shipped: {table: {column: DDL}}; applied once to older catalogs.
 _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
+    "metrics": {"dhash": "TEXT"},
     "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT",
                "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'", "exposure_seconds": "REAL", "merged_into": "TEXT",
                "latitude": "REAL", "longitude": "REAL", "altitude": "REAL"},
@@ -667,13 +668,13 @@ class Catalog:
         self.connection.execute(
             """
             INSERT INTO metrics
-                (photo_id, sharpness, exposure, clipping, face_quality, eye_quality, astro_json, total_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (photo_id, sharpness, exposure, clipping, face_quality, eye_quality, astro_json, total_score, dhash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(photo_id) DO UPDATE SET
                 sharpness=excluded.sharpness, exposure=excluded.exposure,
                 clipping=excluded.clipping, face_quality=excluded.face_quality,
                 eye_quality=excluded.eye_quality, astro_json=excluded.astro_json,
-                total_score=COALESCE(excluded.total_score, metrics.total_score)
+                total_score=COALESCE(excluded.total_score, metrics.total_score), dhash=excluded.dhash
             """,
             (
                 photo_id,
@@ -684,6 +685,7 @@ class Catalog:
                 metrics.eye_quality,
                 json.dumps(metrics.astro, sort_keys=True),
                 total_score,
+                metrics.dhash,
             ),
         )
         self.connection.commit()
@@ -699,6 +701,7 @@ class Catalog:
             face_quality=row["face_quality"],
             eye_quality=row["eye_quality"],
             astro=json.loads(row["astro_json"]),
+            dhash=row["dhash"],
         )
 
     def save_tags(self, photo_id: int, data: dict[str, Any], model: str) -> None:
