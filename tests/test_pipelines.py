@@ -114,7 +114,7 @@ class PipelineTests(unittest.TestCase):
             with Image.open(without.output) as image:
                 self.assertNotIn(b"AltTextAccessibility", image.info["xmp"])
 
-    def test_jpeg_export_carries_place_in_xmp_only_with_gps_presets(self):
+    def test_jpeg_export_carries_place_in_xmp_for_every_preset_without_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "DSC00713.ARW"
@@ -129,13 +129,14 @@ class PipelineTests(unittest.TestCase):
 
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             full = pipeline.export_jpeg(source, decoder="macos", runner=render, place="Madikwe Game Reserve", country="South Africa")
-            web = pipeline.export_jpeg(source, decoder="macos", runner=render, preset="web", place="Madikwe Game Reserve", country="South Africa")
-            with Image.open(full.output) as image:
-                xmp = ElementTree.fromstring(image.info["xmp"])
-            self.assertEqual("Madikwe Game Reserve", xmp.find(".//{http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/}Location").text)
-            self.assertEqual("South Africa", xmp.find(".//{http://ns.adobe.com/photoshop/1.0/}Country").text)
-            with Image.open(web.output) as image:
-                self.assertNotIn(b"Madikwe", image.info["xmp"], "presets that strip GPS also drop the place")
+            share = pipeline.export_jpeg(source, decoder="macos", runner=render, preset="share", place="Madikwe Game Reserve", country="South Africa")
+            for result in (full, share):
+                with Image.open(result.output) as image:
+                    xmp = ElementTree.fromstring(image.info["xmp"])
+                    gps = image.getexif().get_ifd(34853)
+                self.assertEqual("Madikwe Game Reserve", xmp.find(".//{http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/}Location").text)
+                self.assertEqual("South Africa", xmp.find(".//{http://ns.adobe.com/photoshop/1.0/}Country").text)
+            self.assertEqual({}, dict(gps), "share keeps the place but still strips GPS")
 
     def test_jpeg_export_preserves_metadata_and_original_with_collision_suffix(self):
         with tempfile.TemporaryDirectory() as directory:

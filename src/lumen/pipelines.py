@@ -224,8 +224,7 @@ class DarktablePipeline:
                                xmp=SidecarWriter._xmp(
                                    effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
                                    alt_text=alt_text,
-                                   # The place is location data: presets that strip GPS drop it too.
-                                   place=place if options["include_gps"] else None, country=country,
+                                   place=place, country=country,  # A place name travels with every preset; GPS does not.
                                ).encode("utf-8"))
                 if 37500 in capture:
                     # Pillow copies MakerNote bytes but not their absolute offsets; exiftool rebases them.
