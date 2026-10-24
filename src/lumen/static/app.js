@@ -930,6 +930,7 @@ function handleCullingKey(event) {
   const target = event.target;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || (target?.tagName === 'BUTTON' && target.className !== 'frame')) return;  // only frame cards cull; burst and dialog buttons do not
   const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
+  if ((key === '[' || key === ']') && openView?.id === 'loupe') { event.preventDefault(); return stepLoupe(key === ']' ? 1 : -1); }
   const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
   const index = ids.indexOf(state.focusedId);
   const row = sheetColumns();
@@ -2097,6 +2098,21 @@ function openLoupe(photoId) {
   showPreview(viewport, photo);
   showView(document.querySelector('#loupe'));
   viewport.focus();
+}
+
+// Filmstrip: step the loupe through the rendered frames in sheet order.
+function stepLoupe(delta) {
+  const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
+  const index = ids.indexOf(state.focusedId) + delta;
+  if (index < 0) return announce('First frame');
+  if (index >= ids.length) return announce('Last frame');
+  const photo = photoById(ids[index]);
+  if (!photo) return;
+  document.querySelector('#loupe-heading').textContent = photo.name;
+  showPreview(document.querySelector('#loupe-viewport'), photo);
+  focusFrame(photo.id, false);
+  viewOrigin = photo.id;
+  announce(`${photo.name}, ${index + 1} of ${ids.length}`);
 }
 
 for (const name of ['#compare', '#loupe']) {

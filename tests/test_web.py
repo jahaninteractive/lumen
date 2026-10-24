@@ -1271,7 +1271,7 @@ let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
-let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
 if (scenario.startsWith('resume')) {  // seeded before the startup load, which is the only one that resumes
   const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
@@ -2067,6 +2067,56 @@ const regression = `
     assert.equal(dialog.hidden, true);
     assert.equal(focused, card(2), 'closing returns focus to the originating frame');
     assert.equal(state.focusedId, 2);
+    return;
+  }
+  if (scenario === 'loupe-strip') {
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    let prevented = 0;
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() { prevented += 1; }, stopPropagation() {} });
+    const sheetNode = element('#contact-sheet');
+    const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV' });
+    const announced = () => element('#announcer').textContent;
+    await key('Home', card(1), sheetNode);
+    await key('Enter', card(1), sheetNode);
+    assert.equal(loupe.hidden, false);
+    assert.equal(element('#loupe-heading').textContent, 'photo-1.jpg');
+    await key('[', viewport, loupe);
+    assert.equal(announced(), 'First frame');
+    assert.equal(element('#loupe-heading').textContent, 'photo-1.jpg', 'the first edge changes nothing');
+    assert.equal(state.focusedId, 1);
+    await key(']', viewport, loupe);
+    await key(']', viewport, loupe);
+    assert.equal(announced(), 'photo-3.jpg, 3 of 3');
+    await key(']', viewport, loupe);
+    assert.equal(announced(), 'Last frame');
+    assert.equal(state.focusedId, 3, 'the last edge changes nothing');
+    await key('[', viewport, loupe);
+    assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg');
+    assert.equal(viewport.children[0].src, '/preview/2');
+    assert.equal(viewport.getAttribute('aria-label'), 'photo-2.jpg viewport');
+    assert.equal(announced(), 'photo-2.jpg, 2 of 3');
+    assert.equal(state.focusedId, 2);
+    assert.equal(card(2).getAttribute('tabindex'), '0');
+    await key('x', viewport, loupe);
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/decision', body: { decision: 'reject' } }, 'culling keys act on the frame shown');
+    await key('Escape', viewport, loupe);
+    assert.equal(loupe.hidden, true);
+    assert.equal(focused, card(2), 'closing returns focus to the frame last shown');
+    const compare = Object.assign(element('#compare'), { tagName: 'DIALOG', id: 'compare' });
+    await key('c', card(2), sheetNode);
+    await key('ArrowRight', card(2), sheetNode);
+    await key('c', card(3), sheetNode);
+    await element('#open-compare').listeners.click();
+    assert.equal(compare.hidden, false);
+    const before = prevented;
+    await key(']', viewport, compare);
+    await key('[', viewport, compare);
+    assert.equal(state.focusedId, 3, 'brackets do nothing in compare');
+    assert.equal(prevented, before);
+    await key(']', card(3), sheetNode);
+    assert.equal(prevented, before, 'brackets do nothing on the sheet');
     return;
   }
   if (scenario === 'find') {
@@ -2975,6 +3025,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_loupe_opens_on_enter_pans_and_returns_focus(self):
         self.run_javascript_cleanup_regression("loupe")
 
+    def test_javascript_loupe_filmstrip_steps_with_brackets(self):
+        self.run_javascript_cleanup_regression("loupe-strip")
+
     def test_compare_and_loupe_dialogs_have_labeled_viewports_and_actions(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
@@ -3028,8 +3081,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         terms = [node for node in legend if node["tag"] == "dt"]
         keys = [node["text"].strip() for node in legend if node["tag"] == "kbd"]
         self.assertGreaterEqual(len(terms), 8)
-        for key in ("P", "X", "F", "U", "C", "0", "5", "Home", "End"):
+        for key in ("P", "X", "F", "U", "C", "0", "5", "Home", "End", "[", "]"):
             self.assertIn(key, keys)
+        self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() == "Previous or next frame in the loupe" for node in legend))
         for key in keys:
             self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down", "Enter", "Esc"}, key)
         for key in ("Enter", "Esc"):
