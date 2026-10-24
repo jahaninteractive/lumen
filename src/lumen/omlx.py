@@ -136,6 +136,14 @@ class Caption:
 
 def _json_object(raw: str, error_type) -> dict:
     """Strip an optional Markdown fence and parse one JSON object, raising error_type(message, raw)."""
+    payload = _json_value(raw, error_type)
+    if not isinstance(payload, dict):
+        raise error_type("oMLX response must be a JSON object", raw)
+    return payload
+
+
+def _json_value(raw: str, error_type):
+    """Strip an optional Markdown fence and parse any JSON value, raising error_type(message, raw)."""
     text = raw.strip()
     if text.startswith("```"):
         first_newline = text.find("\n")
@@ -147,8 +155,6 @@ def _json_object(raw: str, error_type) -> dict:
         payload = json.loads(text)
     except json.JSONDecodeError as error:
         raise error_type(f"oMLX did not return valid JSON: {error.msg}", raw) from error
-    if not isinstance(payload, dict):
-        raise error_type("oMLX response must be a JSON object", raw)
     return payload
 
 
@@ -167,19 +173,24 @@ def _confidence(value) -> bool:
 
 
 def parse_reject_response(raw: str) -> RejectReview:
-    payload = _json_object(raw, RejectResponseError)
-    if set(payload) != {"problems", "suggest_reject", "confidence"}:
-        raise RejectResponseError("oMLX reject response must contain only problems, suggest_reject, and confidence", raw)
+    """A bare array is taken as the problems alone (no reject suggestion); unknown keys are ignored."""
+    payload = _json_value(raw, RejectResponseError)
+    if isinstance(payload, list):
+        payload = {"problems": payload}
+    if not isinstance(payload, dict) or "problems" not in payload:
+        raise RejectResponseError("oMLX reject response must contain problems", raw)
     problems = payload["problems"]
     if (not isinstance(problems, list)
             or not all(isinstance(p, dict) and set(p) == {"kind", "confidence"} and p["kind"] in PROBLEMS
                        and _confidence(p["confidence"]) for p in problems)
             or len({p["kind"] for p in problems}) != len(problems)):
         raise RejectResponseError("oMLX problems must be unique known kinds with confidence", raw)
-    if type(payload["suggest_reject"]) is not bool or not _confidence(payload["confidence"]):
+    suggest_reject = payload.get("suggest_reject", False)
+    confidence = payload.get("confidence", max((p["confidence"] for p in problems), default=0.0))
+    if type(suggest_reject) is not bool or not _confidence(confidence):
         raise RejectResponseError("oMLX suggest_reject must be boolean and confidence 0 to 1", raw)
     return RejectReview([{"kind": p["kind"], "confidence": float(p["confidence"])} for p in problems],
-                        payload["suggest_reject"], float(payload["confidence"]), raw)
+                        suggest_reject, float(confidence), raw)
 
 
 def parse_burst_response(raw: str, frame_ids: set[str]) -> BurstCritique:
@@ -408,8 +419,9 @@ class OmlxTagger:
         return parse_composition_response(response, set(ids))
 
     def review_rejects(self, preview: Path, timeout: float = 240) -> RejectReview:
-        prompt = ("Look for technical failures only: " + ", ".join(PROBLEMS) + ". Return JSON only with problems "
-                  "(array of {kind, confidence}), suggest_reject (boolean), confidence (0 to 1). Do not identify a person.")
+        prompt = ("Look for technical failures only: " + ", ".join(PROBLEMS) + ". Return one JSON object only, shaped "
+                  '{"problems": [{"kind": "...", "confidence": 0.0}], "suggest_reject": false, "confidence": 0.0}; '
+                  "problems may be an empty array. Do not identify a person.")
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=300)
         return parse_reject_response(content)
 
@@ -424,7 +436,7 @@ class OmlxTagger:
         prompt = ("Write caption (under 200 characters, no hashtags, no emoji) and alt_text (under 125 characters, a "
                   "literal description of what is visible for a screen reader). Return JSON only. Do not identify a person."
                   + _place_sentence(place))
-        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
+        content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=400)
         return parse_caption_response(content)
 
     def write_digest(self, facts_markdown: str, timeout: float = 240) -> DigestNarrative:

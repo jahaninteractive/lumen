@@ -188,10 +188,20 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual(([{"kind": "motion_blur", "confidence": 0.84}], True), (result.problems, result.suggest_reject))
         for bad in ({"problems": [{"kind": "ugly", "confidence": 0.5}], "suggest_reject": False, "confidence": 0.5},
                     {"problems": [], "suggest_reject": "yes", "confidence": 0.5},
-                    {"problems": [], "suggest_reject": False, "confidence": 0.5, "note": "x"},
                     {"problems": [{"kind": "misfire", "confidence": 0.5}, {"kind": "misfire", "confidence": 0.6}], "suggest_reject": True, "confidence": 0.5}):
             with self.subTest(bad=bad), self.assertRaises(RejectResponseError):
                 parse_reject_response(json.dumps(bad))
+
+    def test_reject_response_accepts_a_bare_problem_list_and_ignores_extra_keys(self):
+        # Qwen3-VL-8B answers the scan with just the array; a list means problems only, no reject suggestion.
+        result = parse_reject_response('```json\n[{"kind": "out_of_focus", "confidence": 0.7}]\n```')
+        self.assertEqual(([{"kind": "out_of_focus", "confidence": 0.7}], False, 0.7),
+                         (result.problems, result.suggest_reject, result.confidence))
+        self.assertEqual(([], False, 0.0), (parse_reject_response("[]").problems, False, parse_reject_response("[]").confidence))
+        extra = json.dumps({"problems": [], "suggest_reject": True, "confidence": 0.9, "note": "x"})
+        self.assertTrue(parse_reject_response(extra).suggest_reject)
+        partial = json.dumps({"problems": [{"kind": "misfire", "confidence": 0.8}]})
+        self.assertEqual((False, 0.8), (parse_reject_response(partial).suggest_reject, parse_reject_response(partial).confidence))
 
     def test_review_rejects_sends_one_image_listing_every_problem_with_small_budget(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -347,7 +357,7 @@ class OmlxTests(unittest.TestCase):
                 result = tagger.caption(path)
         self.assertEqual(("Ice.", "White ice."), (result.caption, result.alt_text))
         self.assertIn("Do not identify a person.", captured["content"][0]["text"])
-        self.assertEqual(200, captured["kw"]["max_tokens"])
+        self.assertEqual(400, captured["kw"]["max_tokens"])
 
     def test_tag_and_caption_prompts_state_the_place_only_when_given(self):
         tagger = OmlxTagger("http://127.0.0.1:8000", "m", api_key="k", role="fast")
