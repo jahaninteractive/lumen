@@ -24,6 +24,8 @@ def write_fixture(directory: Path) -> None:
         row(1, "Madikwe Game Reserve", -24.74351, 26.25732, "P", "PPL", "ZA")
         + row(2, "Tlokweng", -24.67, 25.98, "P", "PPL", "ZA", 55508)
         + row(3, "Abjaterskop", -24.8, 26.17, "T", "HLL", "ZA")
+        + row(7, "Holiday Inn Cape Town Waterfront", -33.9173, 18.42, "S", "HTL", "ZA")
+        + row(8, "Cape Town", -33.9, 18.42, "P", "PPLA", "ZA", 3433441)
         + "not\ta\tvalid\tline\n",
         encoding="utf-8",
     )
@@ -60,11 +62,14 @@ class PlaceIndexTests(unittest.TestCase):
         self.assertGreater(sea.distance_km, 25)
         self.assertEqual("near Weddell Sea, Antarctica", sea.label)
 
+    def test_landmark_name_on_a_building_does_not_beat_the_town(self):
+        self.assertEqual("Cape Town", self.index.lookup(-33.92, 18.42).name)
+
     def test_nowhere_returns_none(self):
         self.assertIsNone(self.index.lookup(0, 0))
 
     def test_ensure_skips_malformed_lines_and_rebuilds_only_on_change(self):
-        self.assertEqual({"files": 2, "places": 5, "rebuilt": True}, self.index.ensure())
+        self.assertEqual({"files": 2, "places": 7, "rebuilt": True}, self.index.ensure())
         self.assertFalse(self.index.ensure()["rebuilt"])
         za = self.source / "ZA.txt"
         stat = za.stat()
@@ -77,7 +82,7 @@ class PlaceIndexTests(unittest.TestCase):
         self.assertEqual(("Kaapsehoop", "online", "ONLINE"), (place.name, place.source, place.feature_code))
         za = self.source / "ZA.txt"
         os.utime(za, ns=(za.stat().st_atime_ns, za.stat().st_mtime_ns + 5_000_000_000))
-        self.assertEqual(6, self.index.ensure()["places"])
+        self.assertEqual(8, self.index.ensure()["places"])
         self.assertEqual("Kaapsehoop", self.index.lookup(10.01, 10.0).name)
 
     def test_missing_dir_and_country_fallbacks(self):

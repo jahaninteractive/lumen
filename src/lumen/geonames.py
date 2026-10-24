@@ -19,6 +19,7 @@ TIER_ONE_CODES = frozenset(
 TIER_ONE_NAME = re.compile(
     r"\b(Reserve|Park|Nature|Game|Station|Island|Bay|Glacier|Harbour|Cove|Peninsula|Sound|Strait|Cape|Point)\b"
 )
+LANDMARK_CLASSES = frozenset("LTHP")
 NON_FEATURE_FILES = frozenset({"countryInfo.txt", "readme.txt"})
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS places(id INTEGER PRIMARY KEY, name TEXT, country TEXT, feature_class TEXT,
@@ -63,8 +64,9 @@ def country_names(source_dir: Path) -> dict[str, str]:
     return names
 
 
-def _tier(name: str, feature_code: str) -> int:
-    if feature_code in TIER_ONE_CODES or TIER_ONE_NAME.search(name):
+def _tier(name: str, feature_class: str, feature_code: str) -> int:
+    # Name matches only count for landmarks, not spots/buildings (a "Cape Town" hotel is not a cape).
+    if feature_code in TIER_ONE_CODES or (feature_class in LANDMARK_CLASSES and TIER_ONE_NAME.search(name)):
         return 1
     return 2 if feature_code.startswith("PPL") else 3
 
@@ -150,14 +152,14 @@ class PlaceIndex:
         # ponytail: no antimeridian wrap; boxes clamp at ±180, split the query if Pacific frames matter
         dlon = 180.0 if cos_lat < 0.01 else min(180.0, radius / (KM_PER_DEGREE * cos_lat))
         rows = self._db.execute(
-            "SELECT p.name, p.country, p.feature_code, p.source, p.lat, p.lon FROM places_rtree r "
+            "SELECT p.name, p.country, p.feature_class, p.feature_code, p.source, p.lat, p.lon FROM places_rtree r "
             "JOIN places p ON p.id = r.id "
             "WHERE r.max_lat >= ? AND r.min_lat <= ? AND r.max_lon >= ? AND r.min_lon <= ?"
             + (" AND p.feature_code LIKE 'PPL%'" if populated_only else ""),
             (lat - dlat, lat + dlat, lon - dlon, lon + dlon),
         ).fetchall()
-        found = [(distance_km(lat, lon, plat, plon), name, country, code, source)
-                 for name, country, code, source, plat, plon in rows]
+        found = [(distance_km(lat, lon, plat, plon), name, country, code, source, feature_class)
+                 for name, country, feature_class, code, source, plat, plon in rows]
         return [item for item in found if item[0] <= radius]
 
     def lookup(self, lat: float, lon: float) -> Place | None:
@@ -165,12 +167,12 @@ class PlaceIndex:
             self.ensure()
         close = self._within(lat, lon, RADIUS_KM)
         if close:
-            distance, name, country, code, source = min(close, key=lambda item: (_tier(item[1], item[3]), item[0]))
+            distance, name, country, code, source, _ = min(close, key=lambda i: (_tier(i[1], i[5], i[3]), i[0]))
             return Place(name, country, distance, code, source)
         for radius, populated_only in ((NEAR_POPULATED_KM, True), (NEAR_ANY_KM, False)):
             found = self._within(lat, lon, radius, populated_only)
             if found:
-                distance, name, country, code, source = min(found)
+                distance, name, country, code, source, _ = min(found)
                 return Place(name, country, distance, code, source, near=True)
         return None
 

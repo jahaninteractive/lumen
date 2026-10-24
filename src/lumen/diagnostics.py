@@ -71,9 +71,10 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         }
     roles = {role: {"model": (model := getattr(settings, attribute)), "loaded": model in live_report["loaded_models"]}
              for role, attribute in ROLES.items()}
-    geonames = {"dir": str(settings.geonames_dir), "files": 0, "places": 0}
-    if settings.geonames_dir.is_dir():
-        with PlaceIndex(settings.geonames_dir, settings.geonames_index_path) as index:
+    geonames_dir = settings.geonames_dir
+    geonames = {"dir": str(geonames_dir) if geonames_dir else None, "files": 0, "places": 0}
+    if geonames_dir and geonames_dir.is_dir():
+        with PlaceIndex(geonames_dir, settings.geonames_index_path) as index:
             counts = index.ensure()
         geonames |= {"files": counts["files"], "places": counts["places"]}
     return {

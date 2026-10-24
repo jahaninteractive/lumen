@@ -204,7 +204,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual("Qwen3.8-27B-4bit", payload["omlx_model"]["name"])
         self.assertIn("exiftool", payload["tools"])
         self.assertIn("darktable-cli", payload["tools"])
-        self.assertEqual({"dir": str(geonames), "files": 2, "places": 5}, payload["geonames"])
+        self.assertEqual({"dir": str(geonames), "files": 2, "places": 7}, payload["geonames"])
 
     def test_siril_command_runs_managed_script_hook(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -230,9 +230,10 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch(
             "lumen.diagnostics._find_model", return_value=None
         ), patch("lumen.diagnostics.tool_status", return_value=missing):
-            report = doctor_report(Settings(library_dir=Path(directory), geonames_dir=Path(directory) / "none"))
+            report = doctor_report(Settings(library_dir=Path(directory)))
 
         self.assertNotIn("--vision-test", report["omlx_model"]["recommendation"])
+        self.assertEqual({"dir": None, "files": 0, "places": 0}, report["geonames"])
 
     def test_doctor_distinguishes_loaded_model_from_lumen_target(self):
         missing = ToolStatus(name="tool", available=False, path=None, version=None)
@@ -246,7 +247,7 @@ class CliTests(unittest.TestCase):
         ), patch("lumen.diagnostics.tool_status", return_value=missing), patch(
             "lumen.diagnostics.get_server_status", return_value=live, create=True
         ):
-            report = doctor_report(Settings(library_dir=Path(directory), geonames_dir=Path(directory) / "none"))
+            report = doctor_report(Settings(library_dir=Path(directory)))
 
         self.assertIn("omlx_live", report)
         self.assertTrue(report["omlx_live"]["online"])

@@ -16,7 +16,7 @@ class Settings:
     omlx_fast_model: str = "Qwen3-VL-8B-Instruct-4bit"
     omlx_review_model: str | None = None
     near_duplicate_distance: int = 12
-    geonames_dir: Path = DEFAULT_GEONAMES_DIR
+    geonames_dir: Path | None = None  # set by from_environment; None means no place index
 
     @classmethod
     def from_environment(cls) -> "Settings":
