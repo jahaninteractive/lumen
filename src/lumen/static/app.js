@@ -1196,7 +1196,9 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   updateWorkflow();
   document.querySelector('#import-status').textContent = 'Starting import…';
   try {
-    watchJob(await post('/api/import', { path: document.querySelector('#import-path').value }));
+    const payload = { path: document.querySelector('#import-path').value };
+    if (document.querySelector('#import-include-cleared').checked) payload.include_cleared = true;
+    watchJob(await post('/api/import', payload));
     document.querySelector('#import-status').textContent = 'Import started. Progress and results appear in the job strip at the top.';
     showImport(false);
   } catch (error) {
@@ -1394,7 +1396,7 @@ const JOB_NAMES = { import: 'Import', export: 'Export', tag: 'Tagging', assist: 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
-  const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
+  const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed${result.previously_cleared ? `, ${result.previously_cleared} previously cleared` : ''}.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'assist' && job.result ? ` ${result.tagged} tagged, ${result.reviewed} scanned (${result.suggested} suggested rejects), ${result.captioned} captioned, ${result.skipped} already done, ${result.failed} failed.`
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`

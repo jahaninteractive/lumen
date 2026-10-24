@@ -125,6 +125,18 @@ class WebTests(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, f"job stayed {payload['status']}")
             time.sleep(0.05)
 
+    def test_import_include_cleared_must_be_a_bool_and_reaches_the_job(self):
+        Image.new("RGB", (60, 40), (90, 20, 20)).save(self.root / "DSC0009.jpg")
+        code, body = self.post_json("/api/import", {"path": str(self.root / "DSC0009.jpg"), "include_cleared": "yes"})
+        self.assertEqual((400, True), (code, "include_cleared" in body["error"]))
+        real = Library.start_import_job
+        with patch.object(Library, "start_import_job", autospec=True, side_effect=real) as start:
+            code, started = self.post_json("/api/import", {"path": str(self.root / "DSC0009.jpg"), "include_cleared": True})
+            self.wait_job(started["job_id"])
+            self.post_json("/api/import", {"path": str(self.root / "DSC0009.jpg")})
+        self.assertEqual(202, code)
+        self.assertEqual([True, False], [call.kwargs["include_cleared"] for call in start.call_args_list])
+
     def test_import_returns_job_and_jobs_routes_never_expose_paths_or_fingerprints(self):
         folder = self.root / "Card Folder"
         folder.mkdir()
@@ -143,7 +155,7 @@ class WebTests(unittest.TestCase):
         self.assertIn(started["status"], ("queued", "running", "succeeded"))
         finished = self.wait_job(started["job_id"])
         self.assertEqual("succeeded", finished["status"])
-        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0}, finished["result"])
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 0}, finished["result"])
         self.assertEqual((2, 2, "DSC0001.jpg"), (finished["processed"], finished["total"], finished["label"]))
         code, listing = self.get_json("/api/jobs")
         self.assertEqual(200, code)
@@ -1367,6 +1379,7 @@ let keeperOverride = null;
 let groupsError = null;
 let resumeJobs = [];
 let importPolls = 0;
+const importPosts = [];
 const tagPosts = [];
 const assistPosts = [];
 let tagPolls = 0;
@@ -1435,7 +1448,7 @@ async function fetch(url, options = {}) {
       payload = refineJob('succeeded', 1, { processed: 2, total: 2, result: { refined: 2, skipped: 0, failed: 0 } });
     }
   }
-  else if (url === '/api/import') { assert.deepEqual(JSON.parse(options.body), { path: '/Volumes/Card' }); payload = importJob('queued', 0); }
+  else if (url === '/api/import') { importPosts.push(JSON.parse(options.body)); payload = importJob('queued', 0); }
   else if (url === '/api/photos/tag-all') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
   else if (url === '/api/jobs/15') {
     tagPolls += 1;
@@ -2881,6 +2894,20 @@ const regression = `
     assert.equal(state.job.status, 'queued');
     assert.equal(dialog.hidden, true, 'an accepted import closes the dialog');
     assert.ok(element('#announcer').textContent.includes('Import'));
+    assert.deepEqual(importPosts, [{ path: '/Volumes/Card' }]);
+    return;
+  }
+  if (scenario === 'import-cleared') {
+    await load();
+    element('#import-path').value = '/Volumes/Card';
+    await element('#import-form').listeners.submit({ preventDefault() {}, currentTarget: element('#import-form') });
+    state.busy = false;
+    element('#import-include-cleared').checked = true;
+    await element('#import-form').listeners.submit({ preventDefault() {}, currentTarget: element('#import-form') });
+    assert.deepEqual(importPosts, [{ path: '/Volumes/Card' }, { path: '/Volumes/Card', include_cleared: true }]);
+    const counts = { discovered: 5, imported: 2, updated: 0, skipped: 0, failed: 0 };
+    assert.ok(jobText(importJob('succeeded', 1, { result: { ...counts, previously_cleared: 3 } })).includes('2 new, 0 updated, 0 skipped, 0 failed, 3 previously cleared.'));
+    assert.ok(!jobText(importJob('succeeded', 1, { result: { ...counts, previously_cleared: 0 } })).includes('previously cleared'));
     return;
   }
   if (scenario === 'network-error') {
@@ -3577,6 +3604,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_import_lives_in_a_dialog_opened_from_the_tab_row(self):
         self.run_javascript_cleanup_regression("import-dialog")
 
+    def test_javascript_import_sends_include_cleared_only_when_ticked(self):
+        self.run_javascript_cleanup_regression("import-cleared")
+
     def test_import_dialog_and_export_tab_own_the_import_and_tag_controls(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
@@ -3585,6 +3615,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual("dialog", by_id["import-dialog"]["tag"])
         self.assertIn(by_id["import-dialog"], by_id["import-form"]["parents"], "the import form lives in the dialog")
         self.assertNotIn(by_id["main-content"], by_id["import-form"]["parents"])
+        for text in ('<label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>',
+                     "Frames you removed or cleared before are skipped unless ticked."):
+            self.assertIn(text, html)
         opener = by_id["open-import"]
         self.assertEqual(("button", "button", "dialog"), (opener["tag"], opener["attrs"].get("type"), opener["attrs"].get("aria-haspopup")))
         tab_row = next(node for node in parser.nodes if node["attrs"].get("class") == "tab-row")

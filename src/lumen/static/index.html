@@ -328,6 +328,8 @@
         <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
         <button type="button" id="browse-path" class="secondary">Browse…</button>
       </div>
+      <label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>
+      <p class="quiet">Frames you removed or cleared before are skipped unless ticked.</p>
       <p>Files stay where they are. Lumen writes previews and sidecars to its own library.</p>
       <p id="import-status" role="status" aria-live="polite"></p>
       <div class="button-row">

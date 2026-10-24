@@ -366,13 +366,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json({"path": reveal_outputs(settings)})
                     return
                 if path == "/api/import":
-                    if payload.keys() - {"path"}:
+                    if payload.keys() - {"path", "include_cleared"}:
                         raise ValueError("unexpected import fields")
                     source = payload.get("path")
                     if not isinstance(source, str) or not source.strip():
                         raise ValueError("path is required")
+                    include_cleared = payload.get("include_cleared", False)
+                    if type(include_cleared) is not bool:
+                        raise ValueError("include_cleared must be true or false")
                     with Library(settings, job_runner=self.server.job_runner()) as library:
-                        job = library.start_import_job(Path(source))
+                        job = library.start_import_job(Path(source), include_cleared=include_cleared)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/ingest":

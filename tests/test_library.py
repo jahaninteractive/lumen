@@ -1586,6 +1586,39 @@ class LibraryTests(unittest.TestCase):
             manifest = json.loads(Path(library.catalog.get_job(status["job_id"]).manifest_path).read_text())
             self.assertEqual(("refine_previews", "all"), (manifest["kind"], manifest["scope"]))
 
+    def test_import_skips_frames_in_the_cleared_ledger_unless_included(self):
+        cleared = self.source_dir / "a.jpg"
+        Image.new("RGB", (320, 240), (200, 40, 40)).save(cleared)
+        fingerprint = library_module.fingerprint_file(cleared)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.catalog.record_cleared([fingerprint], "2026-10-24T00:00:00+00:00")
+            skipped = library.import_path(self.source_dir)
+            paths_after_skip = {photo.path for photo in library.catalog.list_photos()}
+            included = library.import_path(self.source_dir, include_cleared=True)
+            paths_after_include = {photo.path for photo in library.catalog.list_photos()}
+            ledger = library.catalog.cleared_fingerprints()
+
+        self.assertEqual((2, 1, 1, 0), (skipped.discovered, skipped.imported, skipped.previously_cleared, skipped.failed))
+        self.assertNotIn(str(cleared.resolve()), paths_after_skip)
+        self.assertEqual((1, 1, 0), (included.imported, included.updated, included.previously_cleared))
+        self.assertIn(str(cleared.resolve()), paths_after_include)
+        self.assertIn(fingerprint, ledger)
+
+    def test_import_job_reports_previously_cleared_and_can_include_them(self):
+        cleared = self.source_dir / "a.jpg"
+        Image.new("RGB", (320, 240), (200, 40, 40)).save(cleared)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.catalog.record_cleared([library_module.fingerprint_file(cleared)], "2026-10-24T00:00:00+00:00")
+            status = self.run_job(library, library.start_import_job(self.source_dir))
+            rows = len(library.catalog.list_photos())
+            included = self.run_job(library, library.start_import_job(self.source_dir, include_cleared=True))
+
+        self.assertEqual({"discovered": 2, "imported": 1, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 1},
+                         status["result"])
+        self.assertEqual(1, rows)
+        self.assertEqual({"discovered": 2, "imported": 1, "updated": 0, "skipped": 1, "failed": 0, "previously_cleared": 0},
+                         included["result"])
+
     def test_import_job_skips_cataloged_matching_photos_without_preview_work(self):
         second = self.source_dir / "DSC0002.jpg"
         Image.new("RGB", (320, 240), (20, 20, 20)).save(second)
@@ -1606,7 +1639,7 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("import", status["kind"])
         self.assertEqual([added.resolve()], [call.args[1] for call in preview.call_args_list])
         self.assertEqual(1, measure.call_count)
-        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 2, "failed": 0}, status["result"])
+        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 2, "failed": 0, "previously_cleared": 0}, status["result"])
         self.assertEqual((3, 3), (status["processed"], status["total"]))
         self.assertEqual(3, len(photos))
         self.assertEqual(events_before, events_after)
@@ -1668,7 +1701,7 @@ class LibraryTests(unittest.TestCase):
             photo_count = library.photo_count()
 
         self.assertEqual("succeeded", status["status"])
-        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 1, "failed": 1}, status["result"])
+        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 1, "failed": 1, "previously_cleared": 0}, status["result"])
         self.assertEqual(prior, changed.fingerprint, "the row keeps its prior identity, never mismatched content")
         self.assertEqual("import_failed", failure.kind)
         self.assertIn("source changed during import", failure.details["error"])
@@ -1768,7 +1801,7 @@ class LibraryTests(unittest.TestCase):
             paths = [photo.path for photo in library.catalog.list_photos()]
 
         self.assertEqual("succeeded", status["status"])
-        self.assertEqual({"discovered": 3, "imported": 2, "updated": 0, "skipped": 1, "failed": 0}, status["result"])
+        self.assertEqual({"discovered": 3, "imported": 2, "updated": 0, "skipped": 1, "failed": 0, "previously_cleared": 0}, status["result"])
         self.assertEqual(3, len(paths))
         self.assertEqual(len(paths), len(set(paths)))
 

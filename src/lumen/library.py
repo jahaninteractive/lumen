@@ -90,6 +90,7 @@ class ImportSummary:
     failed: int = 0
     errors: list[str] = field(default_factory=list)
     skipped: int = 0
+    previously_cleared: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +188,7 @@ class Library:
                     fcntl.flock(handle, fcntl.LOCK_UN)
 
     @_coordinated
-    def import_path(self, requested: Path) -> ImportSummary:
+    def import_path(self, requested: Path, *, include_cleared: bool = False) -> ImportSummary:
         requested = requested.expanduser().resolve()
         summary = ImportSummary()
         if not requested.exists():
@@ -200,13 +201,15 @@ class Library:
             summary.errors.append(f"Unsupported image type: {requested.name}")
             return summary
         summary.discovered = len(candidates)
+        cleared = set() if include_cleared else self.catalog.cleared_fingerprints()
         for source in candidates:
-            self._import_candidate(source, summary)
+            self._import_candidate(source, summary, cleared=cleared)
         self._regroup_and_write_sidecars()
         return summary
 
     def _import_candidate(self, source: Path, summary: ImportSummary, *, skip_unchanged: bool = False,
-                          job_id: int | None = None) -> None:
+                          job_id: int | None = None, cleared: set[str] | frozenset[str] = frozenset()) -> None:
+        """Import one candidate; `cleared` holds ledger fingerprints to skip for frames not already at this path."""
         previous = self.catalog.photo_by_path(str(source))
         try:
             fingerprint = fingerprint_file(source)
@@ -221,6 +224,9 @@ class Library:
                     metrics.dhash = difference_hash(Path(previous.preview_path))
                     self.catalog.save_metrics(previous.id, metrics)  # total_score is kept by save_metrics.
                 summary.skipped += 1
+                return
+            if previous is None and fingerprint in cleared:
+                summary.previously_cleared += 1
                 return
             self._import_one(source, fingerprint, job_id=job_id)
             if previous:
@@ -238,7 +244,7 @@ class Library:
                 pass
             self.catalog.append_event(failed_photo.id if failed_photo else None, "import_failed", details)
 
-    def start_import_job(self, requested: Path) -> Job:
+    def start_import_job(self, requested: Path, *, include_cleared: bool = False) -> Job:
         requested = requested.expanduser().resolve()
         if not requested.exists():
             raise ValueError(f"Path does not exist: {requested}")
@@ -252,18 +258,20 @@ class Library:
             with Library(self.settings, job_runner=runner) as worker:
                 candidates = worker._candidates(requested)
                 summary = ImportSummary(discovered=len(candidates))
+                cleared = set() if include_cleared else worker.catalog.cleared_fingerprints()
                 for index, source in enumerate(candidates, 1):
                     if context.cancelled:
                         break
                     with worker._mutation():
-                        worker._import_candidate(source, summary, skip_unchanged=True, job_id=job.id)
+                        worker._import_candidate(source, summary, skip_unchanged=True, job_id=job.id, cleared=cleared)
                     for error in summary.errors:
                         worker._log_job(job, error)
                     summary.errors.clear()
                     context.update_progress(index / len(candidates), label=source.name[:200], processed=index, total=len(candidates))
                 with worker._mutation():
                     worker._regroup_and_write_sidecars()
-                counts = {key: getattr(summary, key) for key in ("discovered", "imported", "updated", "skipped", "failed")}
+                counts = {key: getattr(summary, key) for key in (
+                    "discovered", "imported", "updated", "skipped", "failed", "previously_cleared")}
                 worker._write_job_files(job.id, {"kind": "import", "path": str(requested), "summary": counts})
 
         self._submit_job(runner, job, work)

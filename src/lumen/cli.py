@@ -27,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     importer = commands.add_parser("import", help="import a file or folder without changing originals")
     importer.add_argument("path", type=Path)
+    importer.add_argument("--include-cleared", action="store_true", help="also import frames cleared in earlier sessions")
     importer.add_argument("--json", action="store_true")
 
     ingester = commands.add_parser("ingest", help="copy a card to verified destinations, then import the primary copies")
@@ -223,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                         job = library.start_refine_job(group_id=args.group, all_photos=args.all,
                                                        filters=filters if filtered else None)
                     elif args.command == "import":
-                        job = library.start_import_job(args.path)
+                        job = library.start_import_job(args.path, include_cleared=args.include_cleared)
                     elif args.command == "review-rejects":
                         job = library.start_reject_review_job(library.tagger_for("fast"),
                                                               scope="all" if args.all else "keepers")

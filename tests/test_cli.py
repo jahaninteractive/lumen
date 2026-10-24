@@ -16,6 +16,7 @@ from lumen.diagnostics import doctor_report
 from lumen.library import Library
 from lumen.omlx import AstroTriage, BurstCritique, Caption
 from lumen.pipelines import DarktablePipeline, PipelineResult
+from lumen.previews import fingerprint_file
 from lumen.tools import ToolStatus
 
 try:
@@ -110,6 +111,20 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(2, code)
                     self.assertEqual({"error": "the catalog is in use by lumen serve: stop the server or use the web page"}, payload)
 
+    def test_import_include_cleared_flag_imports_ledger_frames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / "Card"
+            folder.mkdir()
+            Image.new("RGB", (60, 40), (90, 20, 20)).save(folder / "DSC0001.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.catalog.record_cleared([fingerprint_file(folder / "DSC0001.jpg")], "2026-10-24T00:00:00+00:00")
+            _, skipped = self.run_json(root / "library", "import", str(folder))
+            code, included = self.run_json(root / "library", "import", str(folder), "--include-cleared")
+
+        self.assertEqual((0, 1), (skipped["result"]["imported"], skipped["result"]["previously_cleared"]))
+        self.assertEqual((0, 1, 0), (code, included["result"]["imported"], included["result"]["previously_cleared"]))
+
     def test_import_waits_for_job_and_reports_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -122,7 +137,7 @@ class CliTests(unittest.TestCase):
             missing_code, missing = self.run_json(root / "library", "import", str(root / "missing"))
 
         self.assertEqual((0, "succeeded", "import"), (code, first["status"], first["kind"]))
-        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0}, first["result"])
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 0}, first["result"])
         self.assertEqual((2, 2), (first["processed"], first["total"]))
         self.assertEqual((0, 2), (again_code, again["result"]["skipped"]))
         self.assertEqual(2, missing_code)
