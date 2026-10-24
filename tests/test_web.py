@@ -876,7 +876,7 @@ class WebTests(unittest.TestCase):
             requests.append(("POST", "/api/photos/1/crop", {"candidate_id": candidate["id"]}, "crop could not be selected for this photo"))
             requests.append(("POST", "/api/photos/1/composition-review", {}, "local composition review is unavailable for this photo"))
             for method, path, body, message in requests:
-                with self.subTest(path=path):
+                with self.subTest(path=path), patch("lumen.library.get_server_status", return_value=REVIEW_LOADED):
                     if method == "POST":
                         code, payload = self.post_json(path, body)
                     else:

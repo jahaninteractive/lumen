@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 from PIL import Image, ImageOps
 
@@ -229,3 +230,16 @@ def thumbnail_for(preview: Path, cache_dir: Path) -> Path:
             image.save(temporary, "JPEG", quality=82)
     Path(temporary.name).replace(target)
     return target
+
+
+def prune_thumbnails(cache_dir: Path, previews: Iterable[Path]) -> int:
+    """Remove every cached thumbnail that no existing preview would name; returns the count removed."""
+    if not cache_dir.is_dir():
+        return 0
+    live = {f"{preview.stem}-{preview.stat().st_mtime_ns}.jpg" for preview in previews if preview.is_file()}
+    removed = 0
+    for thumb in cache_dir.glob("*.jpg"):
+        if thumb.name not in live:
+            thumb.unlink(missing_ok=True)
+            removed += 1
+    return removed

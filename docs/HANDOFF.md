@@ -1,8 +1,19 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-24 (Africa/Johannesburg) — keepers export runs as a job with a progress modal (uncommitted on `main`)
+Last updated: 2026-10-24 (Africa/Johannesburg) — workflow round complete on branch `workflow-round` (not yet merged)
 
 ## Resume here
+
+**Workflow round (branch `workflow-round`, not yet merged to `main`).** Spec `docs/superpowers/specs/2026-10-24-workflow-round-design.md`. Shipped:
+- Learned-keyword panel in the Review tab with Forget; a confirmed species is learned as wildlife.
+- Near-duplicate clusters inside time bursts (`metrics.dhash`, `LUMEN_NEAR_DUP_DISTANCE` default 12, 0 off; missing hashes backfilled on reimport).
+- Reload resumes the last inspected frame (`lumen-selected`, first page load only).
+- Loupe filmstrip with `[` / `]`.
+- Search expansion (`POST /api/search/expand`, fast model) and `|` OR terms in the text filter.
+- Astro recipes: tracked (default) or untracked wide-field (`--recipe`).
+- Web export preset (1600 px, q82, no GPS) with optional watermark; remembered as `lumen-export-preset` / `lumen-watermark`.
+- Thumbnail pruning: `previews.prune_thumbnails` runs after remove/clear and at the end of a refine job (`thumbnails pruned: N` in the job log).
+- `ffmpeg` probe removed from `doctor_report` (its ~3.5 s first launch timed out `/api/status` in the suite).
 
 **Incident 3 (2026-10-24 ~12:10 local): `lumen serve --open` listened but answered nothing, not even `/`.** Two fresh servers in a row accepted TCP connections and never replied; `sample` showed the main thread in `os.waitpid` with a child `(osascript)` stuck in state `E` (exiting). Python 3.14's `webbrowser.open` on macOS runs `osascript` and waits for it, so the server never reached `serve_forever`. A scratch server without `--open` answered at once. Fix in `cli.py`: the browser is opened with a fire-and-forget `subprocess.Popen(["/usr/bin/open", url])` (the same tool the Finder reveal uses); `webbrowser` is no longer imported. Verified: a scratch server with `--open` answers `/` in 2 ms. Rule: if the page hangs with a listening port, `sample <pid> 1` and look for `waitpid`.
 

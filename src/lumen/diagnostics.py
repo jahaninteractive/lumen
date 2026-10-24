@@ -16,7 +16,6 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         "exiftool": ("-ver",),
         "darktable-cli": ("--version",),
         "siril-cli": ("--version",),
-        "ffmpeg": ("-version",),
         "swiftc": ("--version",),
     }
     tools = {}

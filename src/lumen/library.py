@@ -31,7 +31,8 @@ from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxErro
 from .pipelines import EXPORT_PRESETS, PipelineRegistry, validate_watermark
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
-from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
+from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_thumbnails, read_image_dimensions,
+                       read_metadata)
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
 from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywords, load_blocked, load_vocabulary, match_keywords
@@ -556,6 +557,7 @@ class Library:
                     for photo in refined:
                         if photo.group_id is None:
                             worker._write_sidecar(photo.id)
+                    worker._log_job(job, f"thumbnails pruned: {worker._prune_thumbnails()}")
                 worker._write_job_files(job.id, manifest | {"summary": counts})
 
         self._submit_job(runner, job, work)
@@ -1142,7 +1144,16 @@ class Library:
             if failures:
                 raise BaseExceptionGroup(f"cleanup failed; recovery files remain in {trash}", [error, *failures]) from error
             raise
+        self._prune_thumbnails()
         return CleanupResult(len(photo_ids), len(moves), trash, snapshot)
+
+    def _prune_thumbnails(self) -> int:
+        """Best effort: thumbnails are a cache, so a failed unlink never fails the caller."""
+        try:
+            return prune_thumbnails(self.settings.cache_dir / "thumbs",
+                                    {Path(photo.preview_path) for photo in self.catalog.list_photos() if photo.preview_path})
+        except OSError:
+            return 0
 
     def _prepare_export(self, request: ExportRequest) -> tuple[list[Photo], object]:
         """Validate every selector and the renderer before any photo is touched."""

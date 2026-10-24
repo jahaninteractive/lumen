@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
+from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_thumbnails, read_image_dimensions, read_metadata, thumbnail_for
 
 
 def write_fake_darktable(directory: Path, sharp: tuple[str, ...] = ()) -> str:
@@ -221,6 +221,21 @@ class PreviewTests(unittest.TestCase):
                     ExifToolPreviewProvider().create_refined_preview(source, root / "previews" / "ghi-2048.jpg",
                                                                      darktable=darktable, runner=runner)
             self.assertEqual([destination], list(destination.parent.iterdir()))
+
+    def test_prune_thumbnails_keeps_only_live_thumbs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "thumbs"
+            previews = [root / "a.jpg", root / "b.jpg"]
+            for preview in previews:
+                Image.new("RGB", (40, 30), "red").save(preview)
+            live = [thumbnail_for(preview, cache) for preview in previews]
+            (cache / "a-1.jpg").write_bytes(b"stale mtime")
+            (cache / "gone-5.jpg").write_bytes(b"deleted preview")
+
+            self.assertEqual(2, prune_thumbnails(cache, previews))
+            self.assertEqual(sorted(live), sorted(cache.iterdir()))
+            self.assertEqual(0, prune_thumbnails(root / "missing", previews))
 
 
 if __name__ == "__main__":

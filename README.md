@@ -162,10 +162,19 @@ In the contact sheet, with a frame focused (**Shortcuts** lists these):
 - `C` marks or unmarks a frame for compare (two at most); **Compare marked** opens
   both at 100 percent with panes that pan together.
 - `Enter` opens the loupe at 100 percent; `Esc` closes compare or loupe.
+- In the loupe, `[` and `]` step to the previous or next frame along the
+  filmstrip.
 
 The **Tile size** select (Small/Medium/Large) is remembered by the browser, as
 is the chosen tab. The left rail opens only the selected burst's day; days you
-open by hand stay open across reloads.
+open by hand stay open across reloads, and a reload re-selects the last frame
+you inspected.
+
+A time burst is split further into near-duplicate clusters, each with its own
+best pick, when a frame's difference hash is more than 12 bits from its
+cluster's first frame. Set `LUMEN_NEAR_DUP_DISTANCE` to tune the threshold, or
+to `0` to keep whole bursts together; frames imported earlier are hashed on
+their next reimport.
 
 Culling keeps working while an import or ingest runs. It pauses while tagging,
 preview refinement, or a stack runs.
@@ -176,7 +185,10 @@ The filter bar narrows the sheet by date range, camera, decision, minimum
 rating, keepers only, tagged only, and tag text; rejected frames are hidden
 unless **Show rejected** is ticked. Filters live in the page URL, so a reload or
 bookmark keeps them. Frames are grouped by capture day and shown 200 at a time;
-the button after the last frame shows the next page. `groups` and `refine-previews` take the same
+the button after the last frame shows the next page. Separate tag-text terms
+with `|` to match any of them (`heron | egret`). **Expand with local AI** asks
+the fast model for related keywords and fills the text filter with them as `|`
+terms. `groups` and `refine-previews` take the same
 filters:
 
 ```sh
@@ -215,7 +227,10 @@ packaged starter and then yours to edit; confident model words are added back
 to it so the vocabulary grows with your shoots. In the UI the **Export** tab has
 **Tag keepers with local AI** and, below it, **Tag all untagged** with a
 **Re-tag already tagged** toggle. The inspector offers **Add local AI tags** for
-one frame, with suggested keywords you can add or remove.
+one frame, with suggested keywords you can add or remove; adding a suggested
+species teaches it to the vocabulary as wildlife. The **Learned keywords**
+panel in the **Review** tab lists the words the models added, and **Forget**
+removes a word from every frame and stops it being learned again.
 
 Run the whole assist in one job (tags, problem scan, caption; finished work is
 skipped, a failing step is logged and the next still runs):
@@ -281,9 +296,11 @@ or **All keepers**. A keeper is any frame that is not rejected and is either
 flagged or the best frame in its burst, so a single frame stays a keeper unless
 you reject it. Pick a preset: **Full resolution** exports at full available
 resolution, quality 92, sRGB; **Share** resizes to a 2048 px long edge at
-quality 85. Capture time, camera/lens details, copyright, ratings,
-descriptions, and keywords are retained when available. Full keeps GPS
-location; Share drops it.
+quality 85; **Web** resizes to a 1600 px long edge at quality 82. Capture
+time, camera/lens details, copyright, ratings, descriptions, and keywords are
+retained when available. Full keeps GPS location; Share and Web drop it.
+**Watermark text** (optional, up to 80 characters) is drawn bottom-right. The
+browser remembers the preset and the watermark.
 
 **Choose XMP…** opens the macOS file picker for an existing `.xmp` processing
 profile. The browser remembers your explicit selection for the next export.
@@ -306,6 +323,7 @@ Equivalent CLI commands:
 uv run lumen export --photo 42 --profile "/path/to/sony-high-iso.xmp" --json
 uv run lumen export --keepers --json
 uv run lumen export --keepers --preset share --json
+uv run lumen export --keepers --preset web --watermark "© Your Name" --json
 ```
 
 If `darktable-cli` is unavailable, the Export panel explains why and disables
@@ -349,14 +367,18 @@ working directory.
    warning but never block the stack (Siril 1.4 cannot build a sequence from one
    frame). Warnings always start with the word *Warning*, so they do not rely on
    colour.
-3. Tick the confirmation checkbox, then **Prepare stack**. The panel shows the
+3. Choose a **Recipe**: **Tracked** (global star alignment, the default) or
+   **Untracked wide-field** (two-pass alignment that keeps only the area common
+   to every frame, for untracked tripod shots). The CLI takes
+   `--recipe tracked|untracked`.
+4. Tick the confirmation checkbox, then **Prepare stack**. The panel shows the
    job number, counts of lights, excluded lights, and calibration frames, the
    warnings, and the managed manifest and log paths. Nothing runs yet.
-4. **Run stack** starts Siril. One heavy job runs at a time; a second run
+5. **Run stack** starts Siril. One heavy job runs at a time; a second run
    returns a clear conflict. Progress is announced and polled only while the job
    is queued or running. **Cancel stack** stops only this job's Siril process and
    can never produce a result.
-5. On success the panel shows `result.tif` (16-bit RGB, star-aligned, sigma
+6. On success the panel shows `result.tif` (16-bit RGB, star-aligned, sigma
    rejection, `-rgb_equal`), and **Show job folder in Finder** opens that job's
    folder. Provenance (`astro_stacked`) is recorded for every light and in each
    light's sidecar.

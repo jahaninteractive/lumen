@@ -1416,6 +1416,23 @@ class LibraryTests(unittest.TestCase):
         with patch("lumen.library.find_tool", return_value=darktable):
             return self.run_job(library, library.start_refine_job(**selector))
 
+    def test_remove_group_and_refine_prune_stale_thumbnails(self):
+        from lumen.previews import thumbnail_for
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate, worst), single = self.import_burst(library, (118, 70, 30))
+            cache = library.settings.cache_dir / "thumbs"
+            thumb = lambda photo_id: thumbnail_for(Path(library.catalog.get_photo(photo_id).preview_path), cache)
+            embedded = {photo_id: thumb(photo_id) for photo_id in (best, alternate, worst, single)}
+
+            status = self.refine(library, group_id=self.group_of(library, best)["id"])
+
+            self.assertIn("thumbnails pruned: 3", Path(library.catalog.get_job(status["job_id"]).log_path).read_text())
+            self.assertFalse(any(embedded[photo_id].exists() for photo_id in (best, alternate, worst)))
+            refined = thumb(best)
+            library.remove_group(self.group_of(library, single)["id"])
+            self.assertFalse(embedded[single].exists(), "the removed photo's thumbnail goes with it")
+            self.assertTrue(refined.is_file(), "a live refined thumbnail survives")
+
     def test_refine_job_changes_sharpness_reranks_group_and_keeps_pick_decision_and_rating(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
             (best, alternate, worst), single = self.import_burst(library, (118, 70, 30))
