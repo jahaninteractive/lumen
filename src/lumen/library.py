@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, measure_image
+from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, difference_hash, measure_image
 from .catalog import Catalog, GroupFilters
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
@@ -214,6 +214,10 @@ class Library:
                     fix = read_metadata(source)
                     if fix["latitude"] is not None:
                         self.catalog.update_location(previous.id, latitude=fix["latitude"], longitude=fix["longitude"], altitude=fix["altitude"])
+                metrics = self.catalog.get_metrics(previous.id)
+                if metrics and metrics.dhash is None:  # ponytail: one preview decode per unhashed photo, every import, until hashed
+                    metrics.dhash = difference_hash(Path(previous.preview_path))
+                    self.catalog.save_metrics(previous.id, metrics)  # total_score is kept by save_metrics.
                 summary.skipped += 1
                 return
             self._import_one(source, fingerprint, job_id=job_id)

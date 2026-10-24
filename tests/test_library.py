@@ -1133,6 +1133,22 @@ class LibraryTests(unittest.TestCase):
             self.assertTrue(library.catalog.get_photo(other).manual_pick)
             self.assertEqual("flag", library.catalog.get_photo(ids[2]).decision)
 
+    def test_unchanged_reimport_backfills_missing_hashes_and_splits_the_burst(self):
+        paths = self.write_scene_change_burst()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            ids = {library.catalog.photo_by_path(str(path)).id for path in paths}
+            members = lambda: [group for group in library.list_groups() if {photo["id"] for photo in group["photos"]} & ids]
+            library.catalog.connection.execute("UPDATE metrics SET dhash = NULL")
+            library.catalog.connection.commit()
+            library._regroup_and_write_sidecars()
+            self.assertEqual(1, len(members()), "a burst without hashes stays whole")
+
+            library.wait_for_job(library.start_import_job(self.source_dir).id)  # every file is unchanged and skipped
+            hashes = [row[0] for row in library.catalog.connection.execute("SELECT dhash FROM metrics")]
+            self.assertTrue(hashes and all(isinstance(value, str) and len(value) == 16 for value in hashes), hashes)
+            self.assertEqual(2, len(members()))
+
     def test_near_duplicate_distance_zero_keeps_the_time_burst_whole(self):
         paths = self.write_scene_change_burst()
         with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
