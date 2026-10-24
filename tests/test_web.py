@@ -1302,6 +1302,7 @@ let refinePolls = 0;
 const refineJob = (status, progress, extra = {}) => ({ job_id: 13, kind: 'refine_previews', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 let groupLoads = 0;
 let lastGroupsUrl = null;
+const photoDetailRequests = [];
 let keeperOverride = null;
 let groupsError = null;
 let resumeJobs = [];
@@ -1435,7 +1436,7 @@ async function fetch(url, options = {}) {
     captionPosts.push({ url, body });
     payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
   }
-  else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
+  else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
     photo: scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
       : scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
@@ -2370,6 +2371,26 @@ const regression = `
     assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true');
     return;
   }
+  if (scenario === 'resume') {
+    const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
+    groups = [group(1, [...range(1000, 249), 2]), group(2, [1, 3])];  // photo 2 is the 250th frame, past the first page
+    stored['lumen-selected'] = '2';
+    await load();
+    assert.equal(state.selectedId, 2, 'a reload re-selects the last inspected frame');
+    assert.ok(state.shown >= 250, 'the page grows to include the remembered frame');
+    const card = document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === 2);
+    assert.equal(card.getAttribute('aria-pressed'), 'true');
+    assert.equal(card.getAttribute('tabindex'), '0');
+    assert.ok(photoDetailRequests.includes('/api/photos/2'));
+    await inspect(state.groups[1].photos[1]);
+    assert.equal(stored['lumen-selected'], '3', 'inspecting remembers the frame');
+    state.selectedId = null;
+    stored['lumen-selected'] = '99';
+    await load();
+    assert.equal(state.selectedId, null);
+    assert.equal(stored['lumen-selected'], undefined, 'a frame that is gone is forgotten');
+    return;
+  }
   if (scenario === 'astro-resume') {
     await load();
     assert.equal(state.astro.job.status, 'running', 'a remembered job is refetched on load');
@@ -2921,6 +2942,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_filters_write_url_group_days_and_page_frames(self):
         self.run_javascript_cleanup_regression("filters")
+
+    def test_javascript_reload_resumes_last_selected_frame(self):
+        self.run_javascript_cleanup_regression("resume")
 
     def test_javascript_find_input_filters_and_inspector_shows_match_reasons(self):
         self.run_javascript_cleanup_regression("find")

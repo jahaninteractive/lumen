@@ -488,6 +488,7 @@ async function inspect(photo) {
     document.querySelector('#composition-advice').textContent = '';
   }
   state.selectedId = photo.id;
+  try { localStorage.setItem('lumen-selected', String(photo.id)); } catch { /* per-visit only */ }
   state.selectedGroupId = state.groups.find(group => group.photos.some(item => item.id === photo.id))?.id ?? null;
   updateWorkflow();
   const compositionLoad = document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true' ? loadComposition() : null;
@@ -1146,6 +1147,22 @@ async function load() {
     : `${status.omlx_live?.summary || 'Status unavailable'} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
+  if (state.selectedId === null) {  // a fresh page resumes the frame inspected before the reload
+    let remembered = null;
+    try { remembered = localStorage.getItem('lumen-selected'); } catch { /* per-visit only */ }
+    const photos = pagedPhotos();
+    const index = remembered === null ? -1 : photos.findIndex(([photo]) => String(photo.id) === remembered);
+    if (index >= 0) {
+      const [photo, group] = photos[index];
+      state.shown = Math.max(state.shown, Math.ceil((index + 1) / PAGE) * PAGE);
+      state.selectedGroupId = group.id;  // so the rebuilt rail opens this frame's day
+      renderGroups();
+      await inspect(photo);
+      focusFrame(photo.id);
+    } else if (remembered !== null) {
+      try { localStorage.removeItem('lumen-selected'); } catch { /* per-visit only */ }
+    }
+  }
   if (!state.astro.job) {
     let remembered = null;
     try { remembered = localStorage.getItem('lumen-astro-job'); } catch { /* per-visit only */ }
