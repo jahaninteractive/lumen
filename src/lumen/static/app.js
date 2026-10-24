@@ -1124,6 +1124,7 @@ async function applyFilters(query = filterQuery()) {
   announceShowing();
 }
 
+let resumed = false;
 async function load() {
   const [status, groups] = await Promise.all([request('/api/status'), request(`/api/groups${location.search}`)]);
   state.status = status;
@@ -1147,7 +1148,8 @@ async function load() {
     : `${status.omlx_live?.summary || 'Status unavailable'} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
-  if (state.selectedId === null) {  // a fresh page resumes the frame inspected before the reload
+  if (!resumed && state.selectedId === null) {  // only a fresh page resumes the frame inspected before the reload
+    resumed = true;  // later loads (filters, jobs, cleanup) must not steal focus
     let remembered = null;
     try { remembered = localStorage.getItem('lumen-selected'); } catch { /* per-visit only */ }
     const photos = pagedPhotos();

@@ -1273,6 +1273,11 @@ const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
 let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
+if (scenario.startsWith('resume')) {  // seeded before the startup load, which is the only one that resumes
+  const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
+  groups = [group(1, [...range(1000, 249), 2]), group(2, [1, 3])];  // photo 2 is the 250th frame, past the first page
+  stored['lumen-selected'] = scenario === 'resume' ? '2' : '99';
+}
 const triageRequests = [];
 const triagePayload = () => ({ group_id: 1, astro_cue: scenario === 'astro-triage', lights: [1, 2, 3].map(id => ({
   photo_id: id, name: 'photo-' + id + '.jpg', sky: { class: id === 2 ? 'cloud' : 'night_sky', confidence: 0.91 }, confidence: 0.91,
@@ -2372,23 +2377,24 @@ const regression = `
     return;
   }
   if (scenario === 'resume') {
-    const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
-    groups = [group(1, [...range(1000, 249), 2]), group(2, [1, 3])];  // photo 2 is the 250th frame, past the first page
-    stored['lumen-selected'] = '2';
-    await load();
     assert.equal(state.selectedId, 2, 'a reload re-selects the last inspected frame');
     assert.ok(state.shown >= 250, 'the page grows to include the remembered frame');
     const card = document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === 2);
     assert.equal(card.getAttribute('aria-pressed'), 'true');
     assert.equal(card.getAttribute('tabindex'), '0');
-    assert.ok(photoDetailRequests.includes('/api/photos/2'));
+    assert.deepEqual(photoDetailRequests, ['/api/photos/2']);
+    state.selectedId = null;  // as selectGroup does; a later load (filter, job, cleanup) must not resume again
+    await load();
+    assert.equal(state.selectedId, null, 'only the first load of a page resumes');
+    assert.deepEqual(photoDetailRequests, ['/api/photos/2']);
     await inspect(state.groups[1].photos[1]);
     assert.equal(stored['lumen-selected'], '3', 'inspecting remembers the frame');
-    state.selectedId = null;
-    stored['lumen-selected'] = '99';
-    await load();
+    return;
+  }
+  if (scenario === 'resume-gone') {
     assert.equal(state.selectedId, null);
     assert.equal(stored['lumen-selected'], undefined, 'a frame that is gone is forgotten');
+    assert.deepEqual(photoDetailRequests, []);
     return;
   }
   if (scenario === 'astro-resume') {
@@ -2945,6 +2951,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_reload_resumes_last_selected_frame(self):
         self.run_javascript_cleanup_regression("resume")
+
+    def test_javascript_reload_forgets_a_frame_that_is_gone(self):
+        self.run_javascript_cleanup_regression("resume-gone")
 
     def test_javascript_find_input_filters_and_inspector_shows_match_reasons(self):
         self.run_javascript_cleanup_regression("find")
