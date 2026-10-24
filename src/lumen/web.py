@@ -457,9 +457,14 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     preset = payload.get("preset", "full")
                     if not isinstance(preset, str) or preset not in EXPORT_PRESETS:
                         raise ValueError("preset must be full or share")
+                    profile_path = Path(profile) if profile is not None else None
+                    if scope == "keepers":  # Many renders: a background job with progress and cancel.
+                        with Library(settings, job_runner=self.server.job_runner()) as library:
+                            job = library.start_export_job(ExportRequest(tuple(library.keeper_ids()), profile_path, preset))
+                            self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                        return
                     with Library(settings) as library:
-                        photo_ids = (payload["photo_id"],) if scope == "current" else tuple(library.keeper_ids())
-                        results = library.export_jpegs(ExportRequest(photo_ids, Path(profile) if profile is not None else None, preset))
+                        results = library.export_jpegs(ExportRequest((payload["photo_id"],), profile_path, preset))
                     status = HTTPStatus.OK if all(result.success for result in results) else HTTPStatus.BAD_REQUEST
                     self._send_json({"results": [asdict(result) for result in results]}, status=status)
                     return

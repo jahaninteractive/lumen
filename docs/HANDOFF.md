@@ -1,8 +1,12 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-24 (Africa/Johannesburg) — UI volume review, local AI hardening, assist job, vocabulary learning (committed on `main`)
+Last updated: 2026-10-24 (Africa/Johannesburg) — keepers export runs as a job with a progress modal (uncommitted on `main`)
 
 ## Resume here
+
+**Incident 3 (2026-10-24 ~12:10 local): `lumen serve --open` listened but answered nothing, not even `/`.** Two fresh servers in a row accepted TCP connections and never replied; `sample` showed the main thread in `os.waitpid` with a child `(osascript)` stuck in state `E` (exiting). Python 3.14's `webbrowser.open` on macOS runs `osascript` and waits for it, so the server never reached `serve_forever`. A scratch server without `--open` answered at once. Fix in `cli.py`: the browser is opened with a fire-and-forget `subprocess.Popen(["/usr/bin/open", url])` (the same tool the Finder reveal uses); `webbrowser` is no longer imported. Verified: a scratch server with `--open` answers `/` in 2 ms. Rule: if the page hangs with a listening port, `sample <pid> 1` and look for `waitpid`.
+
+**Keepers export as a job with a progress modal (2026-10-24, suite 467, `node --check` OK; needs a `lumen serve` restart).** `POST /api/export {scope: "keepers"}` now returns 202 and a job of kind `export` (`Library.start_export_job(ExportRequest)`), validated up front by `_prepare_export` (no job row on a bad request; `export_jpegs` keeps `@_coordinated` and is now `_prepare_export` + `_export_one` per photo). The worker exports one photo per `_mutation()`, counts `exported / failed / skipped` (skipped = removed since the job started), logs each failure as `<basename>: <message>` into the job log (surfaces as `log_tail`), and honours cancel between photos; finished JPEGs are kept. `scope: "current"` and the CLI `lumen export` stay synchronous and return `results`. UI: `dialog#export-dialog` opens when the job is accepted (label `N of M · name`, progress bar, status, **Cancel export**; on a terminal state the button becomes **Close**, `#export-status` carries the summary and `#export-results` lists the failure lines). The job strip and the bottom status bar mirror the same text with `N of M · name` while running. Node scenarios `export` and `export-cancel`; web tests for keepers scope wait on the job and check artifacts in the catalog. Not browser-verified yet on a real library.
 
 **UI volume review + five layout/keyboard fixes (2026-10-23, uncommitted on `main`).** A 1001-frame / 225-burst synthetic library (Pillow JPEGs with EXIF bursts, imported in 77 s) was driven through the real UI with headless Chromium at 1512×982 and 1280×800. Fixed red-green (suite 443 passed, `node --check` OK, each re-verified in the browser):
 

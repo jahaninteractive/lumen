@@ -1128,8 +1128,8 @@ class Library:
             raise
         return CleanupResult(len(photo_ids), len(moves), trash, snapshot)
 
-    @_coordinated
-    def export_jpegs(self, request: ExportRequest) -> list[ExportResult]:
+    def _prepare_export(self, request: ExportRequest) -> tuple[list[Photo], object]:
+        """Validate every selector and the renderer before any photo is touched."""
         if not request.photo_ids or len(set(request.photo_ids)) != len(request.photo_ids):
             raise ValueError("export requires unique photo IDs")
         photos = []
@@ -1143,80 +1143,114 @@ class Library:
             raise ValueError(f"unknown export preset: {request.preset!r}")
         if not self.settings.jpeg_output_dir.resolve().is_relative_to(self.settings.library_dir.resolve()):
             raise ValueError("JPEG output must stay inside the managed library")
-        pipeline = PipelineRegistry().darktable(self.settings.output_dir)
-        results = []
-        for photo in photos:
-            rendered = None
-            artifact = None
-            try:
-                tags = self.catalog.get_tags(photo.id)
-                data = tags["data"] if tags else {}
-                if fingerprint_file(Path(photo.path)) != photo.fingerprint:
-                    raise ValueError("source content changed since import; reimport before exporting")
-                # A raw darktable cannot decode goes through macOS's decoder instead; provenance records which one rendered.
-                decoder = "macos" if self._import_warnings(self.catalog.events_for(photo.id)) else "darktable"
-                edit = self.catalog.get_crop(photo.id)
-                crop = None
-                if edit is not None:
-                    source_width, source_height = read_image_dimensions(Path(photo.path))
-                    if (source_width, source_height) != (edit.source_width, edit.source_height):
-                        raise ValueError("source dimensions changed since the crop was selected; choose a new crop")
-                    crop = {
-                        "left": edit.rect.left, "top": edit.rect.top,
-                        "width": edit.rect.width, "height": edit.rect.height,
-                        "photo_id": photo.id, "candidate_id": edit.candidate_id,
-                        "aspect": edit.aspect, "source_width": edit.source_width,
-                        "source_height": edit.source_height, "source_fingerprint": photo.fingerprint,
-                        "author": edit.author, "rationale": edit.rationale,
-                        "selected_at": edit.selected_at.isoformat(),
-                    }
-                share = request.preset == "share"  # Full keeps the photographer's description and no alt text.
-                caption = data.get("caption")
-                caption_used = share and bool(caption)
-                rendered = pipeline.export_jpeg(Path(photo.path), request.profile,
-                    crop=crop,
-                    description=caption if caption_used else data.get("description"),
-                    keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
-                    rating=-1 if photo.decision == "reject" else photo.rating,
-                    reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
-                    preset=request.preset, decoder=decoder)
-                if not rendered.success:
-                    results.append(ExportResult(photo.id, False, None, rendered.message))
-                    continue
-                artifact = self.catalog.save_artifact(photo.id, Path(photo.path).name,
-                    rendered.settings["source_fingerprint"], "jpeg", str(rendered.output),
-                    rendered.settings, rendered.output_fingerprint)
-                self.catalog.append_event(photo.id, "exported", {
-                    **rendered.settings, "artifact_id": artifact.id, "output": artifact.path,
-                    "output_fingerprint": artifact.output_fingerprint,
-                    "created_at": artifact.created_at.isoformat(),
-                })
-                self._write_sidecar(photo.id)
-                results.append(ExportResult(photo.id, True, rendered.output, rendered.message, artifact))
-            except Exception as error:
-                errors = [str(error)]
-                if rendered is not None and rendered.success:
-                    try:
-                        if artifact is not None:
-                            self.catalog.discard_export(artifact.id)
+        return photos, PipelineRegistry().darktable(self.settings.output_dir)
+
+    @_coordinated
+    def export_jpegs(self, request: ExportRequest) -> list[ExportResult]:
+        photos, pipeline = self._prepare_export(request)
+        return [self._export_one(photo, request, pipeline) for photo in photos]
+
+    def start_export_job(self, request: ExportRequest) -> Job:
+        """Export in the background with progress and cancel; failures are counted and logged by basename."""
+        self._prepare_export(request)
+        manifest = {"kind": "export", "preset": request.preset, "profile": str(request.profile) if request.profile else None,
+                    "photo_ids": list(request.photo_ids)}
+        runner = self.job_runner
+        job = self.catalog.create_prepared_job("export", lambda job_id: self._write_job_files(job_id, manifest))
+
+        def work(context) -> None:
+            with Library(self.settings, job_runner=runner) as worker:
+                pipeline = PipelineRegistry().darktable(worker.settings.output_dir)
+                counts = {"exported": 0, "failed": 0, "skipped": 0}
+                for index, photo_id in enumerate(request.photo_ids, 1):
+                    if context.cancelled:
+                        break
+                    with worker._mutation():
+                        photo = worker.catalog.get_photo(photo_id)
+                        if photo is None:  # Removed since the job started: nothing to export.
+                            counts["skipped"] += 1
                         else:
-                            self.catalog.connection.rollback()
-                    except Exception as compensation_error:
-                        errors.append(f"catalog compensation failed: {compensation_error}")
-                    try:
-                        rendered.output.unlink(missing_ok=True)
-                    except Exception as compensation_error:
-                        errors.append(f"JPEG compensation failed ({rendered.output}): {compensation_error}")
-                    try:
-                        if self.catalog.get_photo(photo.id) is None:
-                            for path in self.sidecars.paths(photo):
-                                path.unlink(missing_ok=True)
-                        else:
-                            self._write_sidecar(photo.id)
-                    except Exception as compensation_error:
-                        errors.append(f"sidecar compensation failed: {compensation_error}")
-                results.append(ExportResult(photo.id, False, None, "; ".join(errors)))
-        return results
+                            result = worker._export_one(photo, request, pipeline)
+                            counts["exported" if result.success else "failed"] += 1
+                            if not result.success:
+                                worker._log_job(job, f"{Path(photo.path).name}: {result.message}")
+                    context.update_progress(index / len(request.photo_ids), label=Path(photo.path).name[:200] if photo else None,
+                                            processed=index, total=len(request.photo_ids))
+                worker._write_job_files(job.id, manifest | {"summary": counts})
+
+        self._submit_job(runner, job, work)
+        return job
+
+    def _export_one(self, photo: Photo, request: ExportRequest, pipeline) -> ExportResult:
+        rendered = None
+        artifact = None
+        try:
+            tags = self.catalog.get_tags(photo.id)
+            data = tags["data"] if tags else {}
+            if fingerprint_file(Path(photo.path)) != photo.fingerprint:
+                raise ValueError("source content changed since import; reimport before exporting")
+            # A raw darktable cannot decode goes through macOS's decoder instead; provenance records which one rendered.
+            decoder = "macos" if self._import_warnings(self.catalog.events_for(photo.id)) else "darktable"
+            edit = self.catalog.get_crop(photo.id)
+            crop = None
+            if edit is not None:
+                source_width, source_height = read_image_dimensions(Path(photo.path))
+                if (source_width, source_height) != (edit.source_width, edit.source_height):
+                    raise ValueError("source dimensions changed since the crop was selected; choose a new crop")
+                crop = {
+                    "left": edit.rect.left, "top": edit.rect.top,
+                    "width": edit.rect.width, "height": edit.rect.height,
+                    "photo_id": photo.id, "candidate_id": edit.candidate_id,
+                    "aspect": edit.aspect, "source_width": edit.source_width,
+                    "source_height": edit.source_height, "source_fingerprint": photo.fingerprint,
+                    "author": edit.author, "rationale": edit.rationale,
+                    "selected_at": edit.selected_at.isoformat(),
+                }
+            share = request.preset == "share"  # Full keeps the photographer's description and no alt text.
+            caption = data.get("caption")
+            caption_used = share and bool(caption)
+            rendered = pipeline.export_jpeg(Path(photo.path), request.profile,
+                crop=crop,
+                description=caption if caption_used else data.get("description"),
+                keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
+                rating=-1 if photo.decision == "reject" else photo.rating,
+                reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
+                preset=request.preset, decoder=decoder)
+            if not rendered.success:
+                return ExportResult(photo.id, False, None, rendered.message)
+            artifact = self.catalog.save_artifact(photo.id, Path(photo.path).name,
+                rendered.settings["source_fingerprint"], "jpeg", str(rendered.output),
+                rendered.settings, rendered.output_fingerprint)
+            self.catalog.append_event(photo.id, "exported", {
+                **rendered.settings, "artifact_id": artifact.id, "output": artifact.path,
+                "output_fingerprint": artifact.output_fingerprint,
+                "created_at": artifact.created_at.isoformat(),
+            })
+            self._write_sidecar(photo.id)
+            return ExportResult(photo.id, True, rendered.output, rendered.message, artifact)
+        except Exception as error:
+            errors = [str(error)]
+            if rendered is not None and rendered.success:
+                try:
+                    if artifact is not None:
+                        self.catalog.discard_export(artifact.id)
+                    else:
+                        self.catalog.connection.rollback()
+                except Exception as compensation_error:
+                    errors.append(f"catalog compensation failed: {compensation_error}")
+                try:
+                    rendered.output.unlink(missing_ok=True)
+                except Exception as compensation_error:
+                    errors.append(f"JPEG compensation failed ({rendered.output}): {compensation_error}")
+                try:
+                    if self.catalog.get_photo(photo.id) is None:
+                        for path in self.sidecars.paths(photo):
+                            path.unlink(missing_ok=True)
+                    else:
+                        self._write_sidecar(photo.id)
+                except Exception as compensation_error:
+                    errors.append(f"sidecar compensation failed: {compensation_error}")
+            return ExportResult(photo.id, False, None, "; ".join(errors))
 
     @_coordinated
     def prepare_astro_job(self, group_id: int, *, confirmed: bool, excluded_photo_ids: Sequence[int] = (),

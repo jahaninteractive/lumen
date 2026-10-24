@@ -329,6 +329,18 @@
     </form>
   </dialog>
 
+  <dialog id="export-dialog" aria-labelledby="export-dialog-heading">
+    <h2 id="export-dialog-heading">Exporting JPEGs</h2>
+    <p id="export-dialog-label">Starting…</p>
+    <progress id="export-dialog-progress" aria-labelledby="export-dialog-label" max="100" value="0"></progress>
+    <p id="export-dialog-status" role="status" aria-live="polite"></p>
+    <p class="quiet">Finished JPEGs are kept if you cancel. You can keep culling while this runs.</p>
+    <div class="button-row">
+      <button type="button" id="export-dialog-cancel" class="danger">Cancel export</button>
+      <button type="button" id="export-dialog-close" class="secondary" hidden>Close</button>
+    </div>
+  </dialog>
+
   <dialog id="shortcuts" aria-labelledby="shortcuts-heading">
     <form method="dialog">
       <h2 id="shortcuts-heading">Keyboard shortcuts</h2>

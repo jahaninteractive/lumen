@@ -349,12 +349,16 @@ class WebTests(unittest.TestCase):
             self.assertEqual(200, code, first)
             first_bytes = Path(first["results"][0]["output"]).read_bytes()
             code, second = self.post_json("/api/export", {"scope": "keepers", "profile": None})
-        self.assertEqual(200, code, second)
-        one, two = first["results"][0], second["results"][0]
+            self.assertEqual((202, "export"), (code, second["kind"]), second)
+            finished = self.wait_job(second["job_id"])
+        self.assertEqual(("succeeded", {"exported": 1, "failed": 0, "skipped": 0}), (finished["status"], finished["result"]))
+        self.assertNotIn(str(self.root), json.dumps(finished))
+        one = first["results"][0]
         self.assertEqual(1, one["photo_id"])
         self.assertTrue(one["success"])
         self.assertEqual("photo-lumen.jpg", Path(one["output"]).name)
-        self.assertEqual("photo-lumen-1.jpg", Path(two["output"]).name)
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertEqual(["photo-lumen.jpg", "photo-lumen-1.jpg"], [Path(artifact.path).name for artifact in library.catalog.list_artifacts()])
         self.assertEqual(first_bytes, Path(one["output"]).read_bytes())
         self.assertEqual(one["output"], one["artifact"]["path"])
         self.assertEqual(str(profile.resolve()), one["artifact"]["settings"]["profile"])
@@ -395,11 +399,13 @@ class WebTests(unittest.TestCase):
             code, share = self.post_json("/api/export", {"scope": "current", "photo_id": 1, "preset": "share"})
             self.assertEqual(200, code, share)
             code, full = self.post_json("/api/export", {"scope": "keepers", "preset": "full"})
-            self.assertEqual(200, code, full)
+            self.assertEqual(202, code, full)
+            self.assertEqual("succeeded", self.wait_job(full["job_id"])["status"])
         self.assertEqual("photo-lumen-share.jpg", Path(share["results"][0]["output"]).name)
         self.assertEqual("share", share["results"][0]["artifact"]["settings"]["preset"])
-        self.assertEqual("photo-lumen.jpg", Path(full["results"][0]["output"]).name)
-        self.assertEqual("full", full["results"][0]["artifact"]["settings"]["preset"])
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            full_artifact = library.catalog.list_artifacts()[-1]
+        self.assertEqual(("photo-lumen.jpg", "full"), (Path(full_artifact.path).name, full_artifact.settings["preset"]))
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
         parser.feed(html)
@@ -451,10 +457,16 @@ class WebTests(unittest.TestCase):
             "lumen.pipelines.subprocess.run", side_effect=render
         ):
             code, payload = self.post_json("/api/export", {"scope": "keepers", "profile": None})
-        self.assertEqual(400, code)
-        self.assertEqual([False, True], [item["success"] for item in payload["results"]])
-        self.assertIsNone(payload["results"][0]["artifact"])
-        self.assertTrue(Path(payload["results"][1]["output"]).is_file())
+            self.assertEqual(202, code, payload)
+            finished = self.wait_job(payload["job_id"])
+        self.assertEqual(("succeeded", {"exported": 1, "failed": 1, "skipped": 0}), (finished["status"], finished["result"]))
+        self.assertEqual(1, len(finished["log_tail"]))
+        self.assertTrue(finished["log_tail"][0].startswith("photo.jpg: "), finished["log_tail"])
+        self.assertNotIn(str(self.root), json.dumps(finished))
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            artifacts = library.catalog.list_artifacts()
+        self.assertEqual(1, len(artifacts))
+        self.assertTrue(Path(artifacts[0].path).is_file())
 
     def test_remove_group_returns_recovery_counts_and_preserves_original(self):
         source = self.root / "photo.jpg"
@@ -1258,6 +1270,10 @@ const ingestCounts = extra => ({ copied: 0, verified: 0, already_present: 0, fai
 const ingestJob = (status, progress, extra = {}) => ({ job_id: 11, kind: 'ingest', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ingest: ingestCounts(), ...extra });
 let darktableReady = true;
 let refineError = null;
+const exportPosts = [];
+let exportPolls = 0;
+let exportCancels = 0;
+const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const refinePosts = [];
 let refinePolls = 0;
 const refineJob = (status, progress, extra = {}) => ({ job_id: 13, kind: 'refine_previews', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
@@ -1427,6 +1443,15 @@ async function fetch(url, options = {}) {
     ingestPolls += 1;
     payload = ingestPolls < 3 ? ingestJob('running', 0.25, { label: 'DSC00001.ARW', processed: 1, total: 4, ingest: ingestCounts({ copied: 1, verified: 1 }) })
       : ingestJob('succeeded', 1, { label: 'DSC00004.ARW', processed: 4, total: 4, ingest: ingestCounts(ingestOutcome) });
+  }
+  else if (url === '/api/export') {
+    assert.equal(options.method, 'POST'); exportPosts.push(JSON.parse(options.body)); payload = exportJob('queued', 0);
+  }
+  else if (url === '/api/jobs/17/cancel') { assert.deepEqual(JSON.parse(options.body), {}); exportCancels += 1; payload = exportJob('cancelled', 0.5, { label: 'photo-1.jpg', processed: 1, total: 2, result: { exported: 1, failed: 0, skipped: 0 } }); }
+  else if (url === '/api/jobs/17') {
+    exportPolls += 1;
+    payload = exportPolls < 3 || scenario === 'export-cancel' ? exportJob('running', 0.5, { label: 'photo-1.jpg', processed: 1, total: 2 })
+      : exportJob('succeeded', 1, { label: 'photo-2.jpg', processed: 2, total: 2, result: { exported: 1, failed: 1, skipped: 0 }, log_tail: ['photo-2.jpg: bad render'] });
   }
   else if (url === '/api/astro/jobs') { assert.equal(options.method, 'POST'); astroPosts.push(JSON.parse(options.body)); payload = jobPayload('queued', 0); }
   else if (url === '/api/astro/jobs/7/run') { assert.deepEqual(JSON.parse(options.body), {}); runs += 1; payload = jobPayload('queued', 0); }
@@ -2379,6 +2404,56 @@ const regression = `
     assert.equal(confirm.disabled, false);
     return;
   }
+  if (scenario === 'export' || scenario === 'export-cancel') {
+    await load();
+    scope.value = 'keepers';
+    element('input[name="export-preset"]:checked').value = 'full';
+    state.keeperCount = 2;
+    updateWorkflow();
+    const dialog = element('#export-dialog');
+    dialog.hidden = true;
+    await element('#export-jpegs').listeners.click();
+    assert.deepEqual(exportPosts, [{ scope: 'keepers', profile: null, preset: 'full' }]);
+    assert.equal(state.job.kind, 'export');
+    assert.equal(state.busy, true, 'an export job holds structural actions');
+    assert.equal(dialog.hidden, false, 'the progress dialog opens when the job is accepted');
+    assert.equal(element('#export-dialog-cancel').hidden, false);
+    assert.equal(element('#export-dialog-close').hidden, true);
+    assert.equal(element('#ai-status').dataset.phase, 'running');
+    assert.ok(element('#export-status').textContent.includes('status bar'));
+    await tick();
+    assert.equal(element('#export-dialog-label').textContent, '1 of 2 · photo-1.jpg');
+    assert.equal(element('#export-dialog-progress').value, 50);
+    assert.equal(element('#export-dialog-status').textContent, 'Export running.');
+    assert.equal(element('#ai-status').textContent, 'Export running. 1 of 2 · photo-1.jpg', 'the bottom status bar carries the same progress');
+    assert.ok(element('#job-label').textContent.includes('Export 17 · 1 of 2'));
+    if (scenario === 'export-cancel') {
+      await element('#export-dialog-cancel').listeners.click();
+      assert.equal(exportCancels, 1);
+      assert.equal(state.job.status, 'cancelled');
+      assert.equal(activeTimers, 0);
+      assert.equal(element('#export-dialog-status').textContent, 'Export cancelled. Finished items are kept.');
+      assert.equal(element('#ai-status').dataset.phase, 'failed');
+      assert.equal(element('#export-dialog-cancel').hidden, true);
+      assert.equal(element('#export-dialog-close').hidden, false);
+      return;
+    }
+    await settle();
+    assert.equal(state.job.status, 'succeeded');
+    assert.equal(state.busy, false);
+    assert.equal(element('#export-dialog-status').textContent, 'Export finished. 1 saved, 1 failed.');
+    assert.equal(element('#export-status').textContent, 'Export finished. 1 saved, 1 failed.');
+    assert.deepEqual(element('#export-results').children.map(item => item.textContent), ['photo-2.jpg: bad render'], 'failures are listed by basename');
+    assert.equal(element('#ai-status').dataset.phase, 'done');
+    assert.equal(element('#ai-status').textContent, 'Export finished. 1 saved, 1 failed.');
+    assert.equal(element('#export-dialog-cancel').hidden, true);
+    assert.equal(element('#export-dialog-close').hidden, false);
+    assert.equal(dialog.hidden, false, 'the outcome stays visible until closed');
+    element('#export-dialog-close').listeners.click();
+    assert.equal(dialog.hidden, true);
+    assert.equal(element('#export-jpegs').disabled, false);
+    return;
+  }
   if (scenario === 'rank-explain') {
     groups[0].photos[0].sharpness = 0.62; groups[0].photos[0].exposure = 0.9; groups[0].photos[0].total_score = 0.69;
     groups[0].photos[1].sharpness = 0.4; groups[0].photos[1].exposure = 0.95; groups[0].photos[1].total_score = 0.54;
@@ -3039,6 +3114,11 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_astro_tab_confirms_includes_polls_and_retains_failure_context(self):
         for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume"):
+            with self.subTest(scenario=scenario):
+                self.run_javascript_cleanup_regression(scenario)
+
+    def test_javascript_keepers_export_runs_as_a_job_with_progress_dialog_and_status_bar(self):
+        for scenario in ("export", "export-cancel"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
 

@@ -952,6 +952,32 @@ class LibraryTests(unittest.TestCase):
             self.assertFalse(any(event.kind == "exported" for event in library.catalog.events_for(ids[0])))
             self.assertEqual(1, len(list(library.settings.jpeg_output_dir.iterdir())))
 
+    def test_export_job_counts_outcomes_logs_failures_by_name_and_reports_progress(self):
+        second = self.source_dir / "second.jpg"
+        Image.new("RGB", (30, 20), "blue").save(second)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            ids = tuple(photo.id for photo in library.catalog.list_photos())
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            def runner(command, **kwargs):
+                if command[1:] != ["--version"] and Path(command[1]).name == "DSC0001.jpg":
+                    return subprocess.CompletedProcess(command, 3, "", "bad render")
+                return self.export_runner(command, **kwargs)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=runner):
+                with self.assertRaises(ValueError):  # validated before any job row exists
+                    library.start_export_job(library_module.ExportRequest(ids + (9999,), None))
+                self.assertEqual([], library.catalog.list_jobs())
+                job = library.start_export_job(library_module.ExportRequest(ids, None, "share"))
+                self.assertTrue(library.wait_for_job(job.id, 10))
+            status = library.job_status(job.id)
+            self.assertEqual(("export", "succeeded", 2, 2), (status["kind"], status["status"], status["processed"], status["total"]))
+            self.assertEqual({"exported": 1, "failed": 1, "skipped": 0}, status["result"])
+            self.assertEqual(1, len(status["log_tail"]))
+            self.assertTrue(status["log_tail"][0].startswith("DSC0001.jpg: "))
+            self.assertNotIn(str(self.root), json.dumps(status))
+            artifacts = library.catalog.list_artifacts()
+            self.assertEqual([(ids[1], "share")], [(artifact.photo_id, artifact.settings["preset"]) for artifact in artifacts])
+
     def test_export_bookkeeping_failure_compensates_and_continues(self):
         for failure in ("artifact", "event", "sidecar"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:

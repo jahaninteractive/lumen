@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
-import webbrowser
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
@@ -401,8 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         server = make_server(settings, port=args.port)
         url = f"http://127.0.0.1:{server.server_port}"
         print(f"Lumen is running at {url}")
-        if args.open_browser:
-            webbrowser.open(url)
+        if args.open_browser:  # Never wait on the browser: Python's webbrowser blocks in waitpid on a wedged osascript.
+            subprocess.Popen(["/usr/bin/open", url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

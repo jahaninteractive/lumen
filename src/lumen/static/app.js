@@ -1320,7 +1320,7 @@ document.querySelector('#reject-all-yes').addEventListener('click', () => {
   return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
 });
 
-const JOB_NAMES = { import: 'Import', tag: 'Tagging', assist: 'Local AI assist', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+const JOB_NAMES = { import: 'Import', export: 'Export', tag: 'Tagging', assist: 'Local AI assist', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
@@ -1330,7 +1330,8 @@ function jobText(job) {
     : job.kind === 'assist' && job.result ? ` ${result.tagged} tagged, ${result.reviewed} scanned (${result.suggested} suggested rejects), ${result.captioned} captioned, ${result.skipped} already done, ${result.failed} failed.`
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
     : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
-    : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.` : '';
+    : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.`
+    : job.kind === 'export' && job.result ? ` ${result.exported} saved, ${result.failed} failed${result.skipped ? `, ${result.skipped} skipped` : ''}.` : '';
   const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
   return {
     queued: `${name} queued.`,
@@ -1355,9 +1356,11 @@ function watchJob(job) {
   const text = jobText(job);
   if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
   document.querySelector('#job-strip').hidden = false;
-  if (['tag', 'assist', 'review_rejects', 'triage'].includes(job.kind)) {  // AI jobs also report in the bottom bar
-    aiStatus(JOB_ACTIVE.includes(job.status) ? 'running' : job.status === 'succeeded' ? 'done' : 'failed', text);
+  if (['tag', 'assist', 'review_rejects', 'triage', 'export'].includes(job.kind)) {  // AI and export jobs also report in the bottom bar
+    const detail = JOB_ACTIVE.includes(job.status) && job.total ? ` ${job.processed} of ${job.total}${job.label ? ` · ${job.label}` : ''}` : '';
+    aiStatus(JOB_ACTIVE.includes(job.status) ? 'running' : job.status === 'succeeded' ? 'done' : 'failed', text + detail);
   }
+  if (job.kind === 'export') renderExportDialog(job);
   if (job.kind === 'astro') setAstroJob(job);
   else {
     if (job.kind === 'ingest') renderIngest(job);
@@ -1399,7 +1402,7 @@ async function pollJob() {
   }
 }
 
-document.querySelector('#cancel-job').addEventListener('click', async () => {
+async function cancelCurrentJob() {
   state.busy = true;
   updateWorkflow();
   try {
@@ -1411,7 +1414,33 @@ document.querySelector('#cancel-job').addEventListener('click', async () => {
     state.busy = false;
     updateWorkflow();
   }
-});
+}
+document.querySelector('#cancel-job').addEventListener('click', cancelCurrentJob);
+
+// A keepers export runs as a job; this modal shows its progress and offers Cancel, then the outcome and Close.
+const exportDialog = document.querySelector('#export-dialog');
+function renderExportDialog(job) {
+  const active = JOB_ACTIVE.includes(job.status);
+  const percent = Math.round((job.progress || 0) * 100);
+  const progress = document.querySelector('#export-dialog-progress');
+  progress.value = percent;
+  progress.setAttribute('aria-valuetext', `${percent}% complete`);
+  document.querySelector('#export-dialog-label').textContent = job.total ? `${job.processed} of ${job.total}${job.label ? ` · ${job.label}` : ''}` : 'Starting…';
+  const text = jobText(job);
+  const status = document.querySelector('#export-dialog-status');
+  if (status.textContent !== text) status.textContent = text;
+  document.querySelector('#export-dialog-cancel').hidden = !active;
+  document.querySelector('#export-dialog-close').hidden = active;
+  if (active && !exportDialog.open) { if (exportDialog.showModal) exportDialog.showModal(); else exportDialog.hidden = false; }
+  if (!active) {
+    document.querySelector('#export-status').textContent = text;
+    const list = document.querySelector('#export-results');
+    list.replaceChildren();
+    (job.log_tail || []).forEach(line => { const item = document.createElement('li'); item.textContent = line; list.append(item); });
+  }
+}
+document.querySelector('#export-dialog-cancel').addEventListener('click', cancelCurrentJob);
+document.querySelector('#export-dialog-close').addEventListener('click', () => { if (exportDialog.close) exportDialog.close(); else exportDialog.hidden = true; });
 
 document.querySelector('#browse-path').addEventListener('click', async event => {
   const button = event.currentTarget;
@@ -2055,7 +2084,10 @@ document.querySelector('#export-jpegs').addEventListener('click', async () => {
   document.querySelector('#export-status').textContent = `Exporting ${scope === 'current' ? 'current photo' : 'all keepers'} at ${size}… Keep this page open until the result appears.`;
   document.querySelector('#export-results').replaceChildren();
   try {
-    showExportResults((await post('/api/export', payload)).results, size);
+    if (scope === 'keepers') {
+      watchJob(await post('/api/export', payload));
+      document.querySelector('#export-status').textContent = `Exporting all keepers at ${size}. Progress is in the dialog and the status bar; finished JPEGs are kept if you cancel.`;
+    } else showExportResults((await post('/api/export', payload)).results, size);
   } catch (error) {
     if (error.payload?.results) showExportResults(error.payload.results, size);
     else document.querySelector('#export-status').textContent = `${error.message}. Check darktable and the selected XMP, then retry. You can also use camera defaults.`;
