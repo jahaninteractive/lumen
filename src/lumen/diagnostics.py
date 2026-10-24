@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .geonames import PlaceIndex
 from .omlx import ROLES, OmlxError, get_server_status
 from .astro import probe_siril
 from .tools import tool_status
@@ -70,6 +71,11 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         }
     roles = {role: {"model": (model := getattr(settings, attribute)), "loaded": model in live_report["loaded_models"]}
              for role, attribute in ROLES.items()}
+    geonames = {"dir": str(settings.geonames_dir), "files": 0, "places": 0}
+    if settings.geonames_dir.is_dir():
+        with PlaceIndex(settings.geonames_dir, settings.geonames_index_path) as index:
+            counts = index.ensure()
+        geonames |= {"files": counts["files"], "places": counts["places"]}
     return {
         "library": str(settings.library_dir),
         "tools": tools,
@@ -90,6 +96,7 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         },
         "omlx_live": live_report,
         "omlx_roles": roles,
+        "geonames": geonames,
     }
 
 

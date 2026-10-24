@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -22,10 +23,12 @@ from lumen.tools import ToolStatus
 try:
     from tests.test_astro import FAKE_SIRIL, SIRIL
     from tests.test_catalog import seed_filter_photos
+    from tests.test_geonames import write_fixture as write_geonames_fixture
     from tests.test_previews import write_fake_darktable
 except ModuleNotFoundError:  # discovered with -s tests
     from test_astro import FAKE_SIRIL, SIRIL
     from test_catalog import seed_filter_photos
+    from test_geonames import write_fixture as write_geonames_fixture
     from test_previews import write_fake_darktable
 
 
@@ -190,15 +193,18 @@ class CliTests(unittest.TestCase):
 
     def test_doctor_reports_required_and_optional_capabilities(self):
         with tempfile.TemporaryDirectory() as directory:
+            geonames = Path(directory) / "geonames"
+            write_geonames_fixture(geonames)
             output = io.StringIO()
-            with redirect_stdout(output):
-                code = main(["--library", directory, "doctor", "--json"])
+            with patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(geonames)}), redirect_stdout(output):
+                code = main(["--library", str(Path(directory) / "library"), "doctor", "--json"])
 
         self.assertIn(code, (0, 2))
         payload = json.loads(output.getvalue())
         self.assertEqual("Qwen3.8-27B-4bit", payload["omlx_model"]["name"])
         self.assertIn("exiftool", payload["tools"])
         self.assertIn("darktable-cli", payload["tools"])
+        self.assertEqual({"dir": str(geonames), "files": 2, "places": 5}, payload["geonames"])
 
     def test_siril_command_runs_managed_script_hook(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -224,7 +230,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch(
             "lumen.diagnostics._find_model", return_value=None
         ), patch("lumen.diagnostics.tool_status", return_value=missing):
-            report = doctor_report(Settings(library_dir=Path(directory)))
+            report = doctor_report(Settings(library_dir=Path(directory), geonames_dir=Path(directory) / "none"))
 
         self.assertNotIn("--vision-test", report["omlx_model"]["recommendation"])
 
@@ -240,7 +246,7 @@ class CliTests(unittest.TestCase):
         ), patch("lumen.diagnostics.tool_status", return_value=missing), patch(
             "lumen.diagnostics.get_server_status", return_value=live, create=True
         ):
-            report = doctor_report(Settings(library_dir=Path(directory)))
+            report = doctor_report(Settings(library_dir=Path(directory), geonames_dir=Path(directory) / "none"))
 
         self.assertIn("omlx_live", report)
         self.assertTrue(report["omlx_live"]["online"])
@@ -416,12 +422,12 @@ class CliTests(unittest.TestCase):
             self.assertEqual(2, FakeTagger.calls)
             self.assertEqual({"tagged": 2, "skipped": 0, "failed": 0}, json.loads(output.getvalue())["result"])  # job_status exposes the manifest summary as result
             output = io.StringIO()
-            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), redirect_stdout(output):
+            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(root / "none")}), redirect_stdout(output):
                 main(["--library", str(root / "library"), "doctor", "--json"])
             roles = json.loads(output.getvalue())["omlx_roles"]
             self.assertEqual({"fast": {"model": "Qwen3-VL-8B-Instruct-4bit", "loaded": True}, "review": {"model": "Qwen3.8-27B-4bit", "loaded": False}}, roles)
             output = io.StringIO()
-            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), redirect_stdout(output):
+            with patch("lumen.diagnostics.get_server_status", return_value=live), patch("lumen.diagnostics.tool_status", return_value=ToolStatus("t", False, None, None)), patch("lumen.diagnostics._find_model", return_value=None), patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(root / "none")}), redirect_stdout(output):
                 main(["--library", str(root / "library"), "doctor"])
             self.assertIn("fast: Qwen3-VL-8B-Instruct-4bit (loaded)", output.getvalue())
             self.assertIn("review: Qwen3.8-27B-4bit (not loaded)", output.getvalue())

@@ -409,13 +409,13 @@ class SirilProbeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch("lumen.diagnostics.tool_status", side_effect=status), patch(
             "lumen.diagnostics.probe_siril", return_value=SirilCapabilities("/Apps/siril-cli", (1, 4, 4))
         ), patch("lumen.diagnostics.get_server_status", side_effect=ValueError("offline")):
-            report = doctor_report(Settings(library_dir=Path(directory)))
+            report = doctor_report(Settings(library_dir=Path(directory), geonames_dir=Path(directory) / "none"))
         self.assertEqual("1.4.4", report["tools"]["siril-cli"]["version"])
         self.assertTrue(report["tools"]["siril-cli"]["supported"])
         with tempfile.TemporaryDirectory() as directory, patch("lumen.diagnostics.tool_status", side_effect=status), patch(
             "lumen.diagnostics.probe_siril", side_effect=RuntimeError("no version")
         ), patch("lumen.diagnostics.get_server_status", side_effect=ValueError("offline")):
-            report = doctor_report(Settings(library_dir=Path(directory)))
+            report = doctor_report(Settings(library_dir=Path(directory), geonames_dir=Path(directory) / "none"))
         self.assertFalse(report["tools"]["siril-cli"]["supported"])
 
 

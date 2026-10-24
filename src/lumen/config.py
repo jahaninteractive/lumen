@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_GEONAMES_DIR = Path(__file__).resolve().parents[2] / "vendor" / "data" / "geonames"
+
 
 @dataclass(frozen=True, slots=True)
 class Settings:
@@ -14,6 +16,7 @@ class Settings:
     omlx_fast_model: str = "Qwen3-VL-8B-Instruct-4bit"
     omlx_review_model: str | None = None
     near_duplicate_distance: int = 12
+    geonames_dir: Path = DEFAULT_GEONAMES_DIR
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -32,6 +35,7 @@ class Settings:
             omlx_fast_model=os.environ.get("LUMEN_OMLX_FAST_MODEL", "Qwen3-VL-8B-Instruct-4bit"),
             omlx_review_model=os.environ.get("LUMEN_OMLX_REVIEW_MODEL") or None,
             near_duplicate_distance=distance,
+            geonames_dir=Path(os.environ.get("LUMEN_GEONAMES_DIR", str(DEFAULT_GEONAMES_DIR))).expanduser(),
         )
 
     @property
@@ -73,6 +77,10 @@ class Settings:
     @property
     def cache_dir(self) -> Path:
         return self.library_dir / "cache"
+
+    @property
+    def geonames_index_path(self) -> Path:
+        return self.cache_dir / "geonames.sqlite"
 
     @property
     def trash_dir(self) -> Path:
