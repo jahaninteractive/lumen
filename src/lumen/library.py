@@ -1068,6 +1068,40 @@ class Library:
                 raise
             raise CleanupError(error) from error
 
+    def _cleared_selection(self) -> tuple[list[int], list[int], bool]:
+        """Live ledger frames, the bursts they empty entirely, and whether any burst is only partly covered."""
+        photo_ids = self.catalog.live_cleared_photo_ids()
+        selected = set(photo_ids)
+        members: dict[int, set[int]] = {}
+        for photo in self.catalog.list_photos():
+            if photo.group_id is not None:
+                members.setdefault(photo.group_id, set()).add(photo.id)
+        touched = [group_id for group_id, ids in members.items() if ids & selected]
+        full = sorted(group_id for group_id in touched if members[group_id] <= selected)
+        return photo_ids, full, len(full) < len(touched)
+
+    @_coordinated
+    def cleared_in_catalog(self) -> dict:
+        seed = self.seed_cleared_from_trash()
+        photo_ids, group_ids, _ = self._cleared_selection()
+        return {"frames": len(photo_ids), "batches": len(group_ids), "seed": seed}
+
+    @_coordinated
+    def remove_cleared(self) -> CleanupResult:
+        try:
+            self.seed_cleared_from_trash()
+            photo_ids, group_ids, partial = self._cleared_selection()
+            if not photo_ids:
+                raise ValueError("no previously cleared frames in the catalog")
+            result = self._cleanup(photo_ids, group_ids)
+            if partial:
+                self._regroup_and_write_sidecars()  # Survivors of a partly removed burst get a fresh ranking.
+            return result
+        except sqlite3.Error as error:
+            if isinstance(error, sqlite3.ProgrammingError):
+                raise
+            raise CleanupError(error) from error
+
     def _cleanup(self, photo_ids: list[int], group_ids: list[int]) -> CleanupResult:
         photos = self.catalog.list_photos()
         selected = set(photo_ids)

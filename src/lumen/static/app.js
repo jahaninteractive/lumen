@@ -4,7 +4,7 @@ const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, critique: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
-  mergeSelection: new Set(),
+  mergeSelection: new Set(), clearedFrames: 0,
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
   get busy() { return this.acting || JOB_ACTIVE.includes(this.job?.status); },
@@ -1443,6 +1443,7 @@ function watchJob(job) {
     if (JOB_ACTIVE.includes(previous)) {
       load().catch(error => announce(error.message));
       if (['triage', 'tag'].includes(job.kind) && state.selectedGroupId !== null) loadAstroTriage(state.selectedGroupId);
+      if (document.querySelector('#clear-tab').getAttribute('aria-selected') === 'true') loadCleared();
     }
   }
   updateWorkflow();
@@ -1788,6 +1789,7 @@ function updateWorkflow() {
   document.querySelector('#refine-availability').textContent = available ? '' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
+  document.querySelector('#remove-cleared').disabled = state.busy || !state.clearedFrames;
   document.querySelector('#merge-batches').disabled = state.busy || state.mergeSelection.size < 2;
   document.querySelector('#write-digest').disabled = state.busy;
   document.querySelector('#merge-count').textContent = `${state.mergeSelection.size} batch${state.mergeSelection.size === 1 ? '' : 'es'} selected`;
@@ -1864,6 +1866,7 @@ function selectTab(tab) {
   try { localStorage.setItem('lumen-tab', tab.id); } catch { /* per-visit only */ }
   if (tab.id === 'compose-tab') loadComposition();
   if (tab.id === 'review-tab') { loadRejectSuggestions(); loadVocabulary(); }
+  if (tab.id === 'clear-tab') loadCleared();
 }
 
 function collapsePanel(collapsed) {
@@ -2290,6 +2293,20 @@ async function cleanup(url, payload) {
   }
 }
 document.querySelector('#remove-group').addEventListener('click', () => cleanup(`/api/groups/${state.selectedGroupId}/remove`, {}));
+
+async function loadCleared() {
+  const count = document.querySelector('#cleared-count');
+  try {
+    const { frames, batches } = await request('/api/library/cleared');
+    state.clearedFrames = frames;
+    count.textContent = frames ? `${frameCount(frames)} in ${batches} batch${batches === 1 ? '' : 'es'}` : 'None';
+  } catch (error) {
+    state.clearedFrames = 0;
+    count.textContent = `Could not count previously cleared frames: ${error.message}`;
+  }
+  updateWorkflow();
+}
+document.querySelector('#remove-cleared').addEventListener('click', () => cleanup('/api/library/remove-cleared', {}).then(loadCleared));
 
 async function mergeBatches() {
   const groupIds = state.groups.map(group => group.id).filter(id => state.mergeSelection.has(id));

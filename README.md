@@ -127,6 +127,12 @@ Each run writes `<library>/outputs/ingest/<job-id>/manifest.json` and
 primary originals in `lumen-catalog-backups/<UTC-timestamp>.sqlite3`. Rerunning
 the same ingest skips files that are already present and verified.
 
+Import and ingest skip frames you removed or cleared in an earlier session
+(matched by content, and still copied and verified by ingest) and report them as
+*previously cleared*. To bring them back on purpose, tick **Include frames
+cleared in earlier sessions** in the import dialog or pass
+`lumen import --include-cleared`.
+
 ## Jobs
 
 Import, ingest, tag-all, preview refinement, and astro stacks run as background
@@ -416,9 +422,16 @@ automatic trash expiry or one-click restore; keep that folder for manual
 recovery. Export provenance remains recorded even after its source catalog row
 is removed.
 
+**Remove previously cleared frames** lists how many frames in the catalog were
+already removed or cleared in an earlier session (for example frames imported
+before Lumen skipped them, or ones you re-imported on purpose) and removes them
+the same recoverable way; bursts they only partly fill are re-ranked.
+
 ```sh
 uv run lumen groups --json
 uv run lumen remove 7 --json
+uv run lumen cleared --json
+uv run lumen cleared --remove --json
 uv run lumen clear CLEAR --json
 ```
 

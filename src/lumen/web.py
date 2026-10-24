@@ -246,6 +246,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 groups = [group for group in groups if group["photos"] or group["rejected_count"] == group["frame_count"]]
                 self._send_json({"groups": groups, "rejected_count": rejected_count, **payload})
                 return
+            if path == "/api/library/cleared":
+                try:
+                    with Library(settings) as library:
+                        self._send_json(library.cleared_in_catalog())
+                except (ValueError, OSError) as error:
+                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                return
             if path == "/api/vocabulary":
                 try:
                     with Library(settings) as library:
@@ -490,6 +497,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("remove requires an empty JSON object")
                     with Library(settings) as library:
                         result = library.remove_group(int(match.group(1)))
+                    self._send_json(asdict(result))
+                    return
+                if path == "/api/library/remove-cleared":
+                    if payload:
+                        raise ValueError("remove-cleared requires an empty JSON object")
+                    with Library(settings) as library:
+                        result = library.remove_cleared()
                     self._send_json(asdict(result))
                     return
                 if path == "/api/library/clear":

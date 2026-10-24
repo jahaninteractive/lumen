@@ -661,6 +661,41 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual({"snapshots": 2, "skipped": 2, "added": 1}, library.seed_cleared_from_trash())
             self.assertEqual({selected.fingerprint, retained.fingerprint}, library.catalog.cleared_fingerprints())
 
+    def _two_bursts_half_cleared(self, library):
+        """Burst A (2 frames) fully in the ledger, burst B (3 frames) with one frame in it; returns (A ids, B ids, cleared B id)."""
+        self.image_path.unlink()
+        for name, stamp in (("a0", "20:00:00"), ("a1", "20:00:01"), ("b0", "21:00:00"), ("b1", "21:00:01"), ("b2", "21:00:02")):
+            exif = Image.Exif(); exif[36867] = f"2026:10:22 {stamp}"
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg", exif=exif)
+        library.import_path(self.source_dir)
+        photos = {Path(photo.path).stem: photo for photo in library.catalog.list_photos()}
+        self.assertEqual(2, len(library.catalog.list_group_ids()))
+        library.catalog.record_cleared([photos[name].fingerprint for name in ("a0", "a1", "b1")], "2026-10-23T00:00:00+00:00")
+        return [photos["a0"].id, photos["a1"].id], [photos[name].id for name in ("b0", "b1", "b2")], photos["b1"].id
+
+    def test_remove_cleared_removes_ledger_frames_and_reranks_partial_bursts(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            burst_a, burst_b, cleared_b = self._two_bursts_half_cleared(library)
+            self.assertEqual({"frames": 3, "batches": 1, "seed": {"snapshots": 0, "skipped": 0, "added": 0}},
+                             library.cleared_in_catalog())
+
+            result = library.remove_cleared()
+
+            self.assertEqual(3, result.photos_removed)
+            self.assertTrue(result.snapshot_path.is_file())
+            manifest = json.loads((result.trash_path / "manifest.json").read_text())
+            self.assertEqual(sorted([*burst_a, cleared_b]), sorted(manifest["photo_ids"]))
+            survivors = [photo_id for photo_id in burst_b if photo_id != cleared_b]
+            self.assertEqual(survivors, sorted(photo.id for photo in library.catalog.list_photos()))
+            (group_id,) = library.catalog.list_group_ids()
+            self.assertEqual(survivors, sorted(library.catalog.group_photo_ids(group_id)))
+            pick = library.catalog.connection.execute(
+                "SELECT automatic_pick_id FROM photo_groups WHERE id = ?", (group_id,)).fetchone()[0]
+            self.assertIn(pick, survivors)
+            self.assertEqual({"frames": 0, "batches": 0}, {key: value for key, value in library.cleared_in_catalog().items() if key != "seed"})
+            with self.assertRaisesRegex(ValueError, "no previously cleared frames in the catalog"):
+                library.remove_cleared()
+
     def test_clear_requires_exact_confirmation_without_any_mutation(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
             library.import_path(self.image_path)

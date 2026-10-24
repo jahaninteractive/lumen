@@ -1,8 +1,14 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-24 (Africa/Johannesburg) — workflow round complete on branch `workflow-round` (not yet merged)
+Last updated: 2026-10-24 (Africa/Johannesburg) — cleared-frame ledger complete on branch `cleared-ledger` (not yet merged)
 
 ## Resume here
+
+**Cleared-frame ledger (branch `cleared-ledger`, not yet merged to `main`).** Spec `docs/superpowers/specs/2026-10-24-cleared-ledger-design.md`. Shipped:
+- Remove-batch and clear-workspace record every removed frame's fingerprint in `cleared_fingerprints`; the ledger outlives photo rows.
+- `Library.seed_cleared_from_trash()` fills the ledger from earlier cleanups: each `<library>/trash/*/catalog.sqlite3` snapshot plus its `manifest.json` `photo_ids` (the snapshot holds the whole catalog, so only the manifest's frames count). Idempotent; unreadable snapshots are counted as skipped. It runs whenever the Clear tab counts or removes.
+- Import and card ingest skip ledger frames (ingest still copies and verifies them) and report `previously_cleared`; `lumen import --include-cleared` and the Import-dialog tick bring them back.
+- Clear tab **Previously cleared frames**: `GET /api/library/cleared` → `{frames, batches, seed}`, `POST /api/library/remove-cleared {}` → the remove-batch payload; `lumen cleared [--remove] [--json]`. Partly removed bursts are regrouped and re-ranked.
 
 **Workflow round (branch `workflow-round`, not yet merged to `main`).** Spec `docs/superpowers/specs/2026-10-24-workflow-round-design.md`. Shipped:
 - Learned-keyword panel in the Review tab with Forget; a confirmed species is learned as wildlife.

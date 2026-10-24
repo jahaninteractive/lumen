@@ -684,6 +684,17 @@ class ExportCleanupCliTests(unittest.TestCase):
         self.assertEqual(1, payload["photos_removed"])
         self.assertTrue(Path(payload["snapshot_path"]).is_file())
 
+    def test_cleared_reports_counts_and_remove_removes_ledger_frames(self):
+        with Library(self.settings) as library:
+            library.catalog.record_cleared([library.catalog.get_photo(self.photo_id).fingerprint], "2026-10-23T00:00:00+00:00")
+        code, payload = self.run_command("cleared")
+        self.assertEqual((0, 1, 1), (code, payload["frames"], payload["batches"]))
+        code, payload = self.run_command("cleared", "--remove")
+        self.assertEqual((0, 1), (code, payload["photos_removed"]))
+        self.assertTrue(Path(payload["snapshot_path"]).is_file())
+        code, payload = self.run_command("cleared", "--remove")
+        self.assertEqual((2, {"error": "no previously cleared frames in the catalog"}), (code, payload))
+
     def test_merge_joins_groups_into_the_earliest_and_rejects_single_ids(self):
         second = self.root / "second.jpg"
         Image.new("RGB", (40, 30), "blue").save(second)

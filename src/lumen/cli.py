@@ -135,6 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     clear.add_argument("confirmation")
     clear.add_argument("--json", action="store_true")
 
+    cleared = commands.add_parser("cleared", help="count frames cleared in an earlier session that are back in the catalog")
+    cleared.add_argument("--remove", action="store_true", help="remove them with recoverable working files")
+    cleared.add_argument("--json", action="store_true")
+
     siril = commands.add_parser("siril", help="run a reviewed Siril script from the managed outputs folder")
     siril.add_argument("script", type=Path)
     siril.add_argument("--json", action="store_true")
@@ -352,11 +356,14 @@ def main(argv: list[str] | None = None) -> int:
         _print(asdict(result) | {"output": str(result.output)}, args.json)
         return 0 if result.success else 2
 
-    if args.command in {"export", "remove", "clear", "merge"}:
+    if args.command in {"export", "remove", "clear", "merge", "cleared"}:
         try:
             with Library(settings) as library:
                 if args.command == "merge":
                     payload = library.merge_groups(args.group_ids)
+                    code = 0
+                elif args.command == "cleared":
+                    payload = asdict(library.remove_cleared()) if args.remove else library.cleared_in_catalog()
                     code = 0
                 elif args.command == "export":
                     photo_ids = (args.photo,) if args.photo is not None else tuple(library.keeper_ids())

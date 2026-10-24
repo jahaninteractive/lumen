@@ -234,6 +234,12 @@
             <button type="button" id="remove-group" class="danger" disabled>Remove batch from Lumen</button>
           </div>
           <div class="cleanup-group">
+            <h3>Previously cleared frames</h3>
+            <p id="cleared-count">Checking…</p>
+            <p class="quiet">Frames whose content you removed or cleared in an earlier session. Removing them here is recoverable like any batch removal; a frame you re-imported on purpose with "Include frames cleared in earlier sessions" counts too.</p>
+            <button type="button" id="remove-cleared" class="danger" disabled>Remove previously cleared frames</button>
+          </div>
+          <div class="cleanup-group">
             <h3>Whole workspace</h3>
             <p id="workspace-cleanup-count">0 batches · 0 frames</p>
             <label for="clear-confirmation">Type CLEAR to clear the workspace</label>

@@ -621,6 +621,27 @@ class WebTests(unittest.TestCase):
         with Library(settings) as library:
             self.assertIsNotNone(library.get_photo(photo.id)["metrics"])
 
+    def test_cleared_routes_count_and_remove_previously_cleared_frames(self):
+        self.assertEqual((200, {"frames": 0, "batches": 0, "seed": {"snapshots": 0, "skipped": 0, "added": 0}}),
+                         self.get_json("/api/library/cleared"))
+        self.assertEqual(400, self.post_json("/api/library/remove-cleared", {})[0])
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            fingerprint = library.catalog.get_photo(1).fingerprint
+            library.catalog.record_cleared([fingerprint], "2026-10-23T00:00:00+00:00")
+        code, payload = self.get_json("/api/library/cleared")
+        self.assertEqual((200, {"frames": 1, "batches": 1}), (code, {key: payload[key] for key in ("frames", "batches")}))
+        self.assertNotIn(fingerprint, json.dumps(payload))
+        code, result = self.post_json("/api/library/remove-cleared", {"x": 1})
+        self.assertEqual(400, code, result)
+        code, result = self.post_json("/api/library/remove-cleared", {})
+        self.assertEqual(200, code, result)
+        self.assertEqual(1, result["photos_removed"])
+        self.assertTrue(Path(result["snapshot_path"]).is_file())
+        code, result = self.post_json("/api/library/remove-cleared", {})
+        self.assertEqual((400, "no previously cleared frames in the catalog"), (code, result["error"]))
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertEqual([], library.catalog.list_photos())
+
     def test_clear_requires_exact_confirmation_then_returns_recovery_paths(self):
         for payload in ({}, {"confirmation": "clear"}, {"confirmation": "CLEAR "}, {"confirmation": None}, {"confirmation": True}, {"confirmation": ["CLEAR"]}):
             with self.subTest(payload=payload):
@@ -640,7 +661,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
-            "/api/vocabulary/forget", "/api/search/expand",
+            "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -660,7 +681,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
-            "/api/vocabulary/forget", "/api/search/expand",
+            "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -695,7 +716,7 @@ class WebTests(unittest.TestCase):
             self.assertEqual("polite", by_id[name]["attrs"].get("aria-live"))
         self.assertEqual("assertive", by_id["announcer"]["attrs"].get("aria-live"))
         export = by_id["export-controls"]
-        for name in ("remove-group", "clear-workspace"):
+        for name in ("remove-group", "remove-cleared", "clear-workspace"):
             self.assertNotIn(export, by_id[name]["parents"])
             self.assertIn(by_id["clear-panel"], by_id[name]["parents"])
 
@@ -1392,6 +1413,9 @@ const keywordData = { subjects: ['ice'], suggested: ['krill', 'gentoo penguin'] 
 const vocabState = { categories: { wildlife: ['gentoo penguin'], learned: ['spindrift', 'krill'] }, counts: { spindrift: 3, krill: 1 }, blocked: [] };
 const vocabularyPosts = [];
 const removals = [];
+let cleared = { frames: 3, batches: 1 };
+let clearedLoads = 0;
+const clearedPosts = [];
 const mergePosts = [];
 const compositionReviews = [];
 const cropMutations = [];
@@ -1549,6 +1573,15 @@ async function fetch(url, options = {}) {
     const removed = groups.find(item => item.id === id);
     groups = groups.filter(item => item.id !== id);
     payload = { photos_removed: removed.photos.length, files_removed: 3, trash_path: '/managed/trash/recovery', snapshot_path: '/managed/trash/recovery/catalog.sqlite3' };
+  } else if (url === '/api/library/cleared') {
+    assert.equal(options.method, undefined);
+    clearedLoads += 1;
+    payload = { ...cleared, seed: { snapshots: 0, skipped: 0, added: 0 } };
+  } else if (url === '/api/library/remove-cleared') {
+    assert.equal(options.method, 'POST');
+    clearedPosts.push(JSON.parse(options.body));
+    payload = { photos_removed: cleared.frames, files_removed: 2, trash_path: '/managed/trash/recovery', snapshot_path: '/managed/trash/recovery/catalog.sqlite3' };
+    cleared = { frames: 0, batches: 0 };
   } else if (url === '/api/browse') payload = { path: browsePaths.shift() || '/cal/darks', cancelled: false };
   else if (url === '/api/ingest') { ingestPosts.push(JSON.parse(options.body)); payload = ingestJob('queued', 0); }
   else if (url === '/api/jobs/11') {
@@ -2999,6 +3032,35 @@ const regression = `
     assert.deepEqual(headerButtons, [], 'burst headers carry no per-burst action buttons; Clear and Astro tabs own them');
     return;
   }
+  if (scenario === 'remove-cleared') {
+    await load();
+    const button = element('#remove-cleared');
+    assert.equal(clearedLoads, 0, 'counted only when the Clear tab opens');
+    selectTab(element('#clear-tab'));
+    await new Promise(setImmediate);
+    assert.equal(element('#cleared-count').textContent, '3 frames in 1 batch');
+    assert.equal(button.disabled, false);
+    state.busy = true; updateWorkflow();
+    assert.equal(button.disabled, true, 'busy disables it');
+    state.busy = false; updateWorkflow();
+    cleared = { frames: 1, batches: 0 };
+    watchJob(importJob('running', 0.5));
+    watchJob(importJob('succeeded', 1, { result: { discovered: 1, imported: 1, updated: 0, skipped: 0, failed: 0 } }));
+    await new Promise(setImmediate);
+    assert.equal(clearedLoads, 2, 'a finished job refreshes the count on the Clear tab');
+    assert.equal(element('#cleared-count').textContent, '1 frame in 0 batches');
+    await button.listeners.click();
+    assert.deepEqual(clearedPosts, [{}]);
+    assert.ok(element('#clear-status').textContent.startsWith('Removed 1 frame'), element('#clear-status').textContent);
+    assert.equal(clearedLoads, 3, 'removal refreshes the count');
+    assert.equal(element('#cleared-count').textContent, 'None');
+    assert.equal(button.disabled, true, 'nothing left to remove');
+    selectTab(element('#review-tab'));
+    watchJob(importJob('running', 0.5)); watchJob(importJob('succeeded', 1, { result: { discovered: 1, imported: 1, updated: 0, skipped: 0, failed: 0 } }));
+    await new Promise(setImmediate);
+    assert.equal(clearedLoads, 3, 'other tabs do not count');
+    return;
+  }
   if (scenario === 'merge-batches') {
     await load();
     const button = element('#merge-batches');
@@ -3414,6 +3476,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for scenario in ("export", "export-cancel", "export-watermark", "export-bad-preset"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
+
+    def test_javascript_clear_tab_counts_and_removes_previously_cleared_frames(self):
+        self.run_javascript_cleanup_regression("remove-cleared")
 
     def test_javascript_batch_rail_merges_selected_batches(self):
         self.run_javascript_cleanup_regression("merge-batches")
