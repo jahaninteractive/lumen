@@ -354,16 +354,18 @@ class Library:
         return self._run_photo_job("review_rejects", tagger, scope, per_photo,
                                    counters=("reviewed", "skipped", "failed", "suggested"))
 
-    def start_assist_job(self, fast, review, *, scope: str | list[int] = "keepers") -> Job:
-        """One job per photo: tag (fast), look for problems (fast), caption (review); work already done is skipped.
-        A failing step is counted and logged, and the next step still runs; the photographer's caption is never replaced."""
+    def start_assist_job(self, fast, review, *, scope: str | list[int] = "keepers", redo: bool = False) -> Job:
+        """One job per photo: tag (fast), look for problems (fast), caption (review); work already done is skipped
+        unless `redo`, which repeats every model step. A failing step is counted and logged, and the next step still
+        runs; the photographer's own caption is never replaced, redo or not."""
         def per_photo(worker, photo, job) -> tuple[str, ...]:
             names: list[str] = []
             data = (worker.catalog.get_tags(photo.id) or {"data": {}})["data"]
+            own_caption = bool(data.get("caption")) and data.get("caption_author") == "photographer"
             steps = (
-                ("tagged", "description" in data, lambda: worker.tag_photo(photo.id, fast, job_id=job.id)),
-                ("reviewed", "problems" in data, lambda: worker._review_rejects_one(photo.id, fast, job_id=job.id)),
-                ("captioned", bool(data.get("caption")), lambda: worker.caption_photo(photo.id, review)),
+                ("tagged", "description" in data and not redo, lambda: worker.tag_photo(photo.id, fast, job_id=job.id)),
+                ("reviewed", "problems" in data and not redo, lambda: worker._review_rejects_one(photo.id, fast, job_id=job.id)),
+                ("captioned", own_caption or (bool(data.get("caption")) and not redo), lambda: worker.caption_photo(photo.id, review)),
             )
             for name, done, step in steps:
                 if done:
@@ -381,7 +383,7 @@ class Library:
 
         return self._run_photo_job("assist", fast, scope, per_photo,
                                    counters=("tagged", "reviewed", "captioned", "skipped", "failed", "suggested"),
-                                   manifest={"review_model": review.model})
+                                   manifest={"review_model": review.model, "redo": redo})
 
     def start_triage_job(self, tagger, *, group_id: int) -> Job:
         """Advisory sky triage of every frame in one group, whatever its exposure; exclusions never change."""
@@ -1001,7 +1003,7 @@ class Library:
 
     def _save_caption(self, photo_id: int, changes: dict, model: str, details: dict) -> dict:
         existing = self.catalog.get_tags(photo_id)
-        data = (existing["data"] if existing else {}) | changes
+        data = (existing["data"] if existing else {}) | changes | {"caption_author": details["author"]}
         data = {key: value for key, value in data.items() if not (key in changes and value == "")}
         self.catalog.save_tags(photo_id, data, existing["model"] if existing else model)
         shape = {"photo_id": photo_id, "caption": data.get("caption"), "alt_text": data.get("alt_text")}

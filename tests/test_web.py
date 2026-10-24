@@ -1063,10 +1063,10 @@ class WebTests(unittest.TestCase):
 
         both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
         with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger):
-            for payload in ({}, {"scope": "keepers", "retag": True}, {"scope": "nope"}):
+            for payload in ({}, {"scope": "keepers", "retag": True}, {"scope": "nope"}, {"scope": "keepers", "redo": "yes"}):
                 with self.subTest(payload=payload):
                     self.assertEqual(400, self.post_json("/api/photos/assist", payload)[0])
-            code, job = self.post_json("/api/photos/assist", {"scope": "keepers"})
+            code, job = self.post_json("/api/photos/assist", {"scope": "keepers", "redo": True})
             self.assertEqual((202, "assist"), (code, job["kind"]))
             done = self.wait_job(job["job_id"])
             self.assertEqual("succeeded", done["status"])
@@ -2914,6 +2914,15 @@ const regression = `
     assert.ok(element('#job-label').textContent.startsWith('Local AI assist'), element('#job-label').textContent);
     assert.equal(element('#ai-status').dataset.phase, 'running');
     assert.equal(button.disabled, true, 'one job at a time');
+    state.job = null;
+    updateWorkflow();
+    element('#redo-keepers').checked = true;
+    await button.listeners.click();
+    assert.deepEqual(assistPosts.at(-1), { scope: 'keepers', redo: true }, 'the redo tick repeats finished work');
+    state.job = null;
+    updateWorkflow();
+    await element('#tag-keepers').listeners.click();
+    assert.deepEqual(tagPosts.at(-1), { scope: 'keepers', retag: true }, 'tag keepers honours the same tick');
     return;
   }
   if (scenario === 'import-dialog') {

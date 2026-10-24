@@ -65,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     selection = assist.add_mutually_exclusive_group()
     selection.add_argument("--keepers", action="store_true", help="assist keepers (default)")
     selection.add_argument("--all", action="store_true")
+    assist.add_argument("--redo", action="store_true", help="repeat tagging, scanning, and model captions already done")
     assist.add_argument("--json", action="store_true")
 
     jobs = commands.add_parser("jobs", help="list recent background jobs")
@@ -234,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
                                                               scope="all" if args.all else "keepers")
                     elif args.command == "assist":
                         job = library.start_assist_job(library.tagger_for("fast"), library.tagger_for("review"),
-                                                       scope="all" if args.all else "keepers")
+                                                       scope="all" if args.all else "keepers", redo=args.redo)
                     else:
                         job = library.start_tag_job(library.tagger_for("fast"), scope="all" if args.all else "keepers",
                                                     retag=args.retag)

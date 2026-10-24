@@ -1224,8 +1224,12 @@ async function startTagJob(url, payload) {
   }
 }
 document.querySelector('#tag-all').addEventListener('click', () => startTagJob('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
-document.querySelector('#tag-keepers').addEventListener('click', () => startTagJob('/api/photos/tag', { scope: 'keepers' }));
-document.querySelector('#assist-keepers').addEventListener('click', () => startTagJob('/api/photos/assist', { scope: 'keepers' }));
+document.querySelector('#tag-keepers').addEventListener('click', () => startTagJob('/api/photos/tag', { scope: 'keepers', ...(redoKeepers() ? { retag: true } : {}) }));
+document.querySelector('#assist-keepers').addEventListener('click', () => startTagJob('/api/photos/assist', { scope: 'keepers', ...(redoKeepers() ? { redo: true } : {}) }));
+// One tick for both keeper buttons: repeat tagging and scanning that is already done (and model captions for Run all).
+function redoKeepers() {
+  return document.querySelector('#redo-keepers').checked;
+}
 
 document.querySelector('#scan-rejects').addEventListener('click', () => startTagJob('/api/photos/review-rejects', { scope: 'keepers' }));
 
@@ -1822,6 +1826,7 @@ function updateWorkflow() {
   document.querySelector('#reject-all-shown').disabled = state.cullingBlocked || !state.rejectSuggestions.length;
   document.querySelector('#composition-availability').textContent = roleUnavailable('review');
   document.querySelector('#retag-all').disabled = state.busy;
+  document.querySelector('#redo-keepers').disabled = state.busy;
   document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review') || !state.composition || state.composition.photo_id !== state.selectedId;
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));

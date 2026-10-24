@@ -395,8 +395,10 @@ class CliTests(unittest.TestCase):
             output = io.StringIO()
             with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
                 code = main(["--library", str(root / "library"), "assist", "--keepers", "--json"])
-            self.assertEqual(0, code)
-            self.assertEqual(["tag", "review", "caption"], FakeTagger.calls)
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(io.StringIO()):
+                redo = main(["--library", str(root / "library"), "assist", "--keepers", "--redo", "--json"])
+            self.assertEqual((0, 0), (code, redo))
+            self.assertEqual(["tag", "review", "caption"] * 2, FakeTagger.calls, "--redo repeats finished work")
             self.assertEqual("succeeded", json.loads(output.getvalue())["status"])
 
     def test_tag_keepers_runs_job_and_doctor_reports_both_roles(self):

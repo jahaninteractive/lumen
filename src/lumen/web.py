@@ -409,12 +409,15 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/assist":
-                    if payload.keys() != {"scope"}:
-                        raise ValueError("assist requires only scope")
-                    scope, _ = _tag_scope(payload)
+                    if payload.keys() - {"scope", "redo"} or "scope" not in payload:
+                        raise ValueError("assist requires scope and optional redo only")
+                    redo = payload.get("redo", False)
+                    if type(redo) is not bool:
+                        raise ValueError("redo must be true or false")
+                    scope, _ = _tag_scope({"scope": payload["scope"]})
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         fast, review = library.tagger_for("fast"), library.tagger_for("review")  # refusals reach the browser verbatim
-                        job = library.start_assist_job(fast, review, scope=scope)
+                        job = library.start_assist_job(fast, review, scope=scope, redo=redo)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/review-rejects":

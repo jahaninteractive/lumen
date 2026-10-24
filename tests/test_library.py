@@ -2393,12 +2393,18 @@ class LibraryTests(unittest.TestCase):
                 again = library.start_assist_job(FakeFast(), FakeReview(), scope="keepers")
                 library.wait_for_job(again.id)
                 rerun = library.job_status(again.id)
+                redo = library.start_assist_job(FakeFast(), FakeReview(), scope="keepers", redo=True)
+                library.wait_for_job(redo.id)
+                redone = library.job_status(redo.id)
+                redone_captions = [library.catalog.get_tags(photo.id)["data"]["caption"] for photo in photos]
         self.assertEqual(("assist", "succeeded", 3), (status["kind"], status["status"], status["processed"]))
         self.assertEqual({"tagged": 3, "reviewed": 3, "captioned": 2, "skipped": 0, "failed": 0, "suggested": 0}, status["result"])
         self.assertTrue(all(item["description"] == "A lion" and "problems" in item for item in data))
         self.assertEqual(["Mine.", "Lion at rest.", "Lion at rest."], [item["caption"] for item in data])
-        self.assertEqual((3, 3, 2), (FakeFast.tags, FakeFast.reviews, FakeReview.captions))
         self.assertEqual({"tagged": 0, "reviewed": 0, "captioned": 0, "skipped": 3, "failed": 0, "suggested": 0}, rerun["result"], "a rerun does no model work")
+        self.assertEqual({"tagged": 3, "reviewed": 3, "captioned": 2, "skipped": 0, "failed": 0, "suggested": 0}, redone["result"], "redo repeats model work")
+        self.assertEqual(["Mine.", "Lion at rest.", "Lion at rest."], redone_captions, "redo never replaces the photographer's caption")
+        self.assertEqual((6, 6, 4), (FakeFast.tags, FakeFast.reviews, FakeReview.captions))
 
     def test_low_confidence_species_named_in_subjects_stays_suggested(self):
         class FakeTagger:
