@@ -6,8 +6,6 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .superpowers/
-vendor/apps/
-vendor/downloads/
-vendor/state/
 
 test-image/
+vendor/

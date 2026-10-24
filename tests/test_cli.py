@@ -99,6 +99,10 @@ class CliTests(unittest.TestCase):
             separate_volumes = patch("lumen.ingest._device", side_effect=str)  # tests share one temp volume
             separate_volumes.start()
             self.addCleanup(separate_volumes.stop)
+            live = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+            loaded_model = patch("lumen.library.get_server_status", return_value=live)  # tag reaches tagger_for before the lock
+            loaded_model.start()
+            self.addCleanup(loaded_model.stop)
             for args in (["import", str(root / "CARD")], ["tag", "--all"], ["refine-previews", "--all"],
                          ["ingest", str(root / "CARD"), "--to", str(root / "primary")]):
                 with self.subTest(command=args[0]):
@@ -348,6 +352,29 @@ class CliTests(unittest.TestCase):
         self.assertEqual(0, code)
         # job_status exposes the manifest summary as result (see the tag --keepers test).
         self.assertEqual({"reviewed": 1, "skipped": 0, "failed": 0, "suggested": 0}, json.loads(output.getvalue())["result"])
+
+    def test_assist_keepers_runs_the_combined_job(self):
+        from lumen.omlx import Caption, RejectReview, TagResult
+
+        class FakeTagger:
+            calls = []
+            def __init__(self, *args, **kwargs): self.model, self.role = "m", kwargs.get("role")
+            def tag(self, preview, *, vocabulary=None): FakeTagger.calls.append("tag"); return TagResult("d", [], "", [], 0.9, "{}", species=[], conditions=[])
+            def review_rejects(self, preview): FakeTagger.calls.append("review"); return RejectReview([], False, 0.8, "{}")
+            def caption(self, preview): FakeTagger.calls.append("caption"); return Caption("c", "a", "{}")
+
+        live = {"version": "0.7.2", "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with redirect_stdout(io.StringIO()):
+                main(["--library", str(root / "library"), "import", str(root)])
+            output = io.StringIO()
+            with patch("lumen.library.OmlxTagger", FakeTagger), patch("lumen.library.get_server_status", return_value=live), redirect_stdout(output):
+                code = main(["--library", str(root / "library"), "assist", "--keepers", "--json"])
+            self.assertEqual(0, code)
+            self.assertEqual(["tag", "review", "caption"], FakeTagger.calls)
+            self.assertEqual("succeeded", json.loads(output.getvalue())["status"])
 
     def test_tag_keepers_runs_job_and_doctor_reports_both_roles(self):
         from lumen.omlx import TagResult

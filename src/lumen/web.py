@@ -19,6 +19,7 @@ from .digest import parse_day
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .pipelines import EXPORT_PRESETS
+from .previews import thumbnail_for
 from .vocabulary import load_vocabulary
 
 
@@ -316,10 +317,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 photo["preview_url"] = f"/preview/{photo['id']}?v={preview_version}"
                 self._send_json({"photo": photo, "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
                 return
-            match = re.fullmatch(r"/preview/(\d+)", path)
+            match = re.fullmatch(r"/(preview|thumb)/(\d+)", path)
             if match:
                 with Library(settings) as library:
-                    photo = library.catalog.get_photo(int(match.group(1)))
+                    photo = library.catalog.get_photo(int(match.group(2)))
                 if not photo or not photo.preview_path:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
@@ -332,6 +333,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if not preview.is_file():
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
+                if match.group(1) == "thumb":
+                    try:
+                        preview = thumbnail_for(preview, settings.cache_dir / "thumbs")
+                    except (OSError, ValueError):
+                        self.send_error(HTTPStatus.NOT_FOUND)
+                        return
                 self._send_bytes(preview.read_bytes(), "image/jpeg", cache=True)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -387,6 +394,15 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     scope, retag = _tag_scope(payload)
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         job = library.start_tag_job(library.tagger_for("fast"), scope=scope, retag=retag)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/photos/assist":
+                    if payload.keys() != {"scope"}:
+                        raise ValueError("assist requires only scope")
+                    scope, _ = _tag_scope(payload)
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        fast, review = library.tagger_for("fast"), library.tagger_for("review")  # refusals reach the browser verbatim
+                        job = library.start_assist_job(fast, review, scope=scope)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/review-rejects":
@@ -638,7 +654,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if isinstance(error, RuntimeError) and "another heavy job" in str(error):
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
-                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag",
+                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist",
                                              "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/"))
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)

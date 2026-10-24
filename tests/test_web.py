@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 from io import BytesIO
@@ -586,7 +587,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -605,7 +606,7 @@ class WebTests(unittest.TestCase):
             "/api/export", "/api/groups/1/remove", "/api/library/clear", "/api/browse-xmp",
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
-            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage",
+            "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -961,6 +962,34 @@ class WebTests(unittest.TestCase):
             self.assertEqual(400, self.post_json("/api/photos/review-rejects", {"scope": "keepers"})[0])
             self.assertFalse(any(j["kind"] == "review_rejects" and j["status"] in ("queued", "running") for j in self.get_json("/api/jobs")[1]["jobs"]))
 
+    def test_assist_route_runs_one_job_over_keepers_and_needs_both_roles(self):
+        from lumen.omlx import Caption, RejectReview, TagResult
+
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = kwargs.get("role") + "-model", kwargs.get("role")
+            def tag(self, preview, *, vocabulary=None): return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+            def review_rejects(self, preview): return RejectReview([], False, 0.8, "{}")
+            def caption(self, preview): return Caption("Cap.", "Alt.", "{}")
+
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger):
+            for payload in ({}, {"scope": "keepers", "retag": True}, {"scope": "nope"}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/assist", payload)[0])
+            code, job = self.post_json("/api/photos/assist", {"scope": "keepers"})
+            self.assertEqual((202, "assist"), (code, job["kind"]))
+            done = self.wait_job(job["job_id"])
+            self.assertEqual("succeeded", done["status"])
+            self.assertEqual({"tagged": 1, "reviewed": 1, "captioned": 1, "skipped": 0, "failed": 0, "suggested": 0}, done["result"])
+            tags = self.get_json("/api/photos/1")[1]["tags"]["data"]
+            self.assertEqual(("d", "Cap.", "Alt."), (tags["description"], tags["caption"], tags["alt_text"]))
+        fast_only = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=fast_only), patch("lumen.library.OmlxTagger", FakeTagger):
+            code, body = self.post_json("/api/photos/assist", {"scope": "keepers"})
+            self.assertEqual(400, code)
+            self.assertIn("review model Qwen3.8-27B-4bit is not loaded", body["error"])
+            self.assertFalse(any(j["kind"] == "assist" and j["status"] in ("queued", "running") for j in self.get_json("/api/jobs")[1]["jobs"]))
+
     def test_review_panel_has_native_rows_keys_and_counted_confirmation(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
         for needle in ('id="review-tab"', 'id="review-panel"', 'id="scan-rejects"', 'id="reject-list"', 'id="reject-all-shown"', 'id="reject-all-confirm"'):
@@ -1166,7 +1195,7 @@ const scope = new Element(); scope.value = 'current';
 const document = {
   get activeElement() { return focused; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
-  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : byData(selector) ? byData(selector)[0] ?? null
+  querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : selector === '.burst-frames' ? (() => { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).find(node => node.className === 'burst-frames') ?? null; })() : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
   querySelectorAll: selector => {
     if (selector === '.frame') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).filter(item => item.className === 'frame'); }
@@ -1184,13 +1213,13 @@ const timers = new Map();
 // The find scenario records timeouts so its debounce is real; elsewhere they run at once.
 const timeouts = new Map();
 let nextTimeout = 0;
-const window = { setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }) };
+const window = { setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }), getComputedStyle: node => ({ gridTemplateColumns: scenario === 'rows' && node?.className === 'burst-frames' ? '224px 224px' : 'none' }) };
 // pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
 async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -1239,6 +1268,7 @@ let groupsError = null;
 let resumeJobs = [];
 let importPolls = 0;
 const tagPosts = [];
+const assistPosts = [];
 let tagPolls = 0;
 const tagJob = (status, progress, extra = {}) => ({ job_id: 15, kind: 'tag', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const suggestionRows = () => [1, 2].map(id => ({ photo_id: id, name: 'photo-' + id + '.jpg', group_id: 1, problems: [{ kind: 'motion_blur', confidence: 0.84 }, { kind: 'eyes_closed', confidence: 0.61 }], confidence: 0.9, preview_url: '/preview/' + id + '?v=x' }));
@@ -1253,6 +1283,7 @@ const cropMutations = [];
 const cropId = 'crop-1111111111111111';
 let activeCrop = null;
 let reviewMode = 'success';
+let networkDown = false;  // the browser's fetch itself fails, as when lumen serve restarts mid-request
 let cropLoads = 0;
 let deferCropLoads = false;
 let deferReviews = false;
@@ -1268,9 +1299,11 @@ function cropPayload(active = activeCrop) {
   };
 }
 async function fetch(url, options = {}) {
+  if (networkDown) throw new TypeError('NetworkError when attempting to fetch resource.');
   let payload;
   let ok = true;
-  if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
+  if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
+  else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
     critiqueRequests.push([url, options.method]);
@@ -1311,7 +1344,7 @@ async function fetch(url, options = {}) {
     payload = importPolls < 3 ? importJob('running', 0.5, { label: 'DSC0001.ARW', processed: 1, total: 2 })
       : importJob('succeeded', 1, { label: 'DSC0002.ARW', processed: 2, total: 2, result: { discovered: 2, imported: 1, updated: 0, skipped: 1, failed: 0 } });
   }
-  else if (/^\/api\/photos\/[12]\/(decision|rating)$/.test(url)) {
+  else if (/^\/api\/photos\/\d+\/(decision|rating)$/.test(url)) {
     assert.equal(options.method, 'POST');
     const id = Number(url.split('/')[3]);
     const body = JSON.parse(options.body);
@@ -1329,6 +1362,7 @@ async function fetch(url, options = {}) {
     payload = { decided: body.photo_ids.map(id => ({ photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 })), remaining: rejectRows.length };
   }
   else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
+  else if (url === '/api/photos/assist') { assert.equal(options.method, 'POST'); assistPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0, { kind: 'assist' }); }
   else if (url === '/api/photos/1/tag') { assert.equal(options.method, 'POST'); return new Promise(resolve => pendingTags.push(() => resolve({ ok: true, json: async () => ({ photo_id: 1 }) }))); }
   else if (url === '/api/photos/1/keywords') {
     assert.equal(options.method, 'POST');
@@ -1353,6 +1387,7 @@ async function fetch(url, options = {}) {
     payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
   }
   else if (/^\/api\/photos\/[123]$/.test(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
+    photo: scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
       : scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (url === '/api/photos/2/crops') {
@@ -1567,6 +1602,7 @@ const regression = `
     assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + state_ + ' · review Qwen3.8-27B-4bit ' + state_);
     const aiTree = node => [node, ...(node.children || []).flatMap(aiTree)];
     if (!loaded) {
+      assert.equal(element('#assist-keepers').disabled, true, 'the combined run waits for both models');
       for (const id of ['#tag-keepers', '#tag-all']) {
         assert.equal(element(id).disabled, true, id + ' waits for the fast model');
         assert.ok(element(id + '-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX'));
@@ -2026,7 +2062,7 @@ const regression = `
     await load();
     assert.equal(lastGroupsUrl, '/api/groups');
     const days = () => element('#batch-list').children;
-    assert.deepEqual(days().map(day => [day.tagName, day.open, day.children[0].tagName]), [['DETAILS', true, 'SUMMARY'], ['DETAILS', true, 'SUMMARY'], ['DETAILS', true, 'SUMMARY']]);
+    assert.deepEqual(days().map(day => [day.tagName, day.open, day.children[0].tagName]), [['DETAILS', true, 'SUMMARY'], ['DETAILS', false, 'SUMMARY'], ['DETAILS', false, 'SUMMARY']], 'without a selection only the first day is expanded');
     assert.deepEqual(days().map(day => day.children[0].textContent), ['2026-10-21 · 250 frames · 3 keepers', '2026-10-22 · 140 frames · 0 keepers', 'Undated · 10 frames · 1 keeper']);
     assert.deepEqual(days().map(day => day.children.slice(1).map(item => item.className)), [['batch-row', 'batch-row'], ['batch-row'], ['batch-row']]);
     const cards = () => document.querySelectorAll('.frame');
@@ -2365,6 +2401,186 @@ const regression = `
     assert.equal(warning?.textContent, 'Warning: Sony reduced-size lossless raw; darktable cannot decode it');
     return;
   }
+  if (scenario === 'rows') {
+    groups = [group(1, [1, 2, 3, 4, 5])];
+    await load();
+    const sheetNode = element('#contact-sheet');
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = name => sheetNode.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target: card(state.focusedId), preventDefault() {} });
+    assert.equal(state.focusedId, 1);
+    await key('ArrowDown');
+    assert.equal(state.focusedId, 3, 'ArrowDown moves one grid row, read from the burst frame grid, not the sheet');
+    await key('PageDown');
+    assert.equal(state.focusedId, 5);
+    await key('ArrowUp');
+    assert.equal(state.focusedId, 3);
+    return;
+  }
+  if (scenario === 'tabs') {
+    groups = [group(1, [1, 2])];
+    await load();
+    scrolled.length = 0;
+    element('#review-tab').listeners.click();
+    const main = element('#main-content');
+    assert.ok(scrolled.some(([node, options]) => node === main && options.top === 0), 'choosing a tab scrolls the main column to its panel');
+    assert.equal(element('#review-panel').hidden, false);
+    assert.equal(stored['lumen-tab'], 'review-tab', 'the chosen tab is remembered');
+    return;
+  }
+  if (scenario === 'tabs-remembered') {
+    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'a remembered tab is selected at startup');
+    assert.equal(element('#compose-panel').hidden, true);
+    return;
+  }
+  if (scenario === 'keep-only') {
+    groups = [group(1, [1, 2, 3])];
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const texts = id => tree(card(id)).map(node => node.textContent);
+    const key = name => element('#contact-sheet').listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target: card(state.focusedId), preventDefault() {} });
+    await key('ArrowRight');
+    await key('r');
+    assert.deepEqual(picks, ['/api/photos/2/pick'], 'R picks the focused frame');
+    assert.deepEqual(decisionPosts.map(item => item.url), ['/api/photos/1/decision', '/api/photos/3/decision'], 'R rejects every other frame of the burst');
+    assert.ok(decisionPosts.every(item => item.body.decision === 'reject'));
+    assert.ok(texts(2).includes('Best') && !texts(2).includes('Rejected'));
+    assert.ok(texts(1).includes('Rejected') && texts(3).includes('Rejected'));
+    assert.equal(element('#announcer').textContent, 'photo-2.jpg kept as best; 2 other frames rejected');
+    assert.equal(focused, card(2), 'focus stays on the kept frame');
+    await inspect(state.groups[0].photos[0]);
+    const button = tree(element('#inspection')).find(node => node.tagName === 'BUTTON' && node.textContent === 'Keep this, reject the rest');
+    assert.ok(button, 'the inspector offers the same action');
+    await button.listeners.click();
+    assert.deepEqual(picks.at(-1), '/api/photos/1/pick');
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/decision', body: { decision: 'reject' } }, 'already rejected frames are not posted again');
+    assert.equal(decisionPosts.length, 3);
+    assert.ok(!tree(element('#inspection')).some(node => node.tagName === 'BUTTON' && node.textContent === 'Keep this, reject the rest'), 'the inspector re-renders once the burst has nothing left to reject');
+    return;
+  }
+  if (scenario === 'tiles' || scenario === 'tiles-remembered') {
+    await load();
+    const select = element('#tile-size');
+    const sheetNode = element('#contact-sheet');
+    if (scenario === 'tiles-remembered') {
+      assert.equal(select.value, 'small', 'a remembered size is restored');
+      assert.equal(sheetNode.style['--tile-min'], '140px');
+      return;
+    }
+    assert.equal(sheetNode.style['--tile-min'], undefined, 'medium is the stylesheet default');
+    select.value = 'large';
+    select.listeners.change();
+    assert.equal(sheetNode.style['--tile-min'], '260px');
+    assert.equal(stored['lumen-tile-size'], 'large');
+    assert.equal(element('#announcer').textContent, 'Large tiles');
+    return;
+  }
+  if (scenario === 'rail-days') {
+    const burst = (id, day, ids) => ({ ...group(id, ids), started_at: day + 'T08:00:00+00:00' });
+    groups = [burst(1, '2026-10-21', [1]), burst(2, '2026-10-22', [2]), burst(3, '2026-10-23', [3])];
+    await load();
+    const days = () => element('#batch-list').children;
+    assert.deepEqual(days().map(day => day.open), [true, false, false]);
+    await inspect(state.groups[1].photos[0]);
+    await load();
+    assert.deepEqual(days().map(day => day.open), [false, true, false], 'the day of the selected burst is expanded');
+    days()[2].open = true;
+    days()[2].children[0].listeners.click();  // the photographer opens a day by hand
+    await load();
+    assert.deepEqual(days().map(day => day.open), [false, true, true], 'hand-opened days survive a reload');
+    const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
+    groups = [burst(1, '2026-10-21', range(1, 200)), burst(2, '2026-10-22', [201])];
+    openDays = null;
+    state.selectedId = null; state.selectedGroupId = null;
+    await load();
+    assert.deepEqual(days().map(day => day.open), [true, false]);
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    tree(days()[1]).find(node => node.className === 'batch-button').listeners.click();
+    await new Promise(setImmediate);
+    assert.deepEqual(days().map(day => day.open), [false, true], 'a rail click that reveals a deeper page keeps its own day open');
+    assert.equal(state.selectedGroupId, 2);
+    return;
+  }
+  if (scenario === 'status-skew') {
+    await load();
+    assert.equal(document.querySelectorAll('.frame').length, 2, 'the sheet renders even when the status payload lacks the AI role block');
+    assert.ok(element('#system-status').textContent.includes('Ready'), element('#system-status').textContent);
+    assert.ok(element('#system-status').textContent.toLowerCase().includes('restart'), 'the status line says the server is older than the page');
+    assert.equal(element('#tag-all').disabled, true, 'AI controls stay disabled without role status');
+    return;
+  }
+  if (scenario === 'ai-status') {
+    await load();
+    const bar = element('#ai-status');
+    assert.equal(bar.dataset.phase, undefined, 'idle until the first call');
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    await inspect(state.groups[0].photos[1]);
+    assert.equal(state.composition?.photo_id, 2, 'the Compose tab loaded crop choices for photo 2');
+    reviewMode = 'failure';
+    await askCompositionAI();
+    assert.equal(bar.dataset.phase, 'failed');
+    assert.equal(bar.textContent, 'Composition review failed: local composition review is unavailable for this photo');
+    const ask = tree(element('#inspection')).find(node => node.id === 'ask-burst-ai');
+    const pending = ask.listeners.click();
+    assert.equal(bar.dataset.phase, 'running');
+    assert.equal(bar.textContent, 'Burst critique running…');
+    await pending;
+    assert.equal(bar.dataset.phase, 'done');
+    assert.equal(bar.textContent, 'Burst critique finished');
+    return;
+  }
+  if (scenario === 'assist') {
+    keeperOverride = 2;
+    await load();
+    const button = element('#assist-keepers');
+    assert.equal(button.textContent, 'Run all local AI on keepers (2 keepers)');
+    assert.equal(button.disabled, false);
+    await button.listeners.click();
+    assert.deepEqual(assistPosts, [{ scope: 'keepers' }]);
+    assert.equal(state.job.kind, 'assist');
+    assert.ok(element('#job-label').textContent.startsWith('Local AI assist'), element('#job-label').textContent);
+    assert.equal(element('#ai-status').dataset.phase, 'running');
+    assert.equal(button.disabled, true, 'one job at a time');
+    return;
+  }
+  if (scenario === 'import-dialog') {
+    await load();
+    const dialog = element('#import-dialog');
+    assert.equal(dialog.hidden, undefined, 'closed until opened');
+    element('#open-import').listeners.click();
+    assert.equal(dialog.hidden, false, 'Import… opens the dialog');
+    assert.equal(focused, element('#import-path'), 'focus lands in the path field');
+    element('#import-path').value = '/Volumes/Card';
+    await element('#import-form').listeners.submit({ preventDefault() {}, currentTarget: element('#import-form') });
+    assert.equal(state.job.status, 'queued');
+    assert.equal(dialog.hidden, true, 'an accepted import closes the dialog');
+    assert.ok(element('#announcer').textContent.includes('Import'));
+    return;
+  }
+  if (scenario === 'network-error') {
+    await load();
+    await inspect(state.groups[0].photos[1]);
+    networkDown = true;
+    await askCompositionAI();
+    assert.equal(element('#ai-status').dataset.phase, 'failed');
+    assert.equal(element('#ai-status').textContent, 'Composition review failed: Lumen server unreachable. If you just restarted lumen serve, reload this page.');
+    networkDown = false;
+    return;
+  }
+  if (scenario === 'location') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    await inspect(state.groups[0].photos[0]);
+    const line = tree(element('#inspection')).find(node => node.id === 'location');
+    assert.equal(line.textContent, 'Location: 24.1234° S, 31.5678° E · 312 m');
+    const link = tree(element('#inspection')).find(node => node.tagName === 'A');
+    assert.equal(link.href, 'https://maps.apple.com/?ll=-24.1234,31.5678&q=photo-1.jpg');
+    assert.equal(link.textContent, 'Open in Apple Maps');
+    await inspect(state.groups[0].photos[1]);
+    assert.equal(tree(element('#inspection')).find(node => node.id === 'location').textContent, 'No location in the file');
+    assert.ok(!tree(element('#inspection')).some(node => node.tagName === 'A'));
+    return;
+  }
   if (scenario === 'bursts') {
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const texts = node => tree(node).map(item => item.textContent);
@@ -2383,7 +2599,8 @@ const regression = `
     assert.ok(document.querySelectorAll('.frame').every(card => card.parent.parent === sections()[Number(card.dataset.group) - 1]));
     const rows = tree(element('#batch-list')).filter(node => node.className === 'batch-row');
     assert.deepEqual(rows.map(row => row.children.map(child => child.tagName)), [['IMG', 'INPUT', 'BUTTON'], ['IMG', 'INPUT', 'BUTTON']]);
-    assert.deepEqual(rows.map(row => [row.children[0].src, row.children[0].alt, row.children[0].loading]), [['/preview/1', '', 'lazy'], ['/preview/3', '', 'lazy']]);
+    assert.deepEqual(rows.map(row => [row.children[0].src, row.children[0].alt, row.children[0].loading]), [['/thumb/1', '', 'lazy'], ['/thumb/3', '', 'lazy']], 'rail thumbs use the small tier');
+    assert.ok(document.querySelectorAll('.frame').every(card => card.children[0].src === '/thumb/' + card.dataset.id), 'cards use the small tier');
     assert.ok(rows[0].children[2].textContent.startsWith('Burst 1 · 2 frames · '), rows[0].children[2].textContent);
     assert.equal(element('#merge-count').textContent, '0 batches selected');
 
@@ -2425,15 +2642,8 @@ const regression = `
     assert.equal(stored['lumen-panel-collapsed'], undefined);
     collapse.listeners.click();
 
-    const astro = tree(sections()[0]).find(node => node.tagName === 'BUTTON' && node.textContent === 'Astro');
-    await astro.listeners.click();
-    assert.equal(state.selectedGroupId, 1);
-    assert.equal(element('#astro-tab').getAttribute('aria-selected'), 'true');
-    assert.equal(element('#workflow-panels').hidden, false, 'choosing a tab expands a collapsed panel');
-    const remove = tree(sections()[1]).find(node => node.tagName === 'BUTTON' && node.textContent === 'Remove batch');
-    await remove.listeners.click();
-    assert.deepEqual(removals, ['/api/groups/2/remove']);
-    assert.equal(sections().length, 1);
+    const headerButtons = sections().flatMap(section => tree(section.children[0]).filter(node => node.tagName === 'BUTTON').map(node => node.textContent));
+    assert.deepEqual(headerButtons, [], 'burst headers carry no per-burst action buttons; Clear and Astro tabs own them');
     return;
   }
   if (scenario === 'merge-batches') {
@@ -2800,7 +3010,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn("hidden", more["attrs"])
         self.assertNotIn(by_id["contact-sheet"], more["parents"])
         javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
-        for text in ("createElement('details')", "createElement('summary')", "open = true", "history.replaceState", "location.search",
+        for text in ("createElement('details')", "createElement('summary')", "details.open = dayIsOpen(", "history.replaceState", "location.search",
                      "loading = 'lazy'", "Showing ${"):
             self.assertIn(text, javascript)
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
@@ -2971,8 +3181,97 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn("clearInterval", javascript)  # polling stops on terminal states
         self.assertNotRegex(javascript, r"astro[^\n]*\.innerHTML")
 
+    def test_javascript_keep_only_picks_the_frame_and_rejects_the_rest_of_its_burst(self):
+        self.run_javascript_cleanup_regression("keep-only")
+
+    def test_javascript_tile_size_control_sets_the_grid_and_is_remembered(self):
+        self.run_javascript_cleanup_regression("tiles")
+        self.run_javascript_cleanup_regression("tiles-remembered")
+
+    def test_javascript_rail_expands_only_the_selected_day_and_hand_opened_days(self):
+        self.run_javascript_cleanup_regression("rail-days")
+
+    def test_sheet_has_tile_size_control_and_keep_only_shortcut(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        self.assertEqual("select", by_id["tile-size"]["tag"])
+        self.assertTrue(any(node["tag"] == "label" and node["attrs"].get("for") == "tile-size" for node in parser.nodes))
+        self.assertIn("<kbd>R</kbd>", html)
+        self.assertIn("reject the rest", html.lower())
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\.burst-frames \{[^}]*minmax\(var\(--tile-min, 180px\), 1fr\)")
+        self.assertRegex(styles, r"\.frame img \{[^}]*object-fit: contain")  # portrait frames are shown whole
+
+    def test_javascript_page_still_renders_when_server_status_predates_the_page(self):
+        self.run_javascript_cleanup_regression("status-skew")
+
+    def test_javascript_ai_status_bar_reports_running_done_and_failed(self):
+        self.run_javascript_cleanup_regression("ai-status")
+
+    def test_ai_status_bar_is_a_footer_live_region(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        status = by_id["ai-status"]
+        self.assertEqual(("status", "polite"), (status["attrs"].get("role"), status["attrs"].get("aria-live")))
+        self.assertTrue(any(node["tag"] == "footer" for node in status["parents"]), "the AI status line sits in a footer at the bottom")
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r'#ai-status\[data-phase="failed"\] \{[^}]*var\(--danger\)')
+
+    def test_javascript_assist_button_runs_one_job_over_keepers(self):
+        self.run_javascript_cleanup_regression("assist")
+
+    def test_javascript_import_lives_in_a_dialog_opened_from_the_tab_row(self):
+        self.run_javascript_cleanup_regression("import-dialog")
+
+    def test_import_dialog_and_export_tab_own_the_import_and_tag_controls(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        self.assertEqual("dialog", by_id["import-dialog"]["tag"])
+        self.assertIn(by_id["import-dialog"], by_id["import-form"]["parents"], "the import form lives in the dialog")
+        self.assertNotIn(by_id["main-content"], by_id["import-form"]["parents"])
+        opener = by_id["open-import"]
+        self.assertEqual(("button", "button", "dialog"), (opener["tag"], opener["attrs"].get("type"), opener["attrs"].get("aria-haspopup")))
+        tab_row = next(node for node in parser.nodes if node["attrs"].get("class") == "tab-row")
+        self.assertIn(tab_row, opener["parents"], "Import… sits in the pinned tab row")
+        for name in ("tag-all", "retag-all"):
+            self.assertIn(by_id["export-panel"], by_id[name]["parents"], f"{name} moved into the Export tab")
+
+    def test_javascript_network_failure_names_the_server_not_the_browser(self):
+        self.run_javascript_cleanup_regression("network-error")
+
+    def test_javascript_inspector_shows_gps_location_with_a_maps_link(self):
+        self.run_javascript_cleanup_regression("location")
+
     def test_javascript_contact_sheet_groups_frames_into_burst_sections(self):
         self.run_javascript_cleanup_regression("bursts")
+
+    def test_javascript_arrow_up_down_move_one_grid_row(self):
+        self.run_javascript_cleanup_regression("rows")
+
+    def test_javascript_choosing_a_tab_scrolls_its_panel_into_view(self):
+        self.run_javascript_cleanup_regression("tabs")
+        self.run_javascript_cleanup_regression("tabs-remembered")
+
+    def test_frames_tab_row_and_caption_inputs_fit_the_sticky_layout(self):
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\n\.frame \{[^}]*scroll-margin-top: var\(--sticky-top")  # focus never lands under the sticky header
+        self.assertRegex(styles, r"\.tab-row \{[^}]*flex-wrap: wrap")  # the collapse button wraps instead of clipping
+        self.assertRegex(styles, r"#caption-controls label, #caption-controls input \{[^}]*display: block")
+        self.assertRegex(styles, r"\.crop-grid \{[^}]*repeat\(auto-fill, minmax\(220px, 360px\)\)")  # one card never fills the panel
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        sticky = next(node for node in parser.nodes if node["attrs"].get("class") == "main-top")
+        self.assertIn(sticky, by_id["compose-tab"]["parents"], "the tab row stays pinned")
+        for name in ("import-form", "tag-all"):
+            self.assertNotIn(sticky, by_id[name]["parents"], f"{name} scrolls away with the page")
 
     def test_layout_is_full_height_with_collapse_toggle_burst_sections_and_rail_merge_controls(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
@@ -3008,7 +3307,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn("prefers-reduced-motion", styles)
         javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
         for text in ("createElement('section')", "className = 'burst'", "'aria-labelledby'", "block: 'start'", "prefers-reduced-motion",
-                     "lumen-panel-collapsed", "'Selected'", "'Select for merge'", "'Remove batch'", "'Astro'", "toLocaleTimeString", "toLocaleString"):
+                     "lumen-panel-collapsed", "'Selected'", "'Select for merge'", "toLocaleTimeString", "toLocaleString"):
             self.assertIn(text, javascript)
         self.assertNotRegex(javascript, r"burst[^\n]*\.innerHTML")
 
@@ -3027,6 +3326,28 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         photo = payload["groups"][0]["photos"][0]
         self.assertTrue(photo["preview_url"].startswith("/preview/"))
         self.assertIsInstance(photo["total_score"], float)
+
+    def test_thumb_route_serves_a_small_cached_jpeg_inside_the_library(self):
+        source = self.root / "big.jpg"
+        Image.new("RGB", (1600, 1200), (30, 60, 90)).save(source)
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            library.import_path(source)
+        photo_id = max(photo["id"] for group in json.load(urllib.request.urlopen(self.base + "/api/groups", timeout=3))["groups"] for photo in group["photos"])
+        with urllib.request.urlopen(f"{self.base}/thumb/{photo_id}?v=abc", timeout=3) as response:
+            self.assertEqual("image/jpeg", response.headers["Content-Type"])
+            self.assertIn("max-age", response.headers["Cache-Control"])
+            thumb = Image.open(io.BytesIO(response.read()))
+        self.assertEqual((480, 360), thumb.size)
+        cached = list((self.root / "library" / "cache" / "thumbs").glob("*.jpg"))
+        self.assertEqual(1, len(cached), "the thumbnail is written once below the library cache")
+        with urllib.request.urlopen(f"{self.base}/thumb/{photo_id}", timeout=3) as response:
+            response.read()
+        self.assertEqual(cached, list((self.root / "library" / "cache" / "thumbs").glob("*.jpg")))
+        for bad in ("/thumb/999", "/thumb/../catalog.sqlite3"):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(self.base + bad, timeout=3)
+            self.assertEqual(404, caught.exception.code)
+            caught.exception.close()
 
     def test_preview_route_rejects_traversal(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from lumen.config import Settings
-from lumen.vocabulary import all_keywords, load_vocabulary, match_keywords
+from lumen.vocabulary import learn_keywords, all_keywords, load_vocabulary, match_keywords
 
 
 class VocabularyTests(unittest.TestCase):
@@ -32,6 +32,18 @@ class VocabularyTests(unittest.TestCase):
         self.assertEqual(["gentoo penguin", "ice"], applied)
         self.assertEqual(["leopard", "krill", "skua"], suggested)
         self.assertEqual(["gentoo penguin", "ice", "zodiac"], all_keywords(vocab))
+
+    def test_learn_keywords_appends_new_words_once_and_keeps_the_file_valid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(library_dir=Path(directory))
+            load_vocabulary(settings)
+            added = learn_keywords(settings, {"learned": ["Impala", "ice", "impala", " "], "wildlife": ["lion"]})
+            self.assertEqual(["Impala", "lion"], added, "existing words (any case) and blanks are not re-added")
+            vocab = load_vocabulary(settings)
+            self.assertEqual(["Impala"], vocab["learned"])
+            self.assertIn("lion", vocab["wildlife"])
+            self.assertEqual([], learn_keywords(settings, {"learned": ["IMPALA"]}))
+            self.assertEqual(1, json.loads(settings.vocabulary_path.read_text())["schema_version"])
 
 
 if __name__ == "__main__":

@@ -58,6 +58,21 @@ class PreviewTests(unittest.TestCase):
             ):
                 self.assertEqual((4000, 6000), read_image_dimensions(source))
 
+    def test_metadata_reads_gps_as_signed_decimals_and_needs_both_coordinates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.ARW"
+            source.write_bytes(b"raw")
+            response = subprocess.CompletedProcess(["exiftool"], 0, '[{"Model":"ILCE-7CM2","GPSLatitude":-24.1234,"GPSLongitude":31.5678,"GPSAltitude":312.4}]', "")
+            with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch("lumen.previews.subprocess.run", return_value=response) as run:
+                metadata = read_metadata(source)
+            self.assertEqual((-24.1234, 31.5678, 312.4), (metadata["latitude"], metadata["longitude"], metadata["altitude"]))
+            for flag in ("-GPSLatitude", "-GPSLongitude", "-GPSAltitude"):
+                self.assertIn(flag, run.call_args.args[0])
+            response.stdout = '[{"Model":"ILCE-7CM2","GPSLatitude":-24.1234}]'
+            with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch("lumen.previews.subprocess.run", return_value=response):
+                metadata = read_metadata(source)
+            self.assertEqual((None, None, None), (metadata["latitude"], metadata["longitude"], metadata["altitude"]), "half a fix is no fix")
+
     def test_metadata_reads_exposure_seconds_numerically(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.ARW"

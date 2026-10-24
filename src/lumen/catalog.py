@@ -22,7 +22,8 @@ _JOB_TRANSITIONS = {
 _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
     "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT",
-               "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'", "exposure_seconds": "REAL", "merged_into": "TEXT"},
+               "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'", "exposure_seconds": "REAL", "merged_into": "TEXT",
+               "latitude": "REAL", "longitude": "REAL", "altitude": "REAL"},
 }
 
 
@@ -224,12 +225,15 @@ class Catalog:
             """
             INSERT INTO photos
                 (path, fingerprint, captured_at, camera_id, preview_path, format,
-                 group_id, manual_pick, imported_at, preview_kind, exposure_seconds)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 group_id, manual_pick, imported_at, preview_kind, exposure_seconds, latitude, longitude, altitude)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 fingerprint=excluded.fingerprint,
                 captured_at=excluded.captured_at,
                 exposure_seconds=excluded.exposure_seconds,
+                latitude=excluded.latitude,
+                longitude=excluded.longitude,
+                altitude=excluded.altitude,
                 camera_id=excluded.camera_id,
                 preview_path=excluded.preview_path,
                 preview_kind=excluded.preview_kind,
@@ -250,10 +254,19 @@ class Catalog:
                 now,
                 photo.preview_kind,
                 photo.exposure_seconds,
+                photo.latitude,
+                photo.longitude,
+                photo.altitude,
             ),
         ).fetchone()
         self.connection.commit()
         return int(row["id"])
+
+    def update_location(self, photo_id: int, *, latitude: float | None, longitude: float | None, altitude: float | None) -> None:
+        """Backfill a GPS fix read later for an otherwise unchanged file."""
+        self.connection.execute("UPDATE photos SET latitude = ?, longitude = ?, altitude = ? WHERE id = ?",
+                                (latitude, longitude, altitude, photo_id))
+        self.connection.commit()
 
     def list_photos(self) -> list[Photo]:
         rows = self.connection.execute("SELECT * FROM photos ORDER BY id").fetchall()
@@ -936,6 +949,9 @@ class Catalog:
             preview_kind=row["preview_kind"],
             exposure_seconds=row["exposure_seconds"],
             merged_into=row["merged_into"],
+            latitude=row["latitude"],
+            longitude=row["longitude"],
+            altitude=row["altitude"],
         )
 
     @staticmethod

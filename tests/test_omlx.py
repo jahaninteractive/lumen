@@ -1,3 +1,4 @@
+import io
 import unittest
 import urllib.error
 import tempfile
@@ -56,13 +57,22 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual("The wider frame preserves context.", result.rationale)
         self.assertEqual(0.8, result.confidence)
 
+    def test_composition_response_keeps_long_rationales_and_ignores_extra_fields(self):
+        # Real Qwen3.8-27B replies ran past 500 characters and were thrown away (2026-10-23); clip at a word instead.
+        words = ("The tighter framing removes the distracting branches on the left and keeps the impala " * 8).strip()
+        raw = json.dumps({"candidate_id": "crop-original", "rationale": words, "confidence": 0.9, "left": 0})
+        result = parse_composition_response(raw, {"crop-original"})
+        self.assertLessEqual(len(result.rationale), 500)
+        self.assertTrue(result.rationale.endswith("…"))
+        self.assertTrue(words.startswith(result.rationale[:-1].rstrip()))
+        self.assertNotIn(" …", result.rationale, "clipped at a word boundary without a dangling space")
+
     def test_composition_response_rejects_unknown_id_unbounded_text_and_invalid_confidence(self):
         invalid = (
             '{"candidate_id":"crop-invented","rationale":"valid","confidence":0.5}',
-            json.dumps({"candidate_id": "crop-original", "rationale": "x" * 501, "confidence": 0.5}),
+            '{"candidate_id":"crop-original","rationale":"","confidence":0.5}',
             '{"candidate_id":"crop-original","rationale":"valid","confidence":NaN}',
             '{"candidate_id":"crop-original","rationale":"valid","confidence":true}',
-            '{"candidate_id":"crop-original","rationale":"valid","confidence":0.5,"left":0}',
             '```json\n{"candidate_id":"crop-original","rationale":"valid","confidence":0.5}\n``` trailing',
         )
         for raw in invalid:
@@ -253,14 +263,17 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual("Bearer secret", opener.request.headers["Authorization"])
 
 
-    def test_tag_response_accepts_species_and_conditions_and_rejects_extra_fields(self):
+    def test_tag_response_accepts_species_conditions_and_ignores_extra_fields(self):
         raw = json.dumps({"description": "Two penguins on ice", "subjects": ["gentoo penguin"], "scene": "ice",
                           "technical": [], "confidence": 0.9,
                           "species": [{"name": "gentoo penguin", "confidence": 0.82}], "conditions": ["overcast"]})
         result = parse_tag_response(raw)
         self.assertEqual([{"name": "gentoo penguin", "confidence": 0.82}], result.species)
         self.assertEqual(["overcast"], result.conditions)
-        for bad in ({"species": [{"name": "x"}]}, {"species": [{"name": "x", "confidence": 2}]}, {"people": ["a"]}):
+        # Real Qwen3-VL-8B replies add fields such as "activity" (2026-10-23); unknown top-level keys are ignored.
+        extra = parse_tag_response(json.dumps({"description": "d", "subjects": ["impala"], "scene": "", "technical": [], "confidence": 0.5, "activity": ["feeding"]}))
+        self.assertEqual(["impala"], extra.subjects)
+        for bad in ({"species": [{"name": "x"}]}, {"species": [{"name": "x", "confidence": 2}]}):
             with self.subTest(bad=bad), self.assertRaises(TagResponseError):
                 parse_tag_response(json.dumps({"description": "d", "subjects": [], "scene": "", "technical": [], "confidence": 0.5} | bad))
 
@@ -279,9 +292,27 @@ class OmlxTests(unittest.TestCase):
             with patch.object(tagger, "_complete", fake_complete):
                 tagger.tag(preview, vocabulary={"wildlife": ["gentoo penguin"], "scene": ["ice"]})
         text = captured["content"][0]["text"]
-        self.assertIn("wildlife: gentoo penguin", text)
+        self.assertNotIn("wildlife", text)  # the stable vocabulary goes first, as a system prefix oMLX can cache
+        self.assertIn("wildlife: gentoo penguin", captured["kwargs"]["system"])
         self.assertIn("Do not identify a person.", text)
         self.assertEqual("fast", tagger.role)
+
+    def test_complete_sends_system_prefix_before_the_user_turn(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k")
+        calls = []
+
+        class Opener:
+            def open(self, request, timeout):
+                calls.append(request)
+                return io.BytesIO(json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode())
+
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=Opener()):
+            tagger._complete([{"type": "text", "text": "hi"}], 5, system="rules")
+            tagger._complete([{"type": "text", "text": "hi"}], 5)
+        with_system = json.loads(calls[0].data)["messages"]
+        self.assertEqual([{"role": "system", "content": "rules"}], with_system[:1])
+        self.assertEqual("user", with_system[1]["role"])
+        self.assertEqual(["user"], [m["role"] for m in json.loads(calls[1].data)["messages"]])
 
     def test_astro_response_requires_known_sky_class_and_issues(self):
         good = json.dumps({"sky": "milky_way", "confidence": 0.91, "issues": ["haze"]})
@@ -294,8 +325,13 @@ class OmlxTests(unittest.TestCase):
     def test_caption_response_enforces_lengths_and_no_hashtags(self):
         good = json.dumps({"caption": "Gentoo penguins porpoise beside the zodiac.", "alt_text": "Three penguins leaping from grey water near a black inflatable boat."})
         self.assertEqual("Gentoo penguins porpoise beside the zodiac.", parse_caption_response(good).caption)
-        for bad in ({"caption": "x" * 201, "alt_text": "a"}, {"caption": "fun #trip", "alt_text": "a"}, {"caption": "a", "alt_text": "x" * 126},
-                    {"caption": "a", "alt_text": "b", "hashtags": []}, {"caption": "", "alt_text": "b"}):
+        # Real Qwen3.8-27B alt text ran past 125 characters (2026-10-23); long text is clipped at a word, never discarded.
+        long = parse_caption_response(json.dumps({"caption": "Penguins leap from grey water " * 12, "alt_text": "Three penguins leaping from grey water near a boat " * 4, "hashtags": []}))
+        self.assertLessEqual(len(long.caption), 200)
+        self.assertLessEqual(len(long.alt_text), 125)
+        self.assertTrue(long.caption.endswith("…") and long.alt_text.endswith("…"))
+        self.assertNotIn(" …", long.alt_text)
+        for bad in ({"caption": "fun #trip", "alt_text": "a"}, {"caption": "", "alt_text": "b"}, {"caption": "a", "alt_text": " "}, {"caption": "a"}):
             with self.subTest(bad=bad), self.assertRaises(CaptionResponseError):
                 parse_caption_response(json.dumps(bad))
 
@@ -327,8 +363,14 @@ class OmlxTests(unittest.TestCase):
     def test_burst_response_requires_supplied_frame_and_bounded_rationale(self):
         good = json.dumps({"frame_id": "7", "rationale": "Sharpest eye, wing fully extended.", "confidence": 0.72})
         self.assertEqual("7", parse_burst_response(good, {"7", "8"}).frame_id)
-        for bad in ({"frame_id": "9", "rationale": "x", "confidence": 0.5}, {"frame_id": "7", "rationale": "x" * 301, "confidence": 0.5},
-                    {"frame_id": "7", "rationale": "x", "confidence": 0.5, "second": "8"}, {"frame_id": 7, "rationale": "x", "confidence": 0.5}):
+        long = parse_burst_response(json.dumps({"frame_id": "7", "rationale": "sharp eye " * 40, "confidence": 0.5, "second": "8"}), {"7", "8"})
+        self.assertLessEqual(len(long.rationale), 300)
+        self.assertTrue(long.rationale.endswith("…"))
+        # Real Qwen3.8-27B answered "frame_id": 93 as a number for frames labelled "93" (2026-10-23); integers are accepted.
+        self.assertEqual("7", parse_burst_response(json.dumps({"frame_id": 7, "rationale": "x", "confidence": 0.5}), {"7", "8"}).frame_id)
+        for bad in ({"frame_id": "9", "rationale": "x", "confidence": 0.5}, {"frame_id": "7", "rationale": " ", "confidence": 0.5},
+                    {"frame_id": 9, "rationale": "x", "confidence": 0.5}, {"frame_id": True, "rationale": "x", "confidence": 0.5},
+                    {"frame_id": 7.0, "rationale": "x", "confidence": 0.5}):
             with self.subTest(bad=bad), self.assertRaises(BurstResponseError):
                 parse_burst_response(json.dumps(bad), {"7", "8"})
 

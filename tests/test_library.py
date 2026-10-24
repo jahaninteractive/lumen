@@ -14,6 +14,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from lumen.config import Settings
+from lumen.vocabulary import load_vocabulary
 from lumen.library import Library
 from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
 from lumen import library as library_module
@@ -450,6 +451,21 @@ class LibraryTests(unittest.TestCase):
             self.assertIsNotNone(library.get_photo(photo.id)["metrics"])
             with closing(sqlite3.connect(next(path for path in metadata if path.name == "catalog.sqlite3"))) as snapshot:
                 self.assertEqual(1, snapshot.execute("SELECT COUNT(*) FROM photos").fetchone()[0])
+
+    def test_import_stores_gps_and_a_later_import_backfills_unchanged_files(self):
+        base = {"captured_at": None, "camera_id": "ILCE-7CM2:1", "exposure_seconds": None, "raw_warning": None,
+                "latitude": None, "longitude": None, "altitude": None}
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            with patch("lumen.library.read_metadata", return_value=base):
+                library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            self.assertIsNone(photo.latitude)
+            fix = base | {"latitude": -24.1234, "longitude": 31.5678, "altitude": 312.0}
+            with patch("lumen.library.read_metadata", return_value=fix):  # e.g. location was linked after the first import
+                library.wait_for_job(library.start_import_job(self.image_path).id)
+            photo = library.catalog.get_photo(photo.id)
+            self.assertEqual((-24.1234, 31.5678, 312.0), (photo.latitude, photo.longitude, photo.altitude), "an unchanged file still gains its fix")
+            self.assertEqual((-24.1234, 31.5678), (library.get_photo(photo.id)["photo"].latitude, library.get_photo(photo.id)["photo"].longitude))
 
     def test_unsupported_raw_is_flagged_at_import_and_exports_through_the_macos_decoder(self):
         warning = "Sony reduced-size lossless raw; darktable cannot decode it"
@@ -1787,16 +1803,22 @@ class LibraryTests(unittest.TestCase):
                 sidecar = json.loads(library.sidecars.paths(photos[0])[0].read_text())
                 xmp = library.sidecars.paths(photos[0])[1].read_text()
                 self.assertIsNone(library.catalog.get_tags(photos[2].id))
+                learned = load_vocabulary(library.settings)
+                learn_event = [e for e in library.catalog.events_for(photos[0].id) if e.kind == "vocabulary_learned"][-1]
         self.assertEqual("succeeded", status["status"])
         self.assertEqual(2, status["processed"])
-        self.assertEqual(["gentoo penguin", "ice", "overcast"], data["subjects"])
-        self.assertEqual(["snow", "krill", "spindrift"], data["suggested"][:3])
-        self.assertIn("chinstrap penguin", data["suggested"])
+        # The vocabulary learns from the model: free-text words become keywords and join <library>/vocabulary.json;
+        # only a weak species (< 0.6) stays a suggestion.
+        self.assertEqual(["gentoo penguin", "ice", "overcast", "snow", "krill", "spindrift"], data["subjects"])
+        self.assertEqual(["chinstrap penguin"], data["suggested"])
+        self.assertEqual(["snow", "krill", "spindrift"], learned["learned"])
+        self.assertNotIn("chinstrap penguin", learn_event.details["words"], "a weak species teaches nothing")
+        self.assertEqual(["snow", "krill", "spindrift"], learn_event.details["words"])
         self.assertEqual("fast", event.details["role"])
         self.assertEqual('{"raw": true}', event.details["raw_response"])
-        self.assertEqual(["gentoo penguin", "ice", "overcast"], sidecar["keywords"])
+        self.assertEqual(["gentoo penguin", "ice", "overcast", "snow", "krill", "spindrift"], sidecar["keywords"])
         self.assertIn("<rdf:li>gentoo penguin</rdf:li>", xmp)
-        self.assertNotIn("krill", xmp)
+        self.assertIn("<rdf:li>krill</rdf:li>", xmp)
         self.assertEqual(2, len(FakeTagger.calls))
         self.assertIn("wildlife", FakeTagger.calls[0])
 
@@ -1821,12 +1843,13 @@ class LibraryTests(unittest.TestCase):
                 library.catalog.save_tags(photo_id, library.catalog.get_tags(photo_id)["data"] | {"suggested": ["krill"]}, "fast-model")
                 added = library.add_suggested_keyword(photo_id, "krill")
                 self.assertEqual((["ice", "krill"], []), (added["subjects"], added["suggested"]))
+                self.assertIn("krill", load_vocabulary(library.settings)["learned"], "a hand-accepted keyword teaches the vocabulary")
                 removed = library.remove_keyword(photo_id, "ice")
                 self.assertEqual((["krill"], ["ice"]), (removed["subjects"], removed["suggested"]))
                 with self.assertRaises(ValueError):
                     library.add_suggested_keyword(photo_id, "orca")
                 kinds = [e.kind for e in library.catalog.events_for(photo_id)]
-                self.assertEqual(["keyword_added", "keyword_removed"], kinds[-2:])
+                self.assertEqual(["keyword_added", "vocabulary_learned", "keyword_removed"], kinds[-3:])
 
     def test_reject_review_job_stores_problems_and_never_changes_decisions(self):
         class FakeTagger:
@@ -1922,6 +1945,46 @@ class LibraryTests(unittest.TestCase):
                 library.wait_for_job(job.id)
                 self.assertEqual(1, library.job_status(job.id)["result"]["tagged"])
                 self.assertIn("problems", library.catalog.get_tags(library.catalog.list_photos()[0].id)["data"])
+
+    def test_assist_job_tags_reviews_and_captions_keepers_and_skips_finished_work(self):
+        from lumen.omlx import RejectReview, TagResult
+
+        class FakeFast:
+            model, role, tags, reviews = "fast-model", "fast", 0, 0
+            def tag(self, preview, *, vocabulary=None):
+                FakeFast.tags += 1
+                return TagResult("A lion", ["lion"], "savanna", [], 0.9, "{}", species=[{"name": "lion", "confidence": 0.95}], conditions=[])
+            def review_rejects(self, preview):
+                FakeFast.reviews += 1
+                return RejectReview([], False, 0.8, "{}")
+
+        class FakeReview:
+            model, role, captions = "review-model", "review", 0
+            def caption(self, preview):
+                FakeReview.captions += 1
+                return Caption("Lion at rest.", "A lion lying in dry grass.", "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(3):
+                Image.new("RGB", (120, 90), (index * 40, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                photos = library.catalog.list_photos()
+                library.set_caption(photos[0].id, caption="Mine.", alt_text="My alt.")  # photographer's words are never replaced
+                job = library.start_assist_job(FakeFast(), FakeReview(), scope="keepers")
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                data = [library.catalog.get_tags(photo.id)["data"] for photo in photos]
+                again = library.start_assist_job(FakeFast(), FakeReview(), scope="keepers")
+                library.wait_for_job(again.id)
+                rerun = library.job_status(again.id)
+        self.assertEqual(("assist", "succeeded", 3), (status["kind"], status["status"], status["processed"]))
+        self.assertEqual({"tagged": 3, "reviewed": 3, "captioned": 2, "skipped": 0, "failed": 0, "suggested": 0}, status["result"])
+        self.assertTrue(all(item["description"] == "A lion" and "problems" in item for item in data))
+        self.assertEqual(["Mine.", "Lion at rest.", "Lion at rest."], [item["caption"] for item in data])
+        self.assertEqual((3, 3, 2), (FakeFast.tags, FakeFast.reviews, FakeReview.captions))
+        self.assertEqual({"tagged": 0, "reviewed": 0, "captioned": 0, "skipped": 3, "failed": 0, "suggested": 0}, rerun["result"], "a rerun does no model work")
 
     def test_low_confidence_species_named_in_subjects_stays_suggested(self):
         class FakeTagger:

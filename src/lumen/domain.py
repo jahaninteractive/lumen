@@ -59,6 +59,9 @@ class Photo:
     preview_kind: str = "embedded"  # "embedded" (camera JPEG) or "refined" (darktable render)
     exposure_seconds: float | None = None
     merged_into: str | None = None  # stable_key of the group a manual merge moved this photo into
+    latitude: float | None = None  # camera GPS fix, signed decimal degrees; None when the file has none
+    longitude: float | None = None
+    altitude: float | None = None  # metres
 
 
 @dataclass(slots=True)

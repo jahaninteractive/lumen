@@ -45,3 +45,22 @@ def match_keywords(candidates: list[str], vocab: dict[str, list[str]]) -> tuple[
         elif len(suggested) < MAX_SUGGESTED:
             suggested.append(candidate.strip())
     return applied, suggested
+
+
+def learn_keywords(settings: Settings, words_by_category: dict[str, list[str]]) -> list[str]:
+    """Append words the model (or the photographer) used to <library>/vocabulary.json; returns the words actually added."""
+    vocab = load_vocabulary(settings)
+    known = {word.casefold() for word in all_keywords(vocab)}
+    added = []
+    for category, words in words_by_category.items():
+        for word in words:
+            clean = word.strip()
+            if not clean or clean.casefold() in known:
+                continue
+            vocab.setdefault(category, []).append(clean)
+            known.add(clean.casefold())
+            added.append(clean)
+    if added:
+        payload = json.loads(settings.vocabulary_path.read_text(encoding="utf-8")) | {"categories": vocab}
+        SidecarWriter._atomic_write(settings.vocabulary_path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    return added

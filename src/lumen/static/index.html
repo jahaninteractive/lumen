@@ -41,24 +41,6 @@
 
     <main id="main-content" tabindex="-1">
       <div class="main-top">
-      <form id="import-form" class="import-bar">
-        <label for="import-path">Folder or photo path</label>
-        <div class="input-row">
-          <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
-          <button type="button" id="browse-path" class="secondary">Browse…</button>
-          <button type="submit">Import originals</button>
-        </div>
-        <p>Files stay where they are. Lumen writes previews and sidecars to its own library.</p>
-        <p id="import-status" role="status" aria-live="polite"></p>
-      </form>
-      <div class="tag-bar">
-        <div class="input-row">
-          <button type="button" id="tag-all" class="secondary" aria-describedby="tag-all-availability">Tag all untagged</button>
-          <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
-        </div>
-        <p id="tag-all-availability" class="quiet"></p>
-        <p>Tags come from the local oMLX model. Progress appears in the job strip at the top.</p>
-      </div>
       <div class="tab-row">
         <div class="tab-rail" role="tablist" aria-label="Finishing workflow">
           <button type="button" id="compose-tab" role="tab" aria-controls="compose-panel" aria-selected="true" tabindex="0">Compose</button>
@@ -68,6 +50,7 @@
           <button type="button" id="ingest-tab" role="tab" aria-controls="ingest-panel" aria-selected="false" tabindex="-1">Ingest</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
+        <button type="button" id="open-import" class="secondary" aria-haspopup="dialog">Import…</button>
         <button type="button" id="collapse-panel" class="secondary" aria-pressed="false" aria-controls="workflow-panels">Collapse panel</button>
       </div>
       </div>
@@ -96,9 +79,20 @@
           <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose a size below; only Full resolution keeps GPS location.</p>
           <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
           <div class="button-row">
+            <button type="button" id="assist-keepers" aria-describedby="assist-keepers-availability" disabled>Run all local AI on keepers (0 keepers)</button>
             <button type="button" id="tag-keepers" class="secondary" aria-describedby="tag-keepers-availability" disabled>Tag keepers with local AI (0 keepers)</button>
           </div>
+          <p class="quiet">Run all: tags, a problem scan, and a caption for every keeper that lacks them. Already finished work is skipped, so run it again after more culling.</p>
+          <p id="assist-keepers-availability" class="quiet"></p>
           <p id="tag-keepers-availability" class="quiet"></p>
+          <div class="tag-bar">
+            <div class="input-row">
+              <button type="button" id="tag-all" class="secondary" aria-describedby="tag-all-availability">Tag all untagged</button>
+              <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
+            </div>
+            <p id="tag-all-availability" class="quiet"></p>
+            <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the top.</p>
+          </div>
           <fieldset id="export-controls">
             <legend>Choose what to export</legend>
             <div class="scope-options">
@@ -255,6 +249,12 @@
           <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" disabled>Compare marked</button>
         </div>
         <div class="refine-row">
+          <label for="tile-size">Tiles</label>
+          <select id="tile-size">
+            <option value="small">Small</option>
+            <option value="medium" selected>Medium</option>
+            <option value="large">Large</option>
+          </select>
           <label for="refine-scope">Refine</label>
           <select id="refine-scope" aria-describedby="refine-availability">
             <option value="group">Selected burst</option>
@@ -308,6 +308,27 @@
     </aside>
   </div>
 
+  <footer class="ai-bar" aria-label="Local AI activity">
+    <p id="ai-status" role="status" aria-live="polite">Local AI idle. Requests and their results are reported here.</p>
+  </footer>
+
+  <dialog id="import-dialog" aria-labelledby="import-heading">
+    <h2 id="import-heading">Import originals</h2>
+    <form id="import-form" class="import-bar">
+      <label for="import-path">Folder or photo path</label>
+      <div class="input-row">
+        <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
+        <button type="button" id="browse-path" class="secondary">Browse…</button>
+      </div>
+      <p>Files stay where they are. Lumen writes previews and sidecars to its own library.</p>
+      <p id="import-status" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="submit">Import originals</button>
+        <button type="button" id="close-import" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="shortcuts" aria-labelledby="shortcuts-heading">
     <form method="dialog">
       <h2 id="shortcuts-heading">Keyboard shortcuts</h2>
@@ -317,6 +338,7 @@
         <dt><kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>Page Up</kbd> <kbd>Page Down</kbd></dt><dd>Previous or next row</dd>
         <dt><kbd>Home</kbd> <kbd>End</kbd></dt><dd>First or last frame</dd>
         <dt><kbd>P</kbd></dt><dd>Choose as best in its burst</dd>
+        <dt><kbd>R</kbd></dt><dd>Keep this frame as best and reject the rest of its burst</dd>
         <dt><kbd>X</kbd></dt><dd>Reject</dd>
         <dt><kbd>F</kbd></dt><dd>Flag</dd>
         <dt><kbd>U</kbd></dt><dd>Clear decision</dd>

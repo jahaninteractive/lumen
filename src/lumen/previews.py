@@ -162,14 +162,15 @@ class ExifToolPreviewProvider:
 
 
 def read_metadata(path: Path) -> dict[str, str | float | None]:
-    unknown = {"captured_at": None, "camera_id": "unknown", "exposure_seconds": None, "raw_warning": None}
+    unknown = {"captured_at": None, "camera_id": "unknown", "exposure_seconds": None, "raw_warning": None,
+               "latitude": None, "longitude": None, "altitude": None}
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return unknown
     try:
         result = subprocess.run(
             [exiftool, "-json", "-n", "-DateTimeOriginal", "-CreateDate", "-Model", "-SerialNumber", "-ExposureTime",
-             "-SubIFD:PhotometricInterpretation", str(path)],
+             "-SubIFD:PhotometricInterpretation", "-GPSLatitude", "-GPSLongitude", "-GPSAltitude", str(path)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -192,8 +193,12 @@ def read_metadata(path: Path) -> dict[str, str | float | None]:
     unsupported = path.suffix.lower() == ".arw" and item.get("PhotometricInterpretation") == 6
     warning = ("Sony reduced-size lossless raw; darktable cannot decode it. JPEG export uses the macOS decoder with default "
                "settings, refined previews are unavailable, and culling uses the embedded preview.") if unsupported else None
+    number = lambda key: value if isinstance(value := item.get(key), (int, float)) and not isinstance(value, bool) else None
+    latitude, longitude, altitude = number("GPSLatitude"), number("GPSLongitude"), number("GPSAltitude")  # -n: signed decimals
+    if latitude is None or longitude is None:  # half a fix is no fix
+        latitude = longitude = altitude = None
     return {"captured_at": _normalize_exif_date(captured), "camera_id": f"{model}:{serial}", "exposure_seconds": exposure,
-            "raw_warning": warning}
+            "raw_warning": warning, "latitude": latitude, "longitude": longitude, "altitude": altitude}
 
 
 def _normalize_exif_date(value: str | None) -> str | None:
@@ -205,3 +210,22 @@ def _normalize_exif_date(value: str | None) -> str | None:
     except ValueError:
         return None
 
+
+
+THUMB_EDGE = 480  # contact-sheet tiles are ~224 CSS px; 480 covers 2× displays
+
+
+def thumbnail_for(preview: Path, cache_dir: Path) -> Path:
+    """Small JPEG for a managed preview, written once below the library cache; the name carries the preview's mtime."""
+    target = cache_dir / f"{preview.stem}-{preview.stat().st_mtime_ns}.jpg"
+    if target.is_file():
+        return target
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with Image.open(preview) as image:
+        image.draft("RGB", (THUMB_EDGE * 2, THUMB_EDGE * 2))  # cheap JPEG decode at reduced scale
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        image.thumbnail((THUMB_EDGE, THUMB_EDGE), Image.Resampling.LANCZOS)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
+            image.save(temporary, "JPEG", quality=82)
+    Path(temporary.name).replace(target)
+    return target

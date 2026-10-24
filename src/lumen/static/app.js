@@ -17,7 +17,12 @@ const inspection = document.querySelector('#inspection');
 const announcer = document.querySelector('#announcer');
 
 async function request(url, options = {}) {
-  const response = await fetch(url, options);
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch {  // fetch itself failed: the server went away, as when lumen serve restarts mid-request
+    throw new Error('Lumen server unreachable. If you just restarted lumen serve, reload this page.');
+  }
   const payload = await response.json();
   if (!response.ok) {
     const error = new Error(payload.error || `Request failed (${response.status})`);
@@ -39,6 +44,24 @@ function roleReady(role) {
 function roleUnavailable(role) {
   const item = state.status?.omlx_roles?.[role];
   return item && !item.loaded ? `${role === 'fast' ? 'Fast' : 'Review'} model ${item.model} is not loaded in oMLX. Load it in oMLX, then reload this page.` : '';
+}
+
+// Bottom status bar: every local AI request reports running, finished, or failed with the reason, in one place.
+const aiStatusLine = document.querySelector('#ai-status');
+function aiStatus(phase, text) {
+  aiStatusLine.dataset.phase = phase;
+  aiStatusLine.textContent = text;
+}
+async function aiCall(label, action) {
+  aiStatus('running', `${label} running…`);
+  try {
+    const result = await action();
+    aiStatus('done', `${label} finished`);
+    return result;
+  } catch (error) {
+    aiStatus('failed', `${label} failed: ${error.message}`);
+    throw error;
+  }
 }
 
 function announce(message) {
@@ -187,7 +210,7 @@ async function askCompositionAI() {
   updateWorkflow();
   document.querySelector('#compose-status').textContent = 'Asking the loaded local vision model…';
   try {
-    const review = await post(`/api/photos/${photoId}/composition-review`);
+    const review = await aiCall('Composition review', () => post(`/api/photos/${photoId}/composition-review`));
     if (requestId !== state.reviewRequest || compositionRequest !== state.compositionRequest || state.selectedId !== photoId) return;
     const candidate = state.composition.candidates.find(item => item.id === review.candidate_id);
     if (!candidate) {
@@ -248,6 +271,11 @@ function startTime(group, withDate = false) {
 function batchText(group, index) {
   const time = startTime(group);
   return `Burst ${index + 1} · ${frameCount(group.frame_count)}${time ? ` · ${time}` : ''}${allRejected(group) ? ` · ${NO_KEEPER}` : ''}`;
+}
+
+// Tiles, rail thumbs, and review rows show the small tier; loupe, compare, and crops keep the full preview.
+function thumbUrl(photo) {
+  return photo.preview_url.replace(/^\/preview\//, '/thumb/');
 }
 
 function bestFrame(group) {
@@ -312,19 +340,7 @@ function burstSection(group, groupIndex, frames) {
   const text = document.createElement('span');
   text.textContent = 'Select for merge';
   toggle.append(mergeCheckbox(group, groupIndex, 'burst-select'), text);
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'danger';
-  remove.textContent = 'Remove batch';
-  remove.setAttribute('aria-label', `Remove Burst ${groupIndex + 1} from Lumen`);
-  remove.addEventListener('click', () => cleanup(`/api/groups/${group.id}/remove`, {}));
-  const astro = document.createElement('button');
-  astro.type = 'button';
-  astro.className = 'secondary';
-  astro.textContent = 'Astro';
-  astro.setAttribute('aria-label', `Stack Burst ${groupIndex + 1} in the Astro tab`);
-  astro.addEventListener('click', () => selectGroup(group).then(() => selectTab(document.querySelector('#astro-tab'))).catch(error => announce(error.message)));
-  header.append(heading, facts, selected, toggle, remove, astro);
+  header.append(heading, facts, selected, toggle);  // removal and stacking live in the Clear and Astro tabs for the selected burst
   if (group.astro_cue) {  // advisory text from stored triage; it never switches the tab
     const cue = document.createElement('span');
     cue.className = 'astro-cue';
@@ -395,6 +411,29 @@ async function decide(photo, field, value, focusAfter = null) {
     announce(field === 'pick' ? `${photo.name} is now your best frame.`
       : field === 'rating' ? `Rating ${result.rating} set for ${name}` : `${name} ${DECISION_ANNOUNCEMENTS[result.decision]}`);
     if (state.selectedId === photo.id && focusAfter) document.querySelector(focusAfter)?.focus();
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+// Keep one frame: pick it as best (which clears its own rejection), then reject every other unrejected frame of its burst.
+// ponytail: one POST per frame, in order; a mid-way failure leaves the burst partly rejected and is announced.
+async function keepOnly(photo) {
+  if (state.cullingBlocked) return announce(cullingBlockedText());
+  const group = state.groups.find(item => item.photos.includes(photo));
+  if (!group) return;
+  const others = group.photos.filter(item => item !== photo && item.decision !== 'reject');
+  state.busy = true;
+  updateWorkflow();
+  try {
+    await post(`/api/photos/${photo.id}/pick`);
+    recordDecision(photo, { decision: photo.decision === 'reject' ? 'none' : photo.decision, rating: photo.rating, group_id: group.id, automatic_pick_id: photo.id });
+    for (const other of others) recordDecision(other, await post(`/api/photos/${other.id}/decision`, { decision: 'reject' }));
+    if (state.selectedId === photo.id) renderInspector(photo);  // the burst changed under the kept frame
+    announce(`${photo.name} kept as best; ${others.length} other frame${others.length === 1 ? '' : 's'} rejected`);
   } catch (error) {
     announce(error.message);
   } finally {
@@ -494,7 +533,7 @@ function burstCritique(photo, group) {
     updateWorkflow();
     announce('Asking local AI to compare this burst');
     try {
-      const data = await post(`/api/groups/${group.id}/critique`);
+      const data = await aiCall('Burst critique', () => post(`/api/groups/${group.id}/critique`));
       state.critique = { groupId: group.id, data };
       if (state.selectedId === photo.id) renderInspector(photo);
       announce(document.querySelector('#burst-advice')?.textContent || `Local AI suggests ${data.name}`);
@@ -536,6 +575,25 @@ function burstCritique(photo, group) {
   return block;
 }
 
+// Camera GPS fix as a sentence plus a link the photographer can open; Lumen itself never contacts a map service.
+function locationLine(photo, record) {
+  const line = document.createElement('p');
+  line.id = 'location';
+  line.className = 'quiet';
+  if (record?.latitude == null || record?.longitude == null) {
+    line.textContent = 'No location in the file';
+    return [line];
+  }
+  const degrees = (value, positive, negative) => `${Math.abs(value).toFixed(4)}° ${value < 0 ? negative : positive}`;
+  line.textContent = `Location: ${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
+  const link = document.createElement('a');
+  link.href = `https://maps.apple.com/?ll=${record.latitude},${record.longitude}&q=${encodeURIComponent(photo.name)}`;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.textContent = 'Open in Apple Maps';
+  return [line, link];
+}
+
 function renderInspector(photo) {
   const details = state.details;
   inspection.replaceChildren();
@@ -554,6 +612,7 @@ function renderInspector(photo) {
     inspection.append(reasons);
   }
   if (group) inspection.append(rankingExplanation(photo, group));
+  inspection.append(...locationLine(photo, details.photo));
   const critique = group && burstCritique(photo, group);
   if (critique) inspection.append(critique);
   inspection.append(decisionControls(photo));
@@ -581,6 +640,14 @@ function renderInspector(photo) {
     choose.addEventListener('click', () => decide(photo, 'pick', null, `.frame[data-id="${photo.id}"]`));
     actions.append(choose);
   }
+  if (group && group.photos.some(item => item !== photo && item.decision !== 'reject')) {
+    const keep = document.createElement('button');
+    keep.type = 'button';
+    keep.className = 'secondary';
+    keep.textContent = 'Keep this, reject the rest';
+    keep.addEventListener('click', () => keepOnly(photo));
+    actions.append(keep);
+  }
   const tag = document.createElement('button');
   tag.type = 'button';
   tag.textContent = 'Add local AI tags';
@@ -591,7 +658,7 @@ function renderInspector(photo) {
     state.busy = true;  // The server holds the library lock for the whole model call.
     updateWorkflow();
     try {
-      await request(`/api/photos/${photo.id}/tag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      await aiCall(`Tagging ${photo.name}`, () => request(`/api/photos/${photo.id}/tag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
       announce(`Tags added to ${photo.name}`);
       await inspect(photo);
     } catch (error) {
@@ -670,7 +737,7 @@ function captionControls(photo, data) {
     updateWorkflow();
     announce(`Asking local AI to caption ${photo.name}`);
     try {
-      const drafted = await post(`/api/photos/${photo.id}/caption`);
+      const drafted = await aiCall(`Caption for ${photo.name}`, () => post(`/api/photos/${photo.id}/caption`));
       caption.value = drafted.caption || '';
       alt.value = drafted.alt_text || '';
       Object.assign(data, { caption: drafted.caption, alt_text: drafted.alt_text });
@@ -755,7 +822,7 @@ function fillFrame(button, photo, group) {
   button.dataset.decision = photo.decision;
   button.setAttribute('aria-label', [`${photo.name}, score ${Math.round(photo.total_score * 100)} percent`, best ? 'best in group' : null, ...marks.map(word => word.toLowerCase())].filter(Boolean).join(', '));
   const image = document.createElement('img');
-  image.src = photo.preview_url;
+  image.src = thumbUrl(photo);
   image.alt = '';
   image.loading = 'lazy';
   const meta = document.createElement('span');
@@ -825,8 +892,9 @@ function focusFrame(photoId, move = true) {
   if (move) frameCard(photoId)?.focus();
 }
 
-function sheetColumns() {
-  const columns = window.getComputedStyle?.(sheet).gridTemplateColumns;
+function sheetColumns() {  // frames sit in per-burst grids; every grid shares one column count
+  const grid = document.querySelector('.burst-frames');
+  const columns = grid && window.getComputedStyle?.(grid).gridTemplateColumns;
   return columns && columns !== 'none' ? columns.trim().split(/\s+/).length : 1;
 }
 
@@ -839,9 +907,10 @@ function toggleCompare(photo) {
   announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
 }
 
-const CULLING_KEYS = { p: 'pick', x: 'reject', f: 'flag', u: 'clear', c: 'compare', Enter: 'loupe', Escape: 'close' };
+const CULLING_KEYS = { p: 'pick', r: 'keepOnly', x: 'reject', f: 'flag', u: 'clear', c: 'compare', Enter: 'loupe', Escape: 'close' };
 const CULLING_ACTIONS = {
   pick: photo => decide(photo, 'pick'),
+  keepOnly,
   reject: photo => decide(photo, 'decision', 'reject'),
   flag: photo => decide(photo, 'decision', 'flag'),
   clear: photo => decide(photo, 'decision', 'none'),
@@ -877,6 +946,16 @@ function handleCullingKey(event) {
 
 const PAGE = 200;
 let dayHeadings = [];  // { day, summary, groups } per rail <details>, so decisions can refresh keeper counts
+let openDays = null;  // days the photographer opened or closed by hand; until then the selected burst's day (else the first) is open
+
+function rememberOpenDays() {
+  openDays = new Set(dayHeadings.filter(heading => heading.details.open).map(heading => heading.day));
+}
+
+function dayIsOpen(day, index, selectedDay) {
+  if (openDays) return openDays.has(day) || day === selectedDay;
+  return selectedDay ? day === selectedDay : index === 0;
+}
 
 function dayText(day, groups) {
   const frames = groups.reduce((total, group) => total + group.frame_count, 0);
@@ -908,14 +987,17 @@ function renderGroups() {
   const ids = visible.map(([photo]) => photo.id);
   if (!ids.includes(state.focusedId)) state.focusedId = ids.includes(state.selectedId) ? state.selectedId : ids[0] ?? null;
   state.compare = state.compare.filter(id => photos.some(([photo]) => photo.id === id));
+  const dayOf = group => group.started_at?.slice(0, 10) || 'Undated';
+  const selectedDay = state.groups.filter(group => group.id === state.selectedGroupId).map(dayOf)[0] ?? null;
   state.groups.forEach((group, groupIndex) => {
-    const day = group.started_at?.slice(0, 10) || 'Undated';
+    const day = dayOf(group);
     let heading = dayHeadings.at(-1);
     if (heading?.day !== day) {
       const details = document.createElement('details');
       details.className = 'day';
-      details.open = true;
+      details.open = dayIsOpen(day, dayHeadings.length, selectedDay);
       const summary = document.createElement('summary');
+      summary.addEventListener('click', () => window.setTimeout(rememberOpenDays, 0));  // after the native toggle
       details.append(summary);
       rail.append(details);
       heading = { day, summary, details, groups: [] };
@@ -924,7 +1006,7 @@ function renderGroups() {
     heading.groups.push(group);
     const thumb = document.createElement('img');
     thumb.className = 'batch-thumb';
-    thumb.src = bestFrame(group)?.preview_url || '';
+    thumb.src = bestFrame(group) ? thumbUrl(bestFrame(group)) : '';
     thumb.alt = '';
     thumb.loading = 'lazy';
     const batch = document.createElement('button');
@@ -936,6 +1018,7 @@ function renderGroups() {
       const first = group.photos[0];
       if (first && !frameCard(first.id)) {  // reveal the pages up to this burst
         state.shown = Math.ceil((photos.findIndex(([photo]) => photo === first) + 1) / PAGE) * PAGE;
+        state.selectedGroupId = group.id;  // so the rebuilt rail keeps this burst's day open
         renderGroups();
       }
       selectGroup(group).then(() => { if (!first) announce(batchText(group, groupIndex)); }).catch(error => announce(error.message));
@@ -1055,8 +1138,11 @@ async function load() {
     state.selectedId = null;
     inspection.textContent = 'Select a frame to see why it ranked where it did.';
   }
+  // A server older than this page answers without omlx_roles; the sheet must still render, so the status line only reports it.
   const roleText = role => `${role} ${status.omlx_roles[role].model} ${status.omlx_roles[role].loaded ? 'loaded' : 'not loaded'}`;
-  document.querySelector('#system-status').textContent = `${status.omlx_live.summary} · ${roleText('fast')} · ${roleText('review')}`;
+  document.querySelector('#system-status').textContent = status.omlx_roles
+    ? `${status.omlx_live.summary} · ${roleText('fast')} · ${roleText('review')}`
+    : `${status.omlx_live?.summary || 'Status unavailable'} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
   if (!state.astro.job) {
@@ -1073,6 +1159,16 @@ async function load() {
   if (document.querySelector('#review-tab').getAttribute('aria-selected') === 'true') await loadRejectSuggestions();
 }
 
+// Import lives in a dialog opened from the tab row, so the sheet keeps the space.
+const importDialog = document.querySelector('#import-dialog');
+function showImport(open) {
+  if (open) {
+    if (importDialog.showModal) importDialog.showModal(); else importDialog.hidden = false;
+    document.querySelector('#import-path').focus();
+  } else if (importDialog.close) importDialog.close(); else importDialog.hidden = true;
+}
+document.querySelector('#open-import').addEventListener('click', () => showImport(true));
+document.querySelector('#close-import').addEventListener('click', () => showImport(false));
 document.querySelector('#import-form').addEventListener('submit', async event => {
   event.preventDefault();
   state.busy = true;
@@ -1081,6 +1177,7 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   try {
     watchJob(await post('/api/import', { path: document.querySelector('#import-path').value }));
     document.querySelector('#import-status').textContent = 'Import started. Progress and results appear in the job strip at the top.';
+    showImport(false);
   } catch (error) {
     document.querySelector('#import-status').textContent = error.message;
     announce(error.message);
@@ -1104,6 +1201,7 @@ async function startTagJob(url, payload) {
 }
 document.querySelector('#tag-all').addEventListener('click', () => startTagJob('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
 document.querySelector('#tag-keepers').addEventListener('click', () => startTagJob('/api/photos/tag', { scope: 'keepers' }));
+document.querySelector('#assist-keepers').addEventListener('click', () => startTagJob('/api/photos/assist', { scope: 'keepers' }));
 
 document.querySelector('#scan-rejects').addEventListener('click', () => startTagJob('/api/photos/review-rejects', { scope: 'keepers' }));
 
@@ -1126,7 +1224,7 @@ function renderRejectList(suggestions) {
     const image = document.createElement('img');
     image.loading = 'lazy';
     image.alt = '';
-    image.src = item.preview_url;
+    image.src = thumbUrl(item);
     const text = document.createElement('div');
     const name = document.createElement('p');
     name.textContent = item.name;
@@ -1222,13 +1320,14 @@ document.querySelector('#reject-all-yes').addEventListener('click', () => {
   return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
 });
 
-const JOB_NAMES = { import: 'Import', tag: 'Tagging', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+const JOB_NAMES = { import: 'Import', tag: 'Tagging', assist: 'Local AI assist', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
+    : job.kind === 'assist' && job.result ? ` ${result.tagged} tagged, ${result.reviewed} scanned (${result.suggested} suggested rejects), ${result.captioned} captioned, ${result.skipped} already done, ${result.failed} failed.`
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
     : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.` : '';
@@ -1256,6 +1355,9 @@ function watchJob(job) {
   const text = jobText(job);
   if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
   document.querySelector('#job-strip').hidden = false;
+  if (['tag', 'assist', 'review_rejects', 'triage'].includes(job.kind)) {  // AI jobs also report in the bottom bar
+    aiStatus(JOB_ACTIVE.includes(job.status) ? 'running' : job.status === 'succeeded' ? 'done' : 'failed', text);
+  }
   if (job.kind === 'astro') setAstroJob(job);
   else {
     if (job.kind === 'ingest') renderIngest(job);
@@ -1606,6 +1708,10 @@ function updateWorkflow() {
   document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;
   document.querySelector('#tag-keepers').disabled = state.busy || !keepers || !fastLoaded;
   document.querySelector('#tag-keepers-availability').textContent = roleUnavailable('fast');
+  const bothLoaded = fastLoaded && roleReady('review');
+  document.querySelector('#assist-keepers').textContent = `Run all local AI on keepers (${keepers} keeper${keepers === 1 ? '' : 's'})`;
+  document.querySelector('#assist-keepers').disabled = state.busy || !keepers || !bothLoaded;
+  document.querySelector('#assist-keepers-availability').textContent = roleUnavailable('fast') || roleUnavailable('review');
   document.querySelector('#scan-rejects').disabled = state.busy || !keepers || !fastLoaded;
   document.querySelector('#scan-rejects-availability').textContent = roleUnavailable('fast');
   document.querySelector('#reject-all-shown').disabled = state.cullingBlocked || !state.rejectSuggestions.length;
@@ -1651,6 +1757,8 @@ function selectTab(tab) {
     document.querySelector(`#${item.getAttribute('aria-controls')}`).hidden = !selected;
   });
   collapsePanel(false);  // choosing a tab always shows its panel
+  document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
+  try { localStorage.setItem('lumen-tab', tab.id); } catch { /* per-visit only */ }
   if (tab.id === 'compose-tab') loadComposition();
   if (tab.id === 'review-tab') loadRejectSuggestions();
 }
@@ -1669,6 +1777,8 @@ document.querySelector('#collapse-panel').addEventListener('click', () => {
   announce(collapsed ? 'Workflow panel collapsed; the contact sheet has the space.' : 'Workflow panel shown.');
 });
 try {
+  const rememberedTab = tabs.find(tab => tab.id === localStorage.getItem('lumen-tab'));
+  if (rememberedTab && rememberedTab.id !== 'compose-tab') selectTab(rememberedTab);  // before load(), so the first load fills the right panel
   if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
 } catch { /* per-visit only */ }
 
@@ -1749,6 +1859,21 @@ document.querySelector('#reset-filters').addEventListener('click', () => {
   return applyFilters('').catch(error => announce(error.message));
 });
 document.querySelector('#show-more').addEventListener('click', showMore);
+// Tile density: a CSS variable on the sheet; medium is the stylesheet default, the choice is remembered per browser.
+const TILE_SIZES = { small: '140px', medium: null, large: '260px' };
+function applyTileSize(size, announceChange = false) {
+  const select = document.querySelector('#tile-size');
+  select.value = size;
+  if (TILE_SIZES[size]) sheet.style.setProperty('--tile-min', TILE_SIZES[size]);
+  else sheet.style.removeProperty?.('--tile-min');
+  try { localStorage.setItem('lumen-tile-size', size); } catch { /* per-visit only */ }
+  if (announceChange) announce(`${size[0].toUpperCase()}${size.slice(1)} tiles`);
+}
+document.querySelector('#tile-size').addEventListener('change', () => applyTileSize(document.querySelector('#tile-size').value, true));
+try {
+  const rememberedSize = localStorage.getItem('lumen-tile-size');
+  if (rememberedSize in TILE_SIZES && rememberedSize !== 'medium') applyTileSize(rememberedSize);
+} catch { /* per-visit only */ }
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
 sheet.addEventListener('keydown', handleCullingKey);
 const shortcuts = document.querySelector('#shortcuts');
@@ -2061,7 +2186,7 @@ async function writeDigest(day, overwrite = false) {
   state.busy = true;  // The server holds the library lock for the whole model call, so culling waits visibly.
   updateWorkflow();
   try {
-    const result = await post('/api/digests', overwrite ? { date: day, overwrite: true } : { date: day });
+    const result = await aiCall(`Digest for ${day}`, () => post('/api/digests', overwrite ? { date: day, overwrite: true } : { date: day }));
     document.querySelector('#digest-result').textContent = result.file;
     announce(`Digest written for ${result.date}: ${result.file} (${result.narrative ? 'narrative included' : 'facts only'})`);
   } catch (error) {

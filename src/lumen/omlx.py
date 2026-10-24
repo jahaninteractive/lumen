@@ -146,6 +146,16 @@ def _json_object(raw: str, error_type) -> dict:
     return payload
 
 
+def _clip_text(value, limit: int, error_type, raw: str, name: str = "rationale") -> str:
+    """A non-empty text field, clipped at a word boundary with an ellipsis when the model runs past the limit."""
+    if not isinstance(value, str) or not (text := value.strip()):
+        raise error_type(f"oMLX {name} must contain 1 to {limit} characters", raw)
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    return (cut[: cut.rfind(" ")] if " " in cut else cut).rstrip() + "…"
+
+
 def _confidence(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1
 
@@ -168,13 +178,14 @@ def parse_reject_response(raw: str) -> RejectReview:
 
 def parse_burst_response(raw: str, frame_ids: set[str]) -> BurstCritique:
     payload = _json_object(raw, BurstResponseError)
-    if set(payload) != {"frame_id", "rationale", "confidence"}:
-        raise BurstResponseError("oMLX burst response must contain only frame_id, rationale, and confidence", raw)
+    if not {"frame_id", "rationale", "confidence"} <= set(payload):  # extra keys are ignored
+        raise BurstResponseError("oMLX burst response must contain frame_id, rationale, and confidence", raw)
     frame_id, rationale = payload["frame_id"], payload["rationale"]
+    if type(frame_id) is int:  # models answer the numeric label "93" as 93
+        frame_id = str(frame_id)
     if not isinstance(frame_id, str) or frame_id not in frame_ids:
         raise BurstResponseError("oMLX returned a frame that was not supplied", raw)
-    if not isinstance(rationale, str) or not 1 <= len(rationale := rationale.strip()) <= 300:
-        raise BurstResponseError("oMLX rationale must contain 1 to 300 characters", raw)
+    rationale = _clip_text(rationale, 300, BurstResponseError, raw)
     if not _confidence(payload["confidence"]):
         raise BurstResponseError("oMLX confidence must be a finite number between 0 and 1", raw)
     return BurstCritique(frame_id, rationale, float(payload["confidence"]), raw)
@@ -195,13 +206,13 @@ def parse_astro_response(raw: str) -> AstroTriage:
 
 def parse_caption_response(raw: str) -> Caption:
     payload = _json_object(raw, CaptionResponseError)
-    if set(payload) != {"caption", "alt_text"}:
-        raise CaptionResponseError("oMLX caption response must contain only caption and alt_text", raw)
+    if not {"caption", "alt_text"} <= set(payload):  # extra keys are ignored
+        raise CaptionResponseError("oMLX caption response must contain caption and alt_text", raw)
     caption, alt_text = payload["caption"], payload["alt_text"]
-    if not isinstance(caption, str) or not 1 <= len(caption := caption.strip()) <= CAPTION_MAX or "#" in caption:
-        raise CaptionResponseError(f"oMLX caption must contain 1 to {CAPTION_MAX} characters and no hashtags", raw)
-    if not isinstance(alt_text, str) or not 1 <= len(alt_text := alt_text.strip()) <= ALT_TEXT_MAX:
-        raise CaptionResponseError(f"oMLX alt_text must contain 1 to {ALT_TEXT_MAX} characters", raw)
+    caption = _clip_text(caption, CAPTION_MAX, CaptionResponseError, raw, "caption")
+    if "#" in caption:
+        raise CaptionResponseError("oMLX caption must contain no hashtags", raw)
+    alt_text = _clip_text(alt_text, ALT_TEXT_MAX, CaptionResponseError, raw, "alt_text")
     return Caption(caption, alt_text, raw)
 
 
@@ -230,8 +241,7 @@ def parse_tag_response(raw: str, *, allow_species: bool = True) -> TagResult:
     allowed = {"description", "subjects", "scene", "technical", "confidence"}
     if allow_species:
         allowed |= {"species", "conditions"}
-    if set(payload) - allowed:
-        raise TagResponseError("oMLX tag response contains unexpected fields", raw)
+    payload = {key: value for key, value in payload.items() if key in allowed}  # models add fields such as "activity"; ignore them
     description = payload.get("description")
     subjects = payload.get("subjects")
     scene = payload.get("scene", "")
@@ -282,15 +292,14 @@ def parse_composition_response(raw: str, candidate_ids: set[str]) -> Composition
     except json.JSONDecodeError as error:
         raise CompositionResponseError(f"oMLX did not return valid JSON: {error.msg}", raw) from error
     required = {"candidate_id", "rationale", "confidence"}
-    if not isinstance(payload, dict) or set(payload) != required:
-        raise CompositionResponseError("oMLX composition response must contain only the required fields", raw)
+    if not isinstance(payload, dict) or not required <= set(payload):  # extra keys are ignored
+        raise CompositionResponseError("oMLX composition response must contain the required fields", raw)
     candidate_id = payload["candidate_id"]
     rationale = payload["rationale"]
     confidence = payload["confidence"]
     if not isinstance(candidate_id, str) or candidate_id not in candidate_ids:
         raise CompositionResponseError("oMLX returned an unavailable crop candidate", raw)
-    if not isinstance(rationale, str) or not (rationale := rationale.strip()) or len(rationale) > 500:
-        raise CompositionResponseError("oMLX rationale must contain 1 to 500 characters", raw)
+    rationale = _clip_text(rationale, 500, CompositionResponseError, raw)
     if (not isinstance(confidence, (int, float)) or isinstance(confidence, bool)
             or not math.isfinite(confidence) or not 0 <= confidence <= 1):
         raise CompositionResponseError("oMLX confidence must be a finite number between 0 and 1", raw)
@@ -314,17 +323,21 @@ class OmlxTagger:
             "technical (string array of visible focus/exposure/motion observations), "
             "and confidence (number 0 to 1). Do not identify a person."
         )
-        if vocabulary:
+        system = None
+        if vocabulary:  # Stable across a job, so it goes first as a system prefix oMLX can cache; the image changes per call.
+            system = (
+                "Keyword list by category: "
+                + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
+                + ". Choose keywords from the list where one fits; add at most three others."
+            )
             prompt += (
                 " Also return species (array of {name, confidence 0 to 1} for animals you can name) and "
-                "conditions (string array of light and weather). Keyword list by category: "
-                + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
-                + ". Choose keywords from the list where one fits; add at most three others. Do not identify a person."
+                "conditions (string array of light and weather). Do not identify a person."
             )
         content = self._complete([
             {"type": "text", "text": prompt},
             self._image_content(preview),
-        ], timeout)
+        ], timeout, system=system)
         return parse_tag_response(content)
 
     def review_composition(
@@ -412,10 +425,11 @@ class OmlxTagger:
         image = base64.b64encode(path.read_bytes()).decode("ascii")
         return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}}
 
-    def _complete(self, content: list[dict], timeout: float, *, max_tokens: int = 500) -> str:
+    def _complete(self, content: list[dict], timeout: float, *, max_tokens: int = 500, system: str | None = None) -> str:
+        messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": content}]
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": content}],
+            "messages": messages,
             "temperature": 0,
             "max_tokens": max_tokens,
             "chat_template_kwargs": {"enable_thinking": False},  # Qwen-style thinking otherwise eats the budget and returns no content.

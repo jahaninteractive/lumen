@@ -361,6 +361,28 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(30.0, migrated.get_photo(1).exposure_seconds)
             self.assertEqual(30.0, migrated.list_photos()[0].exposure_seconds)
 
+    def test_migration_adds_location_columns_and_upsert_and_update_round_trip(self):
+        legacy_path = Path(self.tmp.name) / "pre-location.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE photos (
+                    id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL,
+                    captured_at TEXT, camera_id TEXT NOT NULL, preview_path TEXT,
+                    format TEXT NOT NULL DEFAULT 'ARW', group_id INTEGER,
+                    manual_pick INTEGER NOT NULL DEFAULT 0, imported_at TEXT NOT NULL
+                );
+                INSERT INTO photos (id, path, fingerprint, camera_id, imported_at)
+                    VALUES (1, '/photos/a.ARW', 'abc', 'A1', '2026-10-21T10:00:00+00:00');
+                """
+            )
+        with Catalog(legacy_path) as migrated:
+            self.assertEqual((None, None, None), (migrated.get_photo(1).latitude, migrated.get_photo(1).longitude, migrated.get_photo(1).altitude))
+            migrated.upsert_photo(Photo(path="/photos/a.ARW", fingerprint="abc", captured_at=None, camera_id="A1", latitude=-24.1, longitude=31.5, altitude=300.0))
+            self.assertEqual((-24.1, 31.5, 300.0), (migrated.get_photo(1).latitude, migrated.get_photo(1).longitude, migrated.get_photo(1).altitude))
+            migrated.update_location(1, latitude=-25.0, longitude=32.0, altitude=None)
+            self.assertEqual((-25.0, 32.0, None), (migrated.list_photos()[0].latitude, migrated.list_photos()[0].longitude, migrated.list_photos()[0].altitude))
+
     def test_photos_for_filters_returns_matching_grouped_photo_ids(self):
         ids, _ = seed_filter_photos(self.catalog)
         self.assertEqual(sorted([ids["a1"], ids["a2"], ids["b2"], ids["c1"]]), self.catalog.photos_for_filters(GroupFilters()))

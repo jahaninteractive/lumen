@@ -34,7 +34,7 @@ from .grouping import TimeGapGroupingPolicy
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
-from .vocabulary import load_vocabulary, match_keywords
+from .vocabulary import learn_keywords, load_vocabulary, match_keywords
 
 
 _MUTATION_LOCKS = {}
@@ -210,6 +210,10 @@ class Library:
             fingerprint = fingerprint_file(source)
             if (skip_unchanged and previous and previous.fingerprint == fingerprint
                     and previous.preview_path and Path(previous.preview_path).is_file()):
+                if previous.latitude is None:  # ponytail: one exiftool call per unchanged file without a fix, every import
+                    fix = read_metadata(source)
+                    if fix["latitude"] is not None:
+                        self.catalog.update_location(previous.id, latitude=fix["latitude"], longitude=fix["longitude"], altitude=fix["altitude"])
                 summary.skipped += 1
                 return
             self._import_one(source, fingerprint, job_id=job_id)
@@ -303,6 +307,35 @@ class Library:
 
         return self._run_photo_job("review_rejects", tagger, scope, per_photo,
                                    counters=("reviewed", "skipped", "failed", "suggested"))
+
+    def start_assist_job(self, fast, review, *, scope: str | list[int] = "keepers") -> Job:
+        """One job per photo: tag (fast), look for problems (fast), caption (review); work already done is skipped.
+        A failing step is counted and logged, and the next step still runs; the photographer's caption is never replaced."""
+        def per_photo(worker, photo, job) -> tuple[str, ...]:
+            names: list[str] = []
+            data = (worker.catalog.get_tags(photo.id) or {"data": {}})["data"]
+            steps = (
+                ("tagged", "description" in data, lambda: worker.tag_photo(photo.id, fast, job_id=job.id)),
+                ("reviewed", "problems" in data, lambda: worker._review_rejects_one(photo.id, fast, job_id=job.id)),
+                ("captioned", bool(data.get("caption")), lambda: worker.caption_photo(photo.id, review)),
+            )
+            for name, done, step in steps:
+                if done:
+                    continue
+                try:
+                    result = step()
+                except (OmlxError, ValueError, OSError) as error:  # the step recorded its own *_failed event
+                    names.append("failed")
+                    worker._log_job(job, f"{Path(photo.path).name}: {name} {type(error).__name__}: {error}")
+                    continue
+                names.append(name)
+                if name == "reviewed" and result.suggest_reject:
+                    names.append("suggested")
+            return tuple(names) or ("skipped",)
+
+        return self._run_photo_job("assist", fast, scope, per_photo,
+                                   counters=("tagged", "reviewed", "captioned", "skipped", "failed", "suggested"),
+                                   manifest={"review_model": review.model})
 
     def start_triage_job(self, tagger, *, group_id: int) -> Job:
         """Advisory sky triage of every frame in one group, whatever its exposure; exclusions never change."""
@@ -1391,13 +1424,17 @@ class Library:
         weak = {item["name"].casefold() for item in result.species if item["confidence"] < 0.6}
         candidates = list(result.subjects) + ([result.scene] if result.scene else []) + list(result.conditions)
         applied, suggested = match_keywords([word for word in candidates if word.strip().casefold() not in weak], vocab)
-        vocabulary_names = {word.casefold() for words in vocab.values() for word in words}
-        for item in result.species:  # Species are labelled suggestions unless confident and in the vocabulary.
-            name = item["name"]
-            confident = item["confidence"] >= 0.6 and name.casefold() in vocabulary_names
-            target = applied if confident else suggested
-            if name.casefold() not in {word.casefold() for word in applied + suggested}:
-                target.append(match_keywords([name], vocab)[0][0] if confident else name)
+        # The vocabulary learns from the model: free-text words and confident species become keywords and join the file.
+        # Only a weak species (< 0.6) stays a suggestion for the photographer.
+        confident_species = [item["name"] for item in result.species if item["confidence"] >= 0.6
+                             and item["name"].casefold() not in {word.casefold() for word in applied + suggested}]
+        learned = learn_keywords(self.settings, {"learned": suggested, "wildlife": confident_species})
+        if learned:
+            self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned} | _job_detail(job_id))
+        vocab = load_vocabulary(self.settings)
+        applied = match_keywords(applied + suggested + confident_species, vocab)[0]
+        suggested = [item["name"] for item in result.species if item["confidence"] < 0.6
+                     and item["name"].casefold() not in {word.casefold() for word in applied}]
         existing = self.catalog.get_tags(photo_id)
         payload = (existing["data"] if existing else {}) | {
             "description": result.description,
@@ -1421,7 +1458,10 @@ class Library:
 
     @_coordinated
     def add_suggested_keyword(self, photo_id: int, keyword: str) -> dict:
-        return self._move_keyword(photo_id, keyword, "suggested", "subjects", "keyword_added")
+        result = self._move_keyword(photo_id, keyword, "suggested", "subjects", "keyword_added")
+        if learned := learn_keywords(self.settings, {"learned": [keyword]}):  # a hand-accepted word teaches the vocabulary
+            self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned})
+        return result
 
     @_coordinated
     def remove_keyword(self, photo_id: int, keyword: str) -> dict:
@@ -1483,6 +1523,9 @@ class Library:
             preview_path=str(preview_path),
             format=source.suffix.lstrip(".").upper(),
             exposure_seconds=metadata.get("exposure_seconds"),
+            latitude=metadata.get("latitude"),
+            longitude=metadata.get("longitude"),
+            altitude=metadata.get("altitude"),
         )
         if previous and previous.fingerprint != fingerprint:
             self.catalog.clear_tags(previous.id)
