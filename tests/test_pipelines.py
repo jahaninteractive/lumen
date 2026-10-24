@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from PIL import Image, ImageCms
 
-from lumen.pipelines import DarktablePipeline, PipelineRegistry, SirilPipeline
+from lumen.pipelines import DarktablePipeline, PipelineRegistry, SirilPipeline, validate_watermark
 
 
 class PipelineTests(unittest.TestCase):
@@ -347,7 +347,57 @@ class PipelineTests(unittest.TestCase):
                     self.assertEqual({1: "N", 2: (1.0, 2.0, 3.0), 5: b"\x00", 6: 12.0}, dict(image.getexif().get_ifd(34853)))
             self.assertEqual(["source-lumen-1.jpg", "source-lumen.jpg"], sorted(path.name for path in (default.output, explicit.output)))
             with self.assertRaises(ValueError):
-                pipeline.export_jpeg(source, preset="web", runner=self.preset_render((80, 60)))
+                pipeline.export_jpeg(source, preset="x", runner=self.preset_render((80, 60)))
+
+    def test_web_preset_resizes_to_1600_long_edge_at_quality_82_without_gps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.ARW"
+            source.write_bytes(b"raw")
+            result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
+                source, preset="web", runner=self.preset_render((4000, 2600)))
+            self.assertTrue(result.success, result.message)
+            self.assertEqual("source-lumen-web.jpg", result.output.name)
+            self.assertEqual({"preset": "web", "quality": 82, "long_edge": 1600, "include_gps": False, "watermark": False},
+                             {key: result.settings[key] for key in ("preset", "quality", "long_edge", "include_gps", "watermark")})
+            with Image.open(result.output) as image:
+                self.assertEqual((1600, 1040), image.size)
+                self.assertEqual({}, dict(image.getexif().get_ifd(34853)))
+
+    def test_watermark_marks_bottom_right_only_and_records_a_flag_not_the_text(self):
+        def grey(image):
+            image.paste((128, 128, 128), (0, 0, *image.size))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.ARW"
+            source.write_bytes(b"raw")
+            result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
+                source, preset="web", watermark="\u00a9 N. David", runner=self.preset_render((2000, 1200), paint=grey))
+            self.assertTrue(result.success, result.message)
+            self.assertTrue(result.settings["watermark"])
+            with Image.open(result.output) as opened:
+                image = opened.convert("L")
+                self.assertEqual((1600, 960), image.size)
+                inset = round(0.02 * 960)
+                corner = image.crop((1600 - inset - 300, 960 - inset - 40, 1600 - inset, 960 - inset))
+                low, high = corner.getextrema()
+                self.assertGreater(high, 200)  # White fill.
+                self.assertLess(low, 60)  # Black stroke.
+                top_left = image.crop((0, 0, 400, 300)).getextrema()
+                self.assertTrue(all(abs(value - 128) <= 3 for value in top_left), top_left)
+                xmp = opened.info["xmp"]
+                provenance = json.loads(ElementTree.fromstring(xmp).find(".//{https://lumen.local/ns/1.0/}export").text)
+                self.assertIs(True, provenance["watermark"])
+                self.assertNotIn(b"N. David", xmp if isinstance(xmp, bytes) else xmp.encode())
+
+    def test_validate_watermark(self):
+        self.assertIsNone(validate_watermark(None))
+        self.assertIsNone(validate_watermark(""))
+        self.assertEqual("\u00a9 N. David", validate_watermark("  \u00a9 N. David "))
+        self.assertEqual("x" * 80, validate_watermark("x" * 80))
+        for bad in ("  ", "x" * 81, "a\nb", 5, ["x"]):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "^watermark must be 1 to 80 printable characters$"):
+                validate_watermark(bad)
 
     def test_share_filenames_use_share_suffix_and_collision_numbering(self):
         with tempfile.TemporaryDirectory() as directory:

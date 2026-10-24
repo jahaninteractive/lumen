@@ -818,7 +818,7 @@ class LibraryTests(unittest.TestCase):
             photo = library.catalog.list_photos()[0]
             with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
                 with self.assertRaises(ValueError):
-                    library.export_jpegs(library_module.ExportRequest((photo.id,), None, "web"))
+                    library.export_jpegs(library_module.ExportRequest((photo.id,), None, "x"))
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
                 result = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "share"))[0]
@@ -830,6 +830,24 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(expected, {key: sidecar["artifacts"][0]["settings"][key] for key in expected})
             event = next(event for event in sidecar["provenance"] if event["kind"] == "exported")
             self.assertEqual(expected, {key: event["details"][key] for key in expected})
+
+    def test_export_validates_watermark_before_any_job_and_passes_it_to_the_pipeline(self):
+        self.assertIsNone(library_module.ExportRequest((1,)).watermark)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo = library.catalog.list_photos()[0]
+            with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+                for bad in ("   ", "x" * 81, "a\tb"):
+                    with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "watermark must be 1 to 80 printable characters"):
+                        library.start_export_job(library_module.ExportRequest((photo.id,), None, "web", bad))
+                self.assertEqual([], library.catalog.list_jobs())
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
+                result = library.export_jpegs(library_module.ExportRequest((photo.id,), None, "web", "\u00a9 N. David"))[0]
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(f"{self.image_path.stem}-lumen-web.jpg", Path(result.artifact.path).name)
+            self.assertEqual(("web", True), (result.artifact.settings["preset"], result.artifact.settings["watermark"]))
+            self.assertNotIn("N. David", json.dumps(result.artifact.settings))
 
     def test_expand_search_puts_the_query_first_and_dedupes_terms(self):
         class FakeTagger:

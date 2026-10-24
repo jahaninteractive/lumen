@@ -386,7 +386,7 @@ class WebTests(unittest.TestCase):
 
     def test_export_accepts_known_presets_only_and_ui_has_labeled_preset_radios(self):
         with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
-            for payload in ({"scope": "current", "photo_id": 1, "preset": "web"}, {"scope": "keepers", "preset": 2},
+            for payload in ({"scope": "current", "photo_id": 1, "preset": "x"}, {"scope": "keepers", "preset": 2},
                             {"scope": "keepers", "preset": None}, {"scope": "current", "photo_id": 1, "preset": ["share"]}):
                 with self.subTest(payload=payload):
                     code, result = self.post_json("/api/export", payload)
@@ -410,15 +410,42 @@ class WebTests(unittest.TestCase):
         parser = LandmarkParser()
         parser.feed(html)
         radios = [node for node in parser.nodes if node["tag"] == "input" and node["attrs"].get("name") == "export-preset"]
-        self.assertEqual([("radio", "full"), ("radio", "share")], [(node["attrs"].get("type"), node["attrs"].get("value")) for node in radios])
+        self.assertEqual([("radio", "full"), ("radio", "share"), ("radio", "web")], [(node["attrs"].get("type"), node["attrs"].get("value")) for node in radios])
         self.assertIn("checked", radios[0]["attrs"])
-        for radio, label in zip(radios, ("Full resolution (quality 92, keeps GPS)", "Share (2048 px long edge, quality 85, no GPS)")):
+        for radio, label in zip(radios, ("Full resolution (quality 92, keeps GPS)", "Share (2048 px long edge, quality 85, no GPS)",
+                                         "Web (1600 px long edge, quality 82, no GPS)"), strict=True):
             self.assertTrue(any(node["tag"] == "label" and label in " ".join(node["text"].split()) for node in radio["parents"]))
             self.assertTrue(any(node["tag"] == "fieldset" and "Size" in " ".join(node["text"].split()) for node in radio["parents"]))
         self.assertNotIn("Quality 92 · sRGB · Full resolution", html)
+        for text in ('<label for="export-watermark">Watermark text (optional)</label>',
+                     '<input type="text" id="export-watermark" maxlength="80" autocomplete="off">'):
+            self.assertIn(text, html)
         javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
         self.assertIn('input[name="export-preset"]:checked', javascript)
         self.assertRegex(javascript, r"payload = \{ scope, profile: state.profile, preset \}")
+
+    def test_export_accepts_web_preset_with_watermark_and_rejects_bad_ones(self):
+        with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+            code, result = self.post_json("/api/export", {"scope": "keepers", "preset": "x"})
+            self.assertEqual((400, "preset must be full, share, or web"), (code, result["error"]))
+            for watermark in ("  ", "x" * 81, 7, "a\nb"):
+                with self.subTest(watermark=watermark):
+                    code, result = self.post_json("/api/export", {"scope": "keepers", "preset": "web", "watermark": watermark})
+                    self.assertEqual((400, "watermark must be 1 to 80 printable characters"), (code, result["error"]))
+        pipeline = DarktablePipeline("darktable-cli", self.root / "library" / "outputs")
+        with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
+            "lumen.pipelines.subprocess.run", side_effect=self.render
+        ):
+            code, current = self.post_json("/api/export", {"scope": "current", "photo_id": 1, "preset": "web", "watermark": "\u00a9 N. David"})
+            self.assertEqual(200, code, current)
+            code, job = self.post_json("/api/export", {"scope": "keepers", "preset": "web", "watermark": "\u00a9 N. David"})
+            self.assertEqual(202, code, job)
+            self.assertEqual("succeeded", self.wait_job(job["job_id"])["status"])
+        self.assertEqual("photo-lumen-web.jpg", Path(current["results"][0]["output"]).name)
+        self.assertEqual(("web", True), (current["results"][0]["artifact"]["settings"]["preset"], current["results"][0]["artifact"]["settings"]["watermark"]))
+        self.assertNotIn("N. David", json.dumps(current))
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertEqual(("web", True), (library.catalog.list_artifacts()[-1].settings["preset"], library.catalog.list_artifacts()[-1].settings["watermark"]))
 
     def test_export_unavailable_darktable_returns_bad_request(self):
         with patch("lumen.library.PipelineRegistry.darktable", side_effect=RuntimeError("darktable-cli is unavailable")):
@@ -1295,6 +1322,7 @@ const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
 let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
+if (scenario === 'export-watermark') stored['lumen-watermark'] = '\u00a9 N. David';  // a remembered field from an earlier visit
 if (scenario.startsWith('resume')) {  // seeded before the startup load, which is the only one that resumes
   const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
   groups = [group(1, [...range(1000, 249), 2]), group(2, [1, 3])];  // photo 2 is the 250th frame, past the first page
@@ -2588,6 +2616,29 @@ const regression = `
     assert.equal(confirm.disabled, false);
     return;
   }
+  if (scenario === 'export-watermark') {
+    const watermark = element('#export-watermark');
+    assert.equal(watermark.value, '\u00a9 N. David', 'a reload restores the remembered watermark');
+    await load();
+    scope.value = 'keepers';
+    element('input[name="export-preset"]:checked').value = 'web';
+    state.keeperCount = 2;
+    updateWorkflow();
+    element('#export-dialog').hidden = true;
+    watermark.value = '  \u00a9 2026 N. David ';
+    watermark.listeners.input();
+    assert.equal(stored['lumen-watermark'], '  \u00a9 2026 N. David ', 'typing remembers the field');
+    await element('#export-jpegs').listeners.click();
+    await settle();
+    watermark.value = '   ';
+    watermark.listeners.change();
+    assert.equal('lumen-watermark' in stored, false, 'a blank field forgets the watermark');
+    await element('#export-jpegs').listeners.click();
+    await settle();
+    assert.deepEqual(exportPosts, [{ scope: 'keepers', profile: null, preset: 'web', watermark: '\u00a9 2026 N. David' },
+                                   { scope: 'keepers', profile: null, preset: 'web' }], 'the watermark is sent only when non-blank');
+    return;
+  }
   if (scenario === 'export' || scenario === 'export-cancel') {
     await load();
     scope.value = 'keepers';
@@ -3317,7 +3368,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                 self.run_javascript_cleanup_regression(scenario)
 
     def test_javascript_keepers_export_runs_as_a_job_with_progress_dialog_and_status_bar(self):
-        for scenario in ("export", "export-cancel"):
+        for scenario in ("export", "export-cancel", "export-watermark"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
 

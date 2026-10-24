@@ -76,7 +76,7 @@
         </section>
         <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
           <h2>Finish as JPEG</h2>
-          <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose a size below; only Full resolution keeps GPS location.</p>
+          <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
           <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
           <div class="button-row">
             <button type="button" id="assist-keepers" aria-describedby="assist-keepers-availability" disabled>Run all local AI on keepers (0 keepers)</button>
@@ -104,8 +104,10 @@
               <div class="scope-options">
                 <label><input type="radio" name="export-preset" value="full" checked> Full resolution (quality 92, keeps GPS)</label>
                 <label><input type="radio" name="export-preset" value="share"> Share (2048 px long edge, quality 85, no GPS)</label>
+                <label><input type="radio" name="export-preset" value="web"> Web (1600 px long edge, quality 82, no GPS)</label>
               </div>
             </fieldset>
+            <div><label for="export-watermark">Watermark text (optional)</label><input type="text" id="export-watermark" maxlength="80" autocomplete="off"></div>
             <p id="profile-label">Optional darktable XMP profile</p>
             <p id="profile-path" class="path" aria-labelledby="profile-label">Camera-aware defaults</p>
             <div class="button-row">

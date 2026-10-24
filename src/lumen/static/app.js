@@ -2189,10 +2189,12 @@ document.querySelector('#export-jpegs').addEventListener('click', async () => {
   const scope = document.querySelector('input[name="export-scope"]:checked').value;
   const preset = document.querySelector('input[name="export-preset"]:checked').value;
   const payload = { scope, profile: state.profile, preset };
+  const watermark = document.querySelector('#export-watermark').value.trim();
+  if (watermark) payload.watermark = watermark;
   if (scope === 'current') payload.photo_id = state.selectedId;
   state.busy = true;
   updateWorkflow();
-  const size = preset === 'share' ? 'Share size' : 'Full resolution';
+  const size = { share: 'Share size', web: 'Web size' }[preset] || 'Full resolution';
   document.querySelector('#export-status').textContent = `Exporting ${scope === 'current' ? 'current photo' : 'all keepers'} at ${size}… Keep this page open until the result appears.`;
   document.querySelector('#export-results').replaceChildren();
   try {
@@ -2312,6 +2314,22 @@ async function mergeBatches() {
 document.querySelector('#merge-batches').addEventListener('click', mergeBatches);
 document.querySelector('#clear-workspace').addEventListener('click', () => cleanup('/api/library/clear', { confirmation: document.querySelector('#clear-confirmation').value }));
 
+const watermarkInput = document.querySelector('#export-watermark');
+function rememberWatermark() {
+  try {
+    if (watermarkInput.value.trim()) localStorage.setItem('lumen-watermark', watermarkInput.value);
+    else localStorage.removeItem('lumen-watermark');
+  } catch {
+    document.querySelector('#export-status').textContent = 'Browser storage is unavailable; type the watermark again next visit.';
+  }
+}
+watermarkInput.addEventListener('input', rememberWatermark);
+watermarkInput.addEventListener('change', rememberWatermark);
+try {
+  watermarkInput.value = localStorage.getItem('lumen-watermark') || '';
+} catch {
+  // Storage is optional; the field simply starts empty.
+}
 try {
   const remembered = localStorage.getItem('lumen-xmp-profile');
   if (remembered) {

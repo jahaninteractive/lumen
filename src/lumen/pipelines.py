@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 from xml.etree import ElementTree
 
-from PIL import Image, ImageCms, ImageOps
+from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps
 
 from .previews import fingerprint_file
 from .sidecars import SidecarWriter
@@ -22,7 +22,17 @@ from .tools import find_tool
 EXPORT_PRESETS = {
     "full": {"long_edge": None, "quality": 92, "include_gps": True},
     "share": {"long_edge": 2048, "quality": 85, "include_gps": False},
+    "web": {"long_edge": 1600, "quality": 82, "include_gps": False},
 }
+
+
+def validate_watermark(value: object) -> str | None:
+    """Blank means no watermark; whitespace-only or unprintable text is an error."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not 1 <= len(value.strip()) <= 80 or not value.isprintable():
+        raise ValueError("watermark must be 1 to 80 printable characters")
+    return value.strip()
 
 
 def _public_provenance(settings: dict) -> dict:
@@ -108,6 +118,7 @@ class DarktablePipeline:
         crop: dict[str, object] | None = None, description: str | None = None,
         keywords: list[str] | None = None, rating: int | None = None, alt_text: str | None = None,
         caption_used: bool = False, reserved_paths: set[Path] | None = None, preset: str = "full", decoder: str = "darktable",
+        watermark: str | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
         if preset not in EXPORT_PRESETS:
@@ -115,6 +126,7 @@ class DarktablePipeline:
         if decoder not in DECODERS:
             raise ValueError(f"unknown export decoder: {decoder!r}")
         options = EXPORT_PRESETS[preset]
+        watermark = validate_watermark(watermark)
         runner = runner or subprocess.run
         source = source.resolve()
         directory = (self.output_root / "jpeg").resolve()
@@ -127,6 +139,7 @@ class DarktablePipeline:
         settings = {
             "preset": preset, "quality": options["quality"], "long_edge": options["long_edge"],
             "color_space": "sRGB", "include_gps": options["include_gps"], "caption_used": caption_used,
+            "watermark": watermark is not None,
             "profile": str(profile.resolve()) if profile else None,
             "crop": crop, "source_fingerprint": "", "tool_version": "unknown", "decoder": decoder,
             "command": [],
@@ -197,6 +210,12 @@ class DarktablePipeline:
                         image = image.crop((round(left * image.width), round(top * image.height), round((left + width) * image.width), round((top + height) * image.height)))
                     if long_edge := options["long_edge"]:
                         image.thumbnail((long_edge, long_edge), Image.Resampling.LANCZOS)  # Never upscales.
+                    if watermark:
+                        size = max(14, image.height // 40)
+                        inset = round(0.02 * min(image.size))
+                        ImageDraw.Draw(image).text((image.width - inset, image.height - inset), watermark, fill="white",
+                                                   font=ImageFont.load_default(size=size), anchor="rd",
+                                                   stroke_width=max(1, size // 12), stroke_fill="black")
                     capture[40962], capture[40963] = image.size  # After any crop and resize.
                     exif[34665] = capture
                     temporary = work / "finished.jpg"

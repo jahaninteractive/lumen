@@ -28,7 +28,7 @@ from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
 from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
-from .pipelines import EXPORT_PRESETS, PipelineRegistry
+from .pipelines import EXPORT_PRESETS, PipelineRegistry, validate_watermark
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
 from .previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, read_image_dimensions, read_metadata
@@ -96,6 +96,7 @@ class ExportRequest:
     photo_ids: tuple[int, ...]
     profile: Path | None = None
     preset: str = "full"
+    watermark: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1156,6 +1157,7 @@ class Library:
             raise ValueError(f"profile does not exist: {request.profile}")
         if request.preset not in EXPORT_PRESETS:
             raise ValueError(f"unknown export preset: {request.preset!r}")
+        validate_watermark(request.watermark)
         if not self.settings.jpeg_output_dir.resolve().is_relative_to(self.settings.library_dir.resolve()):
             raise ValueError("JPEG output must stay inside the managed library")
         return photos, PipelineRegistry().darktable(self.settings.output_dir)
@@ -1230,7 +1232,7 @@ class Library:
                 keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
                 rating=-1 if photo.decision == "reject" else photo.rating,
                 reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
-                preset=request.preset, decoder=decoder)
+                preset=request.preset, decoder=decoder, watermark=request.watermark)
             if not rendered.success:
                 return ExportResult(photo.id, False, None, rendered.message)
             artifact = self.catalog.save_artifact(photo.id, Path(photo.path).name,

@@ -20,7 +20,7 @@ from .digest import parse_day
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxError
-from .pipelines import EXPORT_PRESETS
+from .pipelines import EXPORT_PRESETS, validate_watermark
 from .previews import thumbnail_for
 
 
@@ -448,7 +448,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     scope = payload.get("scope")
                     if scope not in ("current", "keepers"):
                         raise ValueError("scope must be current or keepers")
-                    allowed = {"scope", "profile", "preset", "photo_id"} if scope == "current" else {"scope", "profile", "preset"}
+                    allowed = {"scope", "profile", "preset", "watermark", "photo_id"} if scope == "current" else {"scope", "profile", "preset", "watermark"}
                     if payload.keys() - allowed:
                         raise ValueError("unexpected export selectors or fields")
                     if scope == "current" and type(payload.get("photo_id")) is not int:
@@ -458,15 +458,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("profile must be a path string or null")
                     preset = payload.get("preset", "full")
                     if not isinstance(preset, str) or preset not in EXPORT_PRESETS:
-                        raise ValueError("preset must be full or share")
+                        raise ValueError("preset must be full, share, or web")
+                    watermark = validate_watermark(payload.get("watermark"))
                     profile_path = Path(profile) if profile is not None else None
                     if scope == "keepers":  # Many renders: a background job with progress and cancel.
                         with Library(settings, job_runner=self.server.job_runner()) as library:
-                            job = library.start_export_job(ExportRequest(tuple(library.keeper_ids()), profile_path, preset))
+                            job = library.start_export_job(ExportRequest(tuple(library.keeper_ids()), profile_path, preset, watermark))
                             self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                         return
                     with Library(settings) as library:
-                        results = library.export_jpegs(ExportRequest((payload["photo_id"],), profile_path, preset))
+                        results = library.export_jpegs(ExportRequest((payload["photo_id"],), profile_path, preset, watermark))
                     status = HTTPStatus.OK if all(result.success for result in results) else HTTPStatus.BAD_REQUEST
                     self._send_json({"results": [asdict(result) for result in results]}, status=status)
                     return

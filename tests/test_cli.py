@@ -554,8 +554,21 @@ class ExportCleanupCliTests(unittest.TestCase):
         self.assertEqual("photo-lumen.jpg", Path(full["results"][0]["output"]).name)
         self.assertEqual("full", full["results"][0]["artifact"]["settings"]["preset"])
         with self.assertRaises(SystemExit) as caught:
-            self.run_command("export", "--photo", str(self.photo_id), "--preset", "web")
+            self.run_command("export", "--photo", str(self.photo_id), "--preset", "x")
         self.assertEqual(2, caught.exception.code)
+
+    def test_export_web_preset_with_watermark(self):
+        pipeline = DarktablePipeline("darktable-cli", self.settings.output_dir)
+        with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
+            "lumen.pipelines.subprocess.run", side_effect=self.render
+        ):
+            code, payload = self.run_command("export", "--keepers", "--preset", "web", "--watermark", "x")
+            bad_code, bad = self.run_command("export", "--keepers", "--preset", "web", "--watermark", "  ")
+        self.assertEqual(0, code, payload)
+        settings = payload["results"][0]["artifact"]["settings"]
+        self.assertEqual(("web", True), (settings["preset"], settings["watermark"]))
+        self.assertEqual("photo-lumen-web.jpg", Path(payload["results"][0]["output"]).name)
+        self.assertEqual((2, {"error": "watermark must be 1 to 80 printable characters"}), (bad_code, bad))
 
     def test_export_requires_exactly_one_selection(self):
         for arguments in (("export",), ("export", "--photo", "1", "--keepers")):
