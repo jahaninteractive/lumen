@@ -491,7 +491,6 @@ async function inspect(photo) {
   try { localStorage.setItem('lumen-selected', String(photo.id)); } catch { /* per-visit only */ }
   state.selectedGroupId = state.groups.find(group => group.photos.some(item => item.id === photo.id))?.id ?? null;
   updateWorkflow();
-  const compositionLoad = document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true' ? loadComposition() : null;
   document.querySelectorAll('.frame').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.id) === photo.id)));
   const groupId = state.selectedGroupId;
   const critiqueLoad = groupId !== null && state.critique?.groupId !== groupId
@@ -502,7 +501,6 @@ async function inspect(photo) {
   if (critiqueLoad) state.critique = { groupId, data: critique };
   state.details = details;
   renderInspector(photo);
-  if (compositionLoad) await compositionLoad;
 }
 
 // Plain-language reason for the frame's place in its burst, from the same numbers the meters show.
@@ -1042,7 +1040,7 @@ function toggleCompare(photo) {
   announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
 }
 
-const CULLING_KEYS = { p: 'pick', r: 'keepOnly', x: 'reject', f: 'flag', u: 'clear', c: 'compare', Enter: 'loupe', Escape: 'close' };
+const CULLING_KEYS = { p: 'pick', r: 'keepOnly', x: 'reject', f: 'flag', u: 'clear', c: 'compare', z: 'full', Enter: 'loupe', Escape: 'close' };
 const CULLING_ACTIONS = {
   pick: photo => decide(photo, 'pick'),
   keepOnly,
@@ -1052,6 +1050,7 @@ const CULLING_ACTIONS = {
   compare: toggleCompare,
   loupe: photo => openLoupe(photo.id),
   close: () => closeView(),
+  full: () => openView?.id === 'loupe' && toggleFullSize(),
 };
 
 function photoById(id) {
@@ -1061,8 +1060,10 @@ function photoById(id) {
 function handleCullingKey(event) {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   const target = event.target;
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || (target?.tagName === 'BUTTON' && target.className !== 'frame')) return;  // only frame cards cull; burst and dialog buttons do not
   const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName)) return;
+  // Only frame cards cull on the sheet; in the frame view its own buttons cull too, but Enter keeps their native activation.
+  if (target?.tagName === 'BUTTON' && target.className !== 'frame' && (openView?.id !== 'loupe' || key === 'Enter')) return;
   if ((key === '[' || key === ']') && openView?.id === 'loupe') { event.preventDefault(); return stepLoupe(key === ']' ? 1 : -1); }
   const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
   const index = ids.indexOf(state.focusedId);
@@ -1309,7 +1310,6 @@ async function load() {
     const active = (await request('/api/jobs')).jobs.find(job => JOB_ACTIVE.includes(job.status) && !(job.kind === 'astro' && job.status === 'queued'));
     if (active) watchJob(active);
   }
-  if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
   const reviewing = document.querySelector('#review-tab').getAttribute('aria-selected') === 'true';
   await Promise.all([reviewing && loadRejectSuggestions(), loadVocabulary(!reviewing)]);  // the inspector's datalist needs the words on every load
 }
@@ -1521,7 +1521,7 @@ document.querySelector('#reject-all-shown').addEventListener('click', () => {
   const ids = state.rejectSuggestions.map(item => item.photo_id);
   if (!ids.length) return;
   rejectConfirm.dataset.ids = ids.join(',');  // the ids shown at open time, not a count
-  document.querySelector('#reject-all-text').textContent = `Reject all ${ids.length} shown frames? This marks them rejected; you can restore any frame from the inspector.`;
+  document.querySelector('#reject-all-text').textContent = `Reject all ${ids.length} shown frames? This marks them rejected; you can restore any frame from the frame view.`;
   if (rejectConfirm.showModal) rejectConfirm.showModal();
   else rejectConfirm.hidden = false;
 });
@@ -1926,6 +1926,7 @@ function updateWorkflow() {
   document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   const scope = document.querySelector('input[name="export-scope"]:checked').value;
   document.querySelector('#export-jpegs').disabled = state.busy || !available || (scope === 'current' ? !photo : !keepers);
+  document.querySelector('#loupe-export').disabled = state.busy || !available || !photo;
   document.querySelector('#refine-availability').textContent = available ? '' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
@@ -2005,7 +2006,6 @@ function selectTab(tab) {
   collapsePanel(false);  // choosing a tab always shows its panel
   document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
   try { localStorage.setItem('lumen-tab', tab.id); } catch { /* per-visit only */ }
-  if (tab.id === 'compose-tab') loadComposition();
   if (tab.id === 'review-tab') { loadRejectSuggestions(); loadVocabulary(); }
   if (tab.id === 'clear-tab') loadCleared();
 }
@@ -2025,7 +2025,7 @@ document.querySelector('#collapse-panel').addEventListener('click', () => {
 });
 try {
   const rememberedTab = tabs.find(tab => tab.id === localStorage.getItem('lumen-tab'));
-  if (rememberedTab && rememberedTab.id !== 'compose-tab') selectTab(rememberedTab);  // before load(), so the first load fills the right panel
+  if (rememberedTab) selectTab(rememberedTab);  // before load(), so the first load fills the right panel; a removed tab stays on Export
   if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
 } catch { /* per-visit only */ }
 
@@ -2183,13 +2183,14 @@ function closeView() {
 }
 
 // Scale 1 of the stored preview in both panes, so zoom matches; preview_url carries the version query.
-function showPreview(viewport, photo) {
+function showPreview(viewport, photo, src = photo.preview_url, loaded = () => {}) {
   const image = document.createElement('img');
   image.alt = photo.name;
-  image.addEventListener('load', () => { image.width = image.naturalWidth; image.height = image.naturalHeight; });
-  image.src = photo.preview_url;
+  image.addEventListener('load', () => { image.width = image.naturalWidth; image.height = image.naturalHeight; loaded(image); });
+  image.src = src;
   viewport.setAttribute('aria-label', `${photo.name} viewport`);
   viewport.replaceChildren(image);
+  return image;
 }
 
 function syncScroll(from, to) {
@@ -2267,11 +2268,45 @@ function openLoupe(photoId) {
   const photo = photoById(photoId);
   if (openView || !photo) return;
   if (state.cullingBlocked) return announce(cullingBlockedText());
-  document.querySelector('#loupe-heading').textContent = photo.name;
-  const viewport = document.querySelector('#loupe-viewport');
-  showPreview(viewport, photo);
+  showFrame(photo);
   showView(document.querySelector('#loupe'));
-  viewport.focus();
+  loupeViewport.focus();
+}
+
+// The frame view selects the frame as a sheet click does, then gathers its inspector and crops at preview size.
+function showFrame(photo) {
+  document.querySelector('#loupe-heading').textContent = photo.name;
+  showPreview(loupeViewport, photo);
+  Object.assign(fullButton, { disabled: false, textContent: 'Full size' });
+  fullButton.setAttribute('aria-pressed', 'false');
+  inspect(photo).catch(error => announce(error.message));  // sets selectedId before its first await, so the crops below are this frame's
+  loadComposition();
+}
+
+// Swap between the stored preview and the camera's embedded full-size JPEG; the button names the real pixel size.
+function toggleFullSize() {
+  const photo = photoById(state.selectedId);
+  if (!photo || fullButton.disabled) return;
+  if (fullButton.getAttribute('aria-pressed') === 'true') {
+    showPreview(loupeViewport, photo);
+    fullButton.textContent = 'Full size';
+    fullButton.setAttribute('aria-pressed', 'false');
+    return announce('Preview size');
+  }
+  const image = showPreview(loupeViewport, photo, `/full/${photo.id}?${photo.preview_url.split('?')[1] || ''}`, loaded => {
+    if (loupeViewport.children[0] !== image) return;  // stepped on or toggled off while it loaded
+    fullButton.textContent = `Full size, ${loaded.naturalWidth} by ${loaded.naturalHeight}`;
+    fullButton.setAttribute('aria-pressed', 'true');
+    loupeViewport.scrollLeft = (loupeViewport.scrollWidth - loupeViewport.clientWidth) / 2;
+    loupeViewport.scrollTop = (loupeViewport.scrollHeight - loupeViewport.clientHeight) / 2;
+    announce(fullButton.textContent);
+  });
+  image.addEventListener('error', () => {
+    if (loupeViewport.children[0] !== image) return;
+    showPreview(loupeViewport, photo);
+    Object.assign(fullButton, { disabled: true, textContent: 'no full-size image in this file' });
+    announce(fullButton.textContent);
+  });
 }
 
 // Filmstrip: step the loupe through the rendered frames in sheet order.
@@ -2282,9 +2317,8 @@ function stepLoupe(delta) {
   if (index >= ids.length) return announce('Last frame');
   const photo = photoById(ids[index]);
   if (!photo) return;
-  document.querySelector('#loupe-heading').textContent = photo.name;
-  showPreview(document.querySelector('#loupe-viewport'), photo);
   focusFrame(photo.id, false);
+  showFrame(photo);
   viewOrigin = photo.id;
   announce(`${photo.name}, ${index + 1} of ${ids.length}`);
 }
@@ -2295,7 +2329,10 @@ for (const name of ['#compare', '#loupe']) {
   dialog.addEventListener('close', closeView);  // native Escape from a select or button
 }
 const loupeViewport = document.querySelector('#loupe-viewport');
+const fullButton = document.querySelector('#loupe-full');
 loupeViewport.addEventListener('keydown', event => panKey(event, loupeViewport));
+fullButton.addEventListener('click', toggleFullSize);
+document.querySelector('#loupe-export').addEventListener('click', () => exportCurrentFrame());
 SIDES.forEach((side, index) => {
   const part = name => document.querySelector(`#compare-${side}-${name}`);
   const viewport = part('viewport');
@@ -2331,8 +2368,8 @@ function showExportResults(results, size) {
   document.querySelector('#export-status').textContent = `${size} export complete: ${succeeded} saved, ${results.length - succeeded} failed.${succeeded < results.length ? ' Successful JPEGs remain; fix the reported problem and retry the failed photo.' : ''}`;
 }
 
-document.querySelector('#export-jpegs').addEventListener('click', async () => {
-  const scope = document.querySelector('input[name="export-scope"]:checked').value;
+// Export tab and "Export this frame" share one path; a current-frame result is mirrored into the frame view.
+async function runExport(scope) {
   const preset = document.querySelector('input[name="export-preset"]:checked').value;
   const payload = { scope, profile: state.profile, preset };
   const watermark = document.querySelector('#export-watermark').value.trim();
@@ -2355,8 +2392,11 @@ document.querySelector('#export-jpegs').addEventListener('click', async () => {
   } finally {
     state.busy = false;
     updateWorkflow();
+    if (scope === 'current') document.querySelector('#compose-status').textContent = document.querySelector('#export-status').textContent;
   }
-});
+}
+const exportCurrentFrame = () => runExport('current');
+document.querySelector('#export-jpegs').addEventListener('click', () => runExport(document.querySelector('input[name="export-scope"]:checked').value));
 
 // The filtered scope sends the same fields the contact sheet's URL query holds; the server validates them alike.
 function refinePayload() {

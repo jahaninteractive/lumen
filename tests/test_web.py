@@ -695,7 +695,7 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab"]
-        self.assertEqual(["Compose", "Export", "Review", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
+        self.assertEqual(["Export", "Review", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for index, tab in enumerate(tabs):
             self.assertEqual("button", tab["tag"])
@@ -939,8 +939,8 @@ class WebTests(unittest.TestCase):
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
-        compose = by_id["compose-panel"]
-        self.assertIn("Select a photo", compose["text"])
+        self.assertIn(by_id["loupe"], by_id["compose-workspace"]["parents"])
+        self.assertIn("the RAW stays untouched", by_id["loupe"]["text"])
         self.assertEqual("button", by_id["ask-composition-ai"]["tag"])
         self.assertEqual("button", by_id["ask-composition-ai"]["attrs"].get("type"))
         self.assertEqual("details", by_id["more-crop-shapes"]["tag"])
@@ -1305,7 +1305,7 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['compose', 'export', 'review', 'astro', 'ingest', 'clear'].map((name, index) => {
+const tabElements = ['export', 'review', 'astro', 'ingest', 'clear'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -1345,7 +1345,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -1432,6 +1432,7 @@ let activeCrop = null;
 let reviewMode = 'success';
 let networkDown = false;  // the browser's fetch itself fails, as when lumen serve restarts mid-request
 let cropLoads = 0;
+const cropRequests = [];
 let deferCropLoads = false;
 let deferReviews = false;
 const pendingCropLoads = [];
@@ -1560,10 +1561,11 @@ async function fetch(url, options = {}) {
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
       : scenario.startsWith('keyword') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
-  else if (url === '/api/photos/2/crops') {
+  else if (/^\/api\/photos\/\d+\/crops$/.test(url)) {
     cropLoads += 1;
+    cropRequests.push(url);
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
-    payload = cropPayload();
+    payload = { ...cropPayload(), photo_id: Number(url.split('/')[3]) };
   }
   else if (/\/composition-review$/.test(url)) {
     compositionReviews.push(url);
@@ -1608,7 +1610,8 @@ async function fetch(url, options = {}) {
       : ingestJob('succeeded', 1, { label: 'DSC00004.ARW', processed: 4, total: 4, ingest: ingestCounts(ingestOutcome) });
   }
   else if (url === '/api/export') {
-    assert.equal(options.method, 'POST'); exportPosts.push(JSON.parse(options.body)); payload = exportJob('queued', 0);
+    assert.equal(options.method, 'POST'); exportPosts.push(JSON.parse(options.body));
+    payload = exportPosts.at(-1).scope === 'current' ? { results: [{ photo_id: exportPosts.at(-1).photo_id, success: true, output: '/managed/outputs/jpeg/photo-2.jpg' }] } : exportJob('queued', 0);
   }
   else if (url === '/api/jobs/17/cancel') { assert.deepEqual(JSON.parse(options.body), {}); exportCancels += 1; payload = exportJob('cancelled', 0.5, { label: 'photo-1.jpg', processed: 1, total: 2, result: { exported: 1, failed: 0, skipped: 0 } }); }
   else if (url === '/api/jobs/17') {
@@ -2039,7 +2042,7 @@ const regression = `
     assert.equal(rejectPosts.length, posted, 'opening the confirmation posts nothing');
     assert.equal(element('#reject-all-confirm').hidden, false);
     assert.ok(element('#reject-all-text').textContent.includes('Reject all 2 shown frames?'));
-    assert.equal(element('#reject-all-text').textContent, 'Reject all 2 shown frames? This marks them rejected; you can restore any frame from the inspector.');
+    assert.equal(element('#reject-all-text').textContent, 'Reject all 2 shown frames? This marks them rejected; you can restore any frame from the frame view.');
     await element('#reject-all-yes').listeners.click();
     await tick();
     assert.deepEqual(rejectPosts.at(-1), { photo_ids: [1, 2], decision: 'reject' });
@@ -2226,6 +2229,91 @@ const regression = `
     assert.equal(dialog.hidden, true);
     assert.equal(focused, card(2), 'closing returns focus to the originating frame');
     assert.equal(state.focusedId, 2);
+    return;
+  }
+  if (scenario === 'frame-view') {
+    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'a remembered Compose tab falls back to Export');
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    let prevented = 0;
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() { prevented += 1; }, stopPropagation() {} });
+    const sheetNode = element('#contact-sheet');
+    const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV' });
+    photoDetailRequests.length = 0;
+    await key('Home', card(1), sheetNode);
+    await key('Enter', card(1), sheetNode);
+    await new Promise(setImmediate);
+    assert.equal(loupe.hidden, false);
+    assert.equal(state.selectedId, 1, 'opening the frame view selects the frame');
+    assert.deepEqual(photoDetailRequests, ['/api/photos/1']);
+    assert.deepEqual(cropRequests, ['/api/photos/1/crops']);
+    assert.equal(element('#inspection').children[0].textContent, 'photo-1.jpg', 'the inspector renders inside the frame view');
+    assert.equal(element('#compose-workspace').hidden, false, 'crop choices show in the frame view');
+    await key(']', viewport, loupe);
+    assert.equal(element('#announcer').textContent, 'photo-2.jpg, 2 of 2');
+    await new Promise(setImmediate);
+    assert.equal(state.selectedId, 2);
+    assert.deepEqual(photoDetailRequests, ['/api/photos/1', '/api/photos/2']);
+    assert.deepEqual(cropRequests, ['/api/photos/1/crops', '/api/photos/2/crops']);
+    assert.equal(element('#inspection').children[0].textContent, 'photo-2.jpg');
+    const exportButton = Object.assign(element('#loupe-export'), { tagName: 'BUTTON' });
+    const before = prevented;
+    await key('Enter', exportButton, loupe);
+    assert.equal(prevented, before, 'Enter on a dialog button keeps its native activation');
+    await key('x', exportButton, loupe);
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/decision', body: { decision: 'reject' } }, 'culling keys work from the dialog buttons');
+    const posts = decisionPosts.length;
+    await key('x', Object.assign(new Element(), { tagName: 'INPUT' }), loupe);
+    assert.equal(decisionPosts.length, posts, 'a text field in the frame view swallows culling keys');
+    assert.equal(exportButton.disabled, false);
+    await exportButton.listeners.click();
+    assert.deepEqual(exportPosts.at(-1), { scope: 'current', profile: null, preset: 'full', photo_id: 2 });
+    assert.ok(element('#export-status').textContent.startsWith('Full resolution export complete: 1 saved'));
+    assert.equal(element('#compose-status').textContent, element('#export-status').textContent, 'the export result shows in the frame view');
+    await key('Escape', viewport, loupe);
+    assert.equal(loupe.hidden, true);
+    assert.equal(focused, card(2), 'closing returns focus to the frame last shown');
+    return;
+  }
+  if (scenario === 'frame-view-full') {
+    groups[0].photos.forEach(item => { item.preview_url = '/preview/' + item.id + '?v=abc-embedded'; });
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
+    const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', scrollLeft: 0, scrollTop: 0 });
+    const full = element('#loupe-full');
+    await key('Home', card(1), element('#contact-sheet'));
+    await key('Enter', card(1), element('#contact-sheet'));
+    assert.equal(full.getAttribute('aria-pressed'), 'false');
+    full.listeners.click();
+    let image = viewport.children[0];
+    assert.equal(image.src, '/full/1?v=abc-embedded', 'the full-size image carries the preview version');
+    Object.assign(viewport, { scrollWidth: 3504, clientWidth: 1000, scrollHeight: 2336, clientHeight: 800 });
+    Object.assign(image, { naturalWidth: 3504, naturalHeight: 2336 });
+    image.listeners.load();
+    assert.equal(full.textContent, 'Full size, 3504 by 2336', 'the button names the real pixel size');
+    assert.equal(full.getAttribute('aria-pressed'), 'true');
+    assert.deepEqual([viewport.scrollLeft, viewport.scrollTop], [1252, 768], 'zooming in centres the view');
+    await key('z', viewport, loupe);
+    assert.equal(viewport.children[0].src, '/preview/1?v=abc-embedded', 'z returns to the preview');
+    assert.equal(full.getAttribute('aria-pressed'), 'false');
+    assert.equal(full.textContent, 'Full size');
+    await key('z', viewport, loupe);
+    assert.equal(viewport.children[0].src, '/full/1?v=abc-embedded', 'z zooms in again');
+    await key(']', viewport, loupe);
+    assert.equal(viewport.children[0].src, '/preview/2?v=abc-embedded', 'stepping resets to the preview');
+    assert.equal(full.getAttribute('aria-pressed'), 'false');
+    full.listeners.click();
+    viewport.children[0].listeners.error();
+    assert.equal(full.disabled, true);
+    assert.equal(full.textContent, 'no full-size image in this file');
+    assert.equal(full.getAttribute('aria-pressed'), 'false');
+    assert.equal(viewport.children[0].src, '/preview/2?v=abc-embedded', 'a missing full-size image keeps the preview');
+    await key('[', viewport, loupe);
+    assert.equal(full.disabled, false, 'the next frame gets its own chance');
+    assert.equal(full.textContent, 'Full size');
     return;
   }
   if (scenario === 'loupe-strip') {
@@ -2582,10 +2670,10 @@ const regression = `
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const cue = tree(element('#contact-sheet')).find(node => node.className === 'astro-cue');
     assert.equal(cue?.textContent, 'Looks like astro', 'the cue is text in the burst header');
-    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
+    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
     await inspect(state.groups[0].photos[0]);
     await new Promise(setImmediate);
-    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
+    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
     assert.deepEqual(triageRequests, ['/api/groups/1/triage']);
     const lights = document.querySelectorAll('#astro-lights input');
     const triageTexts = element('#astro-lights').children.map(label => label.children[2].textContent);
@@ -2605,7 +2693,7 @@ const regression = `
     assert.deepEqual(astroLights().excluded, [2]);
     assert.equal(element('#announcer').textContent, '1 light excluded');
     assert.equal(element('#exclude-flagged').textContent, 'Exclude flagged lights (0)');
-    assert.equal(element('#compose-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true');
     return;
   }
   if (scenario === 'resume') {
@@ -2854,7 +2942,7 @@ const regression = `
   }
   if (scenario === 'tabs-remembered') {
     assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'a remembered tab is selected at startup');
-    assert.equal(element('#compose-panel').hidden, true);
+    assert.equal(element('#review-panel').hidden, true);
     return;
   }
   if (scenario === 'keep-only') {
@@ -2940,7 +3028,8 @@ const regression = `
     assert.equal(bar.dataset.phase, undefined, 'idle until the first call');
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     await inspect(state.groups[0].photos[1]);
-    assert.equal(state.composition?.photo_id, 2, 'the Compose tab loaded crop choices for photo 2');
+    await loadComposition();
+    assert.equal(state.composition?.photo_id, 2, 'the frame view loaded crop choices for photo 2');
     reviewMode = 'failure';
     await askCompositionAI();
     assert.equal(bar.dataset.phase, 'failed');
@@ -3008,6 +3097,7 @@ const regression = `
   if (scenario === 'network-error') {
     await load();
     await inspect(state.groups[0].photos[1]);
+    await loadComposition();
     networkDown = true;
     await askCompositionAI();
     assert.equal(element('#ai-status').dataset.phase, 'failed');
@@ -3220,9 +3310,8 @@ const regression = `
   assert.ok(state.compositionRequest > requestBeforePhotoChange, 'a photo change must invalidate composition operations');
   assert.equal(element('#composition-advice').textContent, '');
   await inspect(state.groups.flatMap(item => item.photos).find(item => item.id === 2));
-  element('#compose-tab').listeners.click();
-  await new Promise(setImmediate);
-  assert.equal(state.selectedId, 2, 'opening Compose must preserve the selected photo');
+  await loadComposition();
+  assert.equal(state.selectedId, 2, 'loading crops must preserve the selected photo');
   assert.equal(state.composition.photo_id, 2);
   let cards = element('#primary-crops').children;
   let originalAction = cards[0].children.at(-1);
@@ -3365,6 +3454,30 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_loupe_filmstrip_steps_with_brackets(self):
         self.run_javascript_cleanup_regression("loupe-strip")
 
+    def test_javascript_frame_view_gathers_inspector_and_crops(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        for gone in ("compose-tab", "compose-panel"):
+            self.assertNotIn(gone, by_id)
+        self.assertFalse(any("inspector" in node["attrs"].get("class", "").split() for node in parser.nodes))
+        loupe = by_id["loupe"]
+        order = ["loupe-viewport", "loupe-full", "inspection", "compose-workspace", "compose-status", "loupe-export", "close-loupe"]
+        for name in order:
+            self.assertIn(loupe, by_id[name]["parents"], f"{name} lives in the frame view")
+            self.assertFalse(any(node["tag"] == "form" for node in by_id[name]["parents"]), f"{name} sits outside any form")
+        self.assertEqual(order, sorted(order, key=lambda name: parser.nodes.index(by_id[name])), "tab order runs viewport, zoom, right column, Close")
+        full = by_id["loupe-full"]
+        self.assertEqual(("button", "button", "false", "Full size"), (full["tag"], full["attrs"].get("type"), full["attrs"].get("aria-pressed"), full["text"].strip()))
+        self.assertEqual(("button", "Export this frame"), (by_id["loupe-export"]["tag"], by_id["loupe-export"]["text"].strip()))
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"#loupe\[open\] \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\)")  # the viewport keeps two thirds
+        self.run_javascript_cleanup_regression("frame-view")
+
+    def test_javascript_frame_view_full_size_toggle(self):
+        self.run_javascript_cleanup_regression("frame-view-full")
+
     def test_compare_and_loupe_dialogs_have_labeled_viewports_and_actions(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
@@ -3378,8 +3491,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             dialog = by_id[name]
             self.assertEqual("dialog", dialog["tag"])
             self.assertTrue(by_id[dialog["attrs"]["aria-labelledby"]]["text"].strip())
-            form = next(node for node in parser.nodes if node["tag"] == "form" and dialog in node["parents"])
-            self.assertEqual("dialog", form["attrs"].get("method"))
+        form = next(node for node in parser.nodes if node["tag"] == "form" and by_id["compare"] in node["parents"])
+        self.assertEqual("dialog", form["attrs"].get("method"))
         viewports = ["compare-left-viewport", "compare-right-viewport", "loupe-viewport"]
         for name in viewports:
             viewport = by_id[name]
@@ -3420,7 +3533,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertGreaterEqual(len(terms), 8)
         for key in ("P", "X", "F", "U", "C", "0", "5", "Home", "End", "[", "]"):
             self.assertIn(key, keys)
-        self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() == "Previous or next frame in the loupe" for node in legend))
+        for text in ("Previous or next frame in the frame view", "Open the frame view", "Close compare or the frame view", "Full size on or off in the frame view"):
+            self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() == text for node in legend), text)
+        self.assertIn("Z", keys)
         for key in keys:
             self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down", "Enter", "Esc"}, key)
         for key in ("Enter", "Esc"):
@@ -3867,7 +3982,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         sticky = next(node for node in parser.nodes if node["attrs"].get("class") == "main-top")
-        self.assertIn(sticky, by_id["compose-tab"]["parents"], "the tab row stays pinned")
+        self.assertIn(sticky, by_id["export-tab"]["parents"], "the tab row stays pinned")
         for name in ("import-form", "tag-all"):
             self.assertNotIn(sticky, by_id[name]["parents"], f"{name} scrolls away with the page")
 
@@ -3881,15 +3996,14 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(("button", "button", "false"), (collapse["tag"], collapse["attrs"].get("type"), collapse["attrs"].get("aria-pressed")))
         self.assertEqual("Collapse panel", collapse["text"].strip())
         self.assertEqual(tablist["parents"][-1], collapse["parents"][-1], "the toggle sits next to the tab rail")
-        self.assertEqual("tabpanel", by_id["compose-panel"]["attrs"]["role"])
-        self.assertIn(by_id[collapse["attrs"]["aria-controls"]], by_id["compose-panel"]["parents"])
+        self.assertEqual("tabpanel", by_id["export-panel"]["attrs"]["role"])
+        self.assertIn(by_id[collapse["attrs"]["aria-controls"]], by_id["export-panel"]["parents"])
         nav = next(node for node in parser.nodes if node["tag"] == "nav")
-        aside = next(node for node in parser.nodes if node["tag"] == "aside")
+        self.assertNotIn("aside", parser.tags, "the inspector rail is gone; the frame view holds the inspector")
         header = by_id["rail-header"]
         self.assertIn(nav, header["parents"])
-        for name in ("merge-batches", "merge-count", "jump-selected"):
+        for name in ("merge-batches", "merge-count", "jump-selected", "back-to-top"):
             self.assertIn(header, by_id[name]["parents"], f"{name} lives in the sticky rail header")
-        self.assertIn(aside, by_id["back-to-top"]["parents"])
         for name in ("collapse-panel", "merge-batches", "jump-selected", "back-to-top"):
             node = by_id[name]
             self.assertEqual(("button", "button"), (node["tag"], node["attrs"].get("type")))
@@ -3897,7 +4011,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
         self.assertRegex(styles, r"\nbody \{[^}]*overflow: hidden")
         self.assertRegex(styles, r"\.masthead \{[^}]*position: sticky")
-        self.assertRegex(styles, r"\.batch-rail, main, \.inspector \{[^}]*overflow-y: auto")
+        self.assertRegex(styles, r"\.batch-rail, main \{[^}]*overflow-y: auto")
+        self.assertRegex(styles, r"\.workspace \{[^}]*grid-template-columns: 250px minmax\(0, 1fr\);")  # the sheet takes the rail's width
         self.assertRegex(styles, r"\.main-top \{[^}]*position: sticky")
         self.assertRegex(styles, r"\.rail-header \{[^}]*position: sticky")
         self.assertRegex(styles, r'\.burst\[data-selected="true"\] \{[^}]*outline: 2px solid var\(--amber\)')
@@ -3915,7 +4030,6 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         parser.feed(html)
         self.assertIn("main", parser.tags)
         self.assertIn("nav", parser.tags)
-        self.assertIn("aside", parser.tags)
         self.assertGreaterEqual(parser.labels, 1)
 
     def test_groups_api_returns_ranked_photo_with_preview_url(self):

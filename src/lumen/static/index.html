@@ -33,6 +33,7 @@
         <p id="merge-count" class="quiet">0 batches selected</p>
         <button type="button" id="merge-batches" class="secondary" disabled>Merge selected batches</button>
         <button type="button" id="jump-selected" class="secondary">Jump to selected</button>
+        <button type="button" id="back-to-top" class="secondary">Back to top</button>
         <button type="button" id="write-digest" class="secondary">Write today's digest</button>
         <p id="digest-result" class="path"></p>
       </div>
@@ -43,8 +44,7 @@
       <div class="main-top">
       <div class="tab-row">
         <div class="tab-rail" role="tablist" aria-label="Finishing workflow">
-          <button type="button" id="compose-tab" role="tab" aria-controls="compose-panel" aria-selected="true" tabindex="0">Compose</button>
-          <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
+          <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="true" tabindex="0">Export</button>
           <button type="button" id="review-tab" role="tab" aria-controls="review-panel" aria-selected="false" tabindex="-1">Review</button>
           <button type="button" id="astro-tab" role="tab" aria-controls="astro-panel" aria-selected="false" tabindex="-1">Astro</button>
           <button type="button" id="ingest-tab" role="tab" aria-controls="ingest-panel" aria-selected="false" tabindex="-1">Ingest</button>
@@ -56,25 +56,7 @@
       </div>
 
       <section id="workflow-panels" class="workflow" aria-label="Finish this shoot">
-        <section id="compose-panel" role="tabpanel" aria-labelledby="compose-tab" tabindex="0">
-          <h2>Compose without changing the original</h2>
-          <p class="quiet">Select a photo, then compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
-          <p id="compose-empty">Select a photo from the contact sheet to see crop choices.</p>
-          <div id="compose-workspace" hidden>
-            <div class="button-row">
-              <button type="button" id="ask-composition-ai" class="secondary" aria-describedby="composition-availability">Ask local AI</button>
-            </div>
-            <p id="composition-availability" class="quiet"></p>
-            <p id="composition-advice" class="quiet"></p>
-            <div id="primary-crops" class="crop-grid"></div>
-            <details id="more-crop-shapes">
-              <summary>More crop shapes</summary>
-              <div id="alternative-crops" class="crop-grid"></div>
-            </details>
-          </div>
-          <p id="compose-status" role="status" aria-live="polite"></p>
-        </section>
-        <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
+        <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0">
           <h2>Finish as JPEG</h2>
           <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
           <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
@@ -315,13 +297,6 @@
       </section>
     </main>
 
-    <aside aria-labelledby="inspect-heading" class="inspector">
-      <h2 id="inspect-heading">Inspect</h2>
-      <button type="button" id="back-to-top" class="secondary">Back to top</button>
-      <div id="inspection">
-        <p class="quiet">Select a frame to see why it ranked where it did.</p>
-      </div>
-    </aside>
   </div>
 
   <footer class="ai-bar" aria-label="Local AI activity">
@@ -374,9 +349,10 @@
         <dt><kbd>U</kbd></dt><dd>Clear decision</dd>
         <dt><kbd>0</kbd> to <kbd>5</kbd></dt><dd>Set rating; 0 removes it</dd>
         <dt><kbd>C</kbd></dt><dd>Mark or unmark for compare (two frames at most)</dd>
-        <dt><kbd>Enter</kbd></dt><dd>Open the loupe at 100 percent</dd>
-        <dt><kbd>Esc</kbd></dt><dd>Close compare or loupe</dd>
-        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous or next frame in the loupe</dd>
+        <dt><kbd>Enter</kbd></dt><dd>Open the frame view</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close compare or the frame view</dd>
+        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous or next frame in the frame view</dd>
+        <dt><kbd>Z</kbd></dt><dd>Full size on or off in the frame view</dd>
       </dl>
       <button type="submit">Close</button>
     </form>
@@ -452,13 +428,36 @@
   </dialog>
 
   <dialog id="loupe" aria-labelledby="loupe-heading">
-    <form method="dialog">
-      <h2 id="loupe-heading">Loupe</h2>
-      <div id="loupe-viewport" class="loupe-viewport" tabindex="0" role="group" aria-label="Loupe viewport"></div>
+    <h2 id="loupe-heading">Frame</h2>
+    <div class="frame-image">
+      <div id="loupe-viewport" class="loupe-viewport" tabindex="0" role="group" aria-label="Frame viewport"></div>
       <div class="button-row">
-        <button type="button" id="close-loupe">Close</button>
+        <button type="button" id="loupe-full" class="secondary" aria-pressed="false">Full size</button>
       </div>
-    </form>
+    </div>
+    <div class="frame-panel">
+      <div id="inspection"></div>
+      <h3>Crop without changing the original</h3>
+      <p id="compose-empty" hidden></p>
+      <div id="compose-workspace" hidden>
+        <div class="button-row">
+          <button type="button" id="ask-composition-ai" class="secondary" aria-describedby="composition-availability">Ask local AI</button>
+        </div>
+        <p id="composition-availability" class="quiet"></p>
+        <p id="composition-advice" class="quiet"></p>
+        <div id="primary-crops" class="crop-grid"></div>
+        <details id="more-crop-shapes">
+          <summary>More crop shapes</summary>
+          <div id="alternative-crops" class="crop-grid"></div>
+        </details>
+      </div>
+      <p class="quiet">Compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
+      <p id="compose-status" role="status" aria-live="polite"></p>
+      <div class="button-row">
+        <button type="button" id="loupe-export">Export this frame</button>
+        <button type="button" id="close-loupe" class="secondary">Close</button>
+      </div>
+    </div>
   </dialog>
 
   <div id="announcer" class="sr-only" aria-live="assertive"></div>
