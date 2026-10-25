@@ -715,14 +715,12 @@ async function savePlace(photo, payload) {
 function renderInspector(photo) {
   const details = state.details;
   inspection.replaceChildren();
-  const heading = document.createElement('h3');
-  heading.textContent = photo.name;
   const verdict = document.createElement('p');
   verdict.className = 'quiet';
   const group = state.groups.find(item => item.photos.includes(photo));
   verdict.textContent = group && allRejected(group) ? NO_KEEPER
     : photo.id === photo.groupPick ? 'Best measured frame in this group.' : 'Alternate frame; compare its component scores.';
-  inspection.append(heading, verdict);
+  inspection.append(verdict);
   if (photo.matched?.length) {
     const reasons = document.createElement('p');
     reasons.id = 'match-reasons';
@@ -2026,20 +2024,45 @@ function updateWorkflow() {
   }
 }
 
-const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
-function selectTab(tab) {
-  tabs.forEach(item => {
-    const selected = item === tab;
-    item.setAttribute('aria-selected', String(selected));
-    item.tabIndex = selected ? 0 : -1;
-    document.querySelector(`#${item.getAttribute('aria-controls')}`).hidden = !selected;
+// One [role=tablist]: click, Arrow keys, Home, and End select a tab, show its panel, and remember it under storageKey.
+function wireTablist(selector, storageKey, onSelect = () => {}) {
+  const tabs = Array.from(document.querySelectorAll(`${selector} [role="tab"]`));
+  const select = tab => {
+    tabs.forEach(item => {
+      const selected = item === tab;
+      item.setAttribute('aria-selected', String(selected));
+      item.tabIndex = selected ? 0 : -1;
+      document.querySelector(`#${item.getAttribute('aria-controls')}`).hidden = !selected;
+    });
+    try { localStorage.setItem(storageKey, tab.id); } catch { /* per-visit only */ }
+    onSelect(tab);
+  };
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => select(tab));
+    tab.addEventListener('keydown', event => {
+      const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      select(tabs[next]);
+      tabs[next].focus();
+    });
   });
+  // A removed or unknown remembered id keeps the current tab.
+  select.restore = () => {
+    let id = null;
+    try { id = localStorage.getItem(storageKey); } catch { /* per-visit only */ }
+    const tab = tabs.find(item => item.id === id);
+    if (tab) select(tab);
+  };
+  return select;
+}
+
+const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   collapsePanel(false);  // choosing a tab always shows its panel
   document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
-  try { localStorage.setItem('lumen-tab', tab.id); } catch { /* per-visit only */ }
   if (tab.id === 'review-tab') { loadRejectSuggestions(); loadVocabulary(); }
   if (tab.id === 'clear-tab') loadCleared();
-}
+});
 
 function collapsePanel(collapsed) {
   document.querySelector('#workflow-panels').hidden = collapsed;
@@ -2055,8 +2078,7 @@ document.querySelector('#collapse-panel').addEventListener('click', () => {
   announce(collapsed ? 'Workflow panel collapsed; the contact sheet has the space.' : 'Workflow panel shown.');
 });
 try {
-  const rememberedTab = tabs.find(tab => tab.id === localStorage.getItem('lumen-tab'));
-  if (rememberedTab) selectTab(rememberedTab);  // before load(), so the first load fills the right panel; a removed tab stays on Export
+  selectTab.restore();  // before load(), so the first load fills the right panel; a removed tab stays on Export
   if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
 } catch { /* per-visit only */ }
 
@@ -2074,17 +2096,6 @@ if (window.ResizeObserver) {
   const top = document.querySelector('.main-top');
   new ResizeObserver(() => document.documentElement.style.setProperty('--sticky-top', `${top.offsetHeight}px`)).observe(top);
 }
-tabs.forEach((tab, index) => {
-  tab.addEventListener('click', () => selectTab(tab));
-  tab.addEventListener('keydown', event => {
-    const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
-    if (next === undefined) return;
-    event.preventDefault();
-    selectTab(tabs[next]);
-    tabs[next].focus();
-  });
-});
-
 function rememberProfile(path) {
   state.profile = path;
   document.querySelector('#profile-path').textContent = path || 'Camera-aware defaults';
@@ -2313,6 +2324,7 @@ function openLoupe(photoId) {
 // The frame view selects the frame as a sheet click does, then gathers its inspector and crops at preview size.
 function showFrame(photo) {
   document.querySelector('#loupe-heading').textContent = photo.name;
+  selectFrameTab.restore();
   showPreview(loupeViewport, photo, undefined, () => drawCropOverlay(shownCropRect()));
   cropDrag = null;
   state.manualCrop = null;
@@ -2425,6 +2437,7 @@ const fullButton = document.querySelector('#loupe-full');
 const cropOverlay = document.querySelector('#crop-overlay');
 const cropOutline = document.querySelector('#crop-outline');
 const cropLock = document.querySelector('#crop-lock');
+const selectFrameTab = wireTablist('#frame-tabs', 'lumen-frame-tab');
 loupeViewport.addEventListener('keydown', event => {
   if (event.key === 'Escape' && cropDrag) {  // cancel the drag; the dialog never sees this Escape
     event.preventDefault();

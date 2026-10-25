@@ -433,36 +433,47 @@
       <div id="loupe-viewport" class="loupe-viewport" tabindex="0" role="group" aria-label="Frame viewport"><div id="crop-overlay" hidden><div id="crop-outline"></div></div></div>
       <div class="button-row">
         <button type="button" id="loupe-full" class="secondary" aria-pressed="false">Full size</button>
-        <label for="crop-lock">Lock</label>
-        <select id="crop-lock">
-          <option value="free">Free</option>
-          <option value="3:2">3:2</option>
-          <option value="2:3">2:3</option>
-          <option value="1:1">1:1</option>
-          <option value="4:5">4:5</option>
-        </select>
       </div>
     </div>
     <div class="frame-panel">
-      <div id="inspection"></div>
-      <h3>Crop without changing the original</h3>
-      <p id="compose-empty" hidden></p>
-      <div id="compose-workspace" hidden>
-        <div class="button-row">
-          <button type="button" id="ask-composition-ai" class="secondary" aria-describedby="composition-availability">Ask local AI</button>
-        </div>
-        <p id="composition-availability" class="quiet"></p>
-        <p id="composition-advice" class="quiet"></p>
-        <div id="primary-crops" class="crop-grid"></div>
-        <details id="more-crop-shapes">
-          <summary>More crop shapes</summary>
-          <div id="alternative-crops" class="crop-grid"></div>
-        </details>
+      <div id="frame-tabs" class="tab-rail" role="tablist" aria-label="Frame view">
+        <button type="button" id="frame-tab" role="tab" aria-controls="frame-panel" aria-selected="true" tabindex="0">Frame</button>
+        <button type="button" id="crop-tab" role="tab" aria-controls="crop-panel" aria-selected="false" tabindex="-1">Crop</button>
       </div>
-      <p class="quiet">Compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
-      <p id="compose-status" role="status" aria-live="polite"></p>
+      <section id="frame-panel" role="tabpanel" aria-labelledby="frame-tab">
+        <div id="inspection"></div>
+      </section>
+      <section id="crop-panel" role="tabpanel" aria-labelledby="crop-tab" hidden>
+        <div class="button-row">
+          <label for="crop-lock">Lock</label>
+          <select id="crop-lock">
+            <option value="free">Free</option>
+            <option value="3:2">3:2</option>
+            <option value="2:3">2:3</option>
+            <option value="1:1">1:1</option>
+            <option value="4:5">4:5</option>
+          </select>
+        </div>
+        <p id="compose-empty" hidden></p>
+        <div id="compose-workspace" hidden>
+          <div class="button-row">
+            <button type="button" id="ask-composition-ai" class="secondary" aria-describedby="composition-availability">Ask local AI</button>
+          </div>
+          <p id="composition-availability" class="quiet"></p>
+          <p id="composition-advice" class="quiet"></p>
+          <div id="primary-crops" class="crop-grid"></div>
+          <details id="more-crop-shapes">
+            <summary>More crop shapes</summary>
+            <div id="alternative-crops" class="crop-grid"></div>
+          </details>
+        </div>
+        <p class="quiet">Compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
+        <p id="compose-status" role="status" aria-live="polite"></p>
+        <div class="button-row">
+          <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
+        </div>
+      </section>
       <div class="button-row">
-        <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
         <button type="button" id="close-loupe" class="secondary">Close</button>
       </div>
     </div>

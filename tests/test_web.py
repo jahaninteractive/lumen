@@ -694,7 +694,7 @@ class WebTests(unittest.TestCase):
             parser = LandmarkParser()
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
-        tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab"]
+        tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"]]
         self.assertEqual(["Export", "Review", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for index, tab in enumerate(tabs):
@@ -1351,6 +1351,13 @@ const tabElements = ['export', 'review', 'astro', 'ingest', 'clear'].map((name, 
   tab.setAttribute('aria-selected', String(index === 0));
   return tab;
 });
+const frameTabElements = ['frame', 'crop'].map((name, index) => {
+  const tab = element('#' + name + '-tab');
+  tab.id = name + '-tab';
+  tab.setAttribute('aria-controls', name + '-panel');
+  tab.setAttribute('aria-selected', String(index === 0));
+  return tab;
+});
 const scope = new Element(); scope.value = 'current';
 const presetRadios = ['full', 'share', 'web'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const webRadio = presetRadios[2];
@@ -1363,7 +1370,8 @@ const document = {
   querySelectorAll: selector => {
     if (selector === '.frame') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).filter(item => item.className === 'frame'); }
     if (selector === '.batch-button' || selector === '.batch-select') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === selector.slice(1)); }
-    if (selector === '[role="tab"]') return tabElements;
+    if (selector === '.tab-row [role="tab"]') return tabElements;
+    if (selector === '#frame-tabs [role="tab"]') return frameTabElements;
     if (selector === 'input[name="astro-recipe"]') return recipes;
     if (selector === 'input[name="export-preset"]') return presetRadios;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
@@ -2300,7 +2308,8 @@ const regression = `
     assert.equal(state.selectedId, 1, 'opening the frame view selects the frame');
     assert.deepEqual(photoDetailRequests, ['/api/photos/1']);
     assert.deepEqual(cropRequests, ['/api/photos/1/crops']);
-    assert.equal(element('#inspection').children[0].textContent, 'photo-1.jpg', 'the inspector renders inside the frame view');
+    assert.equal(element('#loupe-heading').textContent, 'photo-1.jpg', 'the dialog heading names the frame');
+    assert.ok(element('#inspection').children.length, 'the inspector renders inside the frame view');
     assert.equal(element('#compose-workspace').hidden, false, 'crop choices show in the frame view');
     let before = prevented;
     await key('Enter', Object.assign(new Element(), { tagName: 'A' }), loupe);
@@ -2318,7 +2327,7 @@ const regression = `
     assert.equal(state.selectedId, 2);
     assert.deepEqual(photoDetailRequests, ['/api/photos/1', '/api/photos/2']);
     assert.deepEqual(cropRequests, ['/api/photos/1/crops', '/api/photos/2/crops']);
-    assert.equal(element('#inspection').children[0].textContent, 'photo-2.jpg');
+    assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg');
     const exportButton = Object.assign(element('#loupe-export'), { tagName: 'BUTTON' });
     before = prevented;
     await key('Enter', exportButton, loupe);
@@ -2353,15 +2362,60 @@ const regression = `
     await new Promise(setImmediate);
     assert.equal(heldReplies.length, 2, "frame 1's replies are still in flight");
     assert.equal(state.selectedId, 3);
-    assert.equal(element('#inspection').children[0].textContent, 'photo-3.jpg');
+    assert.equal(element('#inspection').children[0].textContent, 'Alternate frame; compare its component scores.', "the inspector shows frame 3, not frame 1's pick verdict");
+    const inspected = element('#inspection').children;
     assert.equal(state.composition.photo_id, 3);
     const cards = element('#primary-crops').children;
     heldReplies.splice(0).forEach(reply => reply());
     await new Promise(setImmediate);
     assert.equal(element('#loupe-heading').textContent, 'photo-3.jpg', 'late replies leave the frame view on frame 3');
-    assert.equal(element('#inspection').children[0].textContent, 'photo-3.jpg', "frame 1's late details are ignored");
+    assert.equal(element('#inspection').children, inspected, "frame 1's late details are ignored");
     assert.equal(state.composition.photo_id, 3, "frame 1's late crops are ignored");
     assert.equal(element('#primary-crops').children, cards, 'the crop cards are not redrawn');
+    return;
+  }
+  if (scenario === 'frame-tabs') {
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
+    const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const [frameTab, cropTab] = frameTabElements;
+    await key('Enter', card(1), element('#contact-sheet'));
+    await new Promise(setImmediate);
+    assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'the frame view opens on Frame by default');
+    assert.ok(!element('#frame-panel').hidden);
+    assert.ok(!element('#inspection').children.some(node => node.tagName === 'H3' && node.textContent === 'photo-1.jpg'), 'the dialog heading carries the name, not the inspector');
+    cropTab.listeners.click();
+    assert.equal(cropTab.getAttribute('aria-selected'), 'true');
+    assert.equal(frameTab.getAttribute('aria-selected'), 'false');
+    assert.equal(cropTab.tabIndex, 0);
+    assert.equal(frameTab.tabIndex, -1);
+    assert.equal(element('#frame-panel').hidden, true, 'choosing Crop hides the Frame panel');
+    assert.equal(element('#crop-panel').hidden, false);
+    assert.equal(stored['lumen-frame-tab'], 'crop-tab', 'the chosen frame tab is remembered');
+    assert.equal(stored['lumen-tab'], undefined, 'the frame tabs leave the main tab row alone');
+    await key('ArrowLeft', cropTab, cropTab);
+    assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'ArrowLeft on Crop selects Frame');
+    assert.equal(focused, frameTab);
+    await key('End', frameTab, frameTab);
+    assert.equal(cropTab.getAttribute('aria-selected'), 'true');
+    assert.equal(focused, cropTab);
+    await key('Home', cropTab, cropTab);
+    assert.equal(frameTab.getAttribute('aria-selected'), 'true');
+    await key('ArrowRight', frameTab, frameTab);
+    assert.equal(cropTab.getAttribute('aria-selected'), 'true');
+    await key('Escape', element('#loupe-viewport'), loupe);
+    assert.equal(loupe.hidden, true);
+    frameTab.listeners.click();
+    stored['lumen-frame-tab'] = 'crop-tab';
+    await key('Enter', card(1), element('#contact-sheet'));
+    await new Promise(setImmediate);
+    assert.equal(cropTab.getAttribute('aria-selected'), 'true', 'reopening restores the remembered Crop tab');
+    assert.equal(element('#crop-panel').hidden, false);
+    const cropButton = Object.assign(new Element(), { tagName: 'BUTTON' });
+    element('#crop-panel').append(cropButton);
+    await key('x', cropButton, loupe);
+    assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/decision', body: { decision: 'reject' } }, 'culling keys work from the Crop panel');
     return;
   }
   if (scenario === 'frame-view-full') {
@@ -3715,6 +3769,28 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_frame_view_crop_manual_card(self):
         self.run_javascript_cleanup_regression("crop-manual-card")
+
+    def test_javascript_frame_tabs_split_the_right_column(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        tablist = by_id["frame-tabs"]
+        self.assertEqual("tablist", tablist["attrs"].get("role"))
+        self.assertIn(by_id["loupe"], tablist["parents"])
+        for tab, panel, selected, contents in (
+            ("frame-tab", "frame-panel", "true", ["inspection"]),
+            ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai", "loupe-export"]),
+        ):
+            self.assertIn(tablist, by_id[tab]["parents"])
+            self.assertEqual(("tab", panel, selected), (by_id[tab]["attrs"].get("role"), by_id[tab]["attrs"].get("aria-controls"), by_id[tab]["attrs"].get("aria-selected")))
+            self.assertEqual(("tabpanel", tab), (by_id[panel]["attrs"].get("role"), by_id[panel]["attrs"].get("aria-labelledby")))
+            for name in contents:
+                self.assertIn(by_id[panel], by_id[name]["parents"], f"{name} lives in {panel}")
+        self.assertIn("hidden", by_id["crop-panel"]["attrs"])
+        self.assertNotIn(by_id["crop-panel"], by_id["close-loupe"]["parents"])
+        self.assertNotIn(by_id["frame-panel"], by_id["close-loupe"]["parents"])
+        self.run_javascript_cleanup_regression("frame-tabs")
 
     def test_compare_and_loupe_dialogs_have_labeled_viewports_and_actions(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
