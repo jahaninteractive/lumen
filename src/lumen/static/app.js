@@ -72,10 +72,32 @@ function announce(message) {
 function cropLabel(kind) {
   return {
     original: 'Original',
+    manual: 'Your crop',
     'subject-in-scene': 'Subject in scene',
     'tighter-subject': 'Tighter subject',
     'centered-fallback': 'Centered fallback',
   }[kind] || 'Crop option';
+}
+
+// The photographer's own rect as a crop card, sized against the source like the server's candidates.
+function manualCandidate(rect, aspect, composition) {
+  const [width, height] = [composition.source_width, composition.source_height];
+  const [left, top] = [Math.round(rect.left * width), Math.round(rect.top * height)];
+  const pixelBox = [left, top, left + Math.round(rect.width * width), top + Math.round(rect.height * height)];
+  const pixelCount = (pixelBox[2] - left) * (pixelBox[3] - top);  // the server's count, so the 8 MP gate agrees
+  const megapixels = pixelCount / 1_000_000;
+  return {
+    id: 'crop-manual', kind: 'manual', aspect, rect, pixel_box: pixelBox, pixel_count: pixelCount,
+    remaining_megapixels: megapixels, rationale: 'drawn by the photographer',
+    resolution_warning: pixelCount < 12_000_000 ? `${megapixels.toFixed(6)} MP remaining; below 12 MP` : null,
+  };
+}
+
+// The outline on the frame view: a fresh drawing, else this frame's saved drawn crop.
+function shownCropRect() {
+  if (state.manualCrop) return state.manualCrop.rect;
+  const active = state.composition?.photo_id === state.selectedId ? state.composition.active_crop : null;
+  return active?.candidate_id === 'crop-manual' ? active.rect : null;
 }
 
 function cropCard(candidate) {
@@ -83,7 +105,7 @@ function cropCard(candidate) {
   const card = document.createElement('article');
   card.className = 'crop-card';
   const activeId = state.composition.active_crop?.candidate_id;
-  const active = candidate.kind === 'original' ? !activeId : candidate.id === activeId;
+  const active = candidate.kind === 'original' ? !activeId : candidate.id === activeId && !(candidate.kind === 'manual' && state.manualCrop);
   if (active) card.classList?.add('active');
   if (candidate.id === state.recommendedCropId) card.classList?.add('recommended');
 
@@ -113,6 +135,7 @@ function cropCard(candidate) {
   const warning = document.createElement('p');
   warning.className = 'crop-warning';
   warning.textContent = candidate.resolution_warning || '';
+  warning.id = `crop-warning-${candidate.id}`;
   const marker = document.createElement('p');
   marker.className = 'crop-marker';
   marker.textContent = `${active ? 'Current choice' : ''}${active && candidate.id === state.recommendedCropId ? ' · ' : ''}${candidate.id === state.recommendedCropId ? 'Local AI recommendation' : ''}`;
@@ -125,7 +148,9 @@ function cropCard(candidate) {
   action.setAttribute('aria-label', candidate.kind === 'original'
     ? `Keep ${heading.textContent}, ${aspectLabel}`
     : `Use ${heading.textContent} crop, ${aspectLabel}`);
-  action.disabled = state.busy || active;
+  const tooSmall = candidate.kind === 'manual' && candidate.pixel_count < 8_000_000;
+  action.disabled = state.busy || active || tooSmall;
+  if (tooSmall) action.setAttribute('aria-describedby', warning.id);
   action.addEventListener('click', () => applyCrop(photoId, candidate));
   card.append(heading, viewport, details, rationale, warning, marker, action);
   return card;
@@ -136,6 +161,10 @@ function renderComposition() {
   const alternatives = document.querySelector('#alternative-crops');
   primary.replaceChildren();
   alternatives.replaceChildren();
+  const active = state.composition.active_crop;
+  const drawn = state.manualCrop ?? (active?.candidate_id === 'crop-manual' ? active : null);
+  if (drawn) primary.append(cropCard(manualCandidate(drawn.rect, drawn.aspect, state.composition)));
+  if (!cropDrag && loupeViewport.children[0]?.width) drawCropOverlay(shownCropRect());  // before the image loads, its load draws it
   state.composition.candidates.forEach(candidate => {
     (candidate.revealable ? alternatives : primary).append(cropCard(candidate));
   });
@@ -182,7 +211,10 @@ async function applyCrop(photoId, candidate) {
   updateWorkflow();
   try {
     if (candidate.kind === 'original') await post(`/api/photos/${photoId}/crop/clear`);
-    else await post(`/api/photos/${photoId}/crop`, { candidate_id: candidate.id });
+    else await post(`/api/photos/${photoId}/crop`, candidate.kind === 'manual'
+      ? { candidate_id: candidate.id, rect: candidate.rect, aspect: candidate.aspect }
+      : { candidate_id: candidate.id });
+    if (candidate.kind === 'manual') state.manualCrop = null;  // saved: the card and outline now come from active_crop
     announce(candidate.kind === 'original' ? 'Original frame kept.' : `${cropLabel(candidate.kind)} selected.`);
     if (state.selectedId === photoId) await loadComposition();
   } catch (error) {
@@ -2281,7 +2313,7 @@ function openLoupe(photoId) {
 // The frame view selects the frame as a sheet click does, then gathers its inspector and crops at preview size.
 function showFrame(photo) {
   document.querySelector('#loupe-heading').textContent = photo.name;
-  showPreview(loupeViewport, photo);
+  showPreview(loupeViewport, photo, undefined, () => drawCropOverlay(shownCropRect()));
   cropDrag = null;
   state.manualCrop = null;
   drawCropOverlay(null);
@@ -2298,7 +2330,7 @@ function toggleFullSize() {
   const photo = photoById(state.selectedId);
   if (!photo || fullButton.disabled) return;
   cropDrag = null;
-  const redrawCrop = () => drawCropOverlay(state.manualCrop?.rect ?? null);
+  const redrawCrop = () => drawCropOverlay(shownCropRect());
   if (fullButton.getAttribute('aria-pressed') === 'true') {
     showPreview(loupeViewport, photo, undefined, redrawCrop);
     fullButton.textContent = 'Full size';
@@ -2398,7 +2430,7 @@ loupeViewport.addEventListener('keydown', event => {
     event.preventDefault();
     event.stopPropagation();
     cropDrag = null;
-    drawCropOverlay(state.manualCrop?.rect ?? null);
+    drawCropOverlay(shownCropRect());
     return announce('Crop cancelled');
   }
   panKey(event, loupeViewport);
@@ -2422,15 +2454,16 @@ loupeViewport.addEventListener('pointerup', event => {
   const rect = cropDragRect(event);
   cropDrag = null;
   const box = image.getBoundingClientRect();
-  if (rect.width * box.width < CROP_MIN_DISPLAY || rect.height * box.height < CROP_MIN_DISPLAY) return drawCropOverlay(state.manualCrop?.rect ?? null);
+  if (rect.width * box.width < CROP_MIN_DISPLAY || rect.height * box.height < CROP_MIN_DISPLAY) return drawCropOverlay(shownCropRect());
   state.manualCrop = { rect, aspect: cropLockValue() };
   drawCropOverlay(rect);
+  if (state.composition?.photo_id === state.selectedId) renderComposition();
   announce(`Crop drawn: ${Math.round(rect.width * image.naturalWidth)} by ${Math.round(rect.height * image.naturalHeight)} pixels`);
 });
 loupeViewport.addEventListener('pointercancel', () => {
   if (!cropDrag) return;
   cropDrag = null;
-  drawCropOverlay(state.manualCrop?.rect ?? null);
+  drawCropOverlay(shownCropRect());
 });
 cropLock.addEventListener('change', () => {
   try { localStorage.setItem('lumen-crop-lock', cropLockValue()); } catch { /* per-visit only */ }

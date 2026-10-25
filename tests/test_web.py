@@ -1482,7 +1482,7 @@ const pendingCropLoads = [];
 const pendingReviews = [];
 function cropPayload(active = activeCrop) {
   return {
-    photo_id: 2, preview_url: '/preview/2?v=test', active_crop: active,
+    photo_id: 2, preview_url: '/preview/2?v=test', active_crop: active, source_width: 6000, source_height: 4000,
     candidates: [
       { id: 'crop-original', kind: 'original', aspect: 'native', rect: { left: 0, top: 0, width: 1, height: 1 }, pixel_box: [0, 0, 120, 90], remaining_megapixels: 0.01, rationale: '', primary: true, revealable: false, resolution_warning: '0.010800 MP remaining; below 12 MP' },
       { id: cropId, kind: 'centered-fallback', aspect: '1:1', rect: { left: 0.125, top: 0, width: 0.75, height: 1 }, pixel_box: [15, 0, 105, 90], remaining_megapixels: 8.1, rationale: 'centered fallback', primary: true, revealable: false, resolution_warning: '8.100000 MP remaining; below 12 MP' },
@@ -1610,7 +1610,8 @@ async function fetch(url, options = {}) {
     cropLoads += 1;
     cropRequests.push(url);
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
-    payload = { ...cropPayload(), photo_id: Number(url.split('/')[3]) };
+    const id = Number(url.split('/')[3]);
+    payload = { ...cropPayload(activeCrop?.photo_id && activeCrop.photo_id !== id ? null : activeCrop), photo_id: id };  // a drawn crop belongs to its own frame
   }
   else if (/\/composition-review$/.test(url)) {
     compositionReviews.push(url);
@@ -1622,6 +1623,7 @@ async function fetch(url, options = {}) {
     const body = JSON.parse(options.body);
     cropMutations.push({ url, body });
     if (url.endsWith('/clear')) { assert.deepEqual(body, {}); activeCrop = null; payload = { photo_id: 2, active_crop: null }; }
+    else if (body.candidate_id === 'crop-manual') { assert.deepEqual(Object.keys(body), ['candidate_id', 'rect', 'aspect']); activeCrop = { ...body, photo_id: Number(url.split('/')[3]) }; payload = activeCrop; }
     else { assert.deepEqual(body, { candidate_id: cropId }); activeCrop = { candidate_id: cropId }; payload = activeCrop; }
   }
   else if (url === '/api/groups/merge') {
@@ -2469,6 +2471,80 @@ const regression = `
     await key(']', viewport, loupe);
     assert.equal(state.manualCrop, null, 'stepping clears the drawn crop');
     assert.equal(overlay.hidden, true);
+    return;
+  }
+  if (scenario === 'crop-manual-card') {
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
+    const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(setImmediate); };
+    const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', scrollLeft: 0, scrollTop: 0 });
+    const overlay = element('#crop-overlay');
+    const outline = element('#crop-outline');
+    const loadImage = (width, height) => { Object.assign(viewport.children[0], { naturalWidth: width, naturalHeight: height }); viewport.children[0].listeners.load(); };
+    const pointer = (type, x, y) => viewport.listeners[type]({ button: 0, pointerId: 1, clientX: x, clientY: y, target: viewport.children[0], preventDefault() {} });
+    const drag = (x0, y0, x1, y1) => { pointer('pointerdown', x0, y0); pointer('pointermove', x1, y1); pointer('pointerup', x1, y1); };
+    const first = () => element('#primary-crops').children[0];
+    const heading = () => first().children[0].textContent;
+    await key('Home', card(1), element('#contact-sheet'));
+    await key('Enter', card(1), element('#contact-sheet'));
+    loadImage(2048, 1365);
+    await flush();
+    assert.equal(heading(), 'Original', 'no card until a crop is drawn');
+    drag(200, 100, 1200, 800);
+    assert.equal(heading(), 'Your crop', 'the drawn crop is the first card at once');
+    const pixels = Math.round(6000 * 1000 / 2048) * Math.round(4000 * 700 / 1365);
+    assert.equal(first().children[2].textContent, 'free · ' + (pixels / 1e6).toFixed(1) + ' MP remaining');
+    assert.equal(first().children[3].textContent, 'drawn by the photographer');
+    const warning = first().children[4];
+    assert.equal(warning.textContent, (pixels / 1e6).toFixed(6) + ' MP remaining; below 12 MP');
+    const small = first().children.at(-1);
+    assert.equal(small.textContent, 'Use this crop');
+    assert.equal(small.disabled, true, 'under 8 MP cannot be used');
+    assert.equal(small.getAttribute('aria-describedby'), warning.id);
+    assert.ok(warning.id, 'the warning has an id to describe the button');
+    assert.equal(first().children[5].textContent, '', 'a fresh drawing is not the current choice');
+    drag(0, 0, 2000, 1300);
+    const { rect } = state.manualCrop;
+    const use = first().children.at(-1);
+    assert.equal(use.disabled, false, 'a large enough crop can be used');
+    assert.equal(first().children[4].textContent, '', 'over 12 MP has no warning');
+    await use.listeners.click();
+    await flush();
+    assert.deepEqual(cropMutations.at(-1), { url: '/api/photos/1/crop', body: { candidate_id: 'crop-manual', rect, aspect: 'free' } });
+    assert.equal(element('#announcer').textContent, 'Your crop selected.');
+    assert.equal(state.manualCrop, null, 'the saved crop now comes from active_crop');
+    assert.equal(heading(), 'Your crop');
+    assert.equal(first().children[5].textContent, 'Current choice');
+    assert.equal(first().children.at(-1).disabled, true);
+    assert.equal(overlay.hidden, false, 'the saved crop stays outlined');
+    await key(']', viewport, loupe);
+    await flush();
+    assert.equal(heading(), 'Original', "frame 2 has no drawn crop");
+    assert.equal(overlay.hidden, true);
+    holdUrls.add('/api/photos/1/crops');
+    await key('[', viewport, loupe);
+    loadImage(2048, 1365);
+    await flush();
+    assert.equal(state.manualCrop, null);
+    assert.equal(element('#compose-workspace').hidden, true, 'no card until the crops arrive');
+    assert.equal(overlay.hidden, true, 'no outline until the crops arrive');
+    heldReplies.shift()();
+    await flush();
+    assert.equal(heading(), 'Your crop', 'a saved drawn crop returns on reopen');
+    assert.equal(first().children[5].textContent, 'Current choice');
+    assert.equal(overlay.hidden, false, 'the saved crop is outlined');
+    assert.deepEqual([outline.style.left, outline.style.width], [rect.left * 100 + '%', rect.width * 100 + '%']);
+    await key(']', viewport, loupe);
+    await flush();
+    await key('[', viewport, loupe);
+    await flush();
+    assert.equal(heading(), 'Your crop');
+    assert.equal(overlay.hidden, true, 'the outline waits for the image');
+    loadImage(2048, 1365);
+    assert.equal(overlay.hidden, false, 'the image load draws the saved outline');
+    assert.deepEqual([overlay.style.width, outline.style.top], ['2048px', rect.top * 100 + '%']);
     return;
   }
   if (scenario === 'loupe-strip') {
@@ -3636,6 +3712,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_frame_view_crop_draw(self):
         self.run_javascript_cleanup_regression("crop-draw")
+
+    def test_javascript_frame_view_crop_manual_card(self):
+        self.run_javascript_cleanup_regression("crop-manual-card")
 
     def test_compare_and_loupe_dialogs_have_labeled_viewports_and_actions(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
