@@ -247,8 +247,8 @@ preview refinement, or a stack runs.
 
 ## Filters and paging
 
-The filter bar narrows the sheet by date range, camera, decision, minimum
-rating, keepers only, tagged only, and tag text; rejected frames are hidden
+The filter bar shows tag text with Expand, Apply, and Reset; the other filters (date range, camera, decision, minimum
+rating, keepers only, tagged only) sit under **More filters**, which counts the active ones; rejected frames are hidden
 unless **Show rejected** is ticked. Filters live in the page URL, so a reload or
 bookmark keeps them. Frames are grouped by capture day and shown 200 at a time;
 the button after the last frame shows the next page. Separate tag-text terms
@@ -392,7 +392,7 @@ recommendation.
 ## Finish and clear a shoot
 
 In the contact sheet, select a frame (or select its batch in the left rail),
-press Enter on it to open the frame view, where the Compose workspace sits beside the image. Lumen uses Apple Vision face
+press Enter on it to open the frame view, where the **Frame** and **Crop** tabs sit beside the image. To draw your own crop, drag on the image (preview or full size); the **Crop lock** menu holds Free, 3:2, 2:3, 1:1, and 4:5, and Escape cancels a drag. A **Your crop** card appears first with its megapixels, and **Use this crop** saves it (at least 8 MP). Lumen uses Apple Vision face
 rectangles and attention saliency as approximate evidence for subject-safe crop
 choices. When that evidence is absent or weak, it says so and offers only the
 original plus a centered fallback. Non-original candidates below 8 MP are

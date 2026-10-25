@@ -15,3 +15,8 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 - Correcting a remembered place now replaces manual rows within 1 km; rows further apart than that but inside the 25 km radius still coexist and the nearer one wins.
 - The viewport is dark while the full-size JPEG loads.
 - The "thumbnails pruned" log count includes full-size files.
+
+## From the 2026-10-25 own crop
+
+- The 8 MP crop error passes through the route by string match on the message; a typed error would be sturdier.
+- Reopening the same frame keeps the previous crop outline until its crops arrive.
