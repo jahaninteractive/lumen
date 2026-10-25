@@ -235,10 +235,10 @@ def thumbnail_for(preview: Path, cache_dir: Path) -> Path:
 
 def full_size_for(source: Path, cache_dir: Path, fingerprint: str) -> Path | None:
     """The largest JPEG the camera embedded in the original, cached by fingerprint; None without one or without exiftool."""
-    source.stat()  # an unreadable original raises OSError for the caller
     target = cache_dir / f"{fingerprint}.jpg"
-    if target.is_file():
+    if target.is_file():  # served even when the original's volume is unplugged
         return target
+    source.stat()  # an unreadable original with no cached copy raises OSError for the caller
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return None
@@ -272,6 +272,4 @@ def prune_cache(cache_dir: Path, live: set[str]) -> int:
 
 def prune_thumbnails(cache_dir: Path, previews: Iterable[Path]) -> int:
     """Remove every cached thumbnail that no existing preview would name; returns the count removed."""
-    if not cache_dir.is_dir():
-        return 0
     return prune_cache(cache_dir, {f"{preview.stem}-{preview.stat().st_mtime_ns}.jpg" for preview in previews if preview.is_file()})

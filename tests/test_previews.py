@@ -270,6 +270,7 @@ class PreviewTests(unittest.TestCase):
                 self.assertEqual(["-JpgFromRaw", "-PreviewImage"], calls)
                 with self.assertRaises(OSError):
                     full_size_for(root / "missing.ARW", cache, "ghi")
+                self.assertEqual(target, full_size_for(root / "missing.ARW", cache, "abc"), "a cached copy outlives an unplugged volume")
             with patch("lumen.previews.shutil.which", return_value=None):
                 self.assertIsNone(full_size_for(source, cache, "jkl"))
 

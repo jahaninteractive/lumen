@@ -3966,7 +3966,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         Image.new("RGB", (60, 40), "red").save(gone)
         with Library(Settings(library_dir=self.root / "library")) as library:
             library.import_path(gone)
-            gone_id = max(photo.id for photo in library.catalog.list_photos())
+            gone_photo = max(library.catalog.list_photos(), key=lambda photo: photo.id)
+            gone_id = gone_photo.id
         gone.unlink()
         with patch("lumen.previews.shutil.which", return_value=None):
             self.assertEqual(404, status("/full/1?v=x")[0])
@@ -3980,6 +3981,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                 self.assertEqual(404, code, bad)
                 self.assertNotIn(str(self.root).encode(), body)
                 self.assertNotIn(b"Traceback", body)
+            (self.root / "library" / "cache" / "full" / f"{gone_photo.fingerprint}.jpg").write_bytes(buffer.getvalue())
+            self.assertEqual(200, status(f"/full/{gone_id}")[0], "a cached copy serves while the original is unplugged")
 
     def test_preview_route_rejects_traversal(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
