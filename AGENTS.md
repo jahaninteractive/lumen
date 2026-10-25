@@ -37,12 +37,22 @@ Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
 - Both are on the user's shell `PATH` today, but the fallback finds them without it.
 - darktable-cli reads the user's `~/.config/darktable` config, so Lumen pins `--core --conf plugins/lighttable/export/metadata_flags=5` (EXIF + geotag). JPEG export keeps all EXIF and GPS by user decision (2026-10-22).
 - oMLX status is live external state. Trust `/api/status`/`lumen doctor`, not configured model names, before claiming a model is loaded or vision-capable.
+- Two model roles: `LUMEN_OMLX_FAST_MODEL` (default `Qwen3-VL-8B-Instruct-4bit`; tagging, reject scan, astro triage) and `LUMEN_OMLX_REVIEW_MODEL` (defaults to `LUMEN_OMLX_MODEL`; critique, captions, digest, composition review). Every tagger is built by `Library.tagger_for(role)`, which reads live `/api/status` and refuses an unloaded model; `lumen doctor` and `/api/status` report `omlx_roles`. Tests patch `lumen.library.get_server_status`, `lumen.diagnostics.get_server_status`, and `lumen.library.OmlxTagger`; no test contacts oMLX.
+- `LUMEN_NEAR_DUP_DISTANCE` (default 12, `0` disables) splits time bursts into near-duplicate clusters by `metrics.dhash` bit distance.
+- `lumen tag --keepers` (default scope of `POST /api/photos/tag`; `tag-all` remains an alias for scope `all`). `<library>/vocabulary.json` is copied once from the packaged starter and then owned by the photographer; digests live in `<library>/digests/`.
+- Remove/clear write removed frames' fingerprints to `cleared_fingerprints` (also seeded from trash snapshots); import and ingest skip them unless `--include-cleared`, and the Clear tab / `lumen cleared --remove` removes any already in the catalog.
+- Places: `Settings.geonames_dir` (env `LUMEN_GEONAMES_DIR`, default `vendor/data/geonames/`, `None` for plain `Settings(...)`) feeds `<library>/cache/geonames.sqlite`; `Library._resolve_place` stores `photos.place`/`place_country`. Tests build GeoNames fixtures and never read `vendor/data`.
+- `LUMEN_GEOCODE_ONLINE=1` (`Settings.geocode_online`, default off) lets `_resolve_place` ask Nominatim when the local result is missing or "near"; answers are cached into the index as `source='online'` rows. Tests patch `urllib.request.urlopen`; no test reaches the internet.
 - The user's shell exports `LUMEN_OMLX_MODEL`, which fails `test_cli` doctor-model test; run the suite with `env -u LUMEN_OMLX_MODEL`.
 
 ## Plans
 
 - Approved design: `docs/superpowers/specs/2026-10-21-finish-compose-astro-housekeeping-design.md`
-- Composition plan: `docs/superpowers/plans/2026-10-21-composition-crops.md`
-- Next plan: `docs/superpowers/plans/2026-10-21-astro-stacking.md`
+- Composition plan (complete): `docs/superpowers/plans/2026-10-21-composition-crops.md`
+- Astro plan (complete): `docs/superpowers/plans/2026-10-21-astro-stacking.md`
+- Approved design: `docs/superpowers/specs/2026-10-22-travel-volume-culling-design.md`
+- Travel plan (complete, on `main`): `docs/superpowers/plans/2026-10-22-travel-volume-culling.md`
+- Approved design: `docs/superpowers/specs/2026-10-22-local-ai-assist-design.md`
+- Local AI assist plan (complete, on `main`): `docs/superpowers/plans/2026-10-22-local-ai-assist.md`
 
-Update `docs/HANDOFF.md` after every reviewed milestone or before stopping.
+Update `docs/HANDOFF.md` after every reviewed milestone or before stopping. Deferred work goes in `docs/BACKLOG.md`.

@@ -1,7 +1,7 @@
 # Offline prompts for a local model (Qwen3.8-27B via oMLX)
 
 These prompts are written for a local coding agent backed by the 27B model.
-They are deliberately narrower than the prompts used with the coding agent: one
+They are deliberately narrower than prompts written for a large hosted model: one
 feature at a time, named files, exact tests, and a hard "do not touch" list.
 
 ## How to run them

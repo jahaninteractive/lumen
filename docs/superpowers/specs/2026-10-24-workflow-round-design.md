@@ -1,6 +1,6 @@
 # Workflow round: duplicates, resume, loupe, search, keywords, astro recipes, web export
 
-Date: 2026-10-24. Approved by the user as items "6, 1, 3, 4, 5, 7, 8, 9, then housekeeping" from a suggestion list; the user asked for no brainstorming round, so every "how" below is the agent's call unless marked otherwise.
+Date: 2026-10-24. Approved by the user as items "6, 1, 3, 4, 5, 7, 8, 9, then housekeeping" from a suggestion list; the user asked for no brainstorming round, so every "how" below is the implementing agent's call unless marked otherwise.
 
 ## Intent
 
