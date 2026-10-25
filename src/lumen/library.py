@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import fcntl
+import math
 import json
 import os
 import sqlite3
@@ -894,11 +895,16 @@ class Library:
             raise ValueError("crop aspect must be one of " + ", ".join(MANUAL_ASPECTS))
         if not isinstance(rect, dict) or rect.keys() != {"left", "top", "width", "height"}:
             raise ValueError("a drawn crop needs left, top, width, and height")
-        crop = CropRect(rect["left"], rect["top"], rect["width"], rect["height"])
+        def snap(start, size):  # a drag flush to the edge can land one float step past 1
+            numbers = all(type(value) in (int, float) for value in (start, size))
+            return 1 - start if numbers and 1 < start + size <= 1 + 1e-9 else size
+
+        crop = CropRect(rect["left"], rect["top"], snap(rect["left"], rect["width"]), snap(rect["top"], rect["height"]))
         if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
             raise ValueError(f"unknown photo ID: {photo_id}")
         width, height = read_image_dimensions(Path(photo.path))
-        if round(width * crop.width) * round(height * crop.height) < MIN_CROP_PIXELS:
+        # Half up, as the browser's Math.round, so the card's 8 MP gate and this one always agree.
+        if math.floor(width * crop.width + 0.5) * math.floor(height * crop.height + 0.5) < MIN_CROP_PIXELS:
             raise ValueError("crop keeps too few pixels; at least 8 MP")
         edit = PhotoEdit(
             photo_id=photo_id, candidate_id=MANUAL_CROP_ID, rect=crop, aspect=aspect,

@@ -836,6 +836,26 @@ class WebTests(unittest.TestCase):
             code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": generated["id"]})
             self.assertEqual((200, generated["id"]), (code, chosen["candidate_id"]))
 
+    def test_manual_crop_route_snaps_edge_overshoot_rounds_halves_up_and_rejects_nan(self):
+        with patch("lumen.library.read_image_dimensions", return_value=(4096, 3999)), patch(
+            "lumen.library.analyze_subject_regions", return_value=None
+        ):
+            flush = {"left": .5, "top": 0, "width": .5 + 2 ** -52, "height": 1}  # an edge-flush drag one float step past 1
+            self.assertEqual(1 + 2 ** -52, flush["left"] + flush["width"])
+            code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": "crop-manual", "rect": flush, "aspect": "free"})
+            self.assertEqual(200, code, chosen)
+            self.assertEqual(.5, self.get_json("/api/photos/1/crops")[1]["active_crop"]["rect"]["width"])
+            # 2000.5 x 3999 source px: half up, as the browser's Math.round, keeps 2001 x 3999 = 8,001,999 px.
+            half = {"left": 0, "top": 0, "width": 2000.5 / 4096, "height": 1}
+            code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": "crop-manual", "rect": half, "aspect": "free"})
+            self.assertEqual(200, code, chosen)
+            for value in ("NaN", "Infinity"):
+                with self.subTest(value=value):
+                    raw = ('{"candidate_id": "crop-manual", "rect": {"left": 0, "top": 0, "width": %s, "height": 1}, "aspect": "free"}' % value).encode()
+                    code, result = self.post_json("/api/photos/1/crop", None, raw=raw)
+                    self.assertEqual(400, code, result)
+                    self.assertIn("error", result)
+
     def test_crop_mutations_reject_invalid_stale_original_and_extra_fields_without_change(self):
         with patch("lumen.library.read_image_dimensions", return_value=(4000, 3000)) as dimensions, patch(
             "lumen.library.analyze_subject_regions", return_value=None
