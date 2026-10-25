@@ -629,8 +629,9 @@ function renderInspector(photo) {
   if (details.tags?.data) {
     const description = document.createElement('p');
     description.textContent = details.tags.data.description;
-    inspection.append(description, ...keywordLists(photo, details.tags.data));
+    inspection.append(description);
   }
+  inspection.append(...keywordLists(photo, details.tags?.data || {}));  // an untagged frame still takes typed keywords
   inspection.append(captionControls(photo, details.tags?.data || {}));
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -844,6 +845,7 @@ async function changeKeyword(photo, action, keyword, focus = `${action === 'add'
   try {
     const result = await post(`/api/photos/${photo.id}/keywords`, { action, keyword });
     if (state.selectedId !== photo.id) return;
+    state.details.tags ??= { data: {} };  // the first keyword on an untagged frame
     Object.assign(state.details.tags.data, { subjects: result.subjects, suggested: result.suggested });
     state.keywordFocus = focus;  // the undo control, or the typing input
     renderInspector(photo);

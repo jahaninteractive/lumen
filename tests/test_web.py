@@ -1416,6 +1416,7 @@ let rejectRows = suggestionRows();
 const rejectPosts = [];
 const keywordPosts = [];
 const keywordData = { subjects: ['ice'], suggested: ['krill', 'gentoo penguin'] };
+const untaggedKeywords = { subjects: [], suggested: [] };
 const vocabState = { categories: { wildlife: ['gentoo penguin'], learned: ['spindrift', 'krill'] }, counts: { spindrift: 3, krill: 1 }, blocked: [] };
 const vocabularyPosts = [];
 const removals = [];
@@ -1517,14 +1518,16 @@ async function fetch(url, options = {}) {
   else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
   else if (url === '/api/photos/assist') { assert.equal(options.method, 'POST'); assistPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0, { kind: 'assist' }); }
   else if (url === '/api/photos/1/tag') { assert.equal(options.method, 'POST'); return new Promise(resolve => pendingTags.push(() => resolve({ ok: true, json: async () => ({ photo_id: 1 }) }))); }
-  else if (url === '/api/photos/1/keywords') {
+  else if (/^\/api\/photos\/[12]\/keywords$/.test(url)) {
     assert.equal(options.method, 'POST');
     const body = JSON.parse(options.body);
+    const id = Number(url.split('/')[3]);
     keywordPosts.push(body);
-    const [from, to] = body.action === 'add' ? [keywordData.suggested, keywordData.subjects] : [keywordData.subjects, keywordData.suggested];
+    const words = id === 1 ? keywordData : untaggedKeywords;  // photo 2 was never tagged
+    const [from, to] = body.action === 'add' ? [words.suggested, words.subjects] : [words.subjects, words.suggested];
     if (from.includes(body.keyword)) from.splice(from.indexOf(body.keyword), 1);  // a typed word was never suggested
     to.push(body.keyword);
-    payload = { photo_id: 1, subjects: [...keywordData.subjects], suggested: [...keywordData.suggested] };
+    payload = { photo_id: id, subjects: [...words.subjects], suggested: [...words.suggested] };
   }
   else if (url === '/api/digests') {
     assert.equal(options.method, 'POST');
@@ -1861,6 +1864,13 @@ const regression = `
     fresh.value = ' seal ';
     await byId('keyword-add').listeners.click();
     assert.deepEqual(keywordPosts.at(-1), { action: 'add', keyword: 'seal' });
+    await inspect(state.groups[0].photos[1]);
+    assert.equal(state.details.tags, null, 'photo 2 was never tagged');
+    byId('keyword-input').value = 'Zebra';
+    await byId('keyword-input').listeners.keydown({ key: 'Enter', preventDefault() {} });
+    assert.deepEqual(keywordPosts.at(-1), { action: 'add', keyword: 'Zebra' });
+    assert.ok(texts('keywords').includes('Zebra'), 'an untagged keeper takes a typed keyword');
+    assert.equal(element('#announcer').textContent, 'Keyword Zebra added to photo-2.jpg');
     return;
   }
   if (scenario === 'digest') {
