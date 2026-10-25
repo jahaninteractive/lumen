@@ -535,7 +535,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                             or not isinstance(payload["keyword"], str)):
                         raise ValueError("keywords requires action add or remove and a string keyword")
                     with Library(settings) as library:
-                        change = library.add_suggested_keyword if payload["action"] == "add" else library.remove_keyword
+                        change = library.add_keyword if payload["action"] == "add" else library.remove_keyword
                         self._send_json(change(int(match.group(1)), payload["keyword"]))
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/crop", path)

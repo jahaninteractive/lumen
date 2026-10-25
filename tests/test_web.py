@@ -996,6 +996,9 @@ class WebTests(unittest.TestCase):
             self.assertEqual(400, self.post_json("/api/photos/1/keywords", {"action": "drop", "keyword": "ice"})[0])
             code, body = self.post_json("/api/photos/1/keywords", {"action": "remove", "keyword": "ice"})
             self.assertEqual((200, [], ["ice"]), (code, body["subjects"], body["suggested"]))
+            code, body = self.post_json("/api/photos/1/keywords", {"action": "add", "keyword": "Lion"})
+            self.assertEqual((200, ["Lion"], ["ice"]), (code, body["subjects"], body["suggested"]))
+            self.assertEqual(400, self.post_json("/api/photos/1/keywords", {"action": "add", "keyword": "#bad"})[0])
 
     def test_vocabulary_reports_counts_and_forget_strips_keyword(self):
         with Library(Settings(library_dir=self.root / "library")) as library:

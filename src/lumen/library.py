@@ -1622,14 +1622,42 @@ class Library:
         return result
 
     @_coordinated
-    def add_suggested_keyword(self, photo_id: int, keyword: str) -> dict:
-        species = {item.get("name", "").casefold() for item in (self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("species", [])
-                   if isinstance(item, dict) and isinstance(item.get("name"), str)}
-        result = self._move_keyword(photo_id, keyword, "suggested", "subjects", "keyword_added")
-        category = "wildlife" if keyword.strip().casefold() in species else "learned"  # a confirmed species is wildlife
-        if learned := learn_keywords(self.settings, {category: [keyword]}):  # a hand-accepted word teaches the vocabulary
+    def add_keyword(self, photo_id: int, keyword: str) -> dict:
+        """Accept a suggestion or apply a word the photographer typed; both are the photographer's and teach the vocabulary."""
+        tags = self.catalog.get_tags(photo_id)
+        data = tags["data"] if tags else {}
+        typed = keyword not in data.get("suggested", [])
+        if typed:
+            keyword = keyword.strip()
+            if not 1 <= len(keyword) <= 40 or "#" in keyword:
+                raise ValueError("keyword must be 1 to 40 characters without #")
+            if not self.catalog.get_photo(photo_id):
+                raise ValueError(f"unknown photo ID: {photo_id}")
+            if keyword.casefold() in {word.casefold() for word in data.get("subjects", [])}:
+                raise ValueError(f"keyword is already applied for photo {photo_id}")
+            data = {"description": "", "subjects": [], "suggested": []} | data
+            data["subjects"] = data["subjects"] + [keyword]
+            data["typed"] = data.get("typed", []) + [keyword]
+            category = "learned"
+        else:
+            data["suggested"] = [word for word in data["suggested"] if word != keyword]
+            data["subjects"] = data.get("subjects", []) + ([] if keyword in data.get("subjects", []) else [keyword])
+            species = {item.get("name", "").casefold() for item in data.get("species", [])
+                       if isinstance(item, dict) and isinstance(item.get("name"), str)}
+            category = "wildlife" if keyword.strip().casefold() in species else "learned"  # a confirmed species is wildlife
+        data["photographer"] = data.get("photographer", []) + [keyword]
+        self.catalog.save_tags(photo_id, data, tags["model"] if tags else "photographer")
+        self.catalog.append_event(photo_id, "keyword_added", {"keyword": keyword, "typed": typed})
+        self._write_sidecar(photo_id)
+        if learned := learn_keywords(self.settings, {category: [keyword]}):  # a hand-applied word teaches the vocabulary
             self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned})
-        return result
+        return {"photo_id": photo_id, "subjects": data["subjects"], "suggested": data["suggested"]}
+
+    def add_suggested_keyword(self, photo_id: int, keyword: str) -> dict:
+        """Accept-only form of add_keyword for older callers."""
+        if keyword not in (self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("suggested", []):
+            raise ValueError(f"keyword is not suggested for photo {photo_id}")
+        return self.add_keyword(photo_id, keyword)
 
     def vocabulary_report(self) -> dict:
         """Vocabulary plus how many photos carry each applied word (case-insensitive)."""
@@ -1663,18 +1691,20 @@ class Library:
 
     @_coordinated
     def remove_keyword(self, photo_id: int, keyword: str) -> dict:
-        return self._move_keyword(photo_id, keyword, "subjects", "suggested", "keyword_removed")
-
-    def _move_keyword(self, photo_id: int, keyword: str, source: str, target: str, kind: str) -> dict:
-        """Photographer's per-keyword accept or undo; the only way a suggestion reaches the sidecar keywords."""
+        """Undo an applied word: a typed word is dropped, any other goes back to suggested."""
         tags = self.catalog.get_tags(photo_id)
         data = tags["data"] if tags else {}
-        if keyword not in data.get(source, []):
-            raise ValueError(f"keyword is not {'suggested' if source == 'suggested' else 'applied'} for photo {photo_id}")
-        data[source] = [word for word in data[source] if word != keyword]
-        data[target] = data.get(target, []) + ([] if keyword in data.get(target, []) else [keyword])
+        if keyword not in data.get("subjects", []):
+            raise ValueError(f"keyword is not applied for photo {photo_id}")
+        typed = keyword in data.get("typed", [])
+        data["subjects"] = [word for word in data["subjects"] if word != keyword]
+        for key in ("photographer", "typed"):
+            if key in data:
+                data[key] = [word for word in data[key] if word != keyword]
+        suggested = data.get("suggested", [])
+        data["suggested"] = suggested + ([] if typed or keyword in suggested else [keyword])
         self.catalog.save_tags(photo_id, data, tags["model"])
-        self.catalog.append_event(photo_id, kind, {"keyword": keyword})
+        self.catalog.append_event(photo_id, "keyword_removed", {"keyword": keyword})
         self._write_sidecar(photo_id)
         return {"photo_id": photo_id, "subjects": data["subjects"], "suggested": data["suggested"]}
 

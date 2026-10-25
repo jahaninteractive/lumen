@@ -2217,6 +2217,41 @@ class LibraryTests(unittest.TestCase):
                 kinds = [e.kind for e in library.catalog.events_for(photo_id)]
                 self.assertEqual(["keyword_added", "vocabulary_learned", "keyword_removed"], kinds[-3:])
 
+    def test_typed_keyword_is_applied_learned_and_recorded_as_the_photographers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root / "p.jpg")
+                photo_id = library.catalog.list_photos()[0].id
+                added = library.add_keyword(photo_id, " Lion ")
+                self.assertEqual({"photo_id": photo_id, "subjects": ["Lion"], "suggested": []}, added)
+                tags = library.catalog.get_tags(photo_id)
+                self.assertEqual(("photographer", ""), (tags["model"], tags["data"]["description"]))
+                self.assertEqual((["Lion"], ["Lion"]), (tags["data"]["photographer"], tags["data"]["typed"]))
+                self.assertIn("Lion", load_vocabulary(library.settings)["learned"])
+                for bad in ("lion", "#bad", "", "   ", "x" * 41):
+                    with self.subTest(bad=bad), self.assertRaises(ValueError):
+                        library.add_keyword(photo_id, bad)
+                with self.assertRaisesRegex(ValueError, "unknown photo ID"):
+                    library.add_keyword(99, "zebra")
+                library.catalog.save_tags(photo_id, library.catalog.get_tags(photo_id)["data"] | {"suggested": ["krill"]}, "fast-model")
+                added = library.add_keyword(photo_id, "krill")
+                self.assertEqual((["Lion", "krill"], []), (added["subjects"], added["suggested"]))
+                self.assertEqual(["Lion", "krill"], library.catalog.get_tags(photo_id)["data"]["photographer"])
+                removed = library.remove_keyword(photo_id, "Lion")
+                self.assertEqual((["krill"], []), (removed["subjects"], removed["suggested"]), "a typed word is dropped, not suggested")
+                data = library.catalog.get_tags(photo_id)["data"]
+                self.assertEqual((["krill"], []), (data["photographer"], data["typed"]))
+                removed = library.remove_keyword(photo_id, "krill")
+                self.assertEqual(([], ["krill"]), (removed["subjects"], removed["suggested"]))
+                self.assertEqual([], library.catalog.get_tags(photo_id)["data"]["photographer"])
+                events = [(e.kind, e.details) for e in library.catalog.events_for(photo_id)
+                          if e.kind in ("keyword_added", "vocabulary_learned", "keyword_removed")]
+                self.assertEqual([("keyword_added", {"keyword": "Lion", "typed": True}), ("vocabulary_learned", {"words": ["Lion"]}),
+                                  ("keyword_added", {"keyword": "krill", "typed": False}), ("vocabulary_learned", {"words": ["krill"]}),
+                                  ("keyword_removed", {"keyword": "Lion"}), ("keyword_removed", {"keyword": "krill"})], events)
+
     def _two_tagged_photos(self, root: Path, library: Library) -> tuple[int, int]:
         for index in range(2):
             Image.new("RGB", (120 + index, 90), (index * 40, 0, 0)).save(root / f"k{index}.jpg")
