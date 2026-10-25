@@ -430,9 +430,17 @@
   <dialog id="loupe" aria-labelledby="loupe-heading">
     <h2 id="loupe-heading">Frame</h2>
     <div class="frame-image">
-      <div id="loupe-viewport" class="loupe-viewport" tabindex="0" role="group" aria-label="Frame viewport"></div>
+      <div id="loupe-viewport" class="loupe-viewport" tabindex="0" role="group" aria-label="Frame viewport"><div id="crop-overlay" hidden><div id="crop-outline"></div></div></div>
       <div class="button-row">
         <button type="button" id="loupe-full" class="secondary" aria-pressed="false">Full size</button>
+        <label for="crop-lock">Lock</label>
+        <select id="crop-lock">
+          <option value="free">Free</option>
+          <option value="3:2">3:2</option>
+          <option value="2:3">2:3</option>
+          <option value="1:1">1:1</option>
+          <option value="4:5">4:5</option>
+        </select>
       </div>
     </div>
     <div class="frame-panel">

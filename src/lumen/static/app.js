@@ -2185,6 +2185,7 @@ function closeView() {
 function showPreview(viewport, photo, src = photo.preview_url, loaded = () => {}) {
   const image = document.createElement('img');
   image.alt = photo.name;
+  image.draggable = false;  // a pointer drag draws a crop, never drags the file out
   image.addEventListener('load', () => { image.width = image.naturalWidth; image.height = image.naturalHeight; loaded(image); });
   image.src = src;
   viewport.setAttribute('aria-label', `${photo.name} viewport`);
@@ -2281,6 +2282,9 @@ function openLoupe(photoId) {
 function showFrame(photo) {
   document.querySelector('#loupe-heading').textContent = photo.name;
   showPreview(loupeViewport, photo);
+  cropDrag = null;
+  state.manualCrop = null;
+  drawCropOverlay(null);
   Object.assign(fullButton, { disabled: false, textContent: 'Full size' });
   fullButton.setAttribute('aria-pressed', 'false');
   inspect(photo).catch(error => announce(error.message));  // sets selectedId before its first await, so the crops below are this frame's
@@ -2293,8 +2297,10 @@ function showFrame(photo) {
 function toggleFullSize() {
   const photo = photoById(state.selectedId);
   if (!photo || fullButton.disabled) return;
+  cropDrag = null;
+  const redrawCrop = () => drawCropOverlay(state.manualCrop?.rect ?? null);
   if (fullButton.getAttribute('aria-pressed') === 'true') {
-    showPreview(loupeViewport, photo);
+    showPreview(loupeViewport, photo, undefined, redrawCrop);
     fullButton.textContent = 'Full size';
     fullButton.setAttribute('aria-pressed', 'false');
     return announce('Preview size');
@@ -2302,6 +2308,7 @@ function toggleFullSize() {
   fullButton.setAttribute('aria-pressed', 'true');  // a second z while it loads returns to the preview
   const image = showPreview(loupeViewport, photo, `/full/${photo.id}?${photo.preview_url.split('?')[1] || ''}`, loaded => {
     if (loupeViewport.children[0] !== image) return;  // stepped on or toggled off while it loaded
+    redrawCrop();
     fullButton.textContent = `Full size, ${loaded.naturalWidth} by ${loaded.naturalHeight}`;
     loupeViewport.scrollLeft = (loupeViewport.scrollWidth - loupeViewport.clientWidth) / 2;
     loupeViewport.scrollTop = (loupeViewport.scrollHeight - loupeViewport.clientHeight) / 2;
@@ -2309,7 +2316,7 @@ function toggleFullSize() {
   });
   image.addEventListener('error', async () => {
     if (loupeViewport.children[0] !== image) return;
-    const preview = showPreview(loupeViewport, photo);
+    const preview = showPreview(loupeViewport, photo, undefined, redrawCrop);
     fullButton.disabled = true;
     fullButton.setAttribute('aria-pressed', 'false');
     keepFrameViewFocus();
@@ -2318,6 +2325,49 @@ function toggleFullSize() {
     fullButton.textContent = offline ? 'original is offline' : 'no full-size image in this file';
     announce(fullButton.textContent);
   });
+}
+
+// Your own crop: a rect normalised to the shown image's natural size, so preview and full size agree.
+const CROP_LOCKS = { free: null, '3:2': 3 / 2, '2:3': 2 / 3, '1:1': 1, '4:5': 4 / 5 };
+const CROP_MIN_DISPLAY = 24;  // display px on either side; smaller drags are slips
+let cropDrag = null;  // { image, x, y, rect } in natural px while the pointer is down
+
+function cropLockValue() {
+  return cropLock.value in CROP_LOCKS ? cropLock.value : 'free';
+}
+
+function cropPoint(event, image) {
+  const box = image.getBoundingClientRect();
+  const clamp = (value, max) => Math.max(0, Math.min(max, value));
+  return [clamp((event.clientX - box.left) * image.naturalWidth / box.width, image.naturalWidth),
+    clamp((event.clientY - box.top) * image.naturalHeight / box.height, image.naturalHeight)];
+}
+
+function cropDragRect(event) {
+  const { image, x, y } = cropDrag;
+  const [width, height] = [image.naturalWidth, image.naturalHeight];
+  const [px, py] = cropPoint(event, image);
+  let w = Math.abs(px - x);
+  let h = Math.abs(py - y);
+  const ratio = CROP_LOCKS[cropLockValue()];
+  if (ratio) {  // the height follows the width, shrinking both if it would leave the image
+    const roomY = py < y ? y : height - y;
+    h = w / ratio;
+    if (h > roomY) [h, w] = [roomY, roomY * ratio];
+  }
+  const left = px < x ? x - w : x;
+  const top = py < y ? y - h : y;
+  return { left: left / width, top: top / height, width: w / width, height: h / height };
+}
+
+// The overlay covers the image's rendered box, so it scrolls with it; showPreview's replaceChildren detaches it.
+function drawCropOverlay(rect) {
+  const image = loupeViewport.children[0];
+  cropOverlay.hidden = !rect;
+  if (!rect || !image) return;
+  if (!loupeViewport.contains(cropOverlay)) loupeViewport.append(cropOverlay);
+  Object.assign(cropOverlay.style, { width: `${image.width}px`, height: `${image.height}px` });
+  Object.assign(cropOutline.style, { left: `${rect.left * 100}%`, top: `${rect.top * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` });
 }
 
 // Filmstrip: step the loupe through the rendered frames in sheet order.
@@ -2340,7 +2390,55 @@ for (const name of ['#compare', '#loupe']) {
 }
 const loupeViewport = document.querySelector('#loupe-viewport');
 const fullButton = document.querySelector('#loupe-full');
-loupeViewport.addEventListener('keydown', event => panKey(event, loupeViewport));
+const cropOverlay = document.querySelector('#crop-overlay');
+const cropOutline = document.querySelector('#crop-outline');
+const cropLock = document.querySelector('#crop-lock');
+loupeViewport.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && cropDrag) {  // cancel the drag; the dialog never sees this Escape
+    event.preventDefault();
+    event.stopPropagation();
+    cropDrag = null;
+    drawCropOverlay(state.manualCrop?.rect ?? null);
+    return announce('Crop cancelled');
+  }
+  panKey(event, loupeViewport);
+}, { capture: true });
+loupeViewport.addEventListener('pointerdown', event => {
+  const image = loupeViewport.children[0];
+  if (event.button !== 0 || event.target !== image || !image.naturalWidth) return;
+  event.preventDefault();
+  loupeViewport.setPointerCapture(event.pointerId);
+  const [x, y] = cropPoint(event, image);
+  cropDrag = { image, x, y, rect: null };
+});
+loupeViewport.addEventListener('pointermove', event => {
+  if (!cropDrag) return;
+  cropDrag.rect = cropDragRect(event);
+  drawCropOverlay(cropDrag.rect);
+});
+loupeViewport.addEventListener('pointerup', event => {
+  if (!cropDrag) return;
+  const { image } = cropDrag;
+  const rect = cropDragRect(event);
+  cropDrag = null;
+  const box = image.getBoundingClientRect();
+  if (rect.width * box.width < CROP_MIN_DISPLAY || rect.height * box.height < CROP_MIN_DISPLAY) return drawCropOverlay(state.manualCrop?.rect ?? null);
+  state.manualCrop = { rect, aspect: cropLockValue() };
+  drawCropOverlay(rect);
+  announce(`Crop drawn: ${Math.round(rect.width * image.naturalWidth)} by ${Math.round(rect.height * image.naturalHeight)} pixels`);
+});
+loupeViewport.addEventListener('pointercancel', () => {
+  if (!cropDrag) return;
+  cropDrag = null;
+  drawCropOverlay(state.manualCrop?.rect ?? null);
+});
+cropLock.addEventListener('change', () => {
+  try { localStorage.setItem('lumen-crop-lock', cropLockValue()); } catch { /* per-visit only */ }
+});
+try {
+  const rememberedLock = localStorage.getItem('lumen-crop-lock');
+  if (CROP_LOCKS[rememberedLock]) cropLock.value = rememberedLock;
+} catch { /* per-visit only */ }
 fullButton.addEventListener('click', toggleFullSize);
 document.querySelector('#loupe-export').addEventListener('click', () => exportCurrentFrame());
 SIDES.forEach((side, index) => {

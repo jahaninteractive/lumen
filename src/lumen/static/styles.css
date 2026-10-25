@@ -244,6 +244,12 @@ dialog h2 { margin-top: 0; font-size: 1.1rem; }
 .loupe-viewport { height: min(55vh, 720px); overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #08090a; }
 #loupe .loupe-viewport { height: calc(96vh - 9rem); }
 .loupe-viewport img { display: block; max-width: none; }
+#loupe-viewport { position: relative; }
+#loupe-viewport img { user-select: none; -webkit-user-select: none; cursor: crosshair; }
+#crop-overlay { position: absolute; left: 0; top: 0; overflow: hidden; pointer-events: none; }
+#crop-outline { position: absolute; box-sizing: border-box; border: 2px solid var(--amber); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55); }
+#loupe .frame-image .button-row { align-items: center; }
+#crop-lock { padding: .5rem; color: var(--paper); background: var(--graphite); }
 .loupe-viewport:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
 #shortcuts dl { display: grid; grid-template-columns: auto 1fr; gap: .5rem 1rem; }
 #shortcuts dt, #shortcuts dd { margin: 0; }

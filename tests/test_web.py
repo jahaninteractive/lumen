@@ -1318,6 +1318,8 @@ class Element {
     return null;
   }
   focus() { focused = this; }
+  getBoundingClientRect() { return { left: 0, top: 0, width: this.width, height: this.height }; }  // scale 1: the img's width/height attributes
+  setPointerCapture() {}
   scrollIntoView(options) { scrolled.push([this, options]); }
   scrollTo(options) { scrolled.push([this, options]); }
 }
@@ -2405,6 +2407,68 @@ const regression = `
     full.listeners.click();
     await viewport.children[0].listeners.error();
     assert.equal(full.textContent, 'original is offline', 'an unplugged volume is named, not blamed on the file');
+    return;
+  }
+  if (scenario === 'crop-draw') {
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node, stop = () => {}) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation: stop });
+    const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', scrollLeft: 0, scrollTop: 0 });
+    const overlay = element('#crop-overlay');
+    const outline = element('#crop-outline');
+    const loadImage = (width, height) => { Object.assign(viewport.children[0], { naturalWidth: width, naturalHeight: height }); viewport.children[0].listeners.load(); };
+    const pointer = (type, x, y) => viewport.listeners[type]({ button: 0, pointerId: 1, clientX: x, clientY: y, target: viewport.children[0], preventDefault() {} });
+    const drag = (x0, y0, x1, y1) => { pointer('pointerdown', x0, y0); pointer('pointermove', x1, y1); pointer('pointerup', x1, y1); };
+    const near = (actual, expected, message) => Object.entries(expected).forEach(([side, value]) => assert.ok(Math.abs(actual[side] - value) < 0.001, message + ': ' + side + ' ' + actual[side] + ' vs ' + value));
+    await key('Home', card(1), element('#contact-sheet'));
+    await key('Enter', card(1), element('#contact-sheet'));
+    loadImage(2048, 1365);
+    assert.equal(viewport.children[0].draggable, false, 'the image never starts a native drag');
+    assert.equal(state.manualCrop, null);
+    let stopped = false;
+    pointer('pointerdown', 200, 100);
+    pointer('pointermove', 600, 500);
+    assert.equal(overlay.hidden, false, 'a drag in progress shows the outline');
+    await key('Escape', viewport, viewport, () => { stopped = true; });
+    pointer('pointerup', 600, 500);
+    assert.ok(stopped, 'Escape during a drag stops before the dialog sees it');
+    assert.equal(state.manualCrop, null, 'Escape cancels the drag');
+    assert.equal(overlay.hidden, true);
+    assert.equal(openView?.id, 'loupe', 'Escape during a drag keeps the frame view open');
+    drag(200, 100, 1200, 800);
+    const expected = { left: 200 / 2048, top: 100 / 1365, width: 1000 / 2048, height: 700 / 1365 };
+    near(state.manualCrop.rect, expected, 'preview rect');
+    assert.equal(state.manualCrop.aspect, 'free');
+    assert.equal(element('#announcer').textContent, 'Crop drawn: 1000 by 700 pixels');
+    assert.equal(overlay.hidden, false);
+    assert.ok(viewport.contains(overlay), 'the overlay sits inside the viewport over the image');
+    assert.deepEqual([overlay.style.width, overlay.style.height], ['2048px', '1365px'], "the overlay covers the image's rendered box");
+    assert.deepEqual([outline.style.left, outline.style.top, outline.style.width, outline.style.height], ['9.765625%', 100 / 1365 * 100 + '%', '48.828125%', 700 / 1365 * 100 + '%']);
+    const before = state.manualCrop;
+    drag(500, 500, 510, 505);
+    assert.equal(state.manualCrop, before, 'a 10 px drag is ignored');
+    element('#loupe-full').listeners.click();
+    loadImage(4096, 2730);
+    assert.ok(viewport.contains(overlay) && !overlay.hidden, 'the outline is redrawn at full size');
+    assert.deepEqual([overlay.style.width, overlay.style.height], ['4096px', '2730px']);
+    drag(400, 200, 2400, 1600);
+    near(state.manualCrop.rect, expected, 'full-size rect matches the preview rect');
+    const lock = element('#crop-lock');
+    lock.value = '1:1';
+    lock.listeners.change();
+    assert.equal(stored['lumen-crop-lock'], '1:1');
+    assert.equal(cropLockValue(), '1:1');
+    element('#loupe-full').listeners.click();
+    loadImage(2048, 1365);
+    drag(0, 0, 900, 300);
+    const { rect, aspect } = state.manualCrop;
+    assert.equal(aspect, '1:1');
+    assert.ok(Math.abs(rect.width * 2048 - rect.height * 1365) < 1, 'a 1:1 lock keeps a square: ' + rect.width * 2048 + ' by ' + rect.height * 1365);
+    assert.ok(Math.abs(rect.width * 2048 - 900) < 1, 'the height follows the width');
+    await key(']', viewport, loupe);
+    assert.equal(state.manualCrop, null, 'stepping clears the drawn crop');
+    assert.equal(overlay.hidden, true);
     return;
   }
   if (scenario === 'loupe-strip') {
@@ -3569,6 +3633,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_frame_view_full_size_toggle(self):
         self.run_javascript_cleanup_regression("frame-view-full")
+
+    def test_javascript_frame_view_crop_draw(self):
+        self.run_javascript_cleanup_regression("crop-draw")
 
     def test_compare_and_loupe_dialogs_have_labeled_viewports_and_actions(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
