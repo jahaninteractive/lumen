@@ -1231,6 +1231,7 @@ const FILTER_CONTROLS = {
 };
 const FLAG_FILTERS = ['keepers_only', 'tagged_only', 'show_rejected'];
 const FILTER_DEFAULTS = { decision: 'any', min_rating: '0' };
+const MORE_FILTERS = ['date_from', 'date_to', 'camera', 'decision', 'min_rating', ...FLAG_FILTERS];  // the fields inside #filter-more
 let findTimer = null;  // pending debounced apply from #find / #filter-text
 
 function cancelFind() {
@@ -1246,6 +1247,15 @@ function filterQuery() {
     if (value && value !== FILTER_DEFAULTS[name]) params.set(name, value);
   });
   return params.toString();
+}
+
+// The summary counts the folded fields that differ from their defaults, so a closed section still says it is narrowing.
+function updateFilterSummary() {
+  const active = MORE_FILTERS.filter(name => {
+    const control = document.querySelector(FILTER_CONTROLS[name]);
+    return FLAG_FILTERS.includes(name) ? control.checked : control.value && control.value !== FILTER_DEFAULTS[name];
+  }).length;
+  document.querySelector('#filter-more summary').textContent = active ? `More filters (${active} active)` : 'More filters';
 }
 
 function syncFilters(cameras) {
@@ -1268,6 +1278,7 @@ function syncFilters(cameras) {
     else if (!(name === 'text' && holdText)) keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');
   });
   if (!holdText) keepTyping(text[0], params.get('text') ?? '');
+  updateFilterSummary();
 }
 
 // A reload never rewrites the field being typed in, nor one that differs from the URL only by spaces.
@@ -2168,10 +2179,20 @@ document.querySelector('#expand-search').addEventListener('click', async () => {
     updateWorkflow();
   }
 });
-document.querySelector('#reset-filters').addEventListener('click', () => {
+document.querySelector('#reset-filters').addEventListener('click', async () => {
   cancelFind();
-  return applyFilters('').catch(error => announce(error.message));
+  await applyFilters('').catch(error => announce(error.message));
+  updateFilterSummary();
 });
+['input', 'change'].forEach(name => document.querySelector('#filter-form').addEventListener(name, updateFilterSummary));
+const filterMore = document.querySelector('#filter-more');
+filterMore.addEventListener('toggle', () => {
+  try {
+    if (filterMore.open) localStorage.setItem('lumen-filter-more', '1');
+    else localStorage.removeItem('lumen-filter-more');
+  } catch { /* per-visit only */ }
+});
+try { if (localStorage.getItem('lumen-filter-more') === '1') filterMore.open = true; } catch { /* per-visit only */ }
 document.querySelector('#show-more').addEventListener('click', showMore);
 // Tile density: a CSS variable on the sheet; medium is the stylesheet default, the choice is remembered per browser.
 const TILE_SIZES = { small: '140px', medium: null, large: '260px' };

@@ -1392,7 +1392,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : scenario === 'filter-more' && key === 'lumen-filter-more' && !(key in stored) ? '1' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -2740,6 +2740,34 @@ const regression = `
     deferGroups = false;
     return;
   }
+  if (scenario === 'filter-more') {
+    const more = element('#filter-more');
+    const summary = element('#filter-more summary');
+    assert.equal(more.open, true, 'the open section is restored from the last visit');
+    await load();
+    assert.equal(summary.textContent, 'More filters');
+    element('#filter-rating').value = '3';
+    element('#filter-keepers').checked = true;
+    element('#filter-form').listeners.change();
+    assert.equal(summary.textContent, 'More filters (2 active)');
+    element('#filter-text').value = 'fox';
+    element('#filter-form').listeners.input();
+    assert.equal(summary.textContent, 'More filters (2 active)', 'tag text sits outside the section');
+    assert.equal(filterQuery(), 'min_rating=3&keepers_only=1&text=fox');
+    await element('#reset-filters').listeners.click();
+    assert.equal(summary.textContent, 'More filters');
+    assert.deepEqual([element('#filter-rating').value, element('#filter-keepers').checked], ['0', false]);
+    location.search = '?decision=flag&camera=ILCE-7M4%3A1&show_rejected=1';
+    await load();
+    assert.equal(summary.textContent, 'More filters (3 active)', 'a reload counts the filters from the URL');
+    more.open = false;
+    more.listeners.toggle();
+    assert.equal(stored['lumen-filter-more'], undefined);
+    more.open = true;
+    more.listeners.toggle();
+    assert.equal(stored['lumen-filter-more'], '1');
+    return;
+  }
   if (scenario === 'filters') {
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const range = (start, count) => Array.from({ length: count }, (_, index) => start + index);
@@ -3700,6 +3728,27 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_decisions_update_cards_in_place_and_keeper_count(self):
         self.run_javascript_cleanup_regression("decisions")
+
+    def test_javascript_filter_more_folds_secondary_filters(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        form = by_id["filter-form"]
+        row = [node for node in parser.nodes if node["parents"] and node["parents"][-1] is form]
+        self.assertEqual(["div", "button", "button", "details"], [node["tag"] for node in row])
+        for name in ("filter-text", "expand-search", "expand-search-availability"):
+            self.assertIn(row[0], by_id[name]["parents"])
+        self.assertEqual(("submit", "Apply"), (row[1]["attrs"].get("type"), row[1]["text"].strip()))
+        self.assertIs(by_id["reset-filters"], row[2])
+        details = by_id["filter-more"]
+        self.assertIs(details, row[3])
+        summaries = [node for node in parser.nodes if node["tag"] == "summary" and node["parents"][-1] is details]
+        self.assertEqual(["More filters"], [node["text"].strip() for node in summaries])
+        for name in ("filter-from", "filter-to", "filter-camera", "filter-decision", "filter-rating", "filter-keepers", "filter-tagged", "show-rejected"):
+            self.assertIn(details, by_id[name]["parents"], f"{name} folds into More filters")
+        self.assertEqual(3, sum(1 for node in parser.nodes if "toggle" in node["attrs"].get("class", "").split() and details in node["parents"]))
+        self.run_javascript_cleanup_regression("filter-more")
 
     def test_javascript_filters_write_url_group_days_and_page_frames(self):
         self.run_javascript_cleanup_regression("filters")

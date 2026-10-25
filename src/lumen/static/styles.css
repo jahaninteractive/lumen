@@ -260,7 +260,10 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 #loupe .frame-panel select { padding: .5rem; color: var(--paper); background: var(--graphite); }
 
 .filter-form { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem 1rem; margin-bottom: 1rem; padding: .75rem; border: 1px solid var(--line); border-radius: 6px; background: var(--charcoal); }
-.filter-form > div:not(.button-row) { display: grid; gap: .2rem; }
+.filter-form > div, .filter-fields > div { display: grid; gap: .2rem; }
+#filter-more summary { min-height: 44px; padding: .65rem 0; color: var(--cyan); cursor: pointer; font-weight: 700; }
+#filter-more[open] { flex-basis: 100%; }
+.filter-fields { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem 1rem; }
 .filter-form label { color: var(--muted); font-size: .9rem; }
 .filter-form input:not([type="checkbox"]), .filter-form select { padding: 0 .5rem; color: var(--paper); background: var(--graphite); color-scheme: dark; }
 .filter-form .toggle { margin-left: 0; }
