@@ -153,13 +153,6 @@ async function loadComposition() {
   state.recommendedCropId = null;
   document.querySelector('#composition-advice').textContent = '';
   document.querySelector('#compose-workspace').hidden = true;
-  if (!photoId) {
-    document.querySelector('#compose-empty').textContent = 'Select a photo from the contact sheet to see crop choices.';
-    document.querySelector('#compose-empty').hidden = false;
-    document.querySelector('#compose-workspace').hidden = true;
-    document.querySelector('#compose-status').textContent = '';
-    return;
-  }
   document.querySelector('#compose-status').textContent = 'Loading crop choices…';
   try {
     const composition = await request(`/api/photos/${photoId}/crops`);
@@ -631,7 +624,7 @@ function placeEditor(photo, record) {
     form.append(label);
     return input;
   };
-  const burst = check('place-burst', 'Whole burst');
+  const burst = check('place-burst', 'Apply to whole burst');
   const remember = check('place-remember', 'Remember for nearby frames');
   if (record?.latitude == null || record?.longitude == null) {
     remember.checked = false;
@@ -773,6 +766,7 @@ function renderInspector(photo) {
     tag.setAttribute('aria-describedby', reason.id);
     inspection.append(reason);
   }
+  keepFrameViewFocus();
 }
 
 // Advisory: a local AI draft is stored as the model's and shown for editing; only the Share export uses it.
@@ -935,6 +929,10 @@ async function addTypedKeyword(photo, word, applied) {
 async function changeKeyword(photo, action, keyword, focus = `${action === 'add' ? 'remove' : 'add'}:${keyword}`) {
   try {
     const result = await post(`/api/photos/${photo.id}/keywords`, { action, keyword });
+    if (action === 'add' && !(state.vocabularyWords ??= []).some(word => word.toLowerCase() === keyword.toLowerCase())) {
+      state.vocabularyWords.push(keyword);  // the server learned it; offer it while typing without a reload
+      document.querySelector('#vocabulary-words').append(Object.assign(document.createElement('option'), { value: keyword }));
+    }
     if (state.selectedId !== photo.id) return;
     state.details.tags ??= { data: {} };  // the first keyword on an untagged frame
     Object.assign(state.details.tags.data, { subjects: result.subjects, suggested: result.suggested });
@@ -1062,8 +1060,9 @@ function handleCullingKey(event) {
   const target = event.target;
   const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName)) return;
-  // Only frame cards cull on the sheet; in the frame view its own buttons cull too, but Enter keeps their native activation.
-  if (target?.tagName === 'BUTTON' && target.className !== 'frame' && (openView?.id !== 'loupe' || key === 'Enter')) return;
+  if (key === 'Enter' && openView) return;  // no culling meaning in an open view: buttons, links, and summaries keep native activation
+  // Only frame cards cull on the sheet; in the frame view its own buttons cull too.
+  if (target?.tagName === 'BUTTON' && target.className !== 'frame' && openView?.id !== 'loupe') return;
   if ((key === '[' || key === ']') && openView?.id === 'loupe') { event.preventDefault(); return stepLoupe(key === ']' ? 1 : -1); }
   const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
   const index = ids.indexOf(state.focusedId);
@@ -2264,6 +2263,11 @@ async function openCompare() {
   document.querySelector('#compare-left-viewport').focus();
 }
 
+// Re-rendering or disabling the focused control drops focus to <body>, outside the dialog's culling listener.
+function keepFrameViewFocus() {
+  if (openView?.id === 'loupe' && !openView.contains(document.activeElement)) loupeViewport.focus();
+}
+
 function openLoupe(photoId) {
   const photo = photoById(photoId);
   if (openView || !photo) return;
@@ -2281,6 +2285,8 @@ function showFrame(photo) {
   fullButton.setAttribute('aria-pressed', 'false');
   inspect(photo).catch(error => announce(error.message));  // sets selectedId before its first await, so the crops below are this frame's
   loadComposition();
+  const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
+  announce(`${photo.name}, ${ids.indexOf(photo.id) + 1} of ${ids.length}`);
 }
 
 // Swap between the stored preview and the camera's embedded full-size JPEG; the button names the real pixel size.
@@ -2293,18 +2299,23 @@ function toggleFullSize() {
     fullButton.setAttribute('aria-pressed', 'false');
     return announce('Preview size');
   }
+  fullButton.setAttribute('aria-pressed', 'true');  // a second z while it loads returns to the preview
   const image = showPreview(loupeViewport, photo, `/full/${photo.id}?${photo.preview_url.split('?')[1] || ''}`, loaded => {
     if (loupeViewport.children[0] !== image) return;  // stepped on or toggled off while it loaded
     fullButton.textContent = `Full size, ${loaded.naturalWidth} by ${loaded.naturalHeight}`;
-    fullButton.setAttribute('aria-pressed', 'true');
     loupeViewport.scrollLeft = (loupeViewport.scrollWidth - loupeViewport.clientWidth) / 2;
     loupeViewport.scrollTop = (loupeViewport.scrollHeight - loupeViewport.clientHeight) / 2;
     announce(fullButton.textContent);
   });
-  image.addEventListener('error', () => {
+  image.addEventListener('error', async () => {
     if (loupeViewport.children[0] !== image) return;
-    showPreview(loupeViewport, photo);
-    Object.assign(fullButton, { disabled: true, textContent: 'no full-size image in this file' });
+    const preview = showPreview(loupeViewport, photo);
+    fullButton.disabled = true;
+    fullButton.setAttribute('aria-pressed', 'false');
+    keepFrameViewFocus();
+    const offline = await fetch(image.src).then(response => response.status === 503, () => false);  // the img error carries no status
+    if (loupeViewport.children[0] !== preview) return;  // stepped on while asking
+    fullButton.textContent = offline ? 'original is offline' : 'no full-size image in this file';
     announce(fullButton.textContent);
   });
 }
@@ -2320,7 +2331,6 @@ function stepLoupe(delta) {
   focusFrame(photo.id, false);
   showFrame(photo);
   viewOrigin = photo.id;
-  announce(`${photo.name}, ${index + 1} of ${ids.length}`);
 }
 
 for (const name of ['#compare', '#loupe']) {
@@ -2393,6 +2403,7 @@ async function runExport(scope) {
     state.busy = false;
     updateWorkflow();
     if (scope === 'current') document.querySelector('#compose-status').textContent = document.querySelector('#export-status').textContent;
+    keepFrameViewFocus();
   }
 }
 const exportCurrentFrame = () => runExport('current');

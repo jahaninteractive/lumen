@@ -1270,7 +1270,8 @@ class Element {
     };
   }
   append(...children) { children.forEach(child => { if (child && typeof child === 'object') child.parent = this; }); this.children.push(...children); }
-  replaceChildren(...children) { this.children = []; this.append(...children); }
+  replaceChildren(...children) { this.children.forEach(child => { if (child && typeof child === 'object') child.parent = null; }); this.children = []; this.append(...children); }
+  contains(node) { for (; node; node = node.parent) if (node === this) return true; return false; }
   setAttribute(name, value) { this.attrs[name] = value; }
   getAttribute(name) { return this.attrs[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
@@ -1404,6 +1405,7 @@ let lastGroupsUrl = null;
 const photoDetailRequests = [];
 // URLs listed here wait until the scenario runs their entry in heldReplies, so replies can arrive out of order.
 const holdUrls = new Set();
+let fullStatus = 404;  // what /full/<id> answers when the frame view asks why the image failed
 const heldReplies = [];
 let keeperOverride = null;
 let groupsError = null;
@@ -1452,6 +1454,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   if (holdUrls.delete(url)) return new Promise(resolve => heldReplies.push(() => resolve(fetch(url, options))));
   if (networkDown) throw new TypeError('NetworkError when attempting to fetch resource.');
+  if (url.startsWith('/full/')) return { ok: false, status: fullStatus, json: async () => ({}) };
   let payload;
   let ok = true;
   if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
@@ -1886,6 +1889,7 @@ const regression = `
     assert.deepEqual(keywordPosts.at(-1), { action: 'add', keyword: 'Zebra' });
     assert.ok(texts('keywords').includes('Zebra'), 'an untagged keeper takes a typed keyword');
     assert.equal(element('#announcer').textContent, 'Keyword Zebra added to photo-2.jpg');
+    assert.deepEqual(element('#vocabulary-words').children.map(option => option.value), ['gentoo penguin', 'spindrift', 'krill', 'Lion', 'seal', 'Zebra'], 'learned words join the datalist without a reload');
     return;
   }
   if (scenario === 'digest') {
@@ -2244,16 +2248,30 @@ const regression = `
     const sheetNode = element('#contact-sheet');
     const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
     const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV' });
+    card(1).listeners.click();
+    await new Promise(setImmediate);
+    assert.deepEqual(cropRequests, [], 'a sheet click never requests crops');
     photoDetailRequests.length = 0;
     await key('Home', card(1), sheetNode);
     await key('Enter', card(1), sheetNode);
     await new Promise(setImmediate);
     assert.equal(loupe.hidden, false);
+    assert.equal(element('#announcer').textContent, 'photo-1.jpg, 1 of 2', 'opening announces the position');
     assert.equal(state.selectedId, 1, 'opening the frame view selects the frame');
     assert.deepEqual(photoDetailRequests, ['/api/photos/1']);
     assert.deepEqual(cropRequests, ['/api/photos/1/crops']);
     assert.equal(element('#inspection').children[0].textContent, 'photo-1.jpg', 'the inspector renders inside the frame view');
     assert.equal(element('#compose-workspace').hidden, false, 'crop choices show in the frame view');
+    let before = prevented;
+    await key('Enter', Object.assign(new Element(), { tagName: 'A' }), loupe);
+    assert.equal(prevented, before, 'Enter on a frame-view link keeps its native activation');
+    [element('#inspection'), viewport].forEach(node => { node.parent = loupe; });
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const flag = tree(element('#inspection')).find(node => node.dataset?.decisionControl === 'flag');
+    flag.focus();
+    await key('f', flag, loupe);
+    await new Promise(setImmediate);
+    assert.equal(focused, viewport, 'culling from the right column keeps focus inside the frame view');
     await key(']', viewport, loupe);
     assert.equal(element('#announcer').textContent, 'photo-2.jpg, 2 of 2');
     await new Promise(setImmediate);
@@ -2262,7 +2280,7 @@ const regression = `
     assert.deepEqual(cropRequests, ['/api/photos/1/crops', '/api/photos/2/crops']);
     assert.equal(element('#inspection').children[0].textContent, 'photo-2.jpg');
     const exportButton = Object.assign(element('#loupe-export'), { tagName: 'BUTTON' });
-    const before = prevented;
+    before = prevented;
     await key('Enter', exportButton, loupe);
     assert.equal(prevented, before, 'Enter on a dialog button keeps its native activation');
     await key('x', exportButton, loupe);
@@ -2318,6 +2336,7 @@ const regression = `
     await key('Enter', card(1), element('#contact-sheet'));
     assert.equal(full.getAttribute('aria-pressed'), 'false');
     full.listeners.click();
+    assert.equal(full.getAttribute('aria-pressed'), 'true', 'pressed as soon as the swap starts');
     let image = viewport.children[0];
     assert.equal(image.src, '/full/1?v=abc-embedded', 'the full-size image carries the preview version');
     Object.assign(viewport, { scrollWidth: 3504, clientWidth: 1000, scrollHeight: 2336, clientHeight: 800 });
@@ -2332,11 +2351,13 @@ const regression = `
     assert.equal(full.textContent, 'Full size');
     await key('z', viewport, loupe);
     assert.equal(viewport.children[0].src, '/full/1?v=abc-embedded', 'z zooms in again');
+    await key('z', viewport, loupe);
+    assert.equal(viewport.children[0].src, '/preview/1?v=abc-embedded', 'a second z while it loads returns to the preview');
     await key(']', viewport, loupe);
     assert.equal(viewport.children[0].src, '/preview/2?v=abc-embedded', 'stepping resets to the preview');
     assert.equal(full.getAttribute('aria-pressed'), 'false');
     full.listeners.click();
-    viewport.children[0].listeners.error();
+    await viewport.children[0].listeners.error();
     assert.equal(full.disabled, true);
     assert.equal(full.textContent, 'no full-size image in this file');
     assert.equal(full.getAttribute('aria-pressed'), 'false');
@@ -2344,6 +2365,10 @@ const regression = `
     await key('[', viewport, loupe);
     assert.equal(full.disabled, false, 'the next frame gets its own chance');
     assert.equal(full.textContent, 'Full size');
+    fullStatus = 503;
+    full.listeners.click();
+    await viewport.children[0].listeners.error();
+    assert.equal(full.textContent, 'original is offline', 'an unplugged volume is named, not blamed on the file');
     return;
   }
   if (scenario === 'loupe-strip') {
@@ -3163,6 +3188,7 @@ const regression = `
     assert.equal(byId('place-country').value, 'South Africa');
     assert.equal(tree(element('#inspection')).find(node => node.tagName === 'LABEL' && node.htmlFor === 'place-name').textContent, 'Place name');
     assert.equal(byId('place-burst').checked, true, 'the whole burst by default');
+    assert.equal(byId('place-burst').parent.children[1], ' Apply to whole burst');
     assert.equal(byId('place-remember').checked, true);
     assert.ok(!byId('place-remember').disabled, 'a GPS fix allows remembering');
     byId('place-cancel').listeners.click();
@@ -3410,10 +3436,6 @@ const regression = `
   assert.equal(state.recommendedCropId, null);
   reviewMode = 'success';
 
-  element('#compose-empty').textContent = 'Crop choices are unavailable for this photo.';
-  state.selectedId = null;
-  await loadComposition();
-  assert.ok(element('#compose-empty').textContent.startsWith('Select a photo'));
   state.selectedId = 2;
   groups = scenario === 'split' ? [group(1, [1]), group(2, [2])] : scenario === 'merge' ? [group(3, [1, 2])] : [group(1, [1])];
   await load();
@@ -3501,6 +3523,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         full = by_id["loupe-full"]
         self.assertEqual(("button", "button", "false", "Full size"), (full["tag"], full["attrs"].get("type"), full["attrs"].get("aria-pressed"), full["text"].strip()))
         self.assertEqual(("button", "Export this frame"), (by_id["loupe-export"]["tag"], by_id["loupe-export"]["text"].strip()))
+        self.assertEqual("export-availability", by_id["loupe-export"]["attrs"].get("aria-describedby"), "a disabled export says why")
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
         self.assertRegex(styles, r"#loupe\[open\] \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\)")  # the viewport keeps two thirds
         self.run_javascript_cleanup_regression("frame-view")
@@ -4123,7 +4146,10 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             code, kind, body = status("/full/1?v=x")
             self.assertEqual((200, "image/jpeg"), (code, kind))
             self.assertEqual((640, 427), Image.open(BytesIO(body)).size)
-            for bad in (f"/full/{gone_id}", "/full/999", "/full/../catalog.sqlite3"):
+            code, _, body = status(f"/full/{gone_id}")
+            self.assertEqual(503, code, "an unplugged original with nothing cached is offline, not missing")
+            self.assertNotIn(str(self.root).encode(), body)
+            for bad in ("/full/999", "/full/../catalog.sqlite3"):
                 code, _, body = status(bad)
                 self.assertEqual(404, code, bad)
                 self.assertNotIn(str(self.root).encode(), body)

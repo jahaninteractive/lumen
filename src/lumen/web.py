@@ -331,14 +331,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 with Library(settings) as library:
                     photo = library.catalog.get_photo(int(match.group(1)))
                 full_dir = (settings.cache_dir / "full").resolve()
+                offline = False
                 try:
                     full = full_size_for(Path(photo.path), full_dir, photo.fingerprint) if photo else None
                     if full:
                         full.resolve().relative_to(full_dir)
-                except (OSError, ValueError):
+                except OSError:  # the original's volume is unplugged and nothing is cached
+                    full, offline = None, True
+                except ValueError:
                     full = None
                 if not full:
-                    self.send_error(HTTPStatus.NOT_FOUND)
+                    self.send_error(HTTPStatus.SERVICE_UNAVAILABLE if offline else HTTPStatus.NOT_FOUND)
                     return
                 self._send_bytes(full.read_bytes(), "image/jpeg", cache=True)
                 return
