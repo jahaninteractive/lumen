@@ -246,6 +246,7 @@ dialog h2 { margin-top: 0; font-size: 1.1rem; }
 #loupe .loupe-viewport { height: calc(96vh - 9rem); }
 .loupe-viewport img { display: block; max-width: none; }
 #loupe-viewport { position: relative; }
+#loupe-viewport img.fit { max-width: 100%; max-height: 100%; }  /* the whole frame shows while cropping; Full size stays 1:1 */
 #loupe-viewport img { user-select: none; -webkit-user-select: none; cursor: crosshair; }
 #crop-overlay { position: absolute; left: 0; top: 0; overflow: hidden; pointer-events: none; }
 #crop-outline { position: absolute; box-sizing: border-box; border: 2px solid var(--amber); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55); }

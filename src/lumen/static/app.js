@@ -127,7 +127,7 @@ function cropCard(candidate) {
 
   const details = document.createElement('p');
   details.className = 'crop-details';
-  const aspectLabel = candidate.aspect === 'native' ? 'Original ratio' : candidate.aspect;
+  const aspectLabel = { native: 'Original ratio', free: 'Free' }[candidate.aspect] || candidate.aspect;
   details.textContent = `${aspectLabel} · ${candidate.remaining_megapixels.toFixed(1)} MP remaining`;
   const rationale = document.createElement('p');
   rationale.className = 'quiet';
@@ -147,7 +147,7 @@ function cropCard(candidate) {
   action.textContent = candidate.kind === 'original' ? 'Keep original' : 'Use this crop';
   action.setAttribute('aria-label', candidate.kind === 'original'
     ? `Keep ${heading.textContent}, ${aspectLabel}`
-    : `Use ${heading.textContent} crop, ${aspectLabel}`);
+    : candidate.kind === 'manual' ? `Use your crop, ${aspectLabel}` : `Use ${heading.textContent} crop, ${aspectLabel}`);
   const tooSmall = candidate.kind === 'manual' && candidate.pixel_count < 8_000_000;
   action.disabled = state.busy || active || tooSmall;
   if (tooSmall) action.setAttribute('aria-describedby', warning.id);
@@ -164,7 +164,7 @@ function renderComposition() {
   const active = state.composition.active_crop;
   const drawn = state.manualCrop ?? (active?.candidate_id === 'crop-manual' ? active : null);
   if (drawn) primary.append(cropCard(manualCandidate(drawn.rect, drawn.aspect, state.composition)));
-  if (!cropDrag && loupeViewport.children[0]?.width) drawCropOverlay(shownCropRect());  // before the image loads, its load draws it
+  if (!cropDrag && loupeViewport.children[0]?.naturalWidth) drawCropOverlay(shownCropRect());  // before the image loads, its load draws it
   state.composition.candidates.forEach(candidate => {
     (candidate.revealable ? alternatives : primary).append(cropCard(candidate));
   });
@@ -214,7 +214,7 @@ async function applyCrop(photoId, candidate) {
     else await post(`/api/photos/${photoId}/crop`, candidate.kind === 'manual'
       ? { candidate_id: candidate.id, rect: candidate.rect, aspect: candidate.aspect }
       : { candidate_id: candidate.id });
-    if (candidate.kind === 'manual') state.manualCrop = null;  // saved: the card and outline now come from active_crop
+    if (candidate.kind === 'manual' && state.manualCrop?.rect === candidate.rect) state.manualCrop = null;  // saved: the card and outline now come from active_crop; a newer drawing stays
     announce(candidate.kind === 'original' ? 'Original frame kept.' : `${cropLabel(candidate.kind)} selected.`);
     if (state.selectedId === photoId) await loadComposition();
   } catch (error) {
@@ -2105,7 +2105,7 @@ document.querySelector('#back-to-top').addEventListener('click', () => {
 // Keep scroll-into-view clear of the sticky import bar and tab rail.
 if (window.ResizeObserver) {
   const top = document.querySelector('.main-top');
-  new ResizeObserver(() => document.documentElement.style.setProperty('--sticky-top', `${top.offsetHeight}px`)).observe(top);
+  new window.ResizeObserver(() => document.documentElement.style.setProperty('--sticky-top', `${top.offsetHeight}px`)).observe(top);
 }
 function rememberProfile(path) {
   state.profile = path;
@@ -2245,12 +2245,17 @@ function closeView() {
   focusFrame(viewOrigin);
 }
 
-// Scale 1 of the stored preview in both panes, so zoom matches; preview_url carries the version query.
-function showPreview(viewport, photo, src = photo.preview_url, loaded = () => {}) {
+// Scale 1 of the stored preview in both compare panes, so zoom matches; preview_url carries the version query.
+// fit leaves the size to CSS, which fits the frame view's preview whole into its viewport.
+function showPreview(viewport, photo, src = photo.preview_url, loaded = () => {}, fit = false) {
   const image = document.createElement('img');
   image.alt = photo.name;
   image.draggable = false;  // a pointer drag draws a crop, never drags the file out
-  image.addEventListener('load', () => { image.width = image.naturalWidth; image.height = image.naturalHeight; loaded(image); });
+  if (fit) image.className = 'fit';
+  image.addEventListener('load', () => {
+    if (!fit) Object.assign(image, { width: image.naturalWidth, height: image.naturalHeight });
+    loaded(image);
+  });
   image.src = src;
   viewport.setAttribute('aria-label', `${photo.name} viewport`);
   viewport.replaceChildren(image);
@@ -2346,7 +2351,7 @@ function openLoupe(photoId) {
 function showFrame(photo) {
   document.querySelector('#loupe-heading').textContent = photo.name;
   selectFrameTab.restore();
-  showPreview(loupeViewport, photo, undefined, () => drawCropOverlay(shownCropRect()));
+  showPreview(loupeViewport, photo, undefined, () => drawCropOverlay(shownCropRect()), true);
   cropDrag = null;
   state.manualCrop = null;
   drawCropOverlay(null);
@@ -2365,7 +2370,7 @@ function toggleFullSize() {
   cropDrag = null;
   const redrawCrop = () => drawCropOverlay(shownCropRect());
   if (fullButton.getAttribute('aria-pressed') === 'true') {
-    showPreview(loupeViewport, photo, undefined, redrawCrop);
+    showPreview(loupeViewport, photo, undefined, redrawCrop, true);
     fullButton.textContent = 'Full size';
     fullButton.setAttribute('aria-pressed', 'false');
     return announce('Preview size');
@@ -2381,7 +2386,7 @@ function toggleFullSize() {
   });
   image.addEventListener('error', async () => {
     if (loupeViewport.children[0] !== image) return;
-    const preview = showPreview(loupeViewport, photo, undefined, redrawCrop);
+    const preview = showPreview(loupeViewport, photo, undefined, redrawCrop, true);
     fullButton.disabled = true;
     fullButton.setAttribute('aria-pressed', 'false');
     keepFrameViewFocus();
@@ -2431,7 +2436,8 @@ function drawCropOverlay(rect) {
   cropOverlay.hidden = !rect;
   if (!rect || !image) return;
   if (!loupeViewport.contains(cropOverlay)) loupeViewport.append(cropOverlay);
-  Object.assign(cropOverlay.style, { width: `${image.width}px`, height: `${image.height}px` });
+  const box = image.getBoundingClientRect();
+  Object.assign(cropOverlay.style, { width: `${box.width}px`, height: `${box.height}px` });
   Object.assign(cropOutline.style, { left: `${rect.left * 100}%`, top: `${rect.top * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` });
 }
 
@@ -2473,6 +2479,7 @@ loupeViewport.addEventListener('pointerdown', event => {
   const image = loupeViewport.children[0];
   if (event.button !== 0 || event.target !== image || !image.naturalWidth) return;
   event.preventDefault();
+  loupeViewport.focus({ preventScroll: true });  // Escape then cancels the drag rather than closing the dialog
   loupeViewport.setPointerCapture(event.pointerId);
   const [x, y] = cropPoint(event, image);
   cropDrag = { image, x, y, rect: null };
@@ -2492,8 +2499,11 @@ loupeViewport.addEventListener('pointerup', event => {
   state.manualCrop = { rect, aspect: cropLockValue() };
   drawCropOverlay(rect);
   if (state.composition?.photo_id === state.selectedId) renderComposition();
-  announce(`Crop drawn: ${Math.round(rect.width * image.naturalWidth)} by ${Math.round(rect.height * image.naturalHeight)} pixels`);
+  selectFrameTab(document.querySelector('#crop-tab'));  // the card, lock, and save button live there
+  const lock = cropLockValue() === 'free' ? '' : `, ${cropLockValue()}`;
+  announce(`Crop drawn${lock}: ${Math.round(rect.width * image.naturalWidth)} by ${Math.round(rect.height * image.naturalHeight)} pixels`);
 });
+if (window.ResizeObserver) new window.ResizeObserver(() => drawCropOverlay(cropDrag?.rect ?? shownCropRect())).observe(loupeViewport);
 loupeViewport.addEventListener('pointercancel', () => {
   if (!cropDrag) return;
   cropDrag = null;

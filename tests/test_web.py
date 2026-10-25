@@ -1317,8 +1317,9 @@ class Element {
     for (let node = this; node; node = node.parent) if (test?.(node)) return node;
     return null;
   }
-  focus() { focused = this; }
-  getBoundingClientRect() { return { left: 0, top: 0, width: this.width, height: this.height }; }  // scale 1: the img's width/height attributes
+  focus(options) { focused = this; this.focusOptions = options; }
+  // A scenario sets box for a displayed size; otherwise scale 1: the width/height attributes, else the natural size (a fitted img smaller than its viewport).
+  getBoundingClientRect() { return this.box || { left: 0, top: 0, width: this.width ?? this.naturalWidth, height: this.height ?? this.naturalHeight }; }
   setPointerCapture() {}
   scrollIntoView(options) { scrolled.push([this, options]); }
   scrollTo(options) { scrolled.push([this, options]); }
@@ -1386,7 +1387,8 @@ const timers = new Map();
 // The find scenario records timeouts so its debounce is real; elsewhere they run at once.
 const timeouts = new Map();
 let nextTimeout = 0;
-const window = { setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }), getComputedStyle: node => ({ gridTemplateColumns: scenario === 'rows' && node?.className === 'burst-frames' ? '224px 224px' : 'none' }) };
+const observers = [];  // [node, callback] for crop-draw, which resizes the frame viewport
+const window = { ResizeObserver: scenario === 'crop-draw' ? class { constructor(callback) { this.callback = callback; } observe(node) { observers.push([node, this.callback]); } } : undefined, setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }), getComputedStyle: node => ({ gridTemplateColumns: scenario === 'rows' && node?.className === 'burst-frames' ? '224px 224px' : 'none' }) };
 // pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
 async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
@@ -2208,7 +2210,7 @@ const regression = `
       assert.equal(image.src, '/preview/2');
       Object.assign(image, { naturalWidth: 1600, naturalHeight: 1200 });
       image.listeners.load();
-      assert.deepEqual([image.width, image.height], [1600, 1200], 'the loupe shows the stored preview at 100 percent');
+      assert.deepEqual([image.className, image.width, image.height], ['fit', undefined, undefined], 'the frame view fits the stored preview to its viewport; CSS sizes it');
       assert.equal(focused, viewport);
       Object.assign(viewport, { scrollTop: 0, scrollLeft: 0, tagName: 'DIV' });
       await key('ArrowDown', viewport, viewport);
@@ -2241,6 +2243,9 @@ const regression = `
       assert.ok(!details(side).includes('Eye quality'), 'eye quality is listed only when measured');
       assert.equal(element('#compare-' + side + '-viewport').getAttribute('aria-label'), 'photo-' + id + '.jpg viewport');
       assert.equal(element('#compare-' + side + '-viewport').children[0].src, '/preview/' + id);
+      const pane = Object.assign(element('#compare-' + side + '-viewport').children[0], { naturalWidth: 1600, naturalHeight: 1200 });
+      pane.listeners.load();
+      assert.deepEqual([pane.className, pane.width, pane.height], ['', 1600, 1200], 'compare panes keep scale 1 so zoom matches');
     }
     const left = element('#compare-left-viewport');
     const right = element('#compare-right-viewport');
@@ -2436,6 +2441,7 @@ const regression = `
     Object.assign(viewport, { scrollWidth: 3504, clientWidth: 1000, scrollHeight: 2336, clientHeight: 800 });
     Object.assign(image, { naturalWidth: 3504, naturalHeight: 2336 });
     image.listeners.load();
+    assert.deepEqual([image.className, image.width, image.height], ['', 3504, 2336], 'full size shows 1:1 pixels');
     assert.equal(full.textContent, 'Full size, 3504 by 2336', 'the button names the real pixel size');
     assert.equal(full.getAttribute('aria-pressed'), 'true');
     assert.deepEqual([viewport.scrollLeft, viewport.scrollTop], [1252, 768], 'zooming in centres the view');
@@ -2492,11 +2498,22 @@ const regression = `
     assert.equal(state.manualCrop, null, 'Escape cancels the drag');
     assert.equal(overlay.hidden, true);
     assert.equal(openView?.id, 'loupe', 'Escape during a drag keeps the frame view open');
+    assert.equal(viewport.children[0].className, 'fit', 'the preview is fitted to the viewport');
+    assert.equal(viewport.children[0].width, undefined, 'a fitted preview takes its size from CSS');
+    focused = element('#crop-lock');
+    pointer('pointerdown', 200, 100);
+    assert.equal(focused, viewport, 'a drag moves focus to the viewport, so Escape reaches the cancel');
+    assert.deepEqual(viewport.focusOptions, { preventScroll: true });
+    pointer('pointerup', 200, 100);
+    assert.equal(element('#crop-tab').getAttribute('aria-selected'), 'false', 'a slip keeps the Frame tab');
     drag(200, 100, 1200, 800);
     const expected = { left: 200 / 2048, top: 100 / 1365, width: 1000 / 2048, height: 700 / 1365 };
     near(state.manualCrop.rect, expected, 'preview rect');
     assert.equal(state.manualCrop.aspect, 'free');
     assert.equal(element('#announcer').textContent, 'Crop drawn: 1000 by 700 pixels');
+    assert.equal(element('#crop-tab').getAttribute('aria-selected'), 'true', 'drawing shows the Crop tab with the card and save button');
+    assert.equal(element('#crop-panel').hidden, false);
+    assert.equal(element('#frame-panel').hidden, true);
     assert.equal(overlay.hidden, false);
     assert.ok(viewport.contains(overlay), 'the overlay sits inside the viewport over the image');
     assert.deepEqual([overlay.style.width, overlay.style.height], ['2048px', '1365px'], "the overlay covers the image's rendered box");
@@ -2522,6 +2539,22 @@ const regression = `
     assert.equal(aspect, '1:1');
     assert.ok(Math.abs(rect.width * 2048 - rect.height * 1365) < 1, 'a 1:1 lock keeps a square: ' + rect.width * 2048 + ' by ' + rect.height * 1365);
     assert.ok(Math.abs(rect.width * 2048 - 900) < 1, 'the height follows the width');
+    assert.equal(element('#announcer').textContent, 'Crop drawn, 1:1: 900 by 900 pixels', 'a lock other than Free is named');
+    const fitted = viewport.children[0];
+    fitted.box = { left: 0, top: 0, width: 1024, height: 682.5 };  // shown at half its natural size
+    observers.find(([node]) => node === viewport)[1]();
+    assert.deepEqual([overlay.style.width, overlay.style.height], ['1024px', '682.5px'], 'a viewport resize redraws the overlay at the shown size');
+    lock.value = 'free';
+    drag(100, 50, 600, 400);
+    near(state.manualCrop.rect, expected, 'a half-size display gives the same rect as the same drag at scale 1');
+    drag(500, 300, 510, 310);
+    near(state.manualCrop.rect, expected, 'the slip check counts displayed pixels: 10 shown px is still a slip');
+    lock.value = '3:2';
+    fitted.box = { left: 0, top: 0, width: 893, height: 595.3 };  // a 2048 px preview fitted to an ordinary frame-view column
+    drag(45, 30, 848, 500);
+    const candidate = manualCandidate(state.manualCrop.rect, state.manualCrop.aspect, { source_width: 6000, source_height: 4000 });
+    assert.ok(candidate.pixel_count > 8_000_000, 'a light 3:2 trim drawn on the fitted preview keeps over 8 MP: ' + candidate.pixel_count);
+    lock.value = 'free';
     await key(']', viewport, loupe);
     assert.equal(state.manualCrop, null, 'stepping clears the drawn crop');
     assert.equal(overlay.hidden, true);
@@ -2549,7 +2582,8 @@ const regression = `
     drag(200, 100, 1200, 800);
     assert.equal(heading(), 'Your crop', 'the drawn crop is the first card at once');
     const pixels = Math.round(6000 * 1000 / 2048) * Math.round(4000 * 700 / 1365);
-    assert.equal(first().children[2].textContent, 'free · ' + (pixels / 1e6).toFixed(1) + ' MP remaining');
+    assert.equal(first().children[2].textContent, 'Free · ' + (pixels / 1e6).toFixed(1) + ' MP remaining');
+    assert.equal(first().children.at(-1).getAttribute('aria-label'), 'Use your crop, Free');
     assert.equal(first().children[3].textContent, 'drawn by the photographer');
     const warning = first().children[4];
     assert.equal(warning.textContent, (pixels / 1e6).toFixed(6) + ' MP remaining; below 12 MP');
@@ -2564,7 +2598,17 @@ const regression = `
     const use = first().children.at(-1);
     assert.equal(use.disabled, false, 'a large enough crop can be used');
     assert.equal(first().children[4].textContent, '', 'over 12 MP has no warning');
-    await use.listeners.click();
+    holdUrls.add('/api/photos/1/crop');
+    const saving = use.listeners.click();
+    await flush();
+    drag(100, 100, 1900, 1200);
+    const newer = state.manualCrop;
+    heldReplies.shift()();
+    await saving;
+    await flush();
+    assert.equal(state.manualCrop, newer, 'a drawing made while the save was in flight survives it');
+    drag(0, 0, 2000, 1300);
+    await first().children.at(-1).listeners.click();
     await flush();
     assert.deepEqual(cropMutations.at(-1), { url: '/api/photos/1/crop', body: { candidate_id: 'crop-manual', rect, aspect: 'free' } });
     assert.equal(element('#announcer').textContent, 'Your crop selected.');
@@ -3814,6 +3858,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.run_javascript_cleanup_regression("frame-view-full")
 
     def test_javascript_frame_view_crop_draw(self):
+        css = (Path(__file__).parent.parent / "src/lumen/static/styles.css").read_text()
+        self.assertIn("#loupe-viewport img.fit { max-width: 100%; max-height: 100%; }", css, "the frame view shows its preview whole")
         self.run_javascript_cleanup_regression("crop-draw")
 
     def test_javascript_frame_view_crop_manual_card(self):
@@ -3837,6 +3883,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             for name in contents:
                 self.assertIn(by_id[panel], by_id[name]["parents"], f"{name} lives in {panel}")
         self.assertIn("hidden", by_id["crop-panel"]["attrs"])
+        self.assertIn('<label for="crop-lock">Crop lock</label>', html, "the label matches the README")
         self.assertNotIn(by_id["crop-panel"], by_id["close-loupe"]["parents"])
         self.assertNotIn(by_id["frame-panel"], by_id["close-loupe"]["parents"])
         self.run_javascript_cleanup_regression("frame-tabs")
