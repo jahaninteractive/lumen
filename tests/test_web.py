@@ -661,7 +661,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
-            "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared",
+            "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -681,7 +681,7 @@ class WebTests(unittest.TestCase):
             "/api/outputs/reveal", "/api/photos/1/crop", "/api/photos/1/crop/clear",
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
-            "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared",
+            "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -3770,6 +3770,19 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             catalog.update_place(1, place="Madikwe Game Reserve", country="South Africa")
         photo = self.get_json("/api/photos/1")[1]["photo"]
         self.assertEqual(("Madikwe Game Reserve", "South Africa"), (photo["place"], photo["place_country"]))
+
+    def test_place_route_validates_and_sets_place(self):
+        valid = {"name": "Our camp", "country": "South Africa", "scope": "frame", "remember": False}
+        for payload in ({}, {k: v for k, v in valid.items() if k != "remember"}, valid | {"scope": "all"},
+                        valid | {"name": ""}, valid | {"name": "x" * 81}, valid | {"remember": "yes"},
+                        valid | {"extra": 1}, valid | {"country": None}):
+            with self.subTest(payload=payload):
+                self.assertEqual(400, self.post_json("/api/photos/1/place", payload)[0])
+        self.assertEqual(400, self.post_json("/api/photos/999/place", valid)[0])
+        self.assertEqual((200, {"photo_ids": [1], "name": "Our camp", "country": "South Africa", "remembered": False}),
+                         self.post_json("/api/photos/1/place", valid))
+        photo = self.get_json("/api/photos/1")[1]["photo"]
+        self.assertEqual(("Our camp", "South Africa"), (photo["place"], photo["place_country"]))
 
     def test_javascript_contact_sheet_groups_frames_into_burst_sections(self):
         self.run_javascript_cleanup_regression("bursts")

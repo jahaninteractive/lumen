@@ -187,6 +187,30 @@ class Library:
                                                                    "distance_km": round(place.distance_km, 1), "near": place.near})
         return place
 
+    @_coordinated
+    def set_place(self, photo_id: int, name: str, country: str, *, scope: str, remember: bool) -> dict:
+        """Photographer's place for a frame or its whole burst; remember adds it to the index at this frame's GPS fix."""
+        name, country = name.strip(), country.strip() or None
+        if scope not in ("frame", "burst"):
+            raise ValueError("scope must be frame or burst")
+        if not 1 <= len(name) <= 80 or len(country or "") > 60:
+            raise ValueError("place name must be 1-80 characters and country at most 60")
+        photo = self.catalog.get_photo(photo_id)
+        if not photo:
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        targets = [photo_id]
+        if scope == "burst" and photo.group_id is not None:
+            targets = next(([int(p["id"]) for p in group["photos"]] for group in self.catalog.list_groups()
+                            if group["id"] == photo.group_id), targets)
+        for target in targets:
+            self.catalog.update_place(target, place=name, country=country)
+            self.catalog.append_event(target, "place_edited", {"name": name, "country": country, "scope": scope, "remember": remember})
+            self._write_sidecar(target)
+        remembered = remember and self.places is not None and photo.latitude is not None and photo.longitude is not None
+        if remembered:
+            self.places.add(name, country or "", photo.latitude, photo.longitude, source="manual", feature_code="MANUAL")
+        return {"photo_ids": targets, "name": name, "country": country, "remembered": remembered}
+
     def __enter__(self) -> "Library":
         return self
 

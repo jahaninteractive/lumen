@@ -90,6 +90,16 @@ class PlaceIndexTests(unittest.TestCase):
         self.assertEqual(8, self.index.ensure()["places"])
         self.assertEqual("Kaapsehoop", self.index.lookup(10.01, 10.0).name)
 
+    def test_manual_place_beats_geonames_and_survives_rebuild(self):
+        self.index.add("Our camp", "South Africa", -24.74, 26.26, source="manual", feature_code="MANUAL")
+        place = self.index.lookup(-24.745, 26.257)
+        self.assertEqual(("Our camp", "manual"), (place.name, place.source))
+        za = self.source / "ZA.txt"
+        os.utime(za, ns=(za.stat().st_atime_ns, za.stat().st_mtime_ns + 5_000_000_000))
+        self.assertTrue(self.index.ensure()["rebuilt"])
+        place = self.index.lookup(-24.745, 26.257)
+        self.assertEqual(("Our camp", "manual"), (place.name, place.source))
+
     def test_missing_dir_and_country_fallbacks(self):
         root = Path(self.tmp.name)
         with PlaceIndex(root / "absent", root / "cache" / "empty.sqlite") as empty:

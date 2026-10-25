@@ -72,7 +72,9 @@ def country_names(source_dir: Path) -> dict[str, str]:
     return names
 
 
-def _tier(name: str, feature_class: str, feature_code: str) -> int:
+def _tier(name: str, feature_class: str, feature_code: str, source: str = "geonames") -> int:
+    if source == "manual":  # the photographer's own fix outranks every looked-up name
+        return 0
     # Name matches only count for landmarks, not spots/buildings (a "Cape Town" hotel is not a cape).
     if feature_code in TIER_ONE_CODES or (feature_class in LANDMARK_CLASSES and TIER_ONE_NAME.search(name)):
         return 1
@@ -119,9 +121,9 @@ class PlaceIndex:
         if rebuilt:
             names = country_names(self.source_dir)
             with db:
-                online = db.execute(
+                kept = db.execute(
                     "SELECT name, country, feature_class, feature_code, population, lat, lon, source "
-                    "FROM places WHERE source = 'online'"
+                    "FROM places WHERE source IN ('online', 'manual')"
                 ).fetchall()
                 db.execute("DELETE FROM places")
                 db.execute("DELETE FROM places_rtree")
@@ -134,7 +136,7 @@ class PlaceIndex:
                 db.executemany(
                     "INSERT INTO places(name, country, feature_class, feature_code, population, lat, lon, source) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    online,
+                    kept,
                 )
                 db.execute("INSERT INTO places_rtree SELECT id, lat, lat, lon, lon FROM places")
                 db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('manifest', ?)", (manifest,))
@@ -175,7 +177,7 @@ class PlaceIndex:
             self.ensure()
         close = self._within(lat, lon, RADIUS_KM)
         if close:
-            distance, name, country, code, source, _ = min(close, key=lambda i: (_tier(i[1], i[5], i[3]), i[0]))
+            distance, name, country, code, source, _ = min(close, key=lambda i: (_tier(i[1], i[5], i[3], i[4]), i[0]))
             return Place(name, country, distance, code, source)
         for radius, populated_only in ((NEAR_POPULATED_KM, True), (NEAR_ANY_KM, False)):
             found = self._within(lat, lon, radius, populated_only)

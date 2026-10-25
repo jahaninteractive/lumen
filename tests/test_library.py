@@ -504,6 +504,36 @@ class LibraryTests(unittest.TestCase):
                 library.wait_for_job(library.start_import_job(self.image_path).id)
             lookup.assert_not_called()
 
+    def test_set_place_covers_burst_and_remembers_the_fix(self):
+        geonames = self.library_dir.parent / "geonames"
+        write_geonames_fixture(geonames)
+        self.image_path.unlink()
+        for name, stamp in (("c0", "20:00:00"), ("c1", "20:00:01")):
+            exif = Image.Exif(); exif[36867] = f"2026:10:22 {stamp}"
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg", exif=exif)
+        with Library(Settings(library_dir=self.library_dir, geonames_dir=geonames)) as library:
+            library.import_path(self.source_dir)
+            photos = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+            first, second = photos["c0"], photos["c1"]
+            library.catalog.update_location(first, latitude=-24.745, longitude=26.257, altitude=None)
+            result = library.set_place(first, " Our camp ", "South Africa", scope="burst", remember=True)
+            self.assertEqual(sorted([first, second]), sorted(result["photo_ids"]))
+            self.assertEqual(("Our camp", "South Africa", True), (result["name"], result["country"], result["remembered"]))
+            for photo_id in (first, second):
+                photo = library.catalog.get_photo(photo_id)
+                self.assertEqual(("Our camp", "South Africa"), (photo.place, photo.place_country))
+                edited = [event.details for event in library.catalog.events_for(photo_id) if event.kind == "place_edited"]
+                self.assertEqual([{"name": "Our camp", "country": "South Africa", "scope": "burst", "remember": True}], edited)
+                self.assertIn("Our camp", library.sidecars.paths(photo)[1].read_text())
+            self.assertEqual("manual", library.places.lookup(-24.745, 26.257).source)
+            alone = library.set_place(second, "Hide", " ", scope="frame", remember=True)
+            self.assertEqual(([second], None, False), (alone["photo_ids"], alone["country"], alone["remembered"]))
+            self.assertEqual("Our camp", library.catalog.get_photo(first).place, "a frame edit leaves the burst alone")
+            for bad in ({"scope": "all"}, {"name": " "}, {"name": "x" * 81}, {"country": "y" * 61}, {"photo_id": 999}):
+                args = {"photo_id": first, "name": "Camp", "country": "", "scope": "frame"} | bad
+                with self.assertRaises(ValueError, msg=bad):
+                    library.set_place(args.pop("photo_id"), args.pop("name"), args.pop("country"), remember=False, **args)
+
     def test_online_place_lookup_is_opt_in_and_cached_into_the_index(self):
         geonames = self.library_dir.parent / "geonames"
         write_geonames_fixture(geonames)
