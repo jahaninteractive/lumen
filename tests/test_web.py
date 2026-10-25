@@ -800,6 +800,42 @@ class WebTests(unittest.TestCase):
             code, cleared = self.post_json("/api/photos/1/crop/clear", {})
             self.assertEqual((200, {"photo_id": 1, "active_crop": None}), (code, cleared))
 
+    def test_manual_crop_route_accepts_rect_and_rejects_bad_shapes(self):
+        with patch("lumen.library.read_image_dimensions", return_value=(6000, 4000)), patch(
+            "lumen.library.analyze_subject_regions", return_value=None
+        ):
+            payload = self.get_json("/api/photos/1/crops")[1]
+            self.assertEqual((6000, 4000), (payload["source_width"], payload["source_height"]))
+            self.assertIs(int, type(payload["source_width"]))
+            rect = {"left": .1, "top": .1, "width": .8, "height": .8}
+            invalid = (
+                {"candidate_id": "crop-manual", "rect": {"left": .1, "top": .1, "width": .8}, "aspect": "free"},
+                {"candidate_id": "crop-manual", "rect": {**rect, "width": "0.8"}, "aspect": "free"},
+                {"candidate_id": "crop-manual", "rect": {**rect, "width": True}, "aspect": "free"},
+                {"candidate_id": "crop-manual", "rect": rect, "aspect": "7:3"},
+                {"candidate_id": "crop-manual", "rect": rect, "aspect": "free", "author": "vision"},
+                {"candidate_id": "crop-manual", "rect": {**rect, "depth": 1}, "aspect": "free"},
+                {"candidate_id": "crop-manual", "rect": rect},
+                {"candidate_id": "crop-manual"},
+                {"candidate_id": "crop-manual", "rect": {**rect, "width": .3, "height": .3}, "aspect": "free"},
+            )
+            for body in invalid:
+                with self.subTest(body=body):
+                    code, result = self.post_json("/api/photos/1/crop", body)
+                    self.assertEqual(400, code, result)
+                    self.assertIn("error", result)
+            code, result = self.post_json("/api/photos/1/crop", invalid[-1])
+            self.assertEqual("crop keeps too few pixels; at least 8 MP", result["error"])
+            code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": "crop-manual", "rect": rect, "aspect": "4:5"})
+            self.assertEqual(200, code, chosen)
+            self.assertEqual(("crop-manual", "photographer", "4:5"), (chosen["candidate_id"], chosen["author"], chosen["aspect"]))
+            active = self.get_json("/api/photos/1/crops")[1]["active_crop"]
+            self.assertEqual("crop-manual", active["candidate_id"])
+            self.assertEqual(rect, active["rect"])
+            generated = next(item for item in payload["candidates"] if item["kind"] != "original")
+            code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": generated["id"]})
+            self.assertEqual((200, generated["id"]), (code, chosen["candidate_id"]))
+
     def test_crop_mutations_reject_invalid_stale_original_and_extra_fields_without_change(self):
         with patch("lumen.library.read_image_dimensions", return_value=(4000, 3000)) as dimensions, patch(
             "lumen.library.analyze_subject_regions", return_value=None

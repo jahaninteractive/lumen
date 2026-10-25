@@ -17,6 +17,7 @@ from .cli import _cleanup_error_payload, _json_default, _serializable_groups
 from .config import Settings
 from .diagnostics import doctor_report
 from .digest import parse_day
+from .domain import MANUAL_CROP_ID
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxError
@@ -308,6 +309,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "preview_url": f"/preview/{photo_id}?v={photo.fingerprint[:16]}-{photo.preview_kind}",
                         "candidates": [asdict(candidate) for candidate in candidates],
                         "active_crop": active.to_dict() if active else None,
+                        "source_width": candidates[0].pixel_box[2],
+                        "source_height": candidates[0].pixel_box[3],
                     })
                 except (ValueError, OverflowError, OSError, RuntimeError):
                     self._send_json({"error": "crop choices are unavailable for this photo"}, status=HTTPStatus.BAD_REQUEST)
@@ -559,13 +562,23 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/crop", path)
                 if match:
-                    if set(payload) != {"candidate_id"} or not isinstance(payload["candidate_id"], str):
+                    manual = payload.get("candidate_id") == MANUAL_CROP_ID
+                    if manual:
+                        rect = payload.get("rect")
+                        if (set(payload) != {"candidate_id", "rect", "aspect"} or not isinstance(rect, dict)
+                                or set(rect) != {"left", "top", "width", "height"}
+                                or any(type(value) not in (int, float) for value in rect.values())
+                                or not isinstance(payload["aspect"], str)):
+                            raise ValueError("a drawn crop requires candidate_id, rect {left, top, width, height}, and aspect")
+                    elif set(payload) != {"candidate_id"} or not isinstance(payload["candidate_id"], str):
                         raise ValueError("crop requires exactly one string candidate_id")
+                    extra = {"rect": payload["rect"], "aspect": payload["aspect"]} if manual else {}
                     try:
                         with Library(settings) as library:
-                            edit = library.choose_crop(int(match.group(1)), payload["candidate_id"])
+                            edit = library.choose_crop(int(match.group(1)), payload["candidate_id"], **extra)
                     except (ValueError, OverflowError, OSError, RuntimeError) as error:
-                        raise ValueError("crop could not be selected for this photo") from error
+                        too_small = "at least 8 MP" in str(error)
+                        raise ValueError(str(error) if too_small else "crop could not be selected for this photo") from error
                     self._send_json(edit.to_dict())
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/crop/clear", path)

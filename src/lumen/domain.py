@@ -163,6 +163,10 @@ class Job:
             raise ValueError("failed jobs require an error")
 
 
+MANUAL_CROP_ID = "crop-manual"
+MANUAL_ASPECTS = ("free", "3:2", "2:3", "1:1", "4:5")
+
+
 @dataclass(frozen=True, slots=True)
 class PhotoEdit:
     photo_id: int
@@ -178,18 +182,18 @@ class PhotoEdit:
     def __post_init__(self) -> None:
         if type(self.photo_id) is not int or self.photo_id <= 0:
             raise ValueError("crop photo ID must be a positive integer")
-        if not isinstance(self.candidate_id, str) or not re.fullmatch(r"crop-[0-9a-f]{16}", self.candidate_id):
+        if not isinstance(self.candidate_id, str) or not re.fullmatch(r"crop-(?:[0-9a-f]{16}|manual)", self.candidate_id):
             raise ValueError("crop candidate ID is invalid")
         if not isinstance(self.rect, CropRect):
             raise ValueError("crop rectangle is invalid")
-        if not isinstance(self.aspect, str) or self.aspect not in {"native", "3:2", "4:5", "1:1"}:
+        if not isinstance(self.aspect, str) or self.aspect not in {"native", *MANUAL_ASPECTS}:
             raise ValueError("crop aspect is invalid")
         if (type(self.source_width) is not int or type(self.source_height) is not int
                 or self.source_width <= 0 or self.source_height <= 0
                 or self.source_width > MAX_IMAGE_DIMENSION or self.source_height > MAX_IMAGE_DIMENSION
                 or self.source_width * self.source_height > MAX_IMAGE_PIXELS):
             raise ValueError("crop source dimensions are invalid")
-        if not isinstance(self.author, str) or self.author not in {"manual", "vision", "omlx-assisted"}:
+        if not isinstance(self.author, str) or self.author not in {"manual", "vision", "omlx-assisted", "photographer"}:
             raise ValueError("crop author is invalid")
         if not isinstance(self.rationale, str) or not self.rationale.strip() or len(self.rationale) > 500:
             raise ValueError("crop rationale must contain 1 to 500 characters")

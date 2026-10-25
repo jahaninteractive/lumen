@@ -102,6 +102,48 @@ class LibraryTests(unittest.TestCase):
 
         self.assertEqual(before, after)
 
+    def test_manual_crop_is_stored_with_the_photographer_as_author_and_refuses_tiny_rects(self):
+        class FakeTagger:
+            model = "test-vlm"
+
+            def review_composition(self, original, candidates):
+                self.ids = [item[0] for item in candidates]
+                return CompositionReview("crop-original", "The existing frame is strongest.", 0.7)
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "large.jpg"
+            Image.new("RGB", (6000, 4000)).save(source, quality=50)
+            with Library(Settings(library_dir=Path(directory) / "library")) as library, patch(
+                "lumen.library.analyze_subject_regions", return_value=None
+            ):
+                library.import_path(source)
+                photo = library.catalog.list_photos()[0]
+                edit = library.choose_crop(photo.id, "crop-manual",
+                                           rect={"left": .1, "top": .1, "width": .8, "height": .8}, aspect="free")
+                self.assertEqual(("crop-manual", "photographer", "drawn by the photographer", "free"),
+                                 (edit.candidate_id, edit.author, edit.rationale, edit.aspect))
+                self.assertEqual(CropRect(.1, .1, .8, .8), library.catalog.get_crop(photo.id).rect)
+                with self.assertRaisesRegex(ValueError, "at least 8 MP"):
+                    library.choose_crop(photo.id, "crop-manual",
+                                        rect={"left": .1, "top": .1, "width": .3, "height": .3})
+                self.assertEqual(edit, library.catalog.get_crop(photo.id))
+                with self.assertRaises(ValueError):
+                    library.choose_crop(photo.id, "crop-manual",
+                                        rect={"left": .1, "top": .1, "width": .8, "height": .8}, aspect="7:3")
+                with self.assertRaises(ValueError):
+                    library.choose_crop(photo.id, "crop-manual",
+                                        rect={"left": .5, "top": .1, "width": .6, "height": .8})
+                with self.assertRaises(ValueError):
+                    library.choose_crop(photo.id, "crop-manual")
+                self.assertEqual(edit, library.catalog.get_crop(photo.id))
+                tagger = FakeTagger()
+                result = library.review_composition(photo.id, tagger)
+                self.assertEqual("crop-original", result.candidate_id)
+                self.assertNotIn("crop-manual", tagger.ids)
+                self.assertEqual(edit, library.catalog.get_crop(photo.id))
+                library.clear_crop(photo.id)
+                self.assertIsNone(library.catalog.get_crop(photo.id))
+
     def test_failed_composition_review_preserves_raw_response_candidates_and_temp_cleanup(self):
         class BrokenTagger:
             model = "broken-vlm"

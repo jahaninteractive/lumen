@@ -21,9 +21,9 @@ from PIL import Image
 from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, difference_hash, measure_image
 from .catalog import Catalog, GroupFilters
 from .config import Settings
-from .composition import CropCandidate, generate_candidates
+from .composition import MIN_CROP_PIXELS, CropCandidate, generate_candidates
 from .digest import day_facts, render_facts_table
-from .domain import SUPPORTED_EXTENSIONS, Artifact, Job, Photo, PhotoEdit
+from .domain import MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, Job, Photo, PhotoEdit
 from .geonames import Place, PlaceIndex, online_lookup
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
@@ -869,7 +869,9 @@ class Library:
         return generate_candidates(width, height, regions)
 
     @_coordinated
-    def choose_crop(self, photo_id: int, candidate_id: str) -> PhotoEdit:
+    def choose_crop(self, photo_id: int, candidate_id: str, *, rect: dict | None = None, aspect: str = "free") -> PhotoEdit:
+        if candidate_id == MANUAL_CROP_ID:
+            return self._choose_manual_crop(photo_id, rect, aspect)
         candidates = self.crop_candidates(photo_id)
         candidate = next((item for item in candidates if item.id == candidate_id and item.kind != "original"), None)
         if candidate is None:
@@ -883,6 +885,25 @@ class Library:
             aspect=candidate.aspect, source_width=width, source_height=height,
             author="manual", rationale=candidate.rationale,
             selected_at=datetime.now(timezone.utc),
+        )
+        self._change_crop(photo_id, edit)
+        return edit
+
+    def _choose_manual_crop(self, photo_id: int, rect: dict | None, aspect: str) -> PhotoEdit:
+        if aspect not in MANUAL_ASPECTS:
+            raise ValueError("crop aspect must be one of " + ", ".join(MANUAL_ASPECTS))
+        if not isinstance(rect, dict) or rect.keys() != {"left", "top", "width", "height"}:
+            raise ValueError("a drawn crop needs left, top, width, and height")
+        crop = CropRect(rect["left"], rect["top"], rect["width"], rect["height"])
+        if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        width, height = read_image_dimensions(Path(photo.path))
+        if round(width * crop.width) * round(height * crop.height) < MIN_CROP_PIXELS:
+            raise ValueError("crop keeps too few pixels; at least 8 MP")
+        edit = PhotoEdit(
+            photo_id=photo_id, candidate_id=MANUAL_CROP_ID, rect=crop, aspect=aspect,
+            source_width=width, source_height=height, author="photographer",
+            rationale="drawn by the photographer", selected_at=datetime.now(timezone.utc),
         )
         self._change_crop(photo_id, edit)
         return edit
