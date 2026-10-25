@@ -1,8 +1,15 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-24 (Africa/Johannesburg) — places complete on branch `places` (not yet merged)
+Last updated: 2026-10-25 (Africa/Johannesburg) — frame view, typed keywords, place editing on branch `frame-view` (not yet merged)
 
 ## Resume here
+
+**Frame view, typed keywords, place editing (2026-10-25, branch `frame-view`, not yet merged; suite 557, warning-strict, `node --check` OK; needs a `lumen serve` restart after merge).** Shipped:
+- Typed keywords: `POST /api/photos/<id>/keywords {action:"add"}` accepts a never-suggested word (1-40 chars, no `#`, case-insensitive dedupe). Tags data gains `photographer` (typed or accepted words, protected from retag) and `typed` (never a suggestion; Remove drops it instead of re-suggesting). `tag_photo` puts the photographer's words first, then the model's. Inspector `#keyword-input` with `datalist#vocabulary-words` refilled on every `load()`; shown on untagged frames too.
+- Place editing: `POST /api/photos/<id>/place {name, country, scope: frame|burst, remember}` -> `{photo_ids, name, country, remembered}`; `Library.set_place`; event `place_edited`. Remember adds a `source='manual'` row to the GeoNames index (`_tier` 0, survives rebuild). Inspector `#edit-place` -> `#place-form` with "Whole burst" and "Remember for nearby frames" (disabled, "no GPS fix", without coordinates).
+- Full size: `GET /full/<id>?v=` serves `<library>/cache/full/<fingerprint>.jpg`, extracted with exiftool (`JpgFromRaw`, then `PreviewImage`), unresized, quality 92; served from cache even when the original's volume is unplugged; pruned with thumbnails (`prune_cache`). 3504x2336 on the a7C II M-size raws.
+- Frame view: `#loupe` holds the viewport, a "Full size" toggle (`z`, `aria-pressed`, text becomes `Full size, W by H`), `#inspection` (moved from the removed right rail), the Compose workspace (moved from the removed Compose tab; crops load on open and on `[`/`]` step, never on sheet clicks), "Export this frame" (current-scope export, result mirrored into `#compose-status`), Close. Culling keys work from the dialog's own buttons except Enter. Export is the default tab; a remembered `lumen-tab` of `compose-tab` falls back to Export. `#back-to-top` moved into the batch rail. Node scenarios `keyword-typed`, `place-edit`, `frame-view`, `frame-view-full`, `frame-view-race`.
+- Not browser-verified yet; the L-size ARW embedded JPEG size is unknown (`docs/BACKLOG.md`).
 
 **Places (branch `places`, not yet merged to `main`).** Spec `docs/superpowers/specs/2026-10-24-places-design.md`. Shipped:
 - `geonames.py` local index (`<library>/cache/geonames.sqlite`, R-tree) from the `*.txt` files in `LUMEN_GEONAMES_DIR` (default `vendor/data/geonames/`: `AQ.txt`, `ZA.txt`, `cities500.txt`, `countryInfo.txt`); tiered lookup (landmarks within 25 km, then "near" a town within 200 km, then any feature within 500 km).

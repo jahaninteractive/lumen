@@ -33,6 +33,7 @@ Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
 ## Current tool state
 
 - Discovery (`lumen.tools.find_tool`) checks `PATH` first, then falls back to `vendor/apps/darktable.app` / `vendor/apps/Siril.app` `Contents/MacOS/<tool>`, rejecting any resolved executable outside its bundle.
+- `<library>/cache/full/` holds the camera's embedded full-size JPEGs by fingerprint (served at `GET /full/<id>`); manual place rows (`source='manual'`) outrank every GeoNames and online row and survive index rebuilds.
 - Project-local darktable: `vendor/apps/darktable.app/Contents/MacOS/darktable-cli`, version 5.6.2; `lumen doctor` reports it available. A real Sony `.ARW` export was verified 2026-10-22 (see `docs/HANDOFF.md`).
 - Project-local Siril: `vendor/apps/Siril.app/Contents/MacOS/siril-cli`, Apple Silicon, version 1.4.4.
 - Both are on the user's shell `PATH` today, but the fallback finds them without it.

@@ -270,7 +270,7 @@ South Africa" or "Neko Harbour, Antarctica". Protected areas, parks, islands,
 bays, and other landmarks within 25 km win over towns; past that the inspector
 says "near <town>" (populated places within 200 km, then any feature within
 500 km for open sea). The place shows in the inspector beside the coordinates,
-the tag-text filter searches it, and tag and caption prompts, keywords (a
+the tag-text filter searches it, you can correct it in the inspector (for the frame or its whole burst, optionally remembered for nearby frames), and tag and caption prompts, keywords (a
 `places` vocabulary category), and day digests use it.
 
 Names come from a local GeoNames index built from the `.txt` files in
@@ -343,7 +343,7 @@ packaged starter and then yours to edit; confident model words are added back
 to it so the vocabulary grows with your shoots. In the UI the **Export** tab has
 **Tag keepers with local AI** and, below it, **Tag all untagged** with a
 **Re-tag already tagged** toggle. The inspector offers **Add local AI tags** for
-one frame, with suggested keywords you can add or remove; adding a suggested
+one frame and a keyword box for words of your own (they are kept through re-tagging), with suggested keywords you can add or remove; adding a suggested
 species teaches it to the vocabulary as wildlife. The **Learned keywords**
 panel in the **Review** tab lists the words the models added, and **Forget**
 removes a word from every frame and stops it being learned again.
@@ -392,7 +392,7 @@ recommendation.
 ## Finish and clear a shoot
 
 In the contact sheet, select a frame (or select its batch in the left rail),
-then start in **Compose** above the contact sheet. Lumen uses Apple Vision face
+press Enter on it to open the frame view, where the Compose workspace sits beside the image. Lumen uses Apple Vision face
 rectangles and attention saliency as approximate evidence for subject-safe crop
 choices. When that evidence is absent or weak, it says so and offers only the
 original plus a centered fallback. Non-original candidates below 8 MP are
