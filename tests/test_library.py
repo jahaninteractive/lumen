@@ -2252,6 +2252,34 @@ class LibraryTests(unittest.TestCase):
                                   ("keyword_added", {"keyword": "krill", "typed": False}), ("vocabulary_learned", {"words": ["krill"]}),
                                   ("keyword_removed", {"keyword": "Lion"}), ("keyword_removed", {"keyword": "krill"})], events)
 
+    def test_retag_keeps_photographer_keywords_first_and_adds_model_words(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            subjects = ["ice"]
+            def tag(self, preview, *, vocabulary=None, place=None):
+                return TagResult("d", list(self.subjects), "", [], 0.9, "{}", species=[], conditions=[])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new("RGB", (120, 90)).save(root / "p.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root / "p.jpg")
+                photo_id = library.catalog.list_photos()[0].id
+                library.tag_photo(photo_id, FakeTagger())
+                library.add_keyword(photo_id, "Lion")
+                library.remove_keyword(photo_id, "ice")
+                FakeTagger.subjects = ["ice", "sea"]
+                library.tag_photo(photo_id, FakeTagger())
+                data = library.catalog.get_tags(photo_id)["data"]
+                self.assertEqual(["Lion", "ice", "sea"], data["subjects"], "a removed model word is not protected and may return")
+                self.assertEqual((["Lion"], ["Lion"]), (data["photographer"], data["typed"]))
+                library.remove_keyword(photo_id, "sea")
+                library.add_keyword(photo_id, "Sea")
+                library.tag_photo(photo_id, FakeTagger())
+                data = library.catalog.get_tags(photo_id)["data"]
+                self.assertEqual(["Lion", "Sea", "ice"], data["subjects"], "the photographer's casing wins")
+                self.assertEqual((["Lion", "Sea"], ["Lion", "Sea"]), (data["photographer"], data["typed"]))
+
     def _two_tagged_photos(self, root: Path, library: Library) -> tuple[int, int]:
         for index in range(2):
             Image.new("RGB", (120 + index, 90), (index * 40, 0, 0)).save(root / f"k{index}.jpg")

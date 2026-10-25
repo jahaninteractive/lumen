@@ -1598,9 +1598,12 @@ class Library:
             self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned} | _job_detail(job_id))
         vocab = load_vocabulary(self.settings)
         applied = match_keywords(applied + suggested + confident_species + place_words, vocab)[0]
+        existing = self.catalog.get_tags(photo_id)
+        # The photographer's words lead and keep their casing; the model's words follow. A model word removed earlier may return.
+        kept = (existing["data"] if existing else {}).get("photographer", [])
+        applied = kept + [word for word in applied if word.casefold() not in {k.casefold() for k in kept}]
         suggested = [item["name"] for item in result.species if item["confidence"] < 0.6
                      and item["name"].casefold() not in {word.casefold() for word in applied}]
-        existing = self.catalog.get_tags(photo_id)
         payload = (existing["data"] if existing else {}) | {
             "description": result.description,
             "subjects": applied,
