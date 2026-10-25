@@ -1,5 +1,8 @@
 # Lumen
 
+Lumen is the program in this repository (`offline-raw-culler`); the Python
+package is `lumen-raw` and the command is `lumen`.
+
 Lumen is a fully local, non-destructive RAW photography workbench for Apple
 Silicon Macs. It catalogs Sony `.ARW` files without moving or changing them,
 extracts previews, groups bursts, explains a best-shot choice, optionally tags
@@ -9,7 +12,41 @@ and hands exports to local tools such as darktable.
 The included defaults target a 48 GB M4 Mac with two oMLX models: a fast
 vision model (`Qwen3-VL-8B-Instruct-4bit`) for tagging, problem scans, and
 astro triage, and a review model (`Qwen3.8-27B-4bit`) for critique, captions,
-digests, and composition advice.
+digests, and composition advice. Both roles can point at the one 8B model if
+you would rather free the memory (see [Local AI](#local-ai)).
+
+## Why Lumen exists
+
+I shoot nature and wildlife, often on trips to places like the South African
+bush and Antarctica, and come home with thousands of RAW frames per day from a
+Sony body that fires long bursts. Nothing I tried fit how that work actually
+goes:
+
+- **Volume first.** A day's cull has to be fast: load a card, see every burst
+  as one row, keep the one frame that matters, reject the rest with a single
+  key, and move on. Lumen groups bursts, splits near-duplicates, measures
+  sharpness, exposure, and eye/face quality, and explains why it proposes a
+  pick. The pick is advice; my choice always wins.
+- **Originals are sacred.** Years of RAW files are the archive. Lumen never
+  moves, renames, or writes into them; everything it makes lives in its own
+  library and can be thrown away.
+- **Rich metadata without typing.** Capture time, camera, lens, GPS, and a
+  real place name ("Neko Harbour, Antarctica") land in the catalog and in
+  portable sidecars, so the frames stay searchable years later in any tool.
+- **Travel-safe ingest.** Cards get copied to a primary disk and a mirror and
+  every byte is verified before I am told it is safe to format.
+- **Easy export.** One click from a kept frame to a full-resolution JPEG for
+  print, a 2048 px version for sharing, or a web version with a watermark.
+- **AI where there is no internet.** Lodges, ships, and field camps have no or
+  painfully slow connections, and I do not want my frames uploaded anywhere.
+  Tagging, caption drafts, problem scans, burst critique, and day digests run
+  on local models through oMLX on the same Mac, offline, and only suggest.
+- **Night skies too.** Long trips mean dark skies, so sky-frame triage and a
+  reproducible Siril stack live in the same tool.
+- **Accessible and keyboard-driven.** Native controls, live announcements, and
+  full keyboard operation are part of the design, not an afterthought.
+
+It is a personal tool built for one photographer's workflow and shared as is.
 
 ## What is working
 
@@ -28,13 +65,17 @@ digests, and composition advice.
   already done.
 - Burst critique (which frame is best and why), per-day digests, and sky-frame
   triage from the local models; none of them pick, reject, or exclude for you.
-- GPS location read from the original and kept in the catalog and Full exports.
+- GPS location read from the original and kept in the catalog and Full exports,
+  resolved offline to a place name and country from a local GeoNames index.
+- Verified card ingest (SHA-256 on every copy, optional mirror) before import.
+- Near-duplicate clusters inside a burst from a perceptual difference hash.
 - 480 px thumbnail tier for the contact sheet, with Small/Medium/Large tiles.
 - Non-destructive crop suggestions with optional local oMLX composition advice.
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
-- Quality-92, full-resolution sRGB JPEG export for the current photo or all
-  keepers, with an optional darktable XMP profile; the keepers export runs as a
-  cancellable background job with a progress dialog.
+- sRGB JPEG export for the current photo or all keepers with Full (quality 92,
+  full resolution), Share (2048 px), and Web (1600 px) presets, optional
+  watermark and darktable XMP profile; the keepers export runs as a cancellable
+  background job with a progress dialog.
 - Guided, reproducible Siril stacking of a confirmed night-sky batch with
   optional darks/flats/biases, progress, cancellation, and retained job logs.
 - Recoverable batch removal and workspace clearing that retain completed exports.
@@ -48,6 +89,8 @@ Prerequisites:
 2. oMLX installed with `Qwen3-VL-8B-Instruct-4bit` (fast, vision) and
    `Qwen3.8-27B-4bit` (review) available. Both must be loaded in oMLX for the
    **Run all local AI** button; `lumen doctor` reports which roles are loaded.
+   With only the 8B model loaded, set `LUMEN_OMLX_REVIEW_MODEL` to it (see
+   [Local AI](#local-ai)) and skip the 27B download.
 3. `uv`, ExifTool, and the Apple command-line developer tools:
 
    ```sh
@@ -66,20 +109,37 @@ The bootstrap creates a private Python environment and compiles the small
 macOS Vision helper into `~/Pictures/Lumen Library/cache/bin`. Set
 `LUMEN_LIBRARY` before bootstrap if the library should live elsewhere.
 
-Optional processors:
+## The `vendor/` folder
 
-- Install the current Apple Silicon darktable disk image from
-  <https://www.darktable.org/install/>. Lumen looks for `darktable-cli` on
-  `PATH`, then inside a project-local `vendor/apps/darktable.app`. If the
-  application bundle does not put it on `PATH`, add
-  `/Applications/darktable.app/Contents/MacOS` to `PATH`. Exports keep EXIF and
-  GPS, so Lumen pins darktable's metadata flags regardless of your darktable
-  preferences.
-- Install the Apple Silicon build of Siril from <https://siril.org/download/>.
-  Lumen looks for `siril-cli` on `PATH`, then inside a project-local
-  `vendor/apps/Siril.app`. The managed stacking workflow is validated against
-  Siril 1.4.x only (`lumen doctor` reports `supported`); other versions can still
-  run reviewed scripts through the legacy hook below.
+Everything under `vendor/` is ignored by Git, so a fresh clone starts without
+it and nothing in it is ever committed. It holds the optional tools and data
+that Lumen looks for locally:
+
+| Path | What goes there | Used by |
+|------|-----------------|---------|
+| `vendor/apps/darktable.app` | the darktable application bundle; Lumen runs `Contents/MacOS/darktable-cli` | JPEG export, refined previews, RAW preview fallback |
+| `vendor/apps/Siril.app` | the Siril application bundle; Lumen runs `Contents/MacOS/siril-cli` | Astro stacking |
+| `vendor/data/geonames/` | GeoNames `<CC>.txt`, `cities500.txt`, `countryInfo.txt` | Places (see below) |
+| `vendor/downloads/` | installers you keep around (`.dmg`, `.zip`); Lumen never reads it | nothing |
+
+Tool discovery checks `PATH` first and then the project-local bundle, and
+refuses a bundle executable that resolves outside its `.app`. `uv run lumen
+doctor --json` prints the exact path each tool resolved to under `tools`.
+Installing into `/Applications` works too; add the bundle's `Contents/MacOS`
+folder to `PATH` if the installer does not. ExifTool is not vendored: it comes
+from Homebrew and is required.
+
+- **darktable** (optional, 5.6.2 verified): download the Apple Silicon disk
+  image from <https://www.darktable.org/install/>, open it, and drag
+  `darktable.app` into `vendor/apps/`. Exports keep EXIF and GPS, so Lumen pins
+  darktable's metadata flags regardless of your darktable preferences.
+- **Siril** (optional, 1.4.4 verified): download the Apple Silicon build from
+  <https://siril.org/download/> and drag `Siril.app` into `vendor/apps/`. The
+  managed stacking workflow is validated against Siril 1.4.x only
+  (`lumen doctor` reports `supported`); other versions can still run reviewed
+  scripts through the legacy hook below.
+- **GeoNames** (optional, needed for place names): see [Places](#places) for
+  which files to download.
 
 ## First run
 
@@ -213,15 +273,22 @@ says "near <town>" (populated places within 200 km, then any feature within
 the tag-text filter searches it, and tag and caption prompts, keywords (a
 `places` vocabulary category), and day digests use it.
 
-Names come from a local GeoNames index built from the text files in
+Names come from a local GeoNames index built from the `.txt` files in
 `vendor/data/geonames/` (or `LUMEN_GEONAMES_DIR`) into
-`<library>/cache/geonames.sqlite`; it rebuilds itself when those files change.
-`AQ.txt` (Antarctica), `ZA.txt` (South Africa), `cities500.txt` (towns of 500+
-people worldwide), and `countryInfo.txt` are present. Before a trip somewhere
-else, download that country's `<CC>.zip` from
-<https://download.geonames.org/export/dump/> and unzip its `<CC>.txt` into the
-folder. `lumen doctor --json` reports the folder, file count, and place count
-under `geonames`.
+`<library>/cache/geonames.sqlite`; it rebuilds itself when those files change
+(the `.zip` archives beside them are ignored). The folder is not in Git, so
+download the files from <https://download.geonames.org/export/dump/>:
+
+- `countryInfo.txt`, which maps country codes to names (always needed);
+- `cities500.zip`, towns of 500+ people worldwide, unzipped to `cities500.txt`;
+- one `<CC>.zip` per country you shoot in, unzipped to `<CC>.txt`, for parks,
+  reserves, bays, and other landmarks. `AQ.txt` (Antarctica) and `ZA.txt`
+  (South Africa) are in place on this Mac; add the next country before the trip.
+
+`lumen doctor --json` reports the folder, feature-file count (`countryInfo.txt`
+is not counted), place count, and whether online lookup is on under `geonames`.
+Without the folder, frames keep their coordinates and simply have no place.
+GeoNames data is CC BY 4.0; keep its `readme.txt` in the folder.
 
 The place is written to the JSON sidecar (`place`, `place_country`), to the XMP
 sidecar as `Iptc4xmpCore:Location` and `photoshop:Country`, and to exported
@@ -247,6 +314,18 @@ or delete. Two model roles are used:
 Every action checks oMLX's live status first and refuses with a message naming
 the unloaded model; the UI disables the matching buttons with the same reason.
 Trust `lumen doctor` (`omlx_roles`) over the configured names.
+
+To run everything on the 8B model and free about 16 GB, point the review role
+at it. Captions and critique get plainer, nothing else changes. The variable
+must reach the server process, so set it where you start Lumen:
+
+```sh
+LUMEN_OMLX_REVIEW_MODEL=Qwen3-VL-8B-Instruct-4bit uv run lumen serve --open
+```
+
+`lumen doctor` then reports both roles as that model, and the `omlx_model`
+block still describes the configured 27B default; only `omlx_roles` says what
+the actions will actually use.
 
 Start oMLX, then tag:
 
@@ -534,9 +613,9 @@ user-session access to Apple's Vision model service.
   photographer's aesthetic preference. Manual picks are authoritative.
 - Star counts and trailing warnings are screening signals, not scientific
   photometry.
-- Managed stacking uses one fixed Siril recipe; per-job recipe editing,
-  perceptual near-duplicate grouping, and full historical one-click rollback are
-  explicit extension points, not pretend-complete stubs.
+- Managed stacking uses two fixed Siril recipes; per-job recipe editing and
+  full historical one-click rollback are explicit extension points, not
+  pretend-complete stubs.
 - The web server is local-only and has no authentication; do not modify it to
   bind to a LAN address without adding authentication and transport security.
 
