@@ -2207,13 +2207,13 @@ class LibraryTests(unittest.TestCase):
                 job = library.start_tag_job(FakeTagger(), scope=[photo_id])
                 library.wait_for_job(job.id)
                 library.catalog.save_tags(photo_id, library.catalog.get_tags(photo_id)["data"] | {"suggested": ["krill"]}, "fast-model")
-                added = library.add_suggested_keyword(photo_id, "krill")
+                added = library.add_keyword(photo_id, "krill")
                 self.assertEqual((["ice", "krill"], []), (added["subjects"], added["suggested"]))
                 self.assertIn("krill", load_vocabulary(library.settings)["learned"], "a hand-accepted keyword teaches the vocabulary")
                 removed = library.remove_keyword(photo_id, "ice")
                 self.assertEqual((["krill"], ["ice"]), (removed["subjects"], removed["suggested"]))
-                with self.assertRaises(ValueError):
-                    library.add_suggested_keyword(photo_id, "orca")
+                with self.assertRaisesRegex(ValueError, "already applied"):
+                    library.add_keyword(photo_id, "KRILL")
                 kinds = [e.kind for e in library.catalog.events_for(photo_id)]
                 self.assertEqual(["keyword_added", "vocabulary_learned", "keyword_removed"], kinds[-3:])
 
@@ -2295,7 +2295,7 @@ class LibraryTests(unittest.TestCase):
                 a, _ = self._two_tagged_photos(root, library)
                 library.catalog.save_tags(a, {"subjects": [], "suggested": ["skua chick"],
                                               "species": [{"name": "Skua Chick", "confidence": 0.4}]}, "fast-model")
-                library.add_suggested_keyword(a, "skua chick")
+                library.add_keyword(a, "skua chick")
                 vocab = load_vocabulary(library.settings)
                 self.assertIn("skua chick", vocab["wildlife"])
                 self.assertNotIn("skua chick", vocab.get("learned", []))

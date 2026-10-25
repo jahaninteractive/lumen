@@ -1653,12 +1653,6 @@ class Library:
             self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned})
         return {"photo_id": photo_id, "subjects": data["subjects"], "suggested": data["suggested"]}
 
-    def add_suggested_keyword(self, photo_id: int, keyword: str) -> dict:
-        """Accept-only form of add_keyword for older callers."""
-        if keyword not in (self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("suggested", []):
-            raise ValueError(f"keyword is not suggested for photo {photo_id}")
-        return self.add_keyword(photo_id, keyword)
-
     def vocabulary_report(self) -> dict:
         """Vocabulary plus how many photos carry each applied word (case-insensitive)."""
         counts: dict[str, int] = {}
