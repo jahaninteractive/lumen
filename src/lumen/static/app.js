@@ -581,19 +581,112 @@ function locationLine(photo, record) {
   const line = document.createElement('p');
   line.id = 'location';
   line.className = 'quiet';
+  const place = record?.place ? `Place: ${[record.place, record.place_country].filter(Boolean).join(', ')}` : '';
   if (record?.latitude == null || record?.longitude == null) {
-    line.textContent = 'No location in the file';
-    return [line];
+    line.textContent = place || 'No location in the file';  // a place set by hand needs no GPS fix
+    return [line, ...placeEditor(photo, record)];
   }
   const degrees = (value, positive, negative) => `${Math.abs(value).toFixed(4)}° ${value < 0 ? negative : positive}`;
-  const place = record.place ? `Place: ${[record.place, record.place_country].filter(Boolean).join(', ')} · ` : 'Location: ';
-  line.textContent = `${place}${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
+  line.textContent = `${place ? `${place} · ` : 'Location: '}${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
   const link = document.createElement('a');
   link.href = `https://maps.apple.com/?ll=${record.latitude},${record.longitude}&q=${encodeURIComponent(photo.name)}`;
   link.target = '_blank';
   link.rel = 'noopener';
   link.textContent = 'Open in Apple Maps';
-  return [line, link];
+  return [line, link, ...placeEditor(photo, record)];
+}
+
+// The photographer names the place for this frame or its burst; remembering adds it to the local index at this GPS fix.
+function placeEditor(photo, record) {
+  const edit = document.createElement('button');
+  edit.type = 'button';
+  edit.id = 'edit-place';
+  edit.className = 'secondary';
+  edit.textContent = 'Edit place';
+  edit.setAttribute('aria-controls', 'place-form');
+  edit.setAttribute('aria-expanded', 'false');
+  const form = document.createElement('form');
+  form.id = 'place-form';
+  form.hidden = true;
+  const field = (id, text, value, maxLength) => {
+    const label = document.createElement('label');
+    label.htmlFor = id;
+    label.textContent = text;
+    const input = document.createElement('input');
+    input.id = id;
+    input.autocomplete = 'off';
+    input.value = value || '';
+    input.maxLength = maxLength;  // the server's limits
+    form.append(label, input);
+    return input;
+  };
+  const name = field('place-name', 'Place name', record?.place, 80);
+  const country = field('place-country', 'Country', record?.place_country, 60);
+  const check = (id, text) => {
+    const label = document.createElement('label');
+    label.className = 'check';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = id;
+    input.checked = true;
+    label.append(input, ` ${text}`);
+    form.append(label);
+    return input;
+  };
+  const burst = check('place-burst', 'Whole burst');
+  const remember = check('place-remember', 'Remember for nearby frames');
+  if (record?.latitude == null || record?.longitude == null) {
+    remember.checked = false;
+    remember.disabled = true;
+    const reason = document.createElement('span');
+    reason.id = 'place-no-fix';
+    reason.className = 'quiet';
+    reason.textContent = 'no GPS fix';
+    remember.setAttribute('aria-describedby', reason.id);
+    form.append(reason);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.textContent = 'Save place';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.id = 'place-cancel';
+  cancel.className = 'secondary';
+  cancel.textContent = 'Cancel';
+  actions.append(save, cancel);
+  form.append(actions);
+  const show = open => {
+    form.hidden = !open;
+    edit.setAttribute('aria-expanded', String(open));
+    (open ? name : edit).focus();
+  };
+  edit.addEventListener('click', () => show(form.hidden));
+  cancel.addEventListener('click', () => show(false));
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    return savePlace(photo, { name: name.value, country: country.value, scope: burst.checked ? 'burst' : 'frame', remember: remember.checked });
+  });
+  if (state.placeFocus) { state.placeFocus = false; window.setTimeout(() => edit.focus(), 0); }
+  return [edit, form];
+}
+
+async function savePlace(photo, payload) {
+  try {
+    const result = await post(`/api/photos/${photo.id}/place`, payload);
+    const place = { place: result.name, place_country: result.country };
+    for (const item of state.groups.flatMap(group => group.photos)) if (result.photo_ids.includes(item.id)) Object.assign(item, place);
+    if (state.selectedId === photo.id) {
+      Object.assign(state.details.photo, place);
+      state.placeFocus = true;
+      renderInspector(photo);
+    }
+    const count = result.photo_ids.length;
+    announce(`Place set to ${result.name} on ${count} frame${count === 1 ? '' : 's'}${result.remembered ? ', remembered' : ''}`);
+  } catch (error) {
+    announce(error.message);  // the form stays open with what was typed
+  }
 }
 
 function renderInspector(photo) {

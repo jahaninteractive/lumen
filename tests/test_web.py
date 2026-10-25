@@ -1415,6 +1415,7 @@ const suggestionRows = () => [1, 2].map(id => ({ photo_id: id, name: 'photo-' + 
 let rejectRows = suggestionRows();
 const rejectPosts = [];
 const keywordPosts = [];
+const placePosts = [];
 const keywordData = { subjects: ['ice'], suggested: ['krill', 'gentoo penguin'] };
 const untaggedKeywords = { subjects: [], suggested: [] };
 const vocabState = { categories: { wildlife: ['gentoo penguin'], learned: ['spindrift', 'krill'] }, counts: { spindrift: 3, krill: 1 }, blocked: [] };
@@ -1529,6 +1530,13 @@ async function fetch(url, options = {}) {
     to.push(body.keyword);
     payload = { photo_id: id, subjects: [...words.subjects], suggested: [...words.suggested] };
   }
+  else if (/^\/api\/photos\/[12]\/place$/.test(url)) {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    placePosts.push(body);
+    if (!body.name.trim()) { ok = false; payload = { error: 'place name must be 1-80 characters and country at most 60' }; }
+    else payload = { photo_ids: body.scope === 'burst' ? [1, 2] : [Number(url.split('/')[3])], name: body.name, country: body.country || null, remembered: body.remember };
+  }
   else if (url === '/api/digests') {
     assert.equal(options.method, 'POST');
     const body = JSON.parse(options.body);
@@ -1548,7 +1556,7 @@ async function fetch(url, options = {}) {
     payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
   }
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
-    photo: scenario === 'place-line' && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
+    photo: (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
       : scenario.startsWith('keyword') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
@@ -1902,7 +1910,7 @@ const regression = `
     const alt = byId('alt-input');
     assert.deepEqual([caption.tagName, caption.value, caption.maxLength], ['INPUT', 'Porpoising.', 200]);
     assert.deepEqual([alt.tagName, alt.value, alt.maxLength], ['INPUT', 'Penguins leaping.', 125]);
-    const labels = tree(element('#inspection')).filter(node => node.tagName === 'LABEL' && !['rating', 'keyword-input'].includes(node.htmlFor));
+    const labels = tree(byId('caption-controls')).filter(node => node.tagName === 'LABEL');
     assert.deepEqual(labels.map(node => [node.htmlFor, node.textContent]), [['caption-input', 'Caption'], ['alt-input', 'Alt text']]);
     const posts = decisionPosts.length;
     await element('#contact-sheet').listeners.keydown({ key: 'x', metaKey: false, ctrlKey: false, altKey: false, target: caption, preventDefault() {} });
@@ -3018,6 +3026,57 @@ const regression = `
     assert.equal(link.href, 'https://maps.apple.com/?ll=-24.74351,26.25732&q=photo-1.jpg');
     return;
   }
+  if (scenario === 'place-edit') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    const submit = () => byId('place-form').listeners.submit({ preventDefault() {} });
+    await inspect(state.groups[0].photos[0]);
+    const edit = byId('edit-place');
+    assert.equal(edit.textContent, 'Edit place');
+    assert.equal(byId('place-form').hidden, true, 'the form waits for the button');
+    edit.listeners.click();
+    assert.equal(byId('place-form').hidden, false);
+    assert.equal(edit.getAttribute('aria-expanded'), 'true');
+    assert.equal(focused, byId('place-name'));
+    assert.equal(byId('place-name').value, 'Madikwe Game Reserve', 'prefilled with the current place');
+    assert.equal(byId('place-country').value, 'South Africa');
+    assert.equal(tree(element('#inspection')).find(node => node.tagName === 'LABEL' && node.htmlFor === 'place-name').textContent, 'Place name');
+    assert.equal(byId('place-burst').checked, true, 'the whole burst by default');
+    assert.equal(byId('place-remember').checked, true);
+    assert.ok(!byId('place-remember').disabled, 'a GPS fix allows remembering');
+    byId('place-cancel').listeners.click();
+    assert.equal(byId('place-form').hidden, true);
+    assert.equal(focused, edit, 'cancel returns focus to Edit place');
+    edit.listeners.click();
+    byId('place-name').value = ' ';
+    await submit();
+    assert.equal(element('#announcer').textContent, 'place name must be 1-80 characters and country at most 60');
+    assert.equal(byId('place-form').hidden, false, 'a refused place keeps the form open');
+    byId('place-name').value = 'Our camp';
+    byId('place-country').value = 'Botswana';
+    await submit();
+    assert.deepEqual(placePosts.at(-1), { name: 'Our camp', country: 'Botswana', scope: 'burst', remember: true });
+    assert.equal(element('#announcer').textContent, 'Place set to Our camp on 2 frames, remembered');
+    assert.deepEqual(state.groups[0].photos.map(item => [item.place, item.place_country]), [['Our camp', 'Botswana'], ['Our camp', 'Botswana']]);
+    assert.ok(byId('location').textContent.startsWith('Place: Our camp, Botswana'), byId('location').textContent);
+    assert.equal(byId('place-form').hidden, true);
+    assert.equal(focused, byId('edit-place'), 'focus returns to Edit place after saving');
+    await inspect(state.groups[0].photos[1]);
+    const remember = byId('place-remember');
+    assert.ok(byId('edit-place'), 'a frame without a GPS fix still takes a place by hand');
+    assert.equal(remember.disabled, true);
+    assert.equal(remember.checked, false);
+    assert.equal(byId(remember.getAttribute('aria-describedby')).textContent, 'no GPS fix');
+    byId('edit-place').listeners.click();
+    byId('place-burst').checked = false;
+    byId('place-name').value = 'Hide';
+    await submit();
+    assert.deepEqual(placePosts.at(-1), { name: 'Hide', country: '', scope: 'frame', remember: false });
+    assert.equal(element('#announcer').textContent, 'Place set to Hide on 1 frame');
+    assert.equal(byId('location').textContent, 'Place: Hide');
+    return;
+  }
   if (scenario === 'location') {
     await load();
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
@@ -3763,6 +3822,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_inspector_shows_the_place_before_the_coordinates(self):
         self.run_javascript_cleanup_regression("place-line")
+
+    def test_javascript_place_editor_posts_burst_scope_and_disables_remember_without_a_fix(self):
+        self.run_javascript_cleanup_regression("place-edit")
 
     def test_photo_detail_carries_place_and_country(self):
         from lumen.catalog import Catalog
