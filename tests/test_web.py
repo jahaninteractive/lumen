@@ -1216,6 +1216,9 @@ class WebTests(unittest.TestCase):
     def test_javascript_keywords_add_and_remove_without_reload_and_tag_keepers_gates_on_role(self):
         self.run_javascript_cleanup_regression("keywords")
 
+    def test_javascript_typed_keyword_posts_add_and_refuses_duplicates(self):
+        self.run_javascript_cleanup_regression("keyword-typed")
+
     def test_javascript_tag_keepers_disabled_when_fast_model_unloaded(self):
         self.run_javascript_cleanup_regression("keywords-unloaded")
 
@@ -1519,7 +1522,7 @@ async function fetch(url, options = {}) {
     const body = JSON.parse(options.body);
     keywordPosts.push(body);
     const [from, to] = body.action === 'add' ? [keywordData.suggested, keywordData.subjects] : [keywordData.subjects, keywordData.suggested];
-    from.splice(from.indexOf(body.keyword), 1);
+    if (from.includes(body.keyword)) from.splice(from.indexOf(body.keyword), 1);  // a typed word was never suggested
     to.push(body.keyword);
     payload = { photo_id: 1, subjects: [...keywordData.subjects], suggested: [...keywordData.suggested] };
   }
@@ -1545,7 +1548,7 @@ async function fetch(url, options = {}) {
     photo: scenario === 'place-line' && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
-      : scenario.startsWith('keywords') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
+      : scenario.startsWith('keyword') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (url === '/api/photos/2/crops') {
     cropLoads += 1;
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
@@ -1832,6 +1835,34 @@ const regression = `
     assert.equal(state.job.status, 'succeeded');
     return;
   }
+  if (scenario === 'keyword-typed') {
+    await load();
+    assert.deepEqual(element('#vocabulary-words').children.map(option => option.value), ['gentoo penguin', 'spindrift', 'krill'], 'every vocabulary word is offered once per load');
+    await inspect(state.groups[0].photos[0]);
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    const texts = id => tree(byId(id)).map(node => node.textContent);
+    const input = byId('keyword-input');
+    assert.equal(input.getAttribute('list'), 'vocabulary-words');
+    assert.equal(tree(element('#inspection')).find(node => node.tagName === 'LABEL' && node.htmlFor === 'keyword-input').textContent, 'Add a keyword');
+    assert.equal(byId('keyword-add').textContent, 'Add');
+    input.value = 'Lion';
+    await input.listeners.keydown({ key: 'Enter', preventDefault() {} });
+    assert.deepEqual(keywordPosts, [{ action: 'add', keyword: 'Lion' }]);
+    assert.ok(texts('keywords').includes('Lion'));
+    const fresh = byId('keyword-input');
+    assert.equal(fresh.value, '');
+    assert.equal(focused, fresh, 'focus returns to the input for the next word');
+    assert.equal(element('#announcer').textContent, 'Keyword Lion added to photo-1.jpg');
+    fresh.value = 'lion';
+    await fresh.listeners.keydown({ key: 'Enter', preventDefault() {} });
+    assert.equal(keywordPosts.length, 1, 'a duplicate is refused without a round trip');
+    assert.equal(element('#announcer').textContent, 'Keyword lion is already on photo-1.jpg');
+    fresh.value = ' seal ';
+    await byId('keyword-add').listeners.click();
+    assert.deepEqual(keywordPosts.at(-1), { action: 'add', keyword: 'seal' });
+    return;
+  }
   if (scenario === 'digest') {
     await load();
     const announcements = [];
@@ -1861,7 +1892,7 @@ const regression = `
     const alt = byId('alt-input');
     assert.deepEqual([caption.tagName, caption.value, caption.maxLength], ['INPUT', 'Porpoising.', 200]);
     assert.deepEqual([alt.tagName, alt.value, alt.maxLength], ['INPUT', 'Penguins leaping.', 125]);
-    const labels = tree(element('#inspection')).filter(node => node.tagName === 'LABEL' && node.htmlFor !== 'rating');
+    const labels = tree(element('#inspection')).filter(node => node.tagName === 'LABEL' && !['rating', 'keyword-input'].includes(node.htmlFor));
     assert.deepEqual(labels.map(node => [node.htmlFor, node.textContent]), [['caption-input', 'Caption'], ['alt-input', 'Alt text']]);
     const posts = decisionPosts.length;
     await element('#contact-sheet').listeners.keydown({ key: 'x', metaKey: false, ctrlKey: false, altKey: false, target: caption, preventDefault() {} });

@@ -300,6 +300,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .inspector h4 { margin: 1rem 0 0; font-size: .9rem; }
 #caption-controls label, #caption-controls input { display: block; width: 100%; }
 #caption-controls label { margin-top: .5rem; font-weight: 700; }
+label[for="keyword-input"] { display: block; margin-bottom: .35rem; font-weight: 700; }
 #caption-controls input { padding: .5rem .6rem; color: var(--paper); background: var(--graphite); }
 
 #reject-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }

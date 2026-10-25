@@ -799,16 +799,53 @@ function keywordLists(photo, data) {
       list.append(item);
     }
     lists.push(heading, list);
+    if (action === 'remove') lists.push(...typedKeyword(photo, applied));
   }
   return lists;
 }
 
-async function changeKeyword(photo, action, keyword) {
+// A word of the photographer's own; the vocabulary datalist offers known words without limiting the choice.
+function typedKeyword(photo, applied) {
+  const label = document.createElement('label');
+  label.htmlFor = 'keyword-input';
+  label.textContent = 'Add a keyword';
+  const row = document.createElement('div');
+  row.className = 'input-row';
+  const input = document.createElement('input');
+  input.id = 'keyword-input';
+  input.autocomplete = 'off';
+  input.maxLength = 40;  // the server's keyword limit
+  input.setAttribute('list', 'vocabulary-words');
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.id = 'keyword-add';
+  add.className = 'secondary';
+  add.textContent = 'Add';
+  const submit = () => addTypedKeyword(photo, input.value, applied);
+  add.addEventListener('click', submit);
+  input.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    return submit();
+  });
+  row.append(input, add);
+  if (state.keywordFocus === 'input') { state.keywordFocus = null; window.setTimeout(() => input.focus(), 0); }
+  return [label, row];
+}
+
+async function addTypedKeyword(photo, word, applied) {
+  word = word.trim();
+  if (!word) return;
+  if (applied.has(word.toLowerCase())) return announce(`Keyword ${word} is already on ${photo.name}`);  // the server refuses it too
+  return changeKeyword(photo, 'add', word, 'input');
+}
+
+async function changeKeyword(photo, action, keyword, focus = `${action === 'add' ? 'remove' : 'add'}:${keyword}`) {
   try {
     const result = await post(`/api/photos/${photo.id}/keywords`, { action, keyword });
     if (state.selectedId !== photo.id) return;
     Object.assign(state.details.tags.data, { subjects: result.subjects, suggested: result.suggested });
-    state.keywordFocus = `${action === 'add' ? 'remove' : 'add'}:${keyword}`;  // focus lands on the undo control
+    state.keywordFocus = focus;  // the undo control, or the typing input
     renderInspector(photo);
     announce(`Keyword ${keyword} ${action === 'add' ? 'added to' : 'removed from'} ${photo.name}`);
   } catch (error) {
@@ -1178,7 +1215,8 @@ async function load() {
     if (active) watchJob(active);
   }
   if (document.querySelector('#compose-tab').getAttribute('aria-selected') === 'true') await loadComposition();
-  if (document.querySelector('#review-tab').getAttribute('aria-selected') === 'true') await Promise.all([loadRejectSuggestions(), loadVocabulary()]);
+  const reviewing = document.querySelector('#review-tab').getAttribute('aria-selected') === 'true';
+  await Promise.all([reviewing && loadRejectSuggestions(), loadVocabulary(!reviewing)]);  // the inspector's datalist needs the words on every load
 }
 
 // Import lives in a dialog opened from the tab row, so the sheet keeps the space.
@@ -1337,15 +1375,17 @@ rejectList.addEventListener('keydown', handleRejectKey);
 // Learned keywords: the words local models taught the vocabulary; Forget strips one from every frame and blocks it.
 const vocabularyList = document.querySelector('#vocabulary-list');
 
-async function loadVocabulary() {
+async function loadVocabulary(quiet = false) {
   try {
     renderVocabulary(await request('/api/vocabulary'));
   } catch (error) {
-    announce(error.message);
+    if (!quiet) announce(error.message);
   }
 }
 
 function renderVocabulary(vocab) {
+  state.vocabularyWords = [...new Set(Object.values(vocab.categories).flat())];
+  document.querySelector('#vocabulary-words').replaceChildren(...state.vocabularyWords.map(word => Object.assign(document.createElement('option'), { value: word })));
   const words = vocab.categories.learned || [];
   document.querySelector('#vocabulary-count').textContent = `(${words.length})`;
   vocabularyList.replaceChildren(...words.map((word, index) => {
