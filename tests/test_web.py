@@ -817,15 +817,14 @@ class WebTests(unittest.TestCase):
                 {"candidate_id": "crop-manual", "rect": {**rect, "depth": 1}, "aspect": "free"},
                 {"candidate_id": "crop-manual", "rect": rect},
                 {"candidate_id": "crop-manual"},
-                {"candidate_id": "crop-manual", "rect": {**rect, "width": .3, "height": .3}, "aspect": "free"},
             )
             for body in invalid:
                 with self.subTest(body=body):
                     code, result = self.post_json("/api/photos/1/crop", body)
                     self.assertEqual(400, code, result)
                     self.assertIn("error", result)
-            code, result = self.post_json("/api/photos/1/crop", invalid[-1])
-            self.assertEqual("crop keeps too few pixels; at least 8 MP", result["error"])
+            code, result = self.post_json("/api/photos/1/crop", {"candidate_id": "crop-manual", "rect": {**rect, "width": .3, "height": .3}, "aspect": "free"})
+            self.assertEqual(200, code, result)  # a tight crop is the photographer's call; no resolution floor
             code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": "crop-manual", "rect": rect, "aspect": "4:5"})
             self.assertEqual(200, code, chosen)
             self.assertEqual(("crop-manual", "photographer", "4:5"), (chosen["candidate_id"], chosen["author"], chosen["aspect"]))
@@ -2609,7 +2608,7 @@ const regression = `
     assert.equal(warning.textContent, (pixels / 1e6).toFixed(6) + ' MP remaining; below 12 MP');
     const small = first().children.at(-1);
     assert.equal(small.textContent, 'Use this crop');
-    assert.equal(small.disabled, true, 'under 8 MP cannot be used');
+    assert.equal(small.disabled, false, 'under 8 MP is still allowed');
     assert.equal(small.getAttribute('aria-describedby'), warning.id);
     assert.ok(warning.id, 'the warning has an id to describe the button');
     assert.equal(first().children[5].textContent, '', 'a fresh drawing is not the current choice');

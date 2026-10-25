@@ -577,8 +577,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         with Library(settings) as library:
                             edit = library.choose_crop(int(match.group(1)), payload["candidate_id"], **extra)
                     except (ValueError, OverflowError, OSError, RuntimeError) as error:
-                        too_small = "at least 8 MP" in str(error)
-                        raise ValueError(str(error) if too_small else "crop could not be selected for this photo") from error
+                        raise ValueError("crop could not be selected for this photo") from error
                     self._send_json(edit.to_dict())
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/crop/clear", path)

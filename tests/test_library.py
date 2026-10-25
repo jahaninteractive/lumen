@@ -123,10 +123,10 @@ class LibraryTests(unittest.TestCase):
                 self.assertEqual(("crop-manual", "photographer", "drawn by the photographer", "free"),
                                  (edit.candidate_id, edit.author, edit.rationale, edit.aspect))
                 self.assertEqual(CropRect(.1, .1, .8, .8), library.catalog.get_crop(photo.id).rect)
-                with self.assertRaisesRegex(ValueError, "at least 8 MP"):
-                    library.choose_crop(photo.id, "crop-manual",
-                                        rect={"left": .1, "top": .1, "width": .3, "height": .3})
-                self.assertEqual(edit, library.catalog.get_crop(photo.id))
+                tight = library.choose_crop(photo.id, "crop-manual",
+                                            rect={"left": .1, "top": .1, "width": .3, "height": .3})  # 3.2 MP: the photographer's call
+                self.assertEqual(CropRect(.1, .1, .3, .3), library.catalog.get_crop(photo.id).rect)
+                edit = tight
                 with self.assertRaises(ValueError):
                     library.choose_crop(photo.id, "crop-manual",
                                         rect={"left": .1, "top": .1, "width": .8, "height": .8}, aspect="7:3")

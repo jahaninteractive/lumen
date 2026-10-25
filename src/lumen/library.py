@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import re
 import fcntl
-import math
 import json
 import os
 import sqlite3
@@ -22,7 +21,7 @@ from PIL import Image
 from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, difference_hash, measure_image
 from .catalog import Catalog, GroupFilters
 from .config import Settings
-from .composition import MIN_CROP_PIXELS, CropCandidate, generate_candidates
+from .composition import CropCandidate, generate_candidates
 from .digest import day_facts, render_facts_table
 from .domain import MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, Job, Photo, PhotoEdit
 from .geonames import Place, PlaceIndex, online_lookup
@@ -903,9 +902,7 @@ class Library:
         if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
             raise ValueError(f"unknown photo ID: {photo_id}")
         width, height = read_image_dimensions(Path(photo.path))
-        # Half up, as the browser's Math.round, so the card's 8 MP gate and this one always agree.
-        if math.floor(width * crop.width + 0.5) * math.floor(height * crop.height + 0.5) < MIN_CROP_PIXELS:
-            raise ValueError("crop keeps too few pixels; at least 8 MP")
+        # No resolution floor: the photographer's own crop is theirs; only generated suggestions carry the 8 MP gate.
         edit = PhotoEdit(
             photo_id=photo_id, candidate_id=MANUAL_CROP_ID, rect=crop, aspect=aspect,
             source_width=width, source_height=height, author="photographer",

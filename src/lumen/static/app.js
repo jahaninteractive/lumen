@@ -148,9 +148,8 @@ function cropCard(candidate) {
   action.setAttribute('aria-label', candidate.kind === 'original'
     ? `Keep ${heading.textContent}, ${aspectLabel}`
     : candidate.kind === 'manual' ? `Use your crop, ${aspectLabel}` : `Use ${heading.textContent} crop, ${aspectLabel}`);
-  const tooSmall = candidate.kind === 'manual' && candidate.pixel_count < 8_000_000;
-  action.disabled = state.busy || active || tooSmall;
-  if (tooSmall) action.setAttribute('aria-describedby', warning.id);
+  action.disabled = state.busy || active;
+  if (candidate.kind === 'manual' && candidate.resolution_warning) action.setAttribute('aria-describedby', warning.id);  // your crop is yours; the warning is advice
   action.addEventListener('click', () => applyCrop(photoId, candidate));
   card.append(heading, viewport, details, rationale, warning, marker, action);
   return card;
