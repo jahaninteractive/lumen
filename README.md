@@ -392,7 +392,7 @@ recommendation.
 ## Finish and clear a shoot
 
 In the contact sheet, select a frame (or select its batch in the left rail),
-press Enter on it to open the frame view, where the **Frame** and **Crop** tabs sit beside the image. To draw your own crop, drag on the image (preview or full size); the **Crop lock** menu holds Free, 3:2, 2:3, 1:1, and 4:5, and Escape cancels a drag. A **Your crop** card appears first with its megapixels, and **Use this crop** saves it; a small crop shows the resolution warning but is yours to keep. Lumen uses Apple Vision face
+press Enter on it to open the frame view, where the **Frame** and **Crop** tabs sit beside the image. To draw your own crop, drag on the image (preview or full size); drag inside the outline to move it, or hold Shift to draw a new one over it; the **Crop lock** menu holds Free, 3:2, 2:3, 1:1, and 4:5, and Escape cancels a drag. A **Your crop** card appears first with its megapixels, and **Use this crop** saves it; a small crop shows the resolution warning but is yours to keep. Lumen uses Apple Vision face
 rectangles and attention saliency as approximate evidence for subject-safe crop
 choices. When that evidence is absent or weak, it says so and offers only the
 original plus a centered fallback. Non-original candidates below 8 MP are

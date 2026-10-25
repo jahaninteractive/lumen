@@ -2476,29 +2476,44 @@ loupeViewport.addEventListener('keydown', event => {
 }, { capture: true });
 loupeViewport.addEventListener('pointerdown', event => {
   const image = loupeViewport.children[0];
-  if (event.button !== 0 || event.target !== image || !image.naturalWidth) return;
+  if (event.button !== 0 || !(event.target === image || event.target === cropOutline) || !image.naturalWidth) return;
   event.preventDefault();
   loupeViewport.focus({ preventScroll: true });  // Escape then cancels the drag rather than closing the dialog
   loupeViewport.setPointerCapture(event.pointerId);
   const [x, y] = cropPoint(event, image);
-  cropDrag = { image, x, y, rect: null };
+  const shown = shownCropRect();  // a press inside the outline moves it; anywhere else, or with Shift held, draws a new one
+  const inside = shown && !event.shiftKey && x >= shown.left * image.naturalWidth && x <= (shown.left + shown.width) * image.naturalWidth
+    && y >= shown.top * image.naturalHeight && y <= (shown.top + shown.height) * image.naturalHeight;
+  cropDrag = { image, x, y, rect: null, move: inside ? shown : null };
 });
+// Moving keeps the size and slides the rect, stopping at the image edges.
+function cropMoveRect(event) {
+  const { image, x, y, move } = cropDrag;
+  const [px, py] = cropPoint(event, image);
+  const clamp = (value, max) => Math.max(0, Math.min(max, value));
+  return { ...move, left: clamp(move.left + (px - x) / image.naturalWidth, 1 - move.width), top: clamp(move.top + (py - y) / image.naturalHeight, 1 - move.height) };
+}
 loupeViewport.addEventListener('pointermove', event => {
   if (!cropDrag) return;
-  cropDrag.rect = cropDragRect(event);
+  cropDrag.rect = cropDrag.move ? cropMoveRect(event) : cropDragRect(event);
   drawCropOverlay(cropDrag.rect);
 });
 loupeViewport.addEventListener('pointerup', event => {
   if (!cropDrag) return;
-  const { image } = cropDrag;
-  const rect = cropDragRect(event);
+  const { image, move } = cropDrag;
+  const rect = move ? cropMoveRect(event) : cropDragRect(event);
   cropDrag = null;
   const box = image.getBoundingClientRect();
-  if (rect.width * box.width < CROP_MIN_DISPLAY || rect.height * box.height < CROP_MIN_DISPLAY) return drawCropOverlay(shownCropRect());
-  state.manualCrop = { rect, aspect: cropLockValue() };
+  const slip = move
+    ? Math.hypot((rect.left - move.left) * box.width, (rect.top - move.top) * box.height) < CROP_MIN_DISPLAY  // a press on the outline is not a move
+    : rect.width * box.width < CROP_MIN_DISPLAY || rect.height * box.height < CROP_MIN_DISPLAY;
+  if (slip) return drawCropOverlay(shownCropRect());
+  const aspect = move ? (state.manualCrop?.aspect ?? state.composition?.active_crop?.aspect ?? 'free') : cropLockValue();
+  state.manualCrop = { rect, aspect };
   drawCropOverlay(rect);
   if (state.composition?.photo_id === state.selectedId) renderComposition();
   selectFrameTab(document.querySelector('#crop-tab'));  // the card, lock, and save button live there
+  if (move) return announce(`Crop moved to ${Math.round(rect.left * image.naturalWidth)}, ${Math.round(rect.top * image.naturalHeight)}`);
   const lock = cropLockValue() === 'free' ? '' : `, ${cropLockValue()}`;
   announce(`Crop drawn${lock}: ${Math.round(rect.width * image.naturalWidth)} by ${Math.round(rect.height * image.naturalHeight)} pixels`);
 });

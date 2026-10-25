@@ -2499,8 +2499,8 @@ const regression = `
     const overlay = element('#crop-overlay');
     const outline = element('#crop-outline');
     const loadImage = (width, height) => { Object.assign(viewport.children[0], { naturalWidth: width, naturalHeight: height }); viewport.children[0].listeners.load(); };
-    const pointer = (type, x, y) => viewport.listeners[type]({ button: 0, pointerId: 1, clientX: x, clientY: y, target: viewport.children[0], preventDefault() {} });
-    const drag = (x0, y0, x1, y1) => { pointer('pointerdown', x0, y0); pointer('pointermove', x1, y1); pointer('pointerup', x1, y1); };
+    const pointer = (type, x, y, shiftKey = false) => viewport.listeners[type]({ button: 0, pointerId: 1, clientX: x, clientY: y, shiftKey, target: viewport.children[0], preventDefault() {} });
+    const drag = (x0, y0, x1, y1, shiftKey = false) => { pointer('pointerdown', x0, y0, shiftKey); pointer('pointermove', x1, y1); pointer('pointerup', x1, y1); };
     const near = (actual, expected, message) => Object.entries(expected).forEach(([side, value]) => assert.ok(Math.abs(actual[side] - value) < 0.001, message + ': ' + side + ' ' + actual[side] + ' vs ' + value));
     await key('Home', card(1), element('#contact-sheet'));
     await key('Enter', card(1), element('#contact-sheet'));
@@ -2544,7 +2544,7 @@ const regression = `
     loadImage(4096, 2730);
     assert.ok(viewport.contains(overlay) && !overlay.hidden, 'the outline is redrawn at full size');
     assert.deepEqual([overlay.style.width, overlay.style.height], ['4096px', '2730px']);
-    drag(400, 200, 2400, 1600);
+    drag(400, 200, 2400, 1600, true);  // Shift: redraw even though the press lands inside the old outline
     near(state.manualCrop.rect, expected, 'full-size rect matches the preview rect');
     const lock = element('#crop-lock');
     lock.value = '1:1';
@@ -2553,12 +2553,22 @@ const regression = `
     assert.equal(cropLockValue(), '1:1');
     element('#loupe-full').listeners.click();
     loadImage(2048, 1365);
-    drag(0, 0, 900, 300);
+    drag(0, 0, 900, 300, true);
     const { rect, aspect } = state.manualCrop;
     assert.equal(aspect, '1:1');
     assert.ok(Math.abs(rect.width * 2048 - rect.height * 1365) < 1, 'a 1:1 lock keeps a square: ' + rect.width * 2048 + ' by ' + rect.height * 1365);
     assert.ok(Math.abs(rect.width * 2048 - 900) < 1, 'the height follows the width');
     assert.equal(element('#announcer').textContent, 'Crop drawn, 1:1: 900 by 900 pixels', 'a lock other than Free is named');
+    // Pressing inside the outline moves it without changing its size; the edges stop it.
+    drag(450, 150, 650, 250);
+    near(state.manualCrop.rect, { left: rect.left + 200 / 2048, top: rect.top + 100 / 1365, width: rect.width, height: rect.height }, 'moved rect');
+    assert.equal(state.manualCrop.aspect, '1:1', 'a move keeps the aspect it was drawn with');
+    assert.equal(element('#announcer').textContent, 'Crop moved to 200, 100');
+    const moved = state.manualCrop.rect;
+    drag(700, 300, 5000, 5000);
+    near(state.manualCrop.rect, { left: 1 - moved.width, top: 1 - moved.height, width: moved.width, height: moved.height }, 'a move stops at the image edges');
+    drag(2000, 1300, 1500, 1000);
+    assert.ok(state.manualCrop.rect.width * 2048 > 400, 'a press outside the outline draws a new crop');
     const fitted = viewport.children[0];
     fitted.box = { left: 0, top: 0, width: 1024, height: 682.5 };  // shown at half its natural size
     observers.find(([node]) => node === viewport)[1]();
