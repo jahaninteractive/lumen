@@ -12,6 +12,6 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 
 - **L-size ARW embedded JPEG size unverified.** The Full size toggle serves `JpgFromRaw`; on M-size raws that is 3504x2336. Run `exiftool -b -JpgFromRaw file.ARW | sips -g pixelWidth -g pixelHeight` on an L-size file; if it is not ~7008 px, decide whether to fall back to a darktable render.
 - Empty "Suggested keywords" heading shows on untagged frames.
-- Remembering the same GPS fix twice adds duplicate manual place rows.
+- Correcting a remembered place now replaces manual rows within 1 km; rows further apart than that but inside the 25 km radius still coexist and the nearer one wins.
 - The viewport is dark while the full-size JPEG loads.
 - The "thumbnails pruned" log count includes full-size files.
