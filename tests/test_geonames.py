@@ -99,6 +99,8 @@ class PlaceIndexTests(unittest.TestCase):
         self.assertTrue(self.index.ensure()["rebuilt"])
         place = self.index.lookup(-24.745, 26.257)
         self.assertEqual(("Our camp", "manual"), (place.name, place.source))
+        self.index.add("Our tented camp", "South Africa", -24.74, 26.26, source="manual", feature_code="MANUAL")
+        self.assertEqual("Our tented camp", self.index.lookup(-24.745, 26.257).name, "a newer remember near the fix wins")
 
     def test_missing_dir_and_country_fallbacks(self):
         root = Path(self.tmp.name)

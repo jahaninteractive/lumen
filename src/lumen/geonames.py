@@ -148,6 +148,11 @@ class PlaceIndex:
             source: str = "online", feature_code: str = "ONLINE") -> int:
         db = self._db
         with db:
+            if source == "manual":  # a newer remember near the same fix replaces the older name
+                stale = [(row_id,) for row_id, plat, plon in db.execute("SELECT id, lat, lon FROM places WHERE source = 'manual'")
+                         if distance_km(lat, lon, plat, plon) <= 1.0]
+                db.executemany("DELETE FROM places WHERE id = ?", stale)
+                db.executemany("DELETE FROM places_rtree WHERE id = ?", stale)
             cursor = db.execute(
                 "INSERT INTO places(name, country, feature_class, feature_code, population, lat, lon, source) "
                 "VALUES (?, ?, '', ?, 0, ?, ?, ?)",

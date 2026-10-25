@@ -516,7 +516,10 @@ class LibraryTests(unittest.TestCase):
             photos = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
             first, second = photos["c0"], photos["c1"]
             library.catalog.update_location(first, latitude=-24.745, longitude=26.257, altitude=None)
+            library.catalog.update_place(first, place="Madikwe Game Reserve", country="South Africa")
+            library.catalog.save_tags(first, {"subjects": ["lion", "Madikwe Game Reserve", "South Africa"], "suggested": []}, "fast-model")
             result = library.set_place(first, " Our camp ", "South Africa", scope="burst", remember=True)
+            self.assertEqual(["lion", "South Africa"], library.catalog.get_tags(first)["data"]["subjects"], "the old place word goes")
             self.assertEqual(sorted([first, second]), sorted(result["photo_ids"]))
             self.assertEqual(("Our camp", "South Africa", True), (result["name"], result["country"], result["remembered"]))
             for photo_id in (first, second):
@@ -2281,6 +2284,8 @@ class LibraryTests(unittest.TestCase):
                 self.assertEqual([("keyword_added", {"keyword": "Lion", "typed": True}), ("vocabulary_learned", {"words": ["Lion"]}),
                                   ("keyword_added", {"keyword": "krill", "typed": False}), ("vocabulary_learned", {"words": ["krill"]}),
                                   ("keyword_removed", {"keyword": "Lion"}), ("keyword_removed", {"keyword": "krill"})], events)
+                library.catalog.save_tags(photo_id, library.catalog.get_tags(photo_id)["data"] | {"suggested": ["seal"]}, "fast-model")
+                self.assertEqual([], library.add_keyword(photo_id, "Seal")["suggested"], "a typed word takes a case-matching suggestion")
 
     def test_retag_keeps_photographer_keywords_first_and_adds_model_words(self):
         class FakeTagger:
@@ -2309,6 +2314,9 @@ class LibraryTests(unittest.TestCase):
                 data = library.catalog.get_tags(photo_id)["data"]
                 self.assertEqual(["Lion", "Sea", "ice"], data["subjects"], "the photographer's casing wins")
                 self.assertEqual((["Lion", "Sea"], ["Lion", "Sea"]), (data["photographer"], data["typed"]))
+                library.forget_keyword("lion")
+                library.tag_photo(photo_id, FakeTagger())
+                self.assertNotIn("Lion", library.catalog.get_tags(photo_id)["data"]["subjects"], "a forgotten word stays gone after a retag")
 
     def _two_tagged_photos(self, root: Path, library: Library) -> tuple[int, int]:
         for index in range(2):

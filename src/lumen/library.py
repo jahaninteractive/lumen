@@ -203,6 +203,7 @@ class Library:
             targets = next(([int(p["id"]) for p in group["photos"]] for group in self.catalog.list_groups()
                             if group["id"] == photo.group_id), targets)
         for target in targets:
+            self._drop_place_keywords(target, {name.casefold(), (country or "").casefold()})
             self.catalog.update_place(target, place=name, country=country)
             self.catalog.append_event(target, "place_edited", {"name": name, "country": country, "scope": scope, "remember": remember})
             self._write_sidecar(target)
@@ -210,6 +211,18 @@ class Library:
         if remembered:
             self.places.add(name, country or "", photo.latitude, photo.longitude, source="manual", feature_code="MANUAL")
         return {"photo_ids": targets, "name": name, "country": country, "remembered": remembered}
+
+    def _drop_place_keywords(self, photo_id: int, keep: set[str]) -> None:
+        """Tagging applied the old place as keywords; drop them unless the photographer added them or they still hold."""
+        old, tags = self.catalog.get_photo(photo_id), self.catalog.get_tags(photo_id)
+        if not tags:
+            return
+        data = tags["data"]
+        stale = {word.casefold() for word in (old.place, old.place_country) if word} - keep
+        stale -= {word.casefold() for word in data.get("photographer", [])}
+        subjects = [word for word in data.get("subjects", []) if word.casefold() not in stale]
+        if subjects != data.get("subjects", []):
+            self.catalog.save_tags(photo_id, data | {"subjects": subjects}, tags["model"])
 
     def __enter__(self) -> "Library":
         return self
@@ -1665,6 +1678,7 @@ class Library:
             if keyword.casefold() in {word.casefold() for word in data.get("subjects", [])}:
                 raise ValueError(f"keyword is already applied for photo {photo_id}")
             data = {"description": "", "subjects": [], "suggested": []} | data
+            data["suggested"] = [word for word in data["suggested"] if word.casefold() != keyword.casefold()]
             data["subjects"] = data["subjects"] + [keyword]
             data["typed"] = data.get("typed", []) + [keyword]
             category = "learned"
@@ -1701,10 +1715,12 @@ class Library:
         changed = []
         for photo in self.catalog.list_photos():
             tags = self.catalog.get_tags(photo.id)
-            subjects = tags["data"].get("subjects", []) if tags else []
-            kept = [subject for subject in subjects if subject.casefold() != key]
-            if kept != subjects:
-                self.catalog.save_tags(photo.id, tags["data"] | {"subjects": kept}, tags["model"])
+            data = tags["data"] if tags else {}
+            # photographer/typed too, or the next retag would bring the word back as the photographer's
+            kept = {field: [word for word in data[field] if word.casefold() != key]
+                    for field in ("subjects", "photographer", "typed") if field in data}
+            if any(kept[field] != data[field] for field in kept):
+                self.catalog.save_tags(photo.id, data | kept, tags["model"])
                 changed.append(photo.id)
         result = {"word": key, "removed_from": len(changed)}
         self.catalog.append_event(None, "keyword_forgotten", result)
