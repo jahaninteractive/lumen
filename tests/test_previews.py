@@ -1,3 +1,4 @@
+import io
 import json
 import sys
 import tempfile
@@ -8,7 +9,9 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_thumbnails, read_image_dimensions, read_metadata, thumbnail_for
+from lumen.config import Settings
+from lumen.library import Library
+from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, full_size_for, prune_thumbnails, read_image_dimensions, read_metadata, thumbnail_for
 
 
 def write_fake_darktable(directory: Path, sharp: tuple[str, ...] = ()) -> str:
@@ -236,6 +239,55 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(2, prune_thumbnails(cache, previews))
             self.assertEqual(sorted(live), sorted(cache.iterdir()))
             self.assertEqual(0, prune_thumbnails(root / "missing", previews))
+
+    def test_full_size_for_extracts_jpg_from_raw_first_and_caches_by_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00001.ARW"
+            source.write_bytes(b"raw")
+            cache = root / "full"
+            buffer = io.BytesIO()
+            Image.new("RGB", (640, 427), "blue").save(buffer, "JPEG")
+            calls = []
+
+            def run(command, **kwargs):
+                calls.append(command[2])
+                return subprocess.CompletedProcess(command, 0, buffer.getvalue() if "-JpgFromRaw" in command else b"", b"")
+
+            with patch("lumen.previews.shutil.which", return_value="exiftool"), \
+                    patch("lumen.previews.subprocess.run", side_effect=run):
+                target = full_size_for(source, cache, "abc")
+                self.assertEqual(cache / "abc.jpg", target)
+                self.assertEqual(["-JpgFromRaw"], calls)
+                with Image.open(target) as saved:
+                    self.assertEqual((640, 427), saved.size)
+                self.assertEqual(target, full_size_for(source, cache, "abc"))
+                self.assertEqual(["-JpgFromRaw"], calls, "a cached full-size image never runs exiftool again")
+
+                calls.clear()
+                buffer = io.BytesIO()  # no embedded JPEG under either tag
+                self.assertIsNone(full_size_for(source, cache, "def"))
+                self.assertEqual(["-JpgFromRaw", "-PreviewImage"], calls)
+                with self.assertRaises(OSError):
+                    full_size_for(root / "missing.ARW", cache, "ghi")
+            with patch("lumen.previews.shutil.which", return_value=None):
+                self.assertIsNone(full_size_for(source, cache, "jkl"))
+
+    def test_prune_removes_full_size_images_no_photo_carries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "photo.jpg"
+            Image.new("RGB", (40, 30), "red").save(source)
+            settings = Settings(library_dir=root / "library")
+            with Library(settings) as library:
+                library.import_path(source)
+                fingerprint = library.catalog.list_photos()[0].fingerprint
+                full = settings.cache_dir / "full"
+                full.mkdir(parents=True)
+                (full / f"{fingerprint}.jpg").write_bytes(b"live")
+                (full / "gone.jpg").write_bytes(b"stale")
+                library._prune_thumbnails()
+            self.assertEqual([full / f"{fingerprint}.jpg"], list(full.iterdir()))
 
 
 if __name__ == "__main__":

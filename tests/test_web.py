@@ -3947,6 +3947,40 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             self.assertEqual(404, caught.exception.code)
             caught.exception.close()
 
+    def test_full_route_serves_cached_embedded_jpeg_or_404(self):
+        buffer = BytesIO()
+        Image.new("RGB", (640, 427), "blue").save(buffer, "JPEG")
+
+        def run(command, **kwargs):
+            return subprocess.CompletedProcess(command, 0, buffer.getvalue() if "-JpgFromRaw" in command else b"", b"")
+
+        def status(path):
+            try:
+                with urllib.request.urlopen(self.base + path, timeout=3) as response:
+                    return response.code, response.headers["Content-Type"], response.read()
+            except urllib.error.HTTPError as error:
+                with error:
+                    return error.code, error.headers["Content-Type"], error.read()
+
+        gone = self.root / "gone.jpg"
+        Image.new("RGB", (60, 40), "red").save(gone)
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            library.import_path(gone)
+            gone_id = max(photo.id for photo in library.catalog.list_photos())
+        gone.unlink()
+        with patch("lumen.previews.shutil.which", return_value=None):
+            self.assertEqual(404, status("/full/1?v=x")[0])
+        with patch("lumen.previews.shutil.which", return_value="exiftool"), \
+                patch("lumen.previews.subprocess.run", side_effect=run):
+            code, kind, body = status("/full/1?v=x")
+            self.assertEqual((200, "image/jpeg"), (code, kind))
+            self.assertEqual((640, 427), Image.open(BytesIO(body)).size)
+            for bad in (f"/full/{gone_id}", "/full/999", "/full/../catalog.sqlite3"):
+                code, _, body = status(bad)
+                self.assertEqual(404, code, bad)
+                self.assertNotIn(str(self.root).encode(), body)
+                self.assertNotIn(b"Traceback", body)
+
     def test_preview_route_rejects_traversal(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             urllib.request.urlopen(self.base + "/preview/../catalog.sqlite3", timeout=3)

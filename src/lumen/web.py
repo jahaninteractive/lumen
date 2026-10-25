@@ -21,7 +21,7 @@ from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS, validate_watermark
-from .previews import thumbnail_for
+from .previews import full_size_for, thumbnail_for
 
 
 STATIC_FILES = {
@@ -325,6 +325,22 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     photo.pop(key, None)
                 photo["preview_url"] = f"/preview/{photo['id']}?v={preview_version}"
                 self._send_json({"photo": photo, "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
+                return
+            match = re.fullmatch(r"/full/(\d+)", path)
+            if match:
+                with Library(settings) as library:
+                    photo = library.catalog.get_photo(int(match.group(1)))
+                full_dir = (settings.cache_dir / "full").resolve()
+                try:
+                    full = full_size_for(Path(photo.path), full_dir, photo.fingerprint) if photo else None
+                    if full:
+                        full.resolve().relative_to(full_dir)
+                except (OSError, ValueError):
+                    full = None
+                if not full:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                self._send_bytes(full.read_bytes(), "image/jpeg", cache=True)
                 return
             match = re.fullmatch(r"/(preview|thumb)/(\d+)", path)
             if match:

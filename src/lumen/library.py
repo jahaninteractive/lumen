@@ -32,7 +32,7 @@ from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxErro
 from .pipelines import EXPORT_PRESETS, PipelineRegistry, validate_watermark
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
-from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_thumbnails, read_image_dimensions,
+from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_cache, prune_thumbnails, read_image_dimensions,
                        read_metadata)
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
@@ -1272,8 +1272,10 @@ class Library:
     def _prune_thumbnails(self) -> int:
         """Best effort: thumbnails are a cache, so a failed unlink never fails the caller."""
         try:
-            return prune_thumbnails(self.settings.cache_dir / "thumbs",
-                                    {Path(photo.preview_path) for photo in self.catalog.list_photos() if photo.preview_path})
+            photos = self.catalog.list_photos()
+            return (prune_thumbnails(self.settings.cache_dir / "thumbs",
+                                     {Path(photo.preview_path) for photo in photos if photo.preview_path})
+                    + prune_cache(self.settings.cache_dir / "full", {f"{photo.fingerprint}.jpg" for photo in photos}))
         except OSError:
             return 0
 

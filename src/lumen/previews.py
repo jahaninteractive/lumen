@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import shutil
 import subprocess
@@ -232,14 +233,45 @@ def thumbnail_for(preview: Path, cache_dir: Path) -> Path:
     return target
 
 
+def full_size_for(source: Path, cache_dir: Path, fingerprint: str) -> Path | None:
+    """The largest JPEG the camera embedded in the original, cached by fingerprint; None without one or without exiftool."""
+    source.stat()  # an unreadable original raises OSError for the caller
+    target = cache_dir / f"{fingerprint}.jpg"
+    if target.is_file():
+        return target
+    exiftool = shutil.which("exiftool")
+    if not exiftool:
+        return None
+    for tag in ("JpgFromRaw", "PreviewImage"):
+        try:
+            result = subprocess.run([exiftool, "-b", f"-{tag}", str(source)], capture_output=True, timeout=60, check=False)
+        except subprocess.SubprocessError:
+            continue
+        if result.returncode == 0 and result.stdout.startswith(b"\xff\xd8"):
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            with Image.open(io.BytesIO(result.stdout)) as opened:
+                image = ImageOps.exif_transpose(opened).convert("RGB")
+            with tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
+                image.save(temporary, "JPEG", quality=92)
+            Path(temporary.name).replace(target)
+            return target
+    return None
+
+
+def prune_cache(cache_dir: Path, live: set[str]) -> int:
+    """Remove every cached JPEG whose name is not in `live`; returns the count removed."""
+    if not cache_dir.is_dir():
+        return 0
+    removed = 0
+    for cached in cache_dir.glob("*.jpg"):
+        if cached.name not in live:
+            cached.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def prune_thumbnails(cache_dir: Path, previews: Iterable[Path]) -> int:
     """Remove every cached thumbnail that no existing preview would name; returns the count removed."""
     if not cache_dir.is_dir():
         return 0
-    live = {f"{preview.stem}-{preview.stat().st_mtime_ns}.jpg" for preview in previews if preview.is_file()}
-    removed = 0
-    for thumb in cache_dir.glob("*.jpg"):
-        if thumb.name not in live:
-            thumb.unlink(missing_ok=True)
-            removed += 1
-    return removed
+    return prune_cache(cache_dir, {f"{preview.stem}-{preview.stat().st_mtime_ns}.jpg" for preview in previews if preview.is_file()})
