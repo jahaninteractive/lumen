@@ -70,7 +70,12 @@ It is a personal tool built for one photographer's workflow and shared as is.
 - Verified card ingest (SHA-256 on every copy, optional mirror) before import.
 - Near-duplicate clusters inside a burst from a perceptual difference hash.
 - 480 px thumbnail tier for the contact sheet, with Small/Medium/Large tiles.
-- Non-destructive crop suggestions with optional local oMLX composition advice.
+- A frame view (Enter on any frame) that gathers the full-size image, decisions,
+  scores, place, keywords, caption, and crops in one dialog with Frame and Crop tabs.
+- Non-destructive crop suggestions with optional local oMLX composition advice,
+  plus your own drawn crop with an aspect lock.
+- Typed keywords that survive re-tagging, and per-frame or per-burst place
+  correction that can be remembered for nearby frames.
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
 - sRGB JPEG export for the current photo or all keepers with Full (quality 92,
   full resolution), Share (2048 px), and Web (1600 px) presets, optional
@@ -227,9 +232,10 @@ In the contact sheet, with a frame focused (**Shortcuts** lists these):
   `0`–`5` set the rating.
 - `C` marks or unmarks a frame for compare (two at most); **Compare marked** opens
   both at 100 percent with panes that pan together.
-- `Enter` opens the loupe at 100 percent; `Esc` closes compare or loupe.
-- In the loupe, `[` and `]` step to the previous or next frame along the
-  filmstrip.
+- `Enter` opens the frame view (see below); `Esc` closes compare or the frame
+  view.
+- In the frame view, `[` and `]` step to the previous or next frame along the
+  filmstrip, `Z` toggles full size, and the culling keys above keep working.
 
 The **Tile size** select (Small/Medium/Large) is remembered by the browser, as
 is the chosen tab. The left rail opens only the selected burst's day; days you
@@ -244,6 +250,44 @@ their next reimport.
 
 Culling keeps working while an import or ingest runs. It pauses while tagging,
 preview refinement, or a stack runs.
+
+## Frame view
+
+Press `Enter` on a focused frame to open it in a dialog over the sheet. The
+image fills two thirds of the dialog, fitted so the whole frame shows; **Full
+size** (`Z`) swaps in the largest JPEG the camera embedded in the raw at 1:1
+pixels for a sharpness check, and the button names the real pixel size. Arrow
+keys pan the full-size image. `[` and `]` step through the sheet without
+closing; `Esc` returns to the frame you started on.
+
+The right column has two remembered tabs:
+
+- **Frame**: why the frame ranked where it did, its scores, the decision
+  buttons, the location line with **Edit place**, keywords with a box to type
+  your own (with vocabulary autocomplete), the caption and alt-text fields,
+  and the local AI buttons.
+- **Crop**: your own crop, the suggested crops, **Ask local AI**, and
+  **Export this frame**, which uses the Export tab's size and watermark.
+
+**Your own crop.** Drag on the image to draw a rectangle; the outside dims and
+the view switches to the Crop tab, where a **Your crop** card shows the
+megapixels it keeps. Drag inside the outline to move it; hold Shift to draw a
+new one over it; `Esc` during a drag cancels only the drag. The **Crop lock**
+menu (Free, 3:2, 2:3, 1:1, 4:5) is remembered. **Use this crop** saves it like
+any crop and the JPEG export honours it. A small crop shows the resolution
+warning but is yours to keep; only the AI suggestions have an 8 MP floor.
+
+**Keywords.** Type a word and press Enter or **Add**. Your words and the
+suggestions you accept are kept in front of the model's words when a frame is
+re-tagged; **Remove** drops a typed word and returns an accepted suggestion to
+the suggested list. **Forget** in the Review tab still strips a word from every
+frame.
+
+**Place.** **Edit place** opens a small form with the name and country, **Apply
+to whole burst** (on by default), and **Remember for nearby frames**, which
+adds your name to the local place index so later imports within 25 km resolve
+to it without any online lookup. A later correction at the same spot replaces
+the remembered name. Remember is disabled on a frame with no GPS fix.
 
 ## Filters and paging
 
@@ -392,11 +436,12 @@ recommendation.
 ## Finish and clear a shoot
 
 In the contact sheet, select a frame (or select its batch in the left rail),
-press Enter on it to open the frame view, where the **Frame** and **Crop** tabs sit beside the image. To draw your own crop, drag on the image (preview or full size); drag inside the outline to move it, or hold Shift to draw a new one over it; the **Crop lock** menu holds Free, 3:2, 2:3, 1:1, and 4:5, and Escape cancels a drag. A **Your crop** card appears first with its megapixels, and **Use this crop** saves it; a small crop shows the resolution warning but is yours to keep. Lumen uses Apple Vision face
+press Enter on it to open the frame view, and use the **Crop** tab (see
+[Frame view](#frame-view) for drawing your own). Lumen uses Apple Vision face
 rectangles and attention saliency as approximate evidence for subject-safe crop
 choices. When that evidence is absent or weak, it says so and offers only the
-original plus a centered fallback. Non-original candidates below 8 MP are
-rejected; choices below 12 MP show the exact remaining-resolution warning.
+original plus a centered fallback. Suggested crops below 8 MP are not offered;
+any choice below 12 MP shows the exact remaining-resolution warning.
 
 Crop previews include thirds lines. **Use this crop** stores normalized
 coordinates in Lumen's catalog and JSON/XMP sidecars; **Keep original** clears
