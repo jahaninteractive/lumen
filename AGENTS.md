@@ -10,6 +10,8 @@ The local HTTP server must remain loopback-only and mutation routes must retain 
 
 ## Working style
 
+- Keep AI vendor and model names out of tracked files and commit messages; this repo is shared and describes itself by what it does, not what built it. Refer to this file as `AGENTS.md`.
+
 - Keep changes small and reuse existing patterns; Pillow is the only runtime Python dependency.
 - Use red-green tests for behavior changes and run warning-strict tests.
 - Preserve the accessible native-control UI, keyboard tab behavior, live announcements, and charcoal/amber/cyan workbench.
