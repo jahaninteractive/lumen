@@ -1402,6 +1402,9 @@ const refineJob = (status, progress, extra = {}) => ({ job_id: 13, kind: 'refine
 let groupLoads = 0;
 let lastGroupsUrl = null;
 const photoDetailRequests = [];
+// URLs listed here wait until the scenario runs their entry in heldReplies, so replies can arrive out of order.
+const holdUrls = new Set();
+const heldReplies = [];
 let keeperOverride = null;
 let groupsError = null;
 let resumeJobs = [];
@@ -1447,6 +1450,7 @@ function cropPayload(active = activeCrop) {
   };
 }
 async function fetch(url, options = {}) {
+  if (holdUrls.delete(url)) return new Promise(resolve => heldReplies.push(() => resolve(fetch(url, options))));
   if (networkDown) throw new TypeError('NetworkError when attempting to fetch resource.');
   let payload;
   let ok = true;
@@ -2274,6 +2278,32 @@ const regression = `
     await key('Escape', viewport, loupe);
     assert.equal(loupe.hidden, true);
     assert.equal(focused, card(2), 'closing returns focus to the frame last shown');
+    return;
+  }
+  if (scenario === 'frame-view-race') {
+    groups = [group(1, [1, 2, 3])];
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
+    const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV' });
+    ['/api/photos/1', '/api/photos/1/crops'].forEach(url => holdUrls.add(url));
+    await key('Home', card(1), element('#contact-sheet'));
+    await key('Enter', card(1), element('#contact-sheet'));
+    await key(']', viewport, loupe);
+    await key(']', viewport, loupe);
+    await new Promise(setImmediate);
+    assert.equal(heldReplies.length, 2, "frame 1's replies are still in flight");
+    assert.equal(state.selectedId, 3);
+    assert.equal(element('#inspection').children[0].textContent, 'photo-3.jpg');
+    assert.equal(state.composition.photo_id, 3);
+    const cards = element('#primary-crops').children;
+    heldReplies.splice(0).forEach(reply => reply());
+    await new Promise(setImmediate);
+    assert.equal(element('#loupe-heading').textContent, 'photo-3.jpg', 'late replies leave the frame view on frame 3');
+    assert.equal(element('#inspection').children[0].textContent, 'photo-3.jpg', "frame 1's late details are ignored");
+    assert.equal(state.composition.photo_id, 3, "frame 1's late crops are ignored");
+    assert.equal(element('#primary-crops').children, cards, 'the crop cards are not redrawn');
     return;
   }
   if (scenario === 'frame-view-full') {
@@ -3474,6 +3504,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
         self.assertRegex(styles, r"#loupe\[open\] \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\)")  # the viewport keeps two thirds
         self.run_javascript_cleanup_regression("frame-view")
+
+    def test_javascript_frame_view_ignores_stale_frame_responses(self):
+        self.run_javascript_cleanup_regression("frame-view-race")
 
     def test_javascript_frame_view_full_size_toggle(self):
         self.run_javascript_cleanup_regression("frame-view-full")
