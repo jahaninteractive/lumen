@@ -60,6 +60,11 @@
           <h2>Finish as JPEG</h2>
           <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
           <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
+          <dl class="terms" aria-label="What the words mean">
+            <dt>Flagged</dt><dd>You marked the frame to keep, with <kbd>F</kbd> or the Flag button. A flagged frame is always a keeper.</dd>
+            <dt>Unsorted</dt><dd>No decision yet: neither flagged nor rejected.</dd>
+            <dt>Tagged</dt><dd>The local AI has described the frame with keywords, using Tag keepers or Tag all below. Tags make it findable in search and go into the exported JPEG as keywords.</dd>
+          </dl>
           <div class="button-row">
             <button type="button" id="assist-keepers" aria-describedby="assist-keepers-availability" disabled>Run all local AI on keepers (0 keepers)</button>
             <button type="button" id="tag-keepers" class="secondary" aria-describedby="tag-keepers-availability" disabled>Tag keepers with local AI (0 keepers)</button>
@@ -81,6 +86,7 @@
             <div class="scope-options">
               <label><input type="radio" name="export-scope" value="current" checked> Current photo <span id="current-export-name">No photo selected</span></label>
               <label><input type="radio" name="export-scope" value="keepers"> All keepers <span id="keeper-count">0 keepers</span></label>
+              <label><input type="radio" name="export-scope" value="filtered"> Frames the contact sheet filters show <span id="filtered-export-count">0 frames</span></label>
             </div>
             <fieldset id="export-preset">
               <legend>Size</legend>

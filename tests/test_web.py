@@ -376,6 +376,23 @@ class WebTests(unittest.TestCase):
         self.assertEqual(str(profile.resolve()), one["artifact"]["settings"]["profile"])
         datetime.fromisoformat(one["artifact"]["created_at"])
 
+    def test_export_filtered_renders_the_frames_the_contact_sheet_filters_show(self):
+        pipeline = DarktablePipeline("darktable-cli", self.root / "library" / "outputs")
+        with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
+            "lumen.pipelines.subprocess.run", side_effect=self.render
+        ):
+            code, job = self.post_json("/api/export", {"scope": "filtered", "profile": None, "preset": "web", "min_rating": "0"})
+            self.assertEqual((202, "export"), (code, job["kind"]), job)
+            finished = self.wait_job(job["job_id"])
+        self.assertEqual(("succeeded", {"exported": 1, "failed": 0, "skipped": 0}), (finished["status"], finished["result"]))
+        with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+            for payload, error in (({"scope": "filtered", "decision": "flag"}, "no frames match these filters"),
+                                   ({"scope": "filtered", "min_rating": 3}, "filter values must be strings"),
+                                   ({"scope": "filtered", "colour": "red"}, "invalid filter: colour"),
+                                   ({"scope": "filtered", "photo_id": "1"}, "invalid filter: photo_id")):
+                with self.subTest(payload=payload):
+                    self.assertEqual((400, {"error": error}), self.post_json("/api/export", payload))
+
     def test_export_rejects_invalid_or_ambiguous_payload_before_render(self):
         payloads = [
             {}, {"scope": "all"}, {"scope": "current"},
@@ -3225,6 +3242,22 @@ const regression = `
                                    { scope: 'keepers', profile: null, preset: 'web' }], 'the watermark is sent only when non-blank');
     return;
   }
+  if (scenario === 'export-filtered') {
+    location.search = '?min_rating=2&decision=flag';
+    await load();
+    scope.value = 'filtered';
+    updateWorkflow();
+    const shown = document.querySelectorAll('.frame').length;
+    assert.equal(element('#filtered-export-count').textContent, shown + ' frame' + (shown === 1 ? '' : 's'));
+    assert.equal(element('#export-jpegs').disabled, false);
+    await element('#export-jpegs').listeners.click();
+    assert.deepEqual(exportPosts, [{ scope: 'filtered', profile: null, preset: 'full', min_rating: '2', decision: 'flag' }], 'the export carries the contact sheet filters');
+    assert.ok(element('#export-status').textContent.startsWith('Exporting the filtered frames at Full resolution.'));
+    location.search = '';
+    await load();
+    assert.ok(element('#filtered-export-count').textContent.endsWith(', no filter on'));
+    return;
+  }
   if (scenario === 'export' || scenario === 'export-cancel') {
     await load();
     scope.value = 'keepers';
@@ -4156,7 +4189,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                 self.run_javascript_cleanup_regression(scenario)
 
     def test_javascript_keepers_export_runs_as_a_job_with_progress_dialog_and_status_bar(self):
-        for scenario in ("export", "export-cancel", "export-watermark", "export-bad-preset"):
+        for scenario in ("export", "export-cancel", "export-watermark", "export-bad-preset", "export-filtered"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
 

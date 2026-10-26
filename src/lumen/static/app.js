@@ -1954,6 +1954,8 @@ function updateWorkflow() {
   const available = state.status?.tools?.['darktable-cli']?.available === true;
   document.querySelector('#current-export-name').textContent = photo?.name || 'No photo selected';
   document.querySelector('#keeper-count').textContent = `${keepers} keeper${keepers === 1 ? '' : 's'}`;
+  const filtered = pagedPhotos().length;  // every frame the filters match, not only the page shown
+  document.querySelector('#filtered-export-count').textContent = location.search ? frameCount(filtered) : `${frameCount(filtered)}, no filter on`;
   document.querySelector('#rejected-count').textContent = `(${state.rejectedCount})`;
   document.querySelectorAll('[data-decision-control]').forEach(button => { button.disabled = state.cullingBlocked; });
   const rating = document.querySelector('#rating');
@@ -1963,7 +1965,7 @@ function updateWorkflow() {
   document.querySelector('#clear-help').textContent = `Use the exact uppercase word CLEAR. This removes all ${frameCount(state.photoCount)} from Lumen, including photos outside visible batches.`;
   document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   const scope = document.querySelector('input[name="export-scope"]:checked').value;
-  document.querySelector('#export-jpegs').disabled = state.busy || !available || (scope === 'current' ? !photo : !keepers);
+  document.querySelector('#export-jpegs').disabled = state.busy || !available || (scope === 'current' ? !photo : scope === 'keepers' ? !keepers : !filtered);
   document.querySelector('#loupe-export').disabled = state.busy || !available || !photo;
   document.querySelector('#refine-availability').textContent = available ? '' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
@@ -2574,15 +2576,18 @@ async function runExport(scope) {
   const watermark = document.querySelector('#export-watermark').value.trim();
   if (watermark) payload.watermark = watermark;
   if (scope === 'current') payload.photo_id = state.selectedId;
+  // The filtered scope sends the contact sheet's URL query fields; the server validates them as /api/groups does.
+  if (scope === 'filtered') Object.assign(payload, Object.fromEntries(new URLSearchParams(location.search)));
+  const what = { current: 'current photo', keepers: 'all keepers', filtered: 'the filtered frames' }[scope];
   state.busy = true;
   updateWorkflow();
   const size = { share: 'Share size', web: 'Web size' }[preset] || 'Full resolution';
-  document.querySelector('#export-status').textContent = `Exporting ${scope === 'current' ? 'current photo' : 'all keepers'} at ${size}… Keep this page open until the result appears.`;
+  document.querySelector('#export-status').textContent = `Exporting ${what} at ${size}… Keep this page open until the result appears.`;
   document.querySelector('#export-results').replaceChildren();
   try {
-    if (scope === 'keepers') {
+    if (scope !== 'current') {
       watchJob(await post('/api/export', payload));
-      document.querySelector('#export-status').textContent = `Exporting all keepers at ${size}. Progress is in the dialog and the status bar; finished JPEGs are kept if you cancel.`;
+      document.querySelector('#export-status').textContent = `Exporting ${what} at ${size}. Progress is in the dialog and the status bar; finished JPEGs are kept if you cancel.`;
     } else showExportResults((await post('/api/export', payload)).results, size);
   } catch (error) {
     if (error.payload?.results) showExportResults(error.payload.results, size);

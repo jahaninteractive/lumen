@@ -481,10 +481,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 if path == "/api/export":
                     scope = payload.get("scope")
-                    if scope not in ("current", "keepers"):
-                        raise ValueError("scope must be current or keepers")
-                    allowed = {"scope", "profile", "preset", "watermark", "photo_id"} if scope == "current" else {"scope", "profile", "preset", "watermark"}
-                    if payload.keys() - allowed:
+                    if scope not in ("current", "keepers", "filtered"):
+                        raise ValueError("scope must be current, keepers, or filtered")
+                    common = {"scope", "profile", "preset", "watermark"}
+                    filters = None
+                    if scope == "filtered":  # The rest of the body is the contact sheet's filter fields, validated like /api/groups.
+                        fields = {key: value for key, value in payload.items() if key not in common}
+                        if not all(isinstance(value, str) for value in fields.values()):
+                            raise ValueError("filter values must be strings")
+                        filters = parse_group_filters(urlencode(fields))
+                    elif payload.keys() - (common | {"photo_id"} if scope == "current" else common):
                         raise ValueError("unexpected export selectors or fields")
                     if scope == "current" and type(payload.get("photo_id")) is not int:
                         raise ValueError("photo_id must be an integer")
@@ -496,9 +502,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("preset must be full, share, or web")
                     watermark = validate_watermark(payload.get("watermark"))
                     profile_path = Path(profile) if profile is not None else None
-                    if scope == "keepers":  # Many renders: a background job with progress and cancel.
+                    if scope != "current":  # Many renders: a background job with progress and cancel.
                         with Library(settings, job_runner=self.server.job_runner()) as library:
-                            job = library.start_export_job(ExportRequest(tuple(library.keeper_ids()), profile_path, preset, watermark))
+                            ids = library.keeper_ids() if scope == "keepers" else library.catalog.photos_for_filters(filters)
+                            if not ids and scope == "filtered":
+                                raise ValueError("no frames match these filters")
+                            job = library.start_export_job(ExportRequest(tuple(ids), profile_path, preset, watermark))
                             self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                         return
                     with Library(settings) as library:

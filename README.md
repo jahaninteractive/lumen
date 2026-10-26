@@ -77,7 +77,7 @@ It is a personal tool built for one photographer's workflow and shared as is.
 - Typed keywords that survive re-tagging, and per-frame or per-burst place
   correction that can be remembered for nearby frames.
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
-- sRGB JPEG export for the current photo or all keepers with Full (quality 92,
+- sRGB JPEG export for the current photo, all keepers, or the frames the contact sheet filters show, with Full (quality 92,
   full resolution), Share (2048 px), and Web (1600 px) presets, optional
   watermark and darktable XMP profile; the keepers export runs as a cancellable
   background job with a progress dialog.
@@ -459,10 +459,14 @@ for you, so manual choices still work when oMLX is unavailable. Lumen applies
 an approved crop to the full-resolution developed image only during JPEG
 export.
 
-Next use the **Export** tab. Choose **Current photo**
-or **All keepers**. A keeper is any frame that is not rejected and is either
+Next use the **Export** tab. Choose **Current photo**, **All keepers**, or
+**Frames the contact sheet filters show**, which exports exactly what the
+filter bar matches (all of it, not only the page on screen) as a cancellable
+job. A keeper is any frame that is not rejected and is either
 flagged or the best frame in its burst, so a single frame stays a keeper unless
-you reject it. Pick a preset: **Full resolution** exports at full available
+you reject it. The tab also explains **Flagged** (marked to keep with F),
+**Unsorted** (no decision yet), and **Tagged** (described with keywords by the
+local AI). Pick a preset: **Full resolution** exports at full available
 resolution, quality 92, sRGB; **Share** resizes to a 2048 px long edge at
 quality 85; **Web** resizes to a 1600 px long edge at quality 82. Capture
 time, camera/lens details, copyright, ratings, descriptions, and keywords are
