@@ -44,3 +44,32 @@ Steps:
 4. Verify on a clean account: `brew install`, `lumen setup`, `lumen doctor --json` all green.
 
 Trigger: when someone other than the author wants to run Lumen. Pick up the DMG (PyInstaller bundle, `codesign --options runtime`, `notarytool`, `stapler`, DMG via `hdiutil`) when non-terminal users appear and a Developer ID exists.
+
+## Keep the export 16-bit through crop and resize
+
+`raw_developer` writes a genuine 16-bit TIFF, but Pillow caps RGB TIFFs at
+8 bits per channel when `export_jpeg` reads it back, so the crop, resize and
+watermark all run on 8-bit pixels. The develop maths itself happens in Core
+Image's float pipeline, which is where banding would otherwise have come from,
+so this is a refinement rather than a defect.
+
+Moving the crop and the long-edge resize into the helper — both are Core Image
+one-liners — would push the truncation to after the resample. Deliberately not
+done in `2026-10-26-develop-controls-design.md`: the Pillow assembly is
+working, tested code with EXIF-orientation subtleties, and the risk of
+double-applying orientation outweighs a difference nobody has seen yet.
+
+Trigger: visible banding in a smooth gradient (a sunset sky) in an exported
+JPEG that looked clean in the develop preview.
+
+## Carry the camera MakerNote into exported JPEGs
+
+Neither `sips` nor Core Image carries tag 37500 through the render, so the
+MakerNote rebase in `export_jpeg` only ever fires for darktable renders — and
+darktable cannot decode this camera's reduced-size raws. Exports from this
+library therefore ship without the Sony MakerNote. Sourcing it with
+`exiftool -TagsFromFile <original>` instead of from the render would fix it
+for every decoder.
+
+Trigger: wanting Sony-specific capture data (lens corrections, creative look,
+focus point) to survive into the JPEG.

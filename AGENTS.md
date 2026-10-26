@@ -56,5 +56,7 @@ Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
 - Travel plan (complete, on `main`): `docs/superpowers/plans/2026-10-22-travel-volume-culling.md`
 - Approved design: `docs/superpowers/specs/2026-10-22-local-ai-assist-design.md`
 - Local AI assist plan (complete, on `main`): `docs/superpowers/plans/2026-10-22-local-ai-assist.md`
+- Approved design: `docs/superpowers/specs/2026-10-26-develop-controls-design.md`
+- Develop controls plan (not started): `docs/superpowers/plans/2026-10-26-develop-controls.md`
 
 Update `docs/HANDOFF.md` after every reviewed milestone or before stopping. Deferred work goes in `docs/BACKLOG.md`.
