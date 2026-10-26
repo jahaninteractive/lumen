@@ -20,3 +20,27 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 
 - The 8 MP crop error passes through the route by string match on the message; a typed error would be sturdier.
 - Reopening the same frame keeps the previous crop outline until its crops arrive.
+
+## Distribution: Homebrew tap + GitHub Release (planned 2026-10-26)
+
+Goal: a `brew install nasir/lumen/lumen` that pulls Lumen and its tools without an Apple Developer account. A signed DMG is the later step and needs a Developer ID (99 USD/yr) plus notarization; do this first.
+
+What ships today and how it would move:
+
+| Piece | Today | Plan |
+|---|---|---|
+| Lumen package | `uv sync` from source | GitHub Release tarball, formula runs `uv tool install` on it |
+| `vision_analyzer` | built on the user's Mac with `swiftc` (needs Xcode CLT) | prebuilt in CI on a `macos-14` runner, attached to the release, installed by the formula |
+| exiftool | expected on PATH | `depends_on "exiftool"` |
+| darktable, Siril | `vendor/apps/`, gitignored, 535 MB | `depends_on cask: "darktable"`, `depends_on cask: "siril"`; extend `find_tool` fallback to `/Applications/*.app` |
+| GeoNames | `vendor/data/geonames/`, gitignored, 70 MB | new `lumen setup`: downloads the dump into `<library>/cache/` on first run, SHA-256 pinned in the repo |
+| oMLX | separate server | unchanged; `lumen doctor` already reports it |
+
+Steps:
+
+1. Tag `v0.1.0`; GitHub Actions workflow on tag push builds `vision_analyzer`, attaches it and the sdist to the release.
+2. Add `lumen setup` (explicit, user-triggered download with checksum check). Note the one-off outbound fetch in `AGENTS.md`, since the contract currently says no network.
+3. Create `homebrew-lumen` repo with `Formula/lumen.rb`: `uv tool install` the tarball, install the prebuilt analyzer, declare the dependencies above. Caveat text points at `lumen setup` and `lumen doctor`.
+4. Verify on a clean account: `brew install`, `lumen setup`, `lumen doctor --json` all green.
+
+Trigger: when someone other than the author wants to run Lumen. Pick up the DMG (PyInstaller bundle, `codesign --options runtime`, `notarytool`, `stapler`, DMG via `hdiutil`) when non-terminal users appear and a Developer ID exists.
