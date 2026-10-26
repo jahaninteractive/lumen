@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
+import tempfile
 import subprocess
 import sys
 import threading
@@ -17,12 +20,13 @@ from .cli import _cleanup_error_payload, _json_default, _serializable_groups, pr
 from .config import Settings
 from .diagnostics import doctor_report
 from .digest import parse_day
-from .domain import MANUAL_CROP_ID
+from .domain import MANUAL_CROP_ID, DevelopSettings
 from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS, validate_watermark
 from .previews import full_size_for, thumbnail_for
+from .rawdevelop import DevelopError, render_raw
 
 
 STATIC_FILES = {
@@ -197,6 +201,22 @@ class LumenServer(ThreadingHTTPServer):
             super().server_close()
 
 
+def developed_full_size(settings: Settings, source: Path, full_dir: Path, fingerprint: str, develop: DevelopSettings) -> Path:
+    """The full-size render of a developed frame, cached beside the embedded JPEGs under a name that carries the
+    settings, so changing them never serves a stale file. Like that cache, it is never evicted."""
+    digest = hashlib.sha256(json.dumps(develop.to_dict(), sort_keys=True).encode()).hexdigest()[:12]
+    target = full_dir / f"{fingerprint}-{digest}.jpg"
+    if target.is_file():
+        return target
+    source.stat()  # an unreadable original with no cached render raises OSError, as for the embedded JPEG
+    full_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".develop-full-", dir=full_dir) as directory:
+        rendered = Path(directory) / "full.jpg"
+        render_raw(source, rendered, settings.raw_developer_path, settings=develop.to_dict(), image_format="jpeg")
+        rendered.replace(target)
+    return target
+
+
 def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1", "::1", "localhost"}:
         raise ValueError("Lumen only binds to a loopback address")
@@ -338,12 +358,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 full_dir = (settings.cache_dir / "full").resolve()
                 offline = False
                 try:
-                    full = full_size_for(Path(photo.path), full_dir, photo.fingerprint) if photo else None
+                    with Library(settings) as library:
+                        develop = library.develop_for(photo.id) if photo else None
+                    if develop and not develop.is_empty:
+                        full = developed_full_size(settings, Path(photo.path), full_dir, photo.fingerprint, develop)
+                    else:
+                        full = full_size_for(Path(photo.path), full_dir, photo.fingerprint) if photo else None
                     if full:
                         full.resolve().relative_to(full_dir)
                 except OSError:  # the original's volume is unplugged and nothing is cached
                     full, offline = None, True
-                except ValueError:
+                except (ValueError, DevelopError):
                     full = None
                 if not full:
                     self.send_error(HTTPStatus.SERVICE_UNAVAILABLE if offline else HTTPStatus.NOT_FOUND)
@@ -375,6 +400,24 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_bytes(preview.read_bytes(), "image/jpeg", cache=True)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
+
+        def do_DELETE(self) -> None:
+            path = urlparse(self.path).path
+            if not self._trusted_mutation():
+                self._send_json({"error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+                return
+            match = re.fullmatch(r"/api/photos/(\d+)/develop", path)
+            if not match:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            try:
+                if self.headers.get("Content-Length", "0") != "0" and self._read_json():
+                    raise ValueError("develop clear requires an empty JSON object")
+                with Library(settings) as library:
+                    library.clear_develop(int(match.group(1)))
+                self._send_json({"photo_id": int(match.group(1)), "develop": None})
+            except (ValueError, OverflowError, OSError, RuntimeError) as error:
+                self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
 
         def do_POST(self) -> None:
             path = urlparse(self.path).path
@@ -603,6 +646,36 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("crop could not be cleared for this photo") from error
                     self._send_json({"photo_id": photo_id, "active_crop": None})
                     return
+                match = re.fullmatch(r"/api/photos/(\d+)/develop(/preview)?", path)
+                if match:
+                    preview = match.group(2) is not None
+                    if payload.keys() != ({"settings", "long_edge"} if preview else {"settings"}):
+                        raise ValueError("develop requires exactly " + ("settings and long_edge" if preview else "settings"))
+                    try:
+                        develop = DevelopSettings.from_dict(payload["settings"])
+                    except ValueError as error:
+                        raise ValueError(f"develop settings are invalid: {error}") from error
+                    photo_id = int(match.group(1))
+                    if not preview:
+                        with Library(settings) as library:
+                            saved = library.save_develop(photo_id, develop)
+                        self._send_json({"photo_id": photo_id, "develop": saved.to_dict()})
+                        return
+                    edge = payload["long_edge"]
+                    if type(edge) is not int or edge < 1:
+                        raise ValueError("long_edge must be a positive integer")
+                    with Library(settings) as library:
+                        photo = library.catalog.get_photo(photo_id)
+                        if not photo:
+                            raise ValueError("unknown photo")
+                        edge = min(edge, library.previews.max_size)
+                    with tempfile.TemporaryDirectory(prefix=".develop-preview-", dir=settings.cache_dir) as directory:
+                        rendered = render_raw(Path(photo.path), Path(directory) / "preview.jpg", settings.raw_developer_path,
+                                              settings=develop.to_dict(), long_edge=edge, image_format="jpeg", histogram=True)
+                        image = base64.b64encode(rendered.path.read_bytes()).decode()
+                    self._send_json({"image": "data:image/jpeg;base64," + image, "histogram": list(rendered.histogram),
+                                     "neutral_temperature": rendered.neutral_temperature, "neutral_tint": rendered.neutral_tint})
+                    return
                 match = re.fullmatch(r"/api/photos/(\d+)/composition-review", path)
                 if match:
                     if payload:
@@ -752,7 +825,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
                 job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist",
-                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/"))
+                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/")) or "/develop" in path
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 

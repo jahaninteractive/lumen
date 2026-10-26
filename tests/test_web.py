@@ -4924,3 +4924,137 @@ class AstroWebTests(unittest.TestCase):
         self.assertTrue(any("invalid arguments" in line for line in finished["log_tail"]))
         self.assertIsNone(finished["result"])
         self.assert_safe(finished)
+
+
+class DevelopWebTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.settings = Settings(library_dir=self.root / "library")
+        source = self.root / "secret-folder" / "photo.jpg"
+        source.parent.mkdir()
+        Image.new("RGB", (120, 90), (80, 100, 120)).save(source)
+        with Library(self.settings) as library:
+            library.import_path(source)
+            self.photo = library.catalog.get_photo(1)
+        self.calls = []
+        self.fail = False
+        patchers = [patch("lumen.web.render_raw", side_effect=self.render),
+                    patch("lumen.library.render_raw", side_effect=self.render)]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.server = make_server(self.settings, port=0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.tmp.cleanup()
+
+    def render(self, source, destination, executable, *, settings=None, long_edge=0,
+               image_format="tiff16", histogram=False, runner=None):
+        self.calls.append({"settings": settings, "long_edge": long_edge, "histogram": histogram})
+        if self.fail:
+            from lumen.rawdevelop import DevelopError
+            raise DevelopError(f"The raw developer could not develop {Path(source).name}.")
+        Image.new("RGB", (64, 48), (200, 100, 50)).save(destination, format="JPEG")
+        return DevelopRender(path=Path(destination), width=64, height=48, histogram=(0.1, 0.2),
+                             neutral_temperature=5500.0, neutral_tint=3.0)
+
+    post_json = WebTests.post_json
+
+    def request(self, method, path, headers=None):
+        request = urllib.request.Request(self.base + path, headers=headers or {}, method=method,
+                                         data=b"{}" if method == "DELETE" else None)
+        if method == "DELETE":
+            request.add_header("Content-Type", "application/json")
+        try:
+            response = urllib.request.urlopen(request, timeout=3)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            return response.code, response.read()
+
+    def preview(self, **body):
+        return self.post_json("/api/photos/1/develop/preview", {"settings": {"contrast": 0.5}, "long_edge": 512} | body)
+
+    def test_develop_preview_returns_an_image_and_a_histogram(self):
+        code, body = self.preview()
+        self.assertEqual(200, code)
+        self.assertTrue(body["image"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual([0.1, 0.2], body["histogram"])
+        self.assertEqual((5500.0, 3.0), (body["neutral_temperature"], body["neutral_tint"]))
+        self.assertEqual({"contrast": 0.5}, self.calls[0]["settings"])
+        self.assertTrue(self.calls[0]["histogram"])
+        with Library(self.settings) as library:
+            self.assertIsNone(library.develop_for(1), "the preview route never persists")
+
+    def test_develop_preview_clamps_an_oversized_long_edge(self):
+        self.assertEqual(200, self.preview(long_edge=10**9)[0])
+        self.assertEqual(2048, self.calls[0]["long_edge"])
+
+    def test_develop_preview_rejects_a_bad_long_edge(self):
+        for value in (-1, 0, 1.5, "512", True, None):
+            self.assertEqual(400, self.preview(long_edge=value)[0], value)
+        self.assertEqual([], self.calls)
+
+    def test_develop_rejects_bad_settings_and_extra_keys(self):
+        curve = [[0.5, 0], [0.4, 0.2], [0.6, 0.4], [0.8, 0.6], [1, 1]]
+        for settings in ({"nope": 1}, {"contrast": 99}, {"curve": curve}, "x", {"contrast": float("nan")}):
+            self.assertEqual(400, self.post_json("/api/photos/1/develop", {"settings": settings})[0], settings)
+        self.assertEqual(400, self.post_json("/api/photos/1/develop", {"settings": {}, "extra": 1})[0])
+        self.assertEqual(400, self.preview(extra=1)[0])
+        self.assertEqual(400, self.post_json("/api/photos/1/develop", {})[0])
+        self.assertEqual([], self.calls)
+
+    def test_develop_save_and_clear(self):
+        code, body = self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
+        self.assertEqual((200, {"photo_id": 1, "develop": {"contrast": 0.5}}), (code, body))
+        with Library(self.settings) as library:
+            self.assertEqual({"contrast": 0.5}, library.develop_for(1).to_dict())
+        code, raw = self.request("DELETE", "/api/photos/1/develop")
+        self.assertEqual((200, {"photo_id": 1, "develop": None}), (code, json.loads(raw)))
+        with Library(self.settings) as library:
+            self.assertIsNone(library.develop_for(1))
+
+    def test_develop_rejects_cross_origin_and_foreign_host(self):
+        for headers in ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"}):
+            self.assertEqual(403, self.post_json("/api/photos/1/develop", {"settings": {}}, headers=headers)[0])
+            self.assertEqual(403, self.post_json("/api/photos/1/develop/preview", {"settings": {}, "long_edge": 9}, headers=headers)[0])
+            self.assertEqual(403, self.request("DELETE", "/api/photos/1/develop", headers)[0])
+        self.assertEqual([], self.calls)
+
+    def test_develop_unknown_photo_and_helper_failure_stay_public(self):
+        self.assertEqual(400, self.post_json("/api/photos/999/develop", {"settings": {}})[0])
+        self.fail = True
+        for code, body in (self.preview(), self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})):
+            self.assertEqual(400, code)
+            self.assertIn("could not develop", body["error"])
+            text = json.dumps(body)
+            self.assertNotIn(str(self.root), text)
+            self.assertNotIn(self.photo.fingerprint, text)
+
+    def test_full_size_serves_a_developed_render_only_for_developed_frames(self):
+        full_dir = self.settings.cache_dir / "full"
+        plain = full_dir / f"{self.photo.fingerprint}.jpg"
+        full_dir.mkdir(parents=True)
+        Image.new("RGB", (30, 20), "blue").save(plain)
+        self.assertEqual(200, self.request("GET", "/full/1")[0])
+        self.assertEqual([], self.calls, "an undeveloped frame keeps the embedded JPEG")
+        self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
+        self.calls.clear()
+        code, body = self.request("GET", "/full/1")
+        self.assertEqual(200, code)
+        self.assertEqual((64, 48), Image.open(BytesIO(body)).size)
+        self.assertEqual(1, len(self.calls))
+        self.assertEqual(0, self.calls[0]["long_edge"])
+        self.assertEqual(1, len([p for p in full_dir.glob(f"{self.photo.fingerprint}-*.jpg")]))
+        self.request("GET", "/full/1")
+        self.assertEqual(1, len(self.calls), "the second request is served from the cache")
+        self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.6}})
+        self.request("GET", "/full/1")
+        self.assertEqual(2, len(list(full_dir.glob(f"{self.photo.fingerprint}-*.jpg"))))
