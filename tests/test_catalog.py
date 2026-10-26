@@ -1,3 +1,4 @@
+import json
 import re
 import tempfile
 import sqlite3
@@ -818,6 +819,20 @@ class DevelopSettingsTests(unittest.TestCase):
         for bad in (float("nan"), float("inf")):
             with self.assertRaises(ValueError):
                 DevelopSettings({"contrast": bad})
+
+    def test_develop_settings_reject_a_huge_int_with_value_error(self):
+        for key in ("contrast", "exposure_ev"):
+            with self.assertRaises(ValueError):
+                DevelopSettings.from_dict(json.loads('{"%s": %s}' % (key, "1" * 400)))
+        with self.assertRaises(ValueError):
+            DevelopSettings({"curve": ((0, 0), (0.25, 0.2), (0.5, 10 ** 400), (0.75, 0.8), (1, 1))})
+
+    def test_develop_settings_fields_are_read_only(self):
+        settings = DevelopSettings({"contrast": 0.5})
+        with self.assertRaises(TypeError):
+            settings.fields["contrast"] = 99
+        self.assertEqual({"contrast": 0.5}, settings.to_dict())
+        self.assertIs(dict, type(settings.to_dict()))
 
     def test_develop_settings_reject_a_bool(self):
         with self.assertRaises(ValueError):

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import math
 import re
+from types import MappingProxyType
 from typing import Any
 
 MAX_IMAGE_DIMENSION = 100_000
@@ -50,8 +51,9 @@ CURVE_POINTS = 5
 
 
 def _develop_number(value: Any, low: float, high: float, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError(f"develop {name} must be a finite number")
+    # Range check first: it rejects nan/inf and compares huge ints without float conversion.
     if not low <= value <= high:
         raise ValueError(f"develop {name} must be from {low} through {high}")
     return value
@@ -79,7 +81,7 @@ class DevelopSettings:
                 clean[key] = _develop_number(value, *DEVELOP_RANGES[key], key)
             else:
                 raise ValueError(f"unknown develop setting: {key}")
-        object.__setattr__(self, "fields", clean)
+        object.__setattr__(self, "fields", MappingProxyType(clean))
 
     @property
     def is_empty(self) -> bool:
