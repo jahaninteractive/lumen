@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import date, datetime
 import sqlite3
 import subprocess
+import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -1998,11 +1999,14 @@ class LibraryTests(unittest.TestCase):
             ids = self.burst(library)
             with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
                 library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
-            holder = []
-            with patch("lumen.library.render_raw", side_effect=self.develop_render(
-                    [], before_render=lambda: library.job_runner.cancel(holder[0]))):
+            holder, known = [], threading.Event()  # the worker may render before the job id is known
+            def cancel_once_known():
+                self.assertTrue(known.wait(10))
+                library.job_runner.cancel(holder[0])
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([], before_render=cancel_once_known)):
                 job = library.start_develop_group_job(ids[0])
                 holder.append(job.id)
+                known.set()
                 library.wait_for_job(job.id, 10)
             stored = [library.develop_for(i) for i in ids[1:]]
             events = [e for e in library.catalog.events_for(ids[0]) if e.kind == "develop_applied_to_group"]
