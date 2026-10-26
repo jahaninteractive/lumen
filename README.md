@@ -298,8 +298,9 @@ burst** copies the settings to each raw in the burst, rejected ones included,
 as a background job; frames that are not raw or whose original is offline are
 skipped and counted. **Export this frame** bakes the settings into the JPEG;
 tick **Also export the untouched version** (here or in the Export tab) to get
-a second file named `-lumen-original.jpg` beside it. Develop is unavailable
-while the original is offline, and the tab says so. A profile export (darktable
+a second file named `-lumen-original.jpg` beside it. **Reset all**, then leaving the frame, clears the saved settings and returns
+the tile to its pre-develop render. Develop is unavailable while the original
+is offline, or when the frame is not a raw file, and the tab says which. A profile export (darktable
 XMP) cannot be combined with develop settings.
 
 **Your own crop.** Drag on the image to draw a rectangle; the outside dims and
@@ -532,10 +533,10 @@ uv run lumen export --keepers --preset web --watermark "© Your Name" --json
 ```
 
 Raw frames are rendered by a small native helper that `scripts/bootstrap.sh`
-builds; if it is missing, exporting a raw is refused with a message telling you
-to run the script again. If `darktable-cli` is unavailable, the Export panel
-explains why and disables export. Install darktable as described above, add its executable directory to
-`PATH` if needed, restart Lumen, and reload the page. Check with
+builds; if it is missing, exporting a raw without a darktable profile is refused
+with a message telling you to run the script again. If `darktable-cli` is
+unavailable, the Export panel explains why and disables export. Install
+darktable as described above, add its executable directory to `PATH` if needed, restart Lumen, and reload the page. Check with
 `uv run lumen doctor --json`. Import and review remain usable.
 
 ## Refine previews
