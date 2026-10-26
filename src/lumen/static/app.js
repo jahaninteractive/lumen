@@ -1352,16 +1352,7 @@ async function load() {
   await Promise.all([reviewing && loadRejectSuggestions(), loadVocabulary(!reviewing)]);  // the inspector's datalist needs the words on every load
 }
 
-// Import lives in a dialog opened from the tab row, so the sheet keeps the space.
-const importDialog = document.querySelector('#import-dialog');
-function showImport(open) {
-  if (open) {
-    if (importDialog.showModal) importDialog.showModal(); else importDialog.hidden = false;
-    document.querySelector('#import-path').focus();
-  } else if (importDialog.close) importDialog.close(); else importDialog.hidden = true;
-}
-document.querySelector('#open-import').addEventListener('click', () => showImport(true));
-document.querySelector('#close-import').addEventListener('click', () => showImport(false));
+// Import is a tab of its own, beside Ingest.
 document.querySelector('#import-form').addEventListener('submit', async event => {
   event.preventDefault();
   state.busy = true;
@@ -1372,7 +1363,6 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
     if (document.querySelector('#import-include-cleared').checked) payload.include_cleared = true;
     watchJob(await post('/api/import', payload));
     document.querySelector('#import-status').textContent = 'Import started. Progress and results appear in the job strip at the top.';
-    showImport(false);
   } catch (error) {
     document.querySelector('#import-status').textContent = error.message;
     announce(error.message);
@@ -2078,18 +2068,16 @@ const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
 
 function collapsePanel(collapsed) {
   document.querySelector('#workflow-panels').hidden = collapsed;
-  document.querySelector('#collapse-panel').setAttribute('aria-pressed', String(collapsed));
   try {
     if (collapsed) localStorage.setItem('lumen-panel-collapsed', '1');
     else localStorage.removeItem('lumen-panel-collapsed');
   } catch { /* per-visit only */ }
 }
 function togglePanel() {
-  const collapsed = document.querySelector('#collapse-panel').getAttribute('aria-pressed') !== 'true';
+  const collapsed = !document.querySelector('#workflow-panels').hidden;
   collapsePanel(collapsed);
   announce(collapsed ? 'Workflow panel collapsed; the contact sheet has the space.' : 'Workflow panel shown.');
 }
-document.querySelector('#collapse-panel').addEventListener('click', togglePanel);
 try {
   selectTab.restore();  // before load(), so the first load fills the right panel; a removed tab stays on Export
   if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);

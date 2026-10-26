@@ -267,6 +267,9 @@ class WebTests(unittest.TestCase):
         self.assertIn("Do not format the card: ", javascript)
         self.assertNotRegex(javascript.lower(), r"safe to (format|erase|wipe)|card is safe")
         self.assertNotRegex(javascript, r"ingest[^\n]*\.innerHTML")
+        copy = " ".join(panel["text"].split())
+        for text in ("Copy.", "Verify.", "Import.", "never writes to or erases it", "Every file verified on every destination."):
+            self.assertIn(text, copy)
 
     def test_javascript_ingest_tab_starts_polls_and_reports_verification(self):
         self.run_javascript_cleanup_regression("ingest")
@@ -712,7 +715,7 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"]]
-        self.assertEqual(["Export", "Review", "Astro", "Ingest", "Clear"], [node["text"].strip() for node in tabs])
+        self.assertEqual(["Export", "Review", "Astro", "Ingest", "Import", "Clear"], [node["text"].strip() for node in tabs])
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for index, tab in enumerate(tabs):
             self.assertEqual("button", tab["tag"])
@@ -1386,7 +1389,7 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['export', 'review', 'astro', 'ingest', 'clear'].map((name, index) => {
+const tabElements = ['export', 'review', 'astro', 'ingest', 'import', 'clear'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -3482,17 +3485,15 @@ const regression = `
     assert.deepEqual(tagPosts.at(-1), { scope: 'keepers', retag: true }, 'tag keepers honours the same tick');
     return;
   }
-  if (scenario === 'import-dialog') {
+  if (scenario === 'import-tab') {
     await load();
-    const dialog = element('#import-dialog');
-    assert.equal(dialog.hidden, undefined, 'closed until opened');
-    element('#open-import').listeners.click();
-    assert.equal(dialog.hidden, false, 'Import… opens the dialog');
-    assert.equal(focused, element('#import-path'), 'focus lands in the path field');
+    element('#import-tab').listeners.click();
+    assert.equal(element('#import-panel').hidden, false, 'the Import tab shows its panel');
+    assert.equal(element('#ingest-panel').hidden, true);
     element('#import-path').value = '/Volumes/Card';
     await element('#import-form').listeners.submit({ preventDefault() {}, currentTarget: element('#import-form') });
     assert.equal(state.job.status, 'queued');
-    assert.equal(dialog.hidden, true, 'an accepted import closes the dialog');
+    assert.equal(element('#import-panel').hidden, false, 'the panel stays open with its status');
     assert.ok(element('#announcer').textContent.includes('Import'));
     assert.deepEqual(importPosts, [{ path: '/Volumes/Card' }]);
     return;
@@ -3649,21 +3650,16 @@ const regression = `
     assert.deepEqual(scrolled.at(-1), [element('#main-content'), { top: 0, behavior: 'auto' }]);
     assert.ok(element('#announcer').textContent.includes('workflow tabs'));
 
-    const collapse = element('#collapse-panel');
-    collapse.listeners.click();
-    assert.equal(element('#workflow-panels').hidden, true);
-    assert.equal(collapse.getAttribute('aria-pressed'), 'true');
-    assert.equal(stored['lumen-panel-collapsed'], '1');
-    collapse.listeners.click();
-    assert.equal(element('#workflow-panels').hidden, false);
-    assert.equal(stored['lumen-panel-collapsed'], undefined);
-    collapse.listeners.click();
     const exportTab = element('#export-tab');
+    element('#workflow-panels').hidden = false;
     exportTab.listeners.click();
-    assert.equal(element('#workflow-panels').hidden, false, 'clicking the open tab brings a collapsed panel back');
-    exportTab.listeners.click();
-    assert.equal(element('#workflow-panels').hidden, true, 'and clicking it again folds the panel away');
+    assert.equal(element('#workflow-panels').hidden, true, 'clicking the open tab folds the panel away');
+    assert.equal(stored['lumen-panel-collapsed'], '1', 'the folded panel is remembered');
     assert.equal(element('#announcer').textContent, 'Workflow panel collapsed; the contact sheet has the space.');
+    exportTab.listeners.click();
+    assert.equal(element('#workflow-panels').hidden, false, 'clicking it again brings the panel back');
+    assert.equal(stored['lumen-panel-collapsed'], undefined);
+    exportTab.listeners.click();
     element('#review-tab').listeners.click();
     assert.equal(element('#workflow-panels').hidden, false, 'another tab always shows its panel');
     assert.equal(element('#review-tab').getAttribute('aria-selected'), 'true');
@@ -4382,27 +4378,27 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_assist_button_runs_one_job_over_keepers(self):
         self.run_javascript_cleanup_regression("assist")
 
-    def test_javascript_import_lives_in_a_dialog_opened_from_the_tab_row(self):
-        self.run_javascript_cleanup_regression("import-dialog")
+    def test_javascript_import_is_a_tab_beside_ingest(self):
+        self.run_javascript_cleanup_regression("import-tab")
 
     def test_javascript_import_sends_include_cleared_only_when_ticked(self):
         self.run_javascript_cleanup_regression("import-cleared")
 
-    def test_import_dialog_and_export_tab_own_the_import_and_tag_controls(self):
+    def test_import_tab_and_export_tab_own_the_import_and_tag_controls(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
-        self.assertEqual("dialog", by_id["import-dialog"]["tag"])
-        self.assertIn(by_id["import-dialog"], by_id["import-form"]["parents"], "the import form lives in the dialog")
-        self.assertNotIn(by_id["main-content"], by_id["import-form"]["parents"])
+        panel = by_id["import-panel"]
+        self.assertEqual(("tabpanel", "import-tab"), (panel["attrs"].get("role"), panel["attrs"].get("aria-labelledby")))
+        self.assertIn(panel, by_id["import-form"]["parents"], "the import form lives in the Import tab")
+        self.assertNotIn("import-dialog", by_id)
+        self.assertNotIn("open-import", by_id, "the Import… button gave way to the tab")
+        for text in ("Nothing is copied, moved, or renamed", "Use Ingest first"):
+            self.assertIn(text, " ".join(panel["text"].split()))
         for text in ('<label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>',
                      "Frames you removed or cleared before are skipped unless ticked."):
             self.assertIn(text, html)
-        opener = by_id["open-import"]
-        self.assertEqual(("button", "button", "dialog"), (opener["tag"], opener["attrs"].get("type"), opener["attrs"].get("aria-haspopup")))
-        tab_row = next(node for node in parser.nodes if node["attrs"].get("class") == "tab-row")
-        self.assertIn(tab_row, opener["parents"], "Import… sits in the pinned tab row")
         for name in ("tag-all", "retag-all"):
             self.assertIn(by_id["export-panel"], by_id[name]["parents"], f"{name} moved into the Export tab")
 
@@ -4468,20 +4464,16 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
-        tablist = next(node for node in parser.nodes if node["attrs"].get("role") == "tablist")
-        collapse = by_id["collapse-panel"]
-        self.assertEqual(("button", "button", "false"), (collapse["tag"], collapse["attrs"].get("type"), collapse["attrs"].get("aria-pressed")))
-        self.assertEqual("Collapse panel", collapse["text"].strip())
-        self.assertEqual(tablist["parents"][-1], collapse["parents"][-1], "the toggle sits next to the tab rail")
+        self.assertNotIn("collapse-panel", by_id, "clicking the open tab folds the panel; no separate button")
         self.assertEqual("tabpanel", by_id["export-panel"]["attrs"]["role"])
-        self.assertIn(by_id[collapse["attrs"]["aria-controls"]], by_id["export-panel"]["parents"])
+        self.assertIn(by_id["workflow-panels"], by_id["export-panel"]["parents"])
         nav = next(node for node in parser.nodes if node["tag"] == "nav")
         self.assertNotIn("aside", parser.tags, "the inspector rail is gone; the frame view holds the inspector")
         header = by_id["rail-header"]
         self.assertIn(nav, header["parents"])
         for name in ("merge-batches", "merge-count", "jump-selected", "back-to-top"):
             self.assertIn(header, by_id[name]["parents"], f"{name} lives in the sticky rail header")
-        for name in ("collapse-panel", "merge-batches", "jump-selected", "back-to-top"):
+        for name in ("merge-batches", "jump-selected", "back-to-top"):
             node = by_id[name]
             self.assertEqual(("button", "button"), (node["tag"], node["attrs"].get("type")))
             self.assertTrue(node["text"].strip() or node["attrs"].get("aria-label"), f"{name} needs an accessible name")

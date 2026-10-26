@@ -172,10 +172,19 @@ The server listens only on `127.0.0.1:8765`. To use another library:
 uv run lumen --library "/Volumes/Photo Catalog/Lumen" serve --open
 ```
 
-## Ingest a card
+## Ingest or import?
 
-Ingest copies a card to a primary destination and an optional mirror, verifies
-every copy by SHA-256, then imports the primary copies. The card is only read.
+- **Ingest** is for a memory card that is still the only copy. It copies every
+  file to a primary folder and an optional mirror on a second drive, reads each
+  copy back and compares its SHA-256 checksum with the card, then imports the
+  verified primary copies. The card is only read.
+- **Import** is for photos already on a drive. Lumen reads them where they are
+  and adds them to the catalog; nothing is copied or moved. The drive must be
+  plugged in to export or refine previews.
+
+Both are tabs in the UI, side by side.
+
+## Ingest a card
 
 ```sh
 uv run lumen ingest "/Volumes/PHOTO_CARD" --to "/Volumes/Travel SSD/2026-10" --mirror "/Volumes/Backup/2026-10"
@@ -195,7 +204,7 @@ the same ingest skips files that are already present and verified.
 Import and ingest skip frames you removed or cleared in an earlier session
 (matched by content, and still copied and verified by ingest) and report them as
 *previously cleared*. To bring them back on purpose, tick **Include frames
-cleared in earlier sessions** in the import dialog or pass
+cleared in earlier sessions** in the Import tab or pass
 `lumen import --include-cleared`.
 
 ## Jobs

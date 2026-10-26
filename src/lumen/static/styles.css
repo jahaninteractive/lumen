@@ -99,7 +99,6 @@ main { min-width: 0; }
 .main-top { position: sticky; top: 0; z-index: 1; background: var(--black); }
 .tab-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding-right: 1.25rem; border-bottom: 1px solid var(--line); }
 .tab-row .tab-rail { flex: 1 1 auto; border-bottom: 0; }
-#collapse-panel { flex: none; }
 .burst { scroll-margin-top: var(--sticky-top, 0px); margin-bottom: 1.5rem; padding: .25rem; border-radius: 6px; outline-offset: 2px; }
 .burst[data-selected="true"] { outline: 2px solid var(--amber); }
 .burst-header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .75rem; }
@@ -112,12 +111,14 @@ main { min-width: 0; }
 .burst-header .toggle { margin-left: auto; }
 .burst-frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-min, 180px), 1fr)); gap: 1rem; }
 
-#import-dialog { width: min(92vw, 40rem); }
 #export-dialog { width: min(92vw, 34rem); }
 #export-dialog-progress { display: block; width: 100%; height: 12px; accent-color: var(--amber); }
 #export-dialog p { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .import-bar { padding: 0; }
 .import-bar label { display: block; margin-bottom: .35rem; font-weight: 700; }
+.import-bar label.toggle { display: flex; margin: .75rem 0 0; font-weight: 400; }
+.steps { max-width: 80ch; padding-left: 1.5rem; }
+.steps li { margin-bottom: .35rem; }
 .import-bar p { max-width: 70ch; margin: .5rem 0 0; color: var(--muted); font-size: .9rem; }
 .tag-bar { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .tag-bar .input-row { align-items: center; flex-wrap: wrap; }

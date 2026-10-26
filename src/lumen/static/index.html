@@ -48,10 +48,9 @@
           <button type="button" id="review-tab" role="tab" aria-controls="review-panel" aria-selected="false" tabindex="-1">Review</button>
           <button type="button" id="astro-tab" role="tab" aria-controls="astro-panel" aria-selected="false" tabindex="-1">Astro</button>
           <button type="button" id="ingest-tab" role="tab" aria-controls="ingest-panel" aria-selected="false" tabindex="-1">Ingest</button>
+          <button type="button" id="import-tab" role="tab" aria-controls="import-panel" aria-selected="false" tabindex="-1">Import</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
-        <button type="button" id="open-import" class="secondary" aria-haspopup="dialog">Import…</button>
-        <button type="button" id="collapse-panel" class="secondary" aria-pressed="false" aria-controls="workflow-panels">Collapse panel</button>
       </div>
       </div>
 
@@ -184,8 +183,14 @@
           <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
         </section>
         <section id="ingest-panel" role="tabpanel" aria-labelledby="ingest-tab" tabindex="0" hidden>
-          <h2>Copy a card to verified destinations</h2>
-          <p class="quiet">Lumen only reads the card. Every file, videos included, is copied, re-read from the drive, and checked by SHA-256 on every destination; then Lumen imports the primary photo copies. Hidden system files are skipped.</p>
+          <h2>Ingest: copy a memory card safely, then import it</h2>
+          <p>Use Ingest when the photos are still on the camera's card and that card is the only copy. Ingest does three things in order:</p>
+          <ol class="steps">
+            <li><strong>Copy.</strong> Every file on the card, videos included, is copied to your primary folder and, if you choose one, a mirror folder on a second drive.</li>
+            <li><strong>Verify.</strong> Each copy is read back from its drive and its SHA-256 checksum compared with the card's. A copy that does not match is reported, never trusted.</li>
+            <li><strong>Import.</strong> The verified photos in the primary folder are added to Lumen, exactly as Import would.</li>
+          </ol>
+          <p class="quiet">Lumen only reads the card; it never writes to or erases it. Hidden system files are skipped. Format the card in the camera only after the panel ends with "Every file verified on every destination."</p>
           <fieldset id="ingest-controls">
             <legend>Card and destinations</legend>
             <p id="ingest-card-label">Memory card folder</p>
@@ -215,6 +220,25 @@
           <p id="ingest-verdict"></p>
           <p id="ingest-status" role="status" aria-live="polite"></p>
         </section>
+        <section id="import-panel" role="tabpanel" aria-labelledby="import-tab" tabindex="0" hidden>
+          <h2>Import: add photos that are already on a drive</h2>
+          <p>Use Import for photos already copied off the card and backed up: a folder on your Mac or an external drive, or a single photo. Lumen reads them where they are and adds them to the contact sheet. Nothing is copied, moved, or renamed; Lumen writes only previews and sidecars into its own library.</p>
+          <p class="quiet">The originals must stay reachable: if their drive is unplugged, the contact sheet still shows previews, but export and preview refinement need the drive plugged back in. Photos still on a memory card? Use Ingest first, so a verified copy exists before you format the card.</p>
+          <form id="import-form" class="import-bar">
+            <label for="import-path">Folder or photo path</label>
+            <div class="input-row">
+              <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
+              <button type="button" id="browse-path" class="secondary">Browse…</button>
+            </div>
+            <label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>
+            <p class="quiet">Frames you removed or cleared before are skipped unless ticked.</p>
+            <p id="import-status" role="status" aria-live="polite"></p>
+            <div class="button-row">
+              <button type="submit">Import originals</button>
+            </div>
+          </form>
+        </section>
+
         <section id="clear-panel" role="tabpanel" aria-labelledby="clear-tab" tabindex="0" hidden>
           <h2>Make room for the next shoot</h2>
           <p class="quiet">Camera originals and completed exports remain. Lumen moves working files and a catalog snapshot into recoverable library trash.</p>
@@ -312,25 +336,6 @@
   <footer class="ai-bar" aria-label="Local AI activity">
     <p id="ai-status" role="status" aria-live="polite">Local AI idle. Requests and their results are reported here.</p>
   </footer>
-
-  <dialog id="import-dialog" aria-labelledby="import-heading">
-    <h2 id="import-heading">Import originals</h2>
-    <form id="import-form" class="import-bar">
-      <label for="import-path">Folder or photo path</label>
-      <div class="input-row">
-        <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
-        <button type="button" id="browse-path" class="secondary">Browse…</button>
-      </div>
-      <label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>
-      <p class="quiet">Frames you removed or cleared before are skipped unless ticked.</p>
-      <p>Files stay where they are. Lumen writes previews and sidecars to its own library.</p>
-      <p id="import-status" role="status" aria-live="polite"></p>
-      <div class="button-row">
-        <button type="submit">Import originals</button>
-        <button type="button" id="close-import" class="secondary">Cancel</button>
-      </div>
-    </form>
-  </dialog>
 
   <dialog id="export-dialog" aria-labelledby="export-dialog-heading">
     <h2 id="export-dialog-heading">Exporting JPEGs</h2>
