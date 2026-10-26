@@ -449,31 +449,34 @@ class Catalog:
             (photo_id,),
         )]
 
-    def save_develop(self, photo_id: int, settings: DevelopSettings, source_fingerprint: str) -> DevelopSettings:
+    def save_develop(self, photo_id: int, settings: DevelopSettings, source_fingerprint: str,
+                     details: dict | None = None) -> DevelopSettings:
+        """`details` joins the develop_changed event, so one event carries the settings and what they produced."""
         if not isinstance(settings, DevelopSettings):
             raise ValueError("develop settings are invalid")
         if self.get_photo(photo_id) is None:
             raise ValueError(f"unknown photo ID: {photo_id}")
-        details = settings.to_dict()
+        fields = settings.to_dict()
         with self.connection:
             self.connection.execute(
                 """INSERT INTO photo_develop (photo_id, settings_json, source_fingerprint, updated_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(photo_id) DO UPDATE SET settings_json=excluded.settings_json,
                 source_fingerprint=excluded.source_fingerprint, updated_at=excluded.updated_at""",
-                (photo_id, json.dumps(details, sort_keys=True, separators=(",", ":")),
+                (photo_id, json.dumps(fields, sort_keys=True, separators=(",", ":")),
                  source_fingerprint, datetime.now(timezone.utc).isoformat()),
             )
-            self._insert_event(photo_id, "develop_changed", {"settings": details})
+            self._insert_event(photo_id, "develop_changed", {"settings": fields, **(details or {})})
         return settings
 
-    def clear_develop(self, photo_id: int) -> DevelopSettings | None:
+    def clear_develop(self, photo_id: int, details: dict | None = None) -> DevelopSettings | None:
         previous = self.get_develop(photo_id)
-        if previous is None:
+        if previous is None and not details:  # Nothing saved and nothing to record: no event.
             return None
         with self.connection:
             self.connection.execute("DELETE FROM photo_develop WHERE photo_id = ?", (photo_id,))
-            self._insert_event(photo_id, "develop_cleared", {"settings": previous.to_dict()})
+            self._insert_event(photo_id, "develop_cleared",
+                               {"settings": previous.to_dict() if previous else {}, **(details or {})})
         return previous
 
     def invalidate_develop(self, photo_id: int, previous_fingerprint: str,

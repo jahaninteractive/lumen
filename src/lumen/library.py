@@ -938,9 +938,11 @@ class Library:
     def clear_develop(self, photo_id: int) -> None:
         """Drop the saved settings and re-render from the raw with none. The embedded preview is long gone, so
         the frame becomes `refined` rather than `embedded`: rendered from the raw, with nothing added."""
-        if type(photo_id) is not int or not self.catalog.get_photo(photo_id):
+        if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
             raise ValueError(f"unknown photo ID: {photo_id}")
-        if self.catalog.get_develop(photo_id) is None:
+        # A frame whose settings were invalidated keeps preview_kind `developed` with nothing saved, and refine
+        # skips it: clearing is the only way back, so it must still re-render.
+        if self.catalog.get_develop(photo_id) is None and photo.preview_kind != "developed":
             return
         self._develop(photo_id, None)
 
@@ -954,14 +956,19 @@ class Library:
         if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
             raise ValueError(f"unknown photo ID: {photo_id}")
         source = Path(photo.path)
-        try:
-            current = fingerprint_file(source)
-        except OSError:
-            raise DevelopError(f"{source.name} is unavailable; reimport it before developing.") from None
-        if current != photo.fingerprint:  # Other bytes: saved settings no longer describe this file.
-            self.catalog.invalidate_develop(photo_id, photo.fingerprint, current)
-            self._write_sidecar(photo_id)
-            raise DevelopError(f"{source.name} changed since import; reimport it before developing.")
+
+        def refuse_if_changed() -> None:
+            """The file must still hold the bytes the catalog knows, both before and after the render."""
+            try:
+                current = fingerprint_file(source)
+            except OSError:
+                raise DevelopError(f"{source.name} is unavailable; reimport it before developing.") from None
+            if current != photo.fingerprint:  # Other bytes: saved settings no longer describe this file.
+                self.catalog.invalidate_develop(photo_id, photo.fingerprint, current)
+                self._write_sidecar(photo_id)
+                raise DevelopError(f"{source.name} changed since import; reimport it before developing.")
+
+        refuse_if_changed()
         # ponytail: previews are content-addressed, so two copies of one file share this path and the last
         # develop wins; give the path a per-photo suffix if duplicate frames are ever developed apart.
         destination = self.settings.preview_dir / f"{photo.fingerprint}-2048.jpg"
@@ -978,14 +985,21 @@ class Library:
                     apply_vision_result(metrics, vision)
             except (OSError, PreviewError, ValueError) as error:
                 raise DevelopError(f"The rendered preview for {source.name} could not be read.") from error
-            normalized.replace(destination)  # The render succeeded: only now does the library change.
+            refuse_if_changed()  # Swapped during the render: the preview would show other bytes.
+            try:
+                normalized.replace(destination)  # The render held up: only now does the library change.
+            except OSError as error:
+                raise DevelopError(f"The developed preview for {source.name} could not be saved.") from error
         previous = Path(photo.preview_path) if photo.preview_path else None
-        self.catalog.update_preview(photo_id, str(destination), "refined" if settings is None else "developed")
+        kind = "refined" if settings is None else "developed"
+        self.catalog.update_preview(photo_id, str(destination), kind)
         self.catalog.save_metrics(photo_id, metrics)  # total_score is left as the last ranking wrote it.
+        details = {"preview_kind": kind, "metrics": {key: getattr(metrics, key) for key in
+                   ("sharpness", "exposure", "clipping", "face_quality", "eye_quality")}}
         if settings is None:
-            self.catalog.clear_develop(photo_id)
+            self.catalog.clear_develop(photo_id, details)
         else:
-            self.catalog.save_develop(photo_id, settings, photo.fingerprint)
+            self.catalog.save_develop(photo_id, settings, photo.fingerprint, details)
         self._write_sidecar(photo_id)
         # The old preview goes only when no other photo still shows it (the cleanup retention rule).
         if (previous and previous != destination and previous.resolve().parent == self.settings.preview_dir.resolve()

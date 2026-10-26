@@ -1825,7 +1825,10 @@ class LibraryTests(unittest.TestCase):
             photo = library.catalog.get_photo(photo_id)
             stored = library.develop_for(photo_id)
             sidecar = json.loads(library.sidecars.paths(photo)[0].read_text())
-            kinds = [event.kind for event in library.catalog.events_for(photo_id)]
+            events = library.catalog.events_for(photo_id)
+            kinds = [event.kind for event in events]
+            changed = [event for event in events if event.kind == "develop_changed"][-1]
+            metrics = library.catalog.get_metrics(photo_id)
 
         self.assertEqual(settings, saved)
         self.assertEqual(settings, stored)
@@ -1841,6 +1844,11 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(calls[0]["destination"].is_relative_to(self.library_dir), "every render stays in the library")
         self.assertIn("develop_changed", kinds)
         self.assertEqual("developed", sidecar["preview_kind"])
+        self.assertEqual({"exposure_ev": 0.5, "contrast": 0.3}, changed.details["settings"])
+        self.assertEqual("developed", changed.details["preview_kind"])
+        self.assertEqual(sorted(("sharpness", "exposure", "clipping", "face_quality", "eye_quality")),
+                         sorted(changed.details["metrics"]))
+        self.assertEqual(metrics.sharpness, changed.details["metrics"]["sharpness"])
 
     def test_save_develop_remeasures_metrics(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1883,7 +1891,9 @@ class LibraryTests(unittest.TestCase):
                 library.clear_develop(photo_id)  # nothing saved any more: no second render
             photo = library.catalog.get_photo(photo_id)
             stored = library.develop_for(photo_id)
-            kinds = [event.kind for event in library.catalog.events_for(photo_id)]
+            events = library.catalog.events_for(photo_id)
+            kinds = [event.kind for event in events]
+            cleared = [event for event in events if event.kind == "develop_cleared"][-1]
 
         self.assertEqual(2, len(calls))
         self.assertEqual({}, calls[1]["settings"])
@@ -1891,6 +1901,9 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(Path(photo.preview_path).is_file())
         self.assertIsNone(stored)
         self.assertIn("develop_cleared", kinds)
+        self.assertEqual({"exposure_ev": 1.0}, cleared.details["settings"])
+        self.assertEqual("refined", cleared.details["preview_kind"])
+        self.assertIn("sharpness", cleared.details["metrics"])
 
     def test_refine_previews_skips_a_developed_frame(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -1930,6 +1943,56 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("develop_invalidated_source_replaced", kinds[-1])
         self.assertIn("DSC0001.jpg", str(caught.exception))
         self.assertNotIn(str(self.image_path), str(caught.exception))
+
+    def test_save_develop_refuses_a_source_swapped_during_the_render(self):
+        """The render reads the file itself: bytes that change while it runs would be committed as this frame."""
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            embedded = Path(library.catalog.get_photo(photo_id).preview_path)
+            swap = lambda: Image.new("RGB", (320, 240), (10, 200, 10)).save(self.image_path, quality=95)
+            developed = library.settings.preview_dir / f"{library.catalog.get_photo(photo_id).fingerprint}-2048.jpg"
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([], before_render=swap)):
+                with self.assertRaises(library_module.DevelopError) as caught:
+                    library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.5}))
+            photo = library.catalog.get_photo(photo_id)
+            stored = library.develop_for(photo_id)
+
+        self.assertIn("DSC0001.jpg", str(caught.exception))
+        self.assertNotIn(str(self.image_path), str(caught.exception))
+        self.assertEqual(("embedded", str(embedded)), (photo.preview_kind, photo.preview_path))
+        self.assertTrue(embedded.is_file())
+        self.assertFalse(developed.exists(), "a render of other bytes is never published")
+        self.assertIsNone(stored)
+
+    def test_clear_develop_recovers_a_frame_whose_settings_were_invalidated(self):
+        """An invalidated frame stays `developed` with nothing saved, and refine will not touch it; clearing is
+        the only way back, so it must re-render even with no settings to drop."""
+        original = self.image_path.read_bytes()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.5}))
+            Image.new("RGB", (320, 240), (10, 200, 10)).save(self.image_path, quality=95)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                with self.assertRaises(library_module.DevelopError):
+                    library.save_develop(photo_id, DevelopSettings({"contrast": 0.4}))
+            stuck = (library.catalog.get_photo(photo_id).preview_kind, library.develop_for(photo_id))
+            skipped = self.refine(library, all_photos=True)["result"]
+
+            self.image_path.write_bytes(original)  # the photographer puts the file back
+            calls = []
+            with patch("lumen.library.render_raw", side_effect=self.develop_render(calls)):
+                library.clear_develop(photo_id)
+            photo = library.catalog.get_photo(photo_id)
+            preview = Path(photo.preview_path).read_bytes()
+
+        self.assertEqual(("developed", None), stuck, "the invalidated frame is stuck on a developed preview")
+        self.assertEqual({"refined": 0, "skipped": 1, "failed": 0}, skipped, "refine leaves a developed frame alone")
+        self.assertEqual({}, calls[0]["settings"])
+        self.assertEqual("refined", photo.preview_kind)
+        self.assertTrue(preview.startswith(b"\xff\xd8"), "a fresh JPEG preview was rendered")
 
     def test_save_develop_takes_the_mutation_lock(self):
         locked = []

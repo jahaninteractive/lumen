@@ -822,7 +822,11 @@ class WebTests(unittest.TestCase):
                     self.assertEqual(tile["preview_url"], frame["preview_url"], "sheet and inspector agree")
                     seen.append(tile["preview_url"])
 
-        self.assertEqual(["developed", "developed"], [url.split("-")[-2] for url in seen])
+        keys = [url.split("?v=")[1].split("-") for url in seen]
+        self.assertEqual([key[:2] for key in keys[:1]], [key[:2] for key in keys[1:]],
+                         "fingerprint and kind are identical, so only the mtime can bust the tile")
+        self.assertEqual(["developed", "developed"], [key[1] for key in keys])
+        self.assertGreater(int(keys[1][2]), int(keys[0][2]), "the preview file's mtime advanced")
         self.assertNotEqual(seen[0], seen[1], "the second save of an already-developed frame still busts the tile")
 
     def test_crop_api_returns_safe_candidates_and_active_edit(self):
