@@ -54,6 +54,18 @@ class SidecarTests(unittest.TestCase):
         self.assertIn("<Iptc4xmpCore:AltTextAccessibility><rdf:Alt><rdf:li xml:lang=\"x-default\">Two penguins on ice</rdf:li>", with_alt)
         self.assertNotIn("AltTextAccessibility", SidecarWriter._xmp("d", [], rating=0))
 
+    def test_sidecar_carries_lumen_develop_for_a_developed_frame(self):
+        with tempfile.TemporaryDirectory() as directory:
+            writer = SidecarWriter(Path(directory))
+            photo = Photo(id=7, path="/photos/a.ARW", fingerprint="abcdef123456", captured_at=None, camera_id="A1")
+            metrics = PhotoMetrics(sharpness=0.8, exposure=0.7, clipping=0.01)
+            _, developed = writer.write(photo, metrics, [], selected=False,
+                                        develop={"exposure_ev": 0.5, "contrast": 0.3})
+            self.assertIn('<lumen:develop>{"contrast": 0.3, "exposure_ev": 0.5}</lumen:develop>', developed.read_text())
+            _, plain = writer.write(photo, metrics, [], selected=False)
+            self.assertNotIn("lumen:develop", plain.read_text())
+            self.assertNotIn("lumen:develop", SidecarWriter._xmp("d", [], rating=0, develop={}))
+
     def test_place_is_in_json_and_xmp_location_and_country_only_when_present(self):
         from xml.etree import ElementTree
         with tempfile.TemporaryDirectory() as directory:

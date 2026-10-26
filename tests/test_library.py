@@ -36,9 +36,11 @@ from lumen.catalog import GroupFilters
 try:
     from tests.test_previews import write_fake_darktable
     from tests.test_geonames import write_fixture as write_geonames_fixture
+    from tests.test_pipelines import render_raw_stub
 except ModuleNotFoundError:  # discovered with -s tests
     from test_previews import write_fake_darktable
     from test_geonames import write_fixture as write_geonames_fixture
+    from test_pipelines import render_raw_stub
 
 
 class LibraryTests(unittest.TestCase):
@@ -613,18 +615,9 @@ class LibraryTests(unittest.TestCase):
             urlopen.assert_not_called()
             self.assertEqual("Kaapsehoop", library.catalog.photo_by_path(str(second.resolve())).place)
 
-    def test_unsupported_raw_is_flagged_at_import_and_exports_through_the_macos_decoder(self):
+    def test_unsupported_raw_is_flagged_at_import_and_the_flag_clears_on_reimport(self):
         warning = "Sony reduced-size lossless raw; darktable cannot decode it"
         metadata = {"captured_at": None, "camera_id": "ILCE-7CM2:1", "exposure_seconds": None, "raw_warning": warning}
-
-        def macos_runner(command, **kwargs):
-            self.assertNotEqual("darktable-cli", command[0], "darktable must not run for a flagged raw")
-            if command[0].endswith("sw_vers"):
-                return subprocess.CompletedProcess(command, 0, "26.5.1", "")
-            Image.new("RGB", (320, 240), "red").save(command[command.index("--out") + 1], format="TIFF",
-                                                   icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
-            return subprocess.CompletedProcess(command, 0, "", "")
-
         with Library(Settings(library_dir=self.library_dir)) as library:
             with patch("lumen.library.read_metadata", return_value=metadata):
                 library.import_path(self.image_path)
@@ -632,15 +625,6 @@ class LibraryTests(unittest.TestCase):
             imported = next(event for event in library.catalog.events_for(photo.id) if event.kind == "imported")
             self.assertEqual(warning, imported.details["raw_warning"])
             self.assertEqual([warning], library.get_photo(photo.id)["warnings"])
-            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
-            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
-                "lumen.pipelines.subprocess.run", side_effect=macos_runner
-            ):
-                result = library.export_jpegs(library_module.ExportRequest((photo.id,), None))[0]
-            self.assertTrue(result.success, result.message)
-            self.assertEqual("macos", result.artifact.settings["decoder"])
-            exported = next(event for event in library.catalog.events_for(photo.id) if event.kind == "exported")
-            self.assertEqual("macos", exported.details["decoder"])
             with patch("lumen.library.read_metadata", return_value=metadata | {"raw_warning": None}):
                 library.import_path(self.image_path)  # a later decoder fix clears the flag on reimport
             self.assertEqual([], library.get_photo(photo.id)["warnings"])
@@ -1003,6 +987,107 @@ class LibraryTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
         Image.new("RGB", (320, 240), "red").save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
         return subprocess.CompletedProcess(command, 0, "", "")
+
+    def os_version_runner(self, command, **kwargs):
+        """The raw-developer route probes the OS version and runs nothing else."""
+        self.assertTrue(command[0].endswith("sw_vers"), f"nothing but the OS probe may run: {command}")
+        return subprocess.CompletedProcess(command, 0, "26.5.1", "")
+
+    def raw_export_frame(self, library, develop=None):
+        """Import the fixture, then let the catalog see it as the raw it stands in for: export routes on the suffix."""
+        library.import_path(self.image_path)
+        photo_id = library.catalog.list_photos()[0].id
+        raw = self.image_path.rename(self.image_path.with_suffix(".ARW"))
+        with library.catalog.connection:
+            library.catalog.connection.execute("UPDATE photos SET path = ?, format = 'ARW' WHERE id = ?",
+                                               (str(raw.resolve()), photo_id))
+        if develop is not None:
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(photo_id, develop)
+        return photo_id
+
+    def install_raw_developer(self, library):
+        """Stand in for what `scripts/bootstrap.sh` compiles; the render itself is patched out."""
+        library.settings.raw_developer_path.parent.mkdir(parents=True, exist_ok=True)
+        library.settings.raw_developer_path.touch()
+
+    def raw_export(self, library, request, calls=None):
+        pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir,
+                                     raw_developer=library.settings.raw_developer_path)
+        with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), \
+                patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([] if calls is None else calls)), \
+                patch("lumen.pipelines.subprocess.run", side_effect=self.os_version_runner):
+            return library.export_jpegs(request)
+
+    def test_export_records_the_develop_settings_in_provenance(self):
+        calls = []
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.raw_export_frame(library, DevelopSettings({"exposure_ev": 0.5, "contrast": 0.3}))
+            self.install_raw_developer(library)
+            result = self.raw_export(library, library_module.ExportRequest((photo_id,), None), calls)[0]
+            self.assertTrue(result.success, result.message)
+            self.assertEqual("coreimage", result.artifact.settings["decoder"])
+            self.assertEqual({"exposure_ev": 0.5, "contrast": 0.3}, result.artifact.settings["develop"])
+            self.assertEqual({"exposure_ev": 0.5, "contrast": 0.3}, calls[0]["settings"])
+            exported = next(event for event in library.catalog.events_for(photo_id) if event.kind == "exported")
+            self.assertEqual({"exposure_ev": 0.5, "contrast": 0.3}, exported.details["develop"])
+            sidecar = json.loads(next(library.settings.sidecar_dir.glob("*.lumen.json")).read_text())
+            self.assertEqual({"exposure_ev": 0.5, "contrast": 0.3}, sidecar["artifacts"][0]["settings"]["develop"])
+
+    def test_keep_original_produces_two_outputs_with_distinct_names(self):
+        self.assertFalse(library_module.ExportRequest((1,)).keep_original)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.raw_export_frame(library, DevelopSettings({"exposure_ev": 0.5}))
+            self.install_raw_developer(library)
+            result = self.raw_export(library, library_module.ExportRequest((photo_id,), None, keep_original=True))[0]
+            self.assertTrue(result.success, result.message)
+            self.assertEqual({"DSC0001-lumen.jpg", "DSC0001-lumen-original.jpg"},
+                             {path.name for path in library.settings.jpeg_output_dir.iterdir()})
+            self.assertEqual("DSC0001-lumen.jpg", Path(result.output).name)
+            artifacts = library.catalog.list_artifacts()
+            self.assertEqual([{"exposure_ev": 0.5}, None], [artifact.settings["develop"] for artifact in artifacts])
+            exported = [event for event in library.catalog.events_for(photo_id) if event.kind == "exported"]
+            self.assertEqual([artifact.id for artifact in artifacts],
+                             [event.details["artifact_id"] for event in exported])
+
+    def test_keep_original_names_the_companion_per_preset(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.raw_export_frame(library, DevelopSettings({"exposure_ev": 0.5}))
+            self.install_raw_developer(library)
+            request = library_module.ExportRequest((photo_id,), None, "web", keep_original=True)
+            result = self.raw_export(library, request)[0]
+            self.assertTrue(result.success, result.message)
+            names = {path.name for path in library.settings.jpeg_output_dir.iterdir()}
+            self.assertIn("DSC0001-lumen-web-original.jpg", names)
+            self.assertEqual({"DSC0001-lumen-web.jpg", "DSC0001-lumen-web-original.jpg"}, names)
+
+    def test_keep_original_does_nothing_for_a_frame_with_no_develop_settings(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.raw_export_frame(library)
+            self.install_raw_developer(library)
+            photo = library.catalog.get_photo(photo_id)
+            for stored in (None, DevelopSettings({})):  # Empty settings mean undeveloped, as everywhere else.
+                with self.subTest(stored=stored):
+                    if stored is not None:
+                        library.catalog.save_develop(photo_id, stored, photo.fingerprint)
+                    request = library_module.ExportRequest((photo_id,), None, keep_original=True)
+                    result = self.raw_export(library, request)[0]
+                    self.assertTrue(result.success, result.message)
+                    self.assertEqual({"DSC0001-lumen.jpg"}, {path.name for path in library.settings.jpeg_output_dir.iterdir()})
+                    self.assertEqual([None], [artifact.settings["develop"] for artifact in library.catalog.list_artifacts()])
+                    Path(result.output).unlink()  # The next pass must land on the same name, not a collision suffix.
+                    library.catalog.discard_export(result.artifact.id)
+
+    def test_export_refuses_with_an_actionable_message_when_raw_developer_is_missing(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.raw_export_frame(library)
+            self.assertFalse(library.settings.raw_developer_path.exists())
+            with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+                for start in (library.export_jpegs, library.start_export_job):
+                    with self.subTest(start=start.__name__), self.assertRaises(ValueError) as refusal:
+                        start(library_module.ExportRequest((photo_id,), None))
+                    self.assertIn("scripts/bootstrap.sh", str(refusal.exception))
+            self.assertFalse(library.settings.jpeg_output_dir.exists())
 
     def test_export_records_artifact_and_sidecar_provenance(self):
         self.assertTrue(hasattr(library_module, "ExportRequest"), "ExportRequest is missing")

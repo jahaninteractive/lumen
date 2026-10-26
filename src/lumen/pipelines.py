@@ -15,6 +15,7 @@ from xml.etree import ElementTree
 from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps
 
 from .previews import fingerprint_file
+from .rawdevelop import render_raw
 from .sidecars import SidecarWriter
 from .tools import find_tool
 
@@ -102,29 +103,29 @@ class JpegExportResult(PipelineResult):
     output_fingerprint: str
 
 
-# macOS's own RAW decoder, used only for raws darktable's rawspeed refuses (e.g. Sony reduced-size lossless ARW).
-SIPS = "/usr/bin/sips"
-SRGB_PROFILE = "/System/Library/ColorSync/Profiles/sRGB Profile.icc"
-DECODERS = frozenset({"darktable", "macos"})
+# Apple's Core Image raw pipeline (the native raw developer) decodes every raw this library holds, including the
+# Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
+RAW_EXTENSIONS = frozenset({".arw"})
+DECODERS = frozenset({"darktable", "coreimage"})
 
 
 class DarktablePipeline:
-    def __init__(self, executable: str, output_root: Path):
+    def __init__(self, executable: str, output_root: Path, raw_developer: Path | None = None):
         self.executable = executable
         self.output_root = output_root.resolve()
+        self.raw_developer = raw_developer
 
     def export_jpeg(
         self, source: Path, profile: Path | None = None, *,
         crop: dict[str, object] | None = None, description: str | None = None,
         keywords: list[str] | None = None, rating: int | None = None, alt_text: str | None = None,
-        caption_used: bool = False, reserved_paths: set[Path] | None = None, preset: str = "full", decoder: str = "darktable",
+        caption_used: bool = False, reserved_paths: set[Path] | None = None, preset: str = "full",
+        develop: dict[str, object] | None = None, stem_suffix: str | None = None,
         watermark: str | None = None, place: str | None = None, country: str | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
         if preset not in EXPORT_PRESETS:
             raise ValueError(f"unknown export preset: {preset!r}")
-        if decoder not in DECODERS:
-            raise ValueError(f"unknown export decoder: {decoder!r}")
         options = EXPORT_PRESETS[preset]
         watermark = validate_watermark(watermark)
         runner = runner or subprocess.run
@@ -133,16 +134,20 @@ class DarktablePipeline:
         if not directory.is_relative_to(self.output_root):
             raise ValueError("JPEG output must stay inside the managed output directory")
         directory.mkdir(parents=True, exist_ok=True)
-        stem = f"{source.stem}-lumen" + ("" if preset == "full" else f"-{preset}")
+        stem = (f"{source.stem}-lumen" + ("" if preset == "full" else f"-{preset}")
+                + (f"-{stem_suffix}" if stem_suffix else ""))
         destination = directory / f"{stem}.jpg"
         reserved = {path.resolve() for path in reserved_paths or ()}
+        # A profile keeps the darktable route reachable; a non-raw has to take it, since the raw developer only
+        # decodes raws. Everything else — every raw in this library — renders through the raw developer.
+        decoder = "darktable" if profile is not None or source.suffix.lower() not in RAW_EXTENSIONS else "coreimage"
         settings = {
             "preset": preset, "quality": options["quality"], "long_edge": options["long_edge"],
             "color_space": "sRGB", "include_gps": options["include_gps"], "caption_used": caption_used,
             "watermark": watermark is not None,
             "profile": str(profile.resolve()) if profile else None,
             "crop": crop, "source_fingerprint": "", "tool_version": "unknown", "decoder": decoder,
-            "command": [],
+            "develop": develop, "command": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         command: tuple[str, ...] = ()
@@ -158,11 +163,17 @@ class DarktablePipeline:
                     and left + width <= 1 and top + height <= 1
                 ):
                     raise ValueError("crop must be a bounded normalized rectangle")
-            if decoder == "macos":
-                if profile is not None:
-                    raise ValueError("an XMP profile needs darktable; the macOS decoder cannot apply one")
+            if develop and decoder == "darktable":
+                # Rendering through darktable with none of the develop settings applied would publish a JPEG that
+                # disagrees with the preview the photographer approved.
+                raise ValueError("saved develop settings need the raw developer, which cannot render "
+                                 + ("an XMP profile: export with one or the other" if profile is not None
+                                    else f"a {source.suffix or 'non-raw'} file: develop applies to raws only"))
+            if decoder == "coreimage":
+                if self.raw_developer is None or not Path(self.raw_developer).is_file():
+                    raise ValueError("the raw developer is missing; run scripts/bootstrap.sh to build it")
                 version = runner(["/usr/bin/sw_vers", "-productVersion"], capture_output=True, text=True, timeout=30, check=False)
-                settings["tool_version"] = f"macOS {version.stdout.strip() or 'unknown'} sips"
+                settings["tool_version"] = f"macOS {version.stdout.strip() or 'unknown'} Core Image"
             else:
                 version = runner([self.executable, "--version"], capture_output=True, text=True, timeout=30, check=False)
                 if version.returncode != 0:
@@ -174,8 +185,13 @@ class DarktablePipeline:
                 staged_source = work / "source" / source.name
                 shutil.copyfile(source, staged_source)
                 settings["source_fingerprint"] = fingerprint_file(staged_source)
-                rendered = (self._run_sips(staged_source, work / "render.tif", runner) if decoder == "macos"
-                            else self.run(staged_source, work / "render.tif", profile, runner=runner))
+                render = work / "render.tif"
+                if decoder == "coreimage":
+                    # DevelopError carries a photographer-safe message and is handled like any other failure below.
+                    render_raw(staged_source, render, Path(self.raw_developer), settings=develop, runner=runner)
+                    rendered = PipelineResult(True, 0, render, (str(self.raw_developer),), "")
+                else:
+                    rendered = self.run(staged_source, render, profile, runner=runner)
                 command = rendered.command
                 settings["command"] = list(command)
                 if not rendered.success:
@@ -223,7 +239,7 @@ class DarktablePipeline:
                                exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
                                xmp=SidecarWriter._xmp(
                                    effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
-                                   alt_text=alt_text,
+                                   develop=develop, alt_text=alt_text,
                                    place=place, country=country,  # A place name travels with every preset; GPS does not.
                                ).encode("utf-8"))
                 if 37500 in capture:
@@ -249,8 +265,7 @@ class DarktablePipeline:
                     except FileExistsError:
                         suffix += 1
                         destination = directory / f"{stem}-{suffix}.jpg"
-            message = "JPEG exported" + (" with the macOS decoder (darktable cannot decode this raw)" if decoder == "macos" else "")
-            return JpegExportResult(True, 0, destination, command, message, settings, fingerprint)
+            return JpegExportResult(True, 0, destination, command, "JPEG exported", settings, fingerprint)
         except Exception as error:
             errors = [str(error)]
             if published is not None:
@@ -264,18 +279,6 @@ class DarktablePipeline:
                 except Exception as cleanup_error:
                     errors.append(f"workspace cleanup failed ({work}): {cleanup_error}")
             return JpegExportResult(False, 1, destination, command, "; ".join(errors), settings, "")
-
-    @staticmethod
-    def _run_sips(source: Path, destination: Path, runner) -> PipelineResult:
-        """Decode with macOS sips into a 16-bit sRGB TIFF; default-settings render, no profile."""
-        command = [SIPS, "-s", "format", "tiff", "--matchTo", SRGB_PROFILE, str(source), "--out", str(destination)]
-        try:
-            completed = runner(command, capture_output=True, text=True, timeout=600, check=False)
-        except subprocess.TimeoutExpired:
-            return PipelineResult(False, 124, destination, tuple(command), "sips timed out after 600 seconds")
-        success = completed.returncode == 0 and destination.exists()
-        message = (completed.stderr.strip() or completed.stdout.strip()) if not success else ""
-        return PipelineResult(success, completed.returncode, destination, tuple(command), message or ("" if success else "sips produced no output"))
 
     def command(self, source: Path, destination: Path, profile: Path | None = None) -> list[str]:
         destination = destination.resolve()
@@ -385,11 +388,11 @@ class PipelineRegistry:
             ),
         }
 
-    def darktable(self, output_root: Path) -> DarktablePipeline:
+    def darktable(self, output_root: Path, raw_developer: Path | None = None) -> DarktablePipeline:
         executable = find_tool("darktable-cli")
         if not executable:
             raise RuntimeError("darktable-cli is not installed")
-        return DarktablePipeline(executable, output_root)
+        return DarktablePipeline(executable, output_root, raw_developer)
 
     def siril(self, output_root: Path) -> SirilPipeline:
         executable = find_tool("siril-cli")

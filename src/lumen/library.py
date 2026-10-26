@@ -30,7 +30,7 @@ from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
 from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
-from .pipelines import EXPORT_PRESETS, PipelineRegistry, validate_watermark
+from .pipelines import EXPORT_PRESETS, RAW_EXTENSIONS, PipelineRegistry, validate_watermark
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
 from .rawdevelop import DevelopError, render_raw
@@ -55,6 +55,11 @@ def _coordinated(method):
 
 
 _ABSOLUTE_PATH = re.compile(r"'?/[^\s'\"]+'?")
+
+
+def _develop_fields(develop: DevelopSettings | None) -> dict | None:
+    """The settings to render with, or None for an undeveloped frame. Empty settings mean undeveloped."""
+    return None if develop is None or develop.is_empty else develop.to_dict()
 
 
 def _job_detail(job_id: int | None) -> dict:
@@ -102,6 +107,7 @@ class ExportRequest:
     profile: Path | None = None
     preset: str = "full"
     watermark: str | None = None
+    keep_original: bool = False  # Also export the undeveloped version of every developed frame.
 
 
 @dataclass(frozen=True, slots=True)
@@ -1417,9 +1423,16 @@ class Library:
         if request.preset not in EXPORT_PRESETS:
             raise ValueError(f"unknown export preset: {request.preset!r}")
         validate_watermark(request.watermark)
+        if type(request.keep_original) is not bool:
+            raise ValueError("keep_original must be true or false")
         if not self.settings.jpeg_output_dir.resolve().is_relative_to(self.settings.library_dir.resolve()):
             raise ValueError("JPEG output must stay inside the managed library")
-        return photos, PipelineRegistry().darktable(self.settings.output_dir)
+        # Raws render through the native raw developer, so a library bootstrapped before it existed refuses the
+        # whole request rather than falling back to a decoder the photographer did not choose.
+        if (request.profile is None and not self.settings.raw_developer_path.is_file()
+                and any(Path(photo.path).suffix.lower() in RAW_EXTENSIONS for photo in photos)):
+            raise ValueError("the raw developer is missing; run scripts/bootstrap.sh to build it")
+        return photos, PipelineRegistry().darktable(self.settings.output_dir, self.settings.raw_developer_path)
 
     @_coordinated
     def export_jpegs(self, request: ExportRequest) -> list[ExportResult]:
@@ -1436,7 +1449,7 @@ class Library:
 
         def work(context) -> None:
             with Library(self.settings, job_runner=runner) as worker:
-                pipeline = PipelineRegistry().darktable(worker.settings.output_dir)
+                pipeline = PipelineRegistry().darktable(worker.settings.output_dir, worker.settings.raw_developer_path)
                 counts = {"exported": 0, "failed": 0, "skipped": 0}
                 for index, photo_id in enumerate(request.photo_ids, 1):
                     if context.cancelled:
@@ -1515,15 +1528,13 @@ class Library:
         return job
 
     def _export_one(self, photo: Photo, request: ExportRequest, pipeline) -> ExportResult:
-        rendered = None
-        artifact = None
+        done: list[list] = []  # [JpegExportResult, Artifact | None] per published JPEG, for compensation.
         try:
             tags = self.catalog.get_tags(photo.id)
             data = tags["data"] if tags else {}
             if fingerprint_file(Path(photo.path)) != photo.fingerprint:
                 raise ValueError("source content changed since import; reimport before exporting")
-            # A raw darktable cannot decode goes through macOS's decoder instead; provenance records which one rendered.
-            decoder = "macos" if self._import_warnings(self.catalog.events_for(photo.id)) else "darktable"
+            develop = _develop_fields(self.catalog.get_develop(photo.id))
             edit = self.catalog.get_crop(photo.id)
             crop = None
             if edit is not None:
@@ -1542,40 +1553,51 @@ class Library:
             share = request.preset != "full"  # Share and Web use the caption; Full keeps the photographer's description and no alt text.
             caption = data.get("caption")
             caption_used = share and bool(caption)
-            rendered = pipeline.export_jpeg(Path(photo.path), request.profile,
-                crop=crop,
-                description=caption if caption_used else data.get("description"),
-                keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
-                rating=-1 if photo.decision == "reject" else photo.rating,
-                reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
-                preset=request.preset, decoder=decoder, watermark=request.watermark,
-                place=photo.place, country=photo.place_country)
-            if not rendered.success:
-                return ExportResult(photo.id, False, None, rendered.message)
-            artifact = self.catalog.save_artifact(photo.id, Path(photo.path).name,
-                rendered.settings["source_fingerprint"], "jpeg", str(rendered.output),
-                rendered.settings, rendered.output_fingerprint)
-            self.catalog.append_event(photo.id, "exported", {
-                **rendered.settings, "artifact_id": artifact.id, "output": artifact.path,
-                "output_fingerprint": artifact.output_fingerprint,
-                "created_at": artifact.created_at.isoformat(),
-            })
+            # The untouched companion is a second render of the same source with no develop settings, under a name
+            # that cannot collide with another preset's companion. It is pointless for an undeveloped frame.
+            plan = [(develop, None)] + ([(None, "original")] if request.keep_original and develop else [])
+            for settings, stem_suffix in plan:
+                rendered = pipeline.export_jpeg(Path(photo.path), request.profile,
+                    crop=crop,
+                    description=caption if caption_used else data.get("description"),
+                    keywords=data.get("subjects"), alt_text=data.get("alt_text") if share else None, caption_used=caption_used,
+                    rating=-1 if photo.decision == "reject" else photo.rating,
+                    reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
+                    preset=request.preset, develop=settings, stem_suffix=stem_suffix, watermark=request.watermark,
+                    place=photo.place, country=photo.place_country)
+                if not rendered.success:
+                    if done:  # The developed JPEG published; the companion did not, so neither stands.
+                        raise RuntimeError(rendered.message)
+                    return ExportResult(photo.id, False, None, rendered.message)
+                published = [rendered, None]
+                done.append(published)
+                published[1] = self.catalog.save_artifact(photo.id, Path(photo.path).name,
+                    rendered.settings["source_fingerprint"], "jpeg", str(rendered.output),
+                    rendered.settings, rendered.output_fingerprint)
+                self.catalog.append_event(photo.id, "exported", {
+                    **rendered.settings, "artifact_id": published[1].id, "output": published[1].path,
+                    "output_fingerprint": published[1].output_fingerprint,
+                    "created_at": published[1].created_at.isoformat(),
+                })
             self._write_sidecar(photo.id)
-            return ExportResult(photo.id, True, rendered.output, rendered.message, artifact)
+            first, artifact = done[0]
+            return ExportResult(photo.id, True, first.output, first.message, artifact)
         except Exception as error:
             errors = [str(error)]
-            if rendered is not None and rendered.success:
+            if done:
                 try:
-                    if artifact is not None:
-                        self.catalog.discard_export(artifact.id)
-                    else:
+                    for _, artifact in done:
+                        if artifact is not None:
+                            self.catalog.discard_export(artifact.id)
+                    if any(artifact is None for _, artifact in done):
                         self.catalog.connection.rollback()
                 except Exception as compensation_error:
                     errors.append(f"catalog compensation failed: {compensation_error}")
-                try:
-                    rendered.output.unlink(missing_ok=True)
-                except Exception as compensation_error:
-                    errors.append(f"JPEG compensation failed ({rendered.output}): {compensation_error}")
+                for rendered, _ in done:
+                    try:
+                        rendered.output.unlink(missing_ok=True)
+                    except Exception as compensation_error:
+                        errors.append(f"JPEG compensation failed ({rendered.output}): {compensation_error}")
                 try:
                     if self.catalog.get_photo(photo.id) is None:
                         for path in self.sidecars.paths(photo):
@@ -2056,6 +2078,7 @@ class Library:
             alt_text=data.get("alt_text"),
             artifacts=[artifact for artifact in catalog.list_artifacts() if artifact.photo_id == photo_id],
             active_crop=catalog.get_crop(photo_id),
+            develop=_develop_fields(catalog.get_develop(photo_id)),
             decision=photo.decision,
             rating=photo.rating,
             place=photo.place,

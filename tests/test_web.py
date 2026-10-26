@@ -418,6 +418,21 @@ class WebTests(unittest.TestCase):
                     self.assertIn("error", result)
         self.assertFalse((self.root / "library" / "outputs" / "jpeg").exists())
 
+    def test_export_passes_keep_original_through_and_refuses_a_non_boolean(self):
+        with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+            for value in ("yes", 1, None, []):
+                with self.subTest(value=value):
+                    code, result = self.post_json("/api/export", {"scope": "current", "photo_id": 1, "keep_original": value})
+                    self.assertEqual((400, "keep_original must be true or false"), (code, result.get("error")))
+        requests = []
+        with patch("lumen.library.Library.export_jpegs", new=lambda _self, request: requests.append(request) or []):
+            for payload in ({"scope": "current", "photo_id": 1, "keep_original": True},
+                            {"scope": "current", "photo_id": 1}):
+                with self.subTest(payload=payload):
+                    code, _ = self.post_json("/api/export", payload)
+                    self.assertEqual(200, code)
+        self.assertEqual([True, False], [request.keep_original for request in requests])
+
     def test_export_accepts_known_presets_only_and_ui_has_labeled_preset_radios(self):
         with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
             for payload in ({"scope": "current", "photo_id": 1, "preset": "x"}, {"scope": "keepers", "preset": 2},

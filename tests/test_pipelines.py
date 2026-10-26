@@ -10,9 +10,164 @@ from unittest.mock import patch
 from PIL import Image, ImageCms
 
 from lumen.pipelines import DarktablePipeline, PipelineRegistry, SirilPipeline, validate_watermark
+from lumen.rawdevelop import DevelopRender
+
+
+def render_raw_stub(calls, *, size=(80, 60), xmp=None):
+    """Stand-in for the native raw developer: records the request and writes an sRGB TIFF. Never runs Core Image."""
+    def render(source, destination, executable, *, settings=None, long_edge=0,
+               image_format="tiff16", histogram=False, runner=None):
+        calls.append({"source": Path(source), "destination": Path(destination), "executable": Path(executable),
+                      "settings": settings, "format": image_format, "long_edge": long_edge})
+        Image.new("RGB", size, "red").save(
+            destination, format="TIFF", **({"tiffinfo": {700: xmp}} if xmp else {}),
+            icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+        return DevelopRender(path=Path(destination), width=size[0], height=size[1],
+                             histogram=(), neutral_temperature=5500.0, neutral_tint=0.0)
+    return render
+
+
+def os_version_only(test, command, **kwargs):
+    """Runner for the raw-developer route: the OS probe is the only subprocess it may make."""
+    test.assertTrue(command[0].endswith("sw_vers"), f"nothing but the OS probe may run: {command}")
+    return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
 
 
 class PipelineTests(unittest.TestCase):
+    def raw_pipeline(self, root):
+        """The helper itself is patched out; the file only has to exist, as bootstrap leaves it."""
+        helper = root / "bin" / "raw_developer"
+        helper.parent.mkdir(exist_ok=True)
+        helper.touch()
+        return DarktablePipeline("darktable-cli", root / "outputs", raw_developer=helper)
+
+    def test_export_renders_a_raw_through_the_raw_developer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            calls = []
+            with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub(calls)):
+                result = self.raw_pipeline(root).export_jpeg(
+                    source, runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+            self.assertTrue(result.success, result.message)
+            self.assertEqual("coreimage", result.settings["decoder"])
+            self.assertEqual("macOS 26.5.1 Core Image", result.settings["tool_version"])
+            self.assertIsNone(result.settings["develop"])
+            self.assertEqual("DSC00712-lumen.jpg", result.output.name)
+            self.assertTrue(result.output.is_file())
+            self.assertTrue(result.command[0].endswith("raw_developer"), result.command)
+            self.assertEqual(1, len(calls))
+            self.assertEqual(root / "bin" / "raw_developer", calls[0]["executable"])
+            self.assertEqual(("tiff16", 0), (calls[0]["format"], calls[0]["long_edge"]))
+            self.assertEqual(source.name, calls[0]["source"].name)
+            self.assertNotEqual(source, calls[0]["source"], "the staged copy renders, never the original")
+
+    def test_export_passes_the_stored_develop_settings_to_the_helper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            develop = {"exposure_ev": 0.85, "contrast": 0.55, "curve": [[0, 0.06], [0.5, 0.5], [1, 0.96]]}
+            calls = []
+            with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub(calls)):
+                result = self.raw_pipeline(root).export_jpeg(
+                    source, develop=develop, runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(develop, calls[0]["settings"])
+            self.assertEqual(develop, result.settings["develop"])
+            with Image.open(result.output) as image:
+                self.assertIn(b"<lumen:develop>", image.info["xmp"])
+                self.assertIn(b"exposure_ev", image.info["xmp"])
+
+    def test_export_renders_a_non_raw_through_darktable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def render(command, **kwargs):
+                if command[1:] == ["--version"]:
+                    return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF",
+                                                       icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            for name in ("DSC1.jpg", "DSC2.jpeg", "DSC3.png", "DSC4.tif", "DSC5.tiff", "DSC6.heic"):
+                with self.subTest(name=name):
+                    source = root / name
+                    source.write_bytes(b"not a raw")
+                    with patch("lumen.pipelines.render_raw", side_effect=AssertionError("the raw developer cannot take a non-raw")):
+                        result = self.raw_pipeline(root).export_jpeg(source, runner=render)
+                    self.assertTrue(result.success, result.message)
+                    self.assertEqual("darktable", result.settings["decoder"])
+                    self.assertEqual("darktable 5.2", result.settings["tool_version"])
+
+    def test_export_renders_through_darktable_when_a_profile_is_given(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            profile = root / "look.xmp"
+            profile.write_text("<x:xmpmeta/>")
+
+            def render(command, **kwargs):
+                if command[1:] == ["--version"]:
+                    return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                self.assertIn(str(profile.resolve()), command)
+                Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF",
+                                                       icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("lumen.pipelines.render_raw", side_effect=AssertionError("a profile belongs to darktable")):
+                result = self.raw_pipeline(root).export_jpeg(source, profile, runner=render)
+            self.assertTrue(result.success, result.message)
+            self.assertEqual("darktable", result.settings["decoder"])
+
+    def test_export_refuses_when_a_profile_and_develop_settings_are_both_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            profile = root / "look.xmp"
+            profile.write_text("<x:xmpmeta/>")
+            with patch("lumen.pipelines.render_raw", side_effect=AssertionError("nothing may render")):
+                result = self.raw_pipeline(root).export_jpeg(
+                    source, profile, develop={"exposure_ev": 0.5},
+                    runner=lambda *args, **kwargs: self.fail("nothing may run"))
+            self.assertFalse(result.success)
+            self.assertIn("profile", result.message)
+            self.assertIn("develop", result.message)
+            self.assertEqual([], list((root / "outputs" / "jpeg").iterdir()))
+
+    def test_export_refuses_with_an_actionable_message_when_the_raw_developer_is_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            result = pipeline.export_jpeg(source, runner=lambda *args, **kwargs: self.fail("nothing may run"))
+            self.assertFalse(result.success)
+            self.assertIn("bootstrap", result.message)
+
+    def test_the_untouched_companion_is_named_per_preset_and_carries_no_develop_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC1.ARW"
+            source.write_bytes(b"raw")
+            pipeline = self.raw_pipeline(root)
+            runner = lambda command, **kwargs: os_version_only(self, command, **kwargs)
+            with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])):
+                developed = pipeline.export_jpeg(source, develop={"exposure_ev": 0.5}, runner=runner)
+                companion = pipeline.export_jpeg(source, develop=None, stem_suffix="original", runner=runner)
+                web = pipeline.export_jpeg(source, develop=None, stem_suffix="original", preset="web", runner=runner)
+            for result in (developed, companion, web):
+                self.assertTrue(result.success, result.message)
+            self.assertEqual(["DSC1-lumen.jpg", "DSC1-lumen-original.jpg", "DSC1-lumen-web-original.jpg"],
+                             [result.output.name for result in (developed, companion, web)])
+            with Image.open(developed.output) as image:
+                self.assertIn(b"<lumen:develop>", image.info["xmp"])
+            for result in (companion, web):
+                with Image.open(result.output) as image:
+                    self.assertNotIn(b"<lumen:develop>", image.info["xmp"])
     def test_jpeg_export_preserves_only_approved_tiff_xmp_with_explicit_overrides(self):
         xmp_packet = b'''<x:xmpmeta xmlns:x="adobe:ns:meta/">
           <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -27,7 +182,7 @@ class PipelineTests(unittest.TestCase):
           </rdf:RDF></x:xmpmeta>'''
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
@@ -57,58 +212,16 @@ class PipelineTests(unittest.TestCase):
                         self.assertEqual(description, parsed.find(".//dc:description/rdf:Alt/rdf:li", ns).text or "")
                         self.assertEqual(keywords, [item.text for item in parsed.findall(".//dc:subject/rdf:Bag/rdf:li", ns)])
 
-    def test_jpeg_export_can_render_through_the_macos_decoder_without_darktable(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "DSC00712.ARW"
-            source.write_bytes(b"raw")
-            calls = []
-
-            def render(command, **kwargs):
-                calls.append(command)
-                self.assertNotEqual("darktable-cli", command[0], "darktable must not run for the macOS decoder")
-                if command[0].endswith("sw_vers"):
-                    return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
-                self.assertTrue(command[0].endswith("/sips"))
-                self.assertIn("--matchTo", command)
-                Image.new("RGB", (80, 60), "red").save(command[command.index("--out") + 1], format="TIFF",
-                                                     icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
-            result = pipeline.export_jpeg(source, decoder="macos", runner=render)
-            self.assertTrue(result.success, result.message)
-            self.assertEqual("macos", result.settings["decoder"])
-            self.assertEqual("macOS 26.5.1 sips", result.settings["tool_version"])
-            self.assertIn("macOS decoder", result.message)
-            self.assertTrue(result.command[0].endswith("/sips"))
-            with Image.open(result.output) as image:
-                self.assertIn(b"macos", image.info["xmp"])
-
-            profile = root / "look.xmp"
-            profile.write_text("<x:xmpmeta/>")
-            refused = pipeline.export_jpeg(source, profile, decoder="macos", runner=render)
-            self.assertFalse(refused.success)
-            self.assertIn("darktable", refused.message)
-            with self.assertRaises(ValueError):
-                pipeline.export_jpeg(source, decoder="gimp", runner=render)
-
     def test_jpeg_export_embeds_alt_text_only_when_given(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "DSC00713.ARW"
             source.write_bytes(b"raw")
-
-            def render(command, **kwargs):
-                if command[0].endswith("sw_vers"):
-                    return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
-                Image.new("RGB", (80, 60), "red").save(command[command.index("--out") + 1], format="TIFF",
-                                                     icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
-            with_alt = pipeline.export_jpeg(source, decoder="macos", runner=render, alt_text="Red square")
-            without = pipeline.export_jpeg(source, decoder="macos", runner=render)
+            render = lambda command, **kwargs: os_version_only(self, command, **kwargs)
+            pipeline = self.raw_pipeline(root)
+            with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])):
+                with_alt = pipeline.export_jpeg(source, runner=render, alt_text="Red square")
+                without = pipeline.export_jpeg(source, runner=render)
             with Image.open(with_alt.output) as image:
                 self.assertIn(b"<Iptc4xmpCore:AltTextAccessibility><rdf:Alt><rdf:li xml:lang=\"x-default\">Red square", image.info["xmp"])
             with Image.open(without.output) as image:
@@ -119,17 +232,11 @@ class PipelineTests(unittest.TestCase):
             root = Path(directory)
             source = root / "DSC00713.ARW"
             source.write_bytes(b"raw")
-
-            def render(command, **kwargs):
-                if command[0].endswith("sw_vers"):
-                    return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
-                Image.new("RGB", (80, 60), "red").save(command[command.index("--out") + 1], format="TIFF",
-                                                     icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
-            full = pipeline.export_jpeg(source, decoder="macos", runner=render, place="Madikwe Game Reserve", country="South Africa")
-            share = pipeline.export_jpeg(source, decoder="macos", runner=render, preset="share", place="Madikwe Game Reserve", country="South Africa")
+            render = lambda command, **kwargs: os_version_only(self, command, **kwargs)
+            pipeline = self.raw_pipeline(root)
+            with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])):
+                full = pipeline.export_jpeg(source, runner=render, place="Madikwe Game Reserve", country="South Africa")
+                share = pipeline.export_jpeg(source, runner=render, preset="share", place="Madikwe Game Reserve", country="South Africa")
             for result in (full, share):
                 with Image.open(result.output) as image:
                     xmp = ElementTree.fromstring(image.info["xmp"])
@@ -141,9 +248,9 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_export_preserves_metadata_and_original_with_collision_suffix(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"original RAW")
-            adjacent = source.with_suffix(".ARW.xmp")
+            adjacent = source.with_suffix(".jpg.xmp")
             adjacent.write_text("must not be implicitly adopted")
             before = (source.read_bytes(), source.stat().st_mtime_ns)
             profile = root / "explicit.xmp"
@@ -164,7 +271,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertNotEqual(source, staged_source)
                 self.assertTrue(staged_source.is_relative_to((root / "outputs" / "jpeg").resolve()))
                 self.assertEqual(b"original RAW", staged_source.read_bytes())
-                self.assertFalse(staged_source.with_suffix(".ARW.xmp").exists())
+                self.assertFalse(staged_source.with_suffix(".jpg.xmp").exists())
                 self.assertEqual(str(profile.resolve()), command[2])
                 self.assertEqual(["--width", "0", "--height", "0", "--core", "--conf", "plugins/lighttable/export/metadata_flags=5"], command[-7:])
                 exif = Image.Exif()
@@ -229,7 +336,7 @@ class PipelineTests(unittest.TestCase):
         for exiftool, outcome in (("/usr/bin/exiftool", 1), (None, None)):
             with self.subTest(exiftool=exiftool), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                source = root / "source.ARW"
+                source = root / "source.jpg"
                 source.write_bytes(b"raw")
                 pipeline = DarktablePipeline("darktable-cli", root / "outputs")
                 def render(command, **kwargs):
@@ -250,7 +357,7 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_export_runner_failure_leaves_no_final_or_temporary_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             def fail(command, **kwargs):
@@ -266,7 +373,7 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_export_applies_normalized_crop(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
@@ -281,7 +388,7 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_crop_uses_exact_full_resolution_pixels_and_keeps_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw source")
             before = source.read_bytes()
             def render(command, **kwargs):
@@ -325,7 +432,7 @@ class PipelineTests(unittest.TestCase):
     def test_share_preset_resizes_render_to_2048_long_edge_at_quality_85_without_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, description="A red bird", keywords=["bird", "travel"], rating=4, preset="share",
@@ -356,7 +463,7 @@ class PipelineTests(unittest.TestCase):
     def test_full_preset_is_unchanged_and_keeps_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             default = pipeline.export_jpeg(source, runner=self.preset_render((2400, 1600)))
@@ -376,7 +483,7 @@ class PipelineTests(unittest.TestCase):
     def test_web_preset_resizes_to_1600_long_edge_at_quality_82_without_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, preset="web", runner=self.preset_render((4000, 2600)))
@@ -393,7 +500,7 @@ class PipelineTests(unittest.TestCase):
             image.paste((128, 128, 128), (0, 0, *image.size))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, preset="web", watermark="\u00a9 N. David", runner=self.preset_render((2000, 1200), paint=grey))
@@ -426,7 +533,7 @@ class PipelineTests(unittest.TestCase):
     def test_share_filenames_use_share_suffix_and_collision_numbering(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             jpeg = (root / "outputs" / "jpeg").resolve()
@@ -446,7 +553,7 @@ class PipelineTests(unittest.TestCase):
             image.paste((0, 255, 0), (1250, 0, 3750, 2500))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.ARW"
+            source = root / "source.jpg"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, crop={"left": .25, "top": 0, "width": .5, "height": 1}, preset="share",
@@ -463,7 +570,7 @@ class PipelineTests(unittest.TestCase):
         for icc in (None, b"invalid ICC"):
             with self.subTest(icc=icc), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                source = root / "source.ARW"
+                source = root / "source.jpg"
                 source.write_bytes(b"raw")
                 def render(command, **kwargs):
                     if command[1:] == ["--version"]:
@@ -484,7 +591,7 @@ class PipelineTests(unittest.TestCase):
             (outputs / "jpeg").symlink_to(outside, target_is_directory=True)
             pipeline = DarktablePipeline("darktable-cli", outputs)
             with self.assertRaises(ValueError):
-                pipeline.export_jpeg(root / "source.ARW")
+                pipeline.export_jpeg(root / "source.jpg")
             self.assertEqual([], list(outside.iterdir()))
 
     def test_missing_tools_are_reported_as_unavailable(self):

@@ -26,6 +26,7 @@ class SidecarWriter:
         keywords: list[str] | None = None,
         artifacts: list[Artifact] | None = None,
         active_crop: PhotoEdit | None = None,
+        develop: dict | None = None,
         decision: str = "none",
         rating: int = 0,
         alt_text: str | None = None,
@@ -81,7 +82,7 @@ class SidecarWriter:
                 {"id": event.id, "created_at": event.created_at.isoformat(), "details": event.details}
                 for event in events if event.kind == "ingested"
             ],
-            alt_text=alt_text, place=place, country=country,
+            develop=develop, alt_text=alt_text, place=place, country=country,
         ))
         return json_path, xmp_path
 
@@ -106,10 +107,13 @@ class SidecarWriter:
     @staticmethod
     def _xmp(description: str, keywords: list[str], *, rating: int, provenance: dict | None = None, crop: dict | None = None,
              crop_provenance: list[dict] | None = None, ingest_provenance: list[dict] | None = None,
-             alt_text: str | None = None, place: str | None = None, country: str | None = None) -> str:
+             develop: dict | None = None, alt_text: str | None = None, place: str | None = None,
+             country: str | None = None) -> str:
         keyword_items = "".join(f"<rdf:li>{escape(keyword)}</rdf:li>" for keyword in keywords)
         export = f'<lumen:export>{escape(json.dumps(provenance, sort_keys=True))}</lumen:export>' if provenance else ""
         crop_payload = f'<lumen:crop>{escape(json.dumps(crop, sort_keys=True))}</lumen:crop>' if crop else ""
+        # Only the controls the photographer set; its absence is what marks an untouched frame.
+        develop_payload = f'<lumen:develop>{escape(json.dumps(develop, sort_keys=True))}</lumen:develop>' if develop else ""
         crop_history = (f'<lumen:cropProvenance>{escape(json.dumps(crop_provenance, sort_keys=True))}'
                         f'</lumen:cropProvenance>' if crop_provenance else "")
         ingest_history = (f'<lumen:ingested>{escape(json.dumps(ingest_provenance, sort_keys=True))}</lumen:ingested>'
@@ -130,6 +134,7 @@ class SidecarWriter:
       {location}
       {export}
       {crop_payload}
+      {develop_payload}
       {crop_history}
       {ingest_history}
     </rdf:Description>
