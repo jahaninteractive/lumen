@@ -5282,7 +5282,7 @@ class DevelopWebTests(unittest.TestCase):
         self.assertEqual((200, 1, None), (code, body["photo_id"], body["develop"]))
         with Library(self.settings) as library:
             self.assertIsNone(library.develop_for(1))
-            self.assertNotEqual("developed", library.catalog.get_photo(1).preview_kind)
+            self.assertEqual("refined", library.catalog.get_photo(1).preview_kind)
 
     def test_develop_full_size_render_failure_is_a_500(self):
         self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
@@ -5304,6 +5304,13 @@ class DevelopWebTests(unittest.TestCase):
 
     def test_apply_to_group_starts_a_job_and_validates_the_request(self):
         url = "/api/photos/1/develop/apply-to-group"
+        second = self.root / "secret-folder" / "photo2.jpg"
+        Image.new("RGB", (120, 90), (90, 110, 130)).save(second)
+        with Library(self.settings) as library:
+            library.import_path(second)
+            library.merge_groups([group["id"] for group in library.list_groups()])
+            with library.catalog.connection:
+                library.catalog.connection.execute("UPDATE photos SET format = 'ARW'")
         self.assertEqual(400, self.post_json(url, {})[0], "no settings saved yet")
         self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
         self.assertEqual(400, self.post_json(url, {"extra": 1})[0])
@@ -5312,6 +5319,8 @@ class DevelopWebTests(unittest.TestCase):
         code, job = self.post_json(url, {})
         finished = WebTests.wait_job(self, job["job_id"])
         self.assertEqual((202, "develop_group", "succeeded"), (code, job["kind"], finished["status"]))
+        with Library(self.settings) as library:
+            self.assertEqual({"contrast": 0.5}, library.develop_for(2).to_dict())
         self.assertNotIn(str(self.root), json.dumps(finished))
 
     def test_develop_rejects_cross_origin_and_foreign_host(self):

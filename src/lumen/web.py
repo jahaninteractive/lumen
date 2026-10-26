@@ -850,7 +850,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
                 job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist",
-                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/")) or "/develop" in path
+                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/")) or re.search(r"/develop(/|$)", path)
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 

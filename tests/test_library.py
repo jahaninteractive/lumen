@@ -1928,6 +1928,16 @@ class LibraryTests(unittest.TestCase):
                                  histogram=(), neutral_temperature=5500.0, neutral_tint=0.0)
         return render
 
+    def test_save_develop_refuses_empty_settings(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                with self.assertRaises(ValueError):
+                    library.save_develop(photo_id, DevelopSettings({}))
+            self.assertIsNone(library.develop_for(photo_id))
+            self.assertNotEqual("developed", library.catalog.get_photo(photo_id).preview_kind)
+
     def test_save_develop_rerenders_the_preview_and_marks_it_developed(self):
         calls = []
         settings = DevelopSettings({"exposure_ev": 0.5, "contrast": 0.3})

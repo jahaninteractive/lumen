@@ -935,7 +935,7 @@ class Library:
     @_coordinated
     def save_develop(self, photo_id: int, settings: DevelopSettings) -> DevelopSettings:
         """Store these develop settings and re-render the frame's preview from the raw with them applied."""
-        if not isinstance(settings, DevelopSettings):
+        if not isinstance(settings, DevelopSettings) or settings.is_empty:  # empty means undeveloped: use clear_develop
             raise ValueError("develop settings are invalid")
         self._develop(photo_id, settings)
         return settings

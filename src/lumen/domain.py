@@ -111,7 +111,7 @@ class Photo:
     decision: str = "none"
     rating: int = 0
     mirror_path: str | None = None
-    preview_kind: str = "embedded"  # "embedded" (camera JPEG) or "refined" (darktable render)
+    preview_kind: str = "embedded"  # "embedded" (camera JPEG), "refined" (rendered from the raw, no develop settings) or "developed" (rendered from the raw with saved develop settings)
     exposure_seconds: float | None = None
     merged_into: str | None = None  # stable_key of the group a manual merge moved this photo into
     latitude: float | None = None  # camera GPS fix, signed decimal degrees; None when the file has none

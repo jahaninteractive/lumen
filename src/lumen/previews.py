@@ -195,7 +195,7 @@ def read_metadata(path: Path) -> dict[str, str | float | None]:
     exposure = float(exposure) if isinstance(exposure, (int, float)) and not isinstance(exposure, bool) and exposure > 0 else None
     # Sony's reduced-size (M/S) lossless ARW stores the raw as YCbCr lossless JPEG (photometric 6); rawspeed refuses it.
     unsupported = path.suffix.lower() == ".arw" and item.get("PhotometricInterpretation") == 6
-    warning = ("Sony reduced-size lossless raw; darktable cannot decode it. Refined previews are unavailable and "
+    warning = ("Sony reduced-size lossless raw; darktable cannot decode it. darktable's refine pass is unavailable and "
                "culling uses the embedded preview. JPEG export is unaffected.") if unsupported else None
     number = lambda key: value if isinstance(value := item.get(key), (int, float)) and not isinstance(value, bool) else None
     latitude, longitude, altitude = number("GPSLatitude"), number("GPSLongitude"), number("GPSAltitude")  # -n: signed decimals
