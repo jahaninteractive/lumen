@@ -715,16 +715,17 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"]]
-        self.assertEqual(["Export", "Review", "Astro", "Ingest", "Import", "Clear"], [node["text"].strip() for node in tabs])
+        self.assertEqual(["Ingest", "Import", "Review", "Astro", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
-        for index, tab in enumerate(tabs):
+        for tab in tabs:
             self.assertEqual("button", tab["tag"])
-            self.assertEqual(str(index == 0).lower(), tab["attrs"]["aria-selected"])
-            self.assertEqual("0" if index == 0 else "-1", tab["attrs"].get("tabindex"))
+            export = tab["text"].strip() == "Export"  # Export stays the default tab wherever it sits
+            self.assertEqual(str(export).lower(), tab["attrs"]["aria-selected"])
+            self.assertEqual("0" if export else "-1", tab["attrs"].get("tabindex"))
             panel = by_id[tab["attrs"]["aria-controls"]]
             self.assertEqual("tabpanel", panel["attrs"].get("role"))
             self.assertEqual(tab["attrs"]["id"], panel["attrs"].get("aria-labelledby"))
-            self.assertEqual(index != 0, "hidden" in panel["attrs"])
+            self.assertEqual(not export, "hidden" in panel["attrs"])
         for node in parser.nodes:
             if node["tag"] == "button":
                 self.assertIn(node["attrs"].get("type"), {"button", "submit"})
@@ -1389,11 +1390,11 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['export', 'review', 'astro', 'ingest', 'import', 'clear'].map((name, index) => {
+const tabElements = ['ingest', 'import', 'review', 'astro', 'export', 'clear'].map(name => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
-  tab.setAttribute('aria-selected', String(index === 0));
+  tab.setAttribute('aria-selected', String(name === 'export'));
   return tab;
 });
 const frameTabElements = ['frame', 'crop'].map((name, index) => {
