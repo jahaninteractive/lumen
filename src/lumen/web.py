@@ -4,9 +4,9 @@ import base64
 import hashlib
 import json
 import re
-import tempfile
 import subprocess
 import sys
+import tempfile
 import threading
 from dataclasses import asdict, replace
 from http import HTTPStatus
@@ -203,7 +203,7 @@ class LumenServer(ThreadingHTTPServer):
 
 def developed_full_size(settings: Settings, source: Path, full_dir: Path, fingerprint: str, develop: DevelopSettings) -> Path:
     """The full-size render of a developed frame, cached beside the embedded JPEGs under a name that carries the
-    settings, so changing them never serves a stale file. Like that cache, it is never evicted."""
+    settings, so changing them never serves a stale file. Housekeeping prunes it with the rest of that cache; the next loupe open re-renders."""
     digest = hashlib.sha256(json.dumps(develop.to_dict(), sort_keys=True).encode()).hexdigest()[:12]
     target = full_dir / f"{fingerprint}-{digest}.jpg"
     if target.is_file():
@@ -355,11 +355,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             if match:
                 with Library(settings) as library:
                     photo = library.catalog.get_photo(int(match.group(1)))
+                    develop = library.develop_for(photo.id) if photo else None
                 full_dir = (settings.cache_dir / "full").resolve()
-                offline = False
+                offline = failed = False
                 try:
-                    with Library(settings) as library:
-                        develop = library.develop_for(photo.id) if photo else None
                     if develop and not develop.is_empty:
                         full = developed_full_size(settings, Path(photo.path), full_dir, photo.fingerprint, develop)
                     else:
@@ -368,10 +367,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         full.resolve().relative_to(full_dir)
                 except OSError:  # the original's volume is unplugged and nothing is cached
                     full, offline = None, True
-                except (ValueError, DevelopError):
+                except ValueError:
                     full = None
+                except DevelopError:  # the frame exists but the render broke
+                    full, failed = None, True
                 if not full:
-                    self.send_error(HTTPStatus.SERVICE_UNAVAILABLE if offline else HTTPStatus.NOT_FOUND)
+                    self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR if failed else
+                                    HTTPStatus.SERVICE_UNAVAILABLE if offline else HTTPStatus.NOT_FOUND)
                     return
                 self._send_bytes(full.read_bytes(), "image/jpeg", cache=True)
                 return
@@ -401,6 +403,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
+        def _develop_reply(self, photo_id: int, develop: DevelopSettings | None) -> dict:
+            """Save (or, for none or empty settings, clear) and report the frame's new preview URL."""
+            with Library(settings) as library:
+                if develop is None or develop.is_empty:
+                    library.clear_develop(photo_id)
+                    develop = None
+                else:
+                    develop = library.save_develop(photo_id, develop)
+                photo = library.catalog.get_photo(photo_id)
+            version = preview_version(photo.fingerprint, photo.preview_kind, photo.preview_path)
+            return {"photo_id": photo_id, "develop": develop and develop.to_dict(),
+                    "preview_url": f"/preview/{photo_id}?v={version}"}
+
         def do_DELETE(self) -> None:
             path = urlparse(self.path).path
             if not self._trusted_mutation():
@@ -413,9 +428,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             try:
                 if self.headers.get("Content-Length", "0") != "0" and self._read_json():
                     raise ValueError("develop clear requires an empty JSON object")
-                with Library(settings) as library:
-                    library.clear_develop(int(match.group(1)))
-                self._send_json({"photo_id": int(match.group(1)), "develop": None})
+                self._send_json(self._develop_reply(int(match.group(1)), None))
             except (ValueError, OverflowError, OSError, RuntimeError) as error:
                 self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
 
@@ -657,9 +670,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError(f"develop settings are invalid: {error}") from error
                     photo_id = int(match.group(1))
                     if not preview:
-                        with Library(settings) as library:
-                            saved = library.save_develop(photo_id, develop)
-                        self._send_json({"photo_id": photo_id, "develop": saved.to_dict()})
+                        self._send_json(self._develop_reply(photo_id, develop))
                         return
                     edge = payload["long_edge"]
                     if type(edge) is not int or edge < 1:

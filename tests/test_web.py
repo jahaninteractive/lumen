@@ -4938,7 +4938,7 @@ class DevelopWebTests(unittest.TestCase):
             library.import_path(source)
             self.photo = library.catalog.get_photo(1)
         self.calls = []
-        self.fail = False
+        self.render_fails = False
         patchers = [patch("lumen.web.render_raw", side_effect=self.render),
                     patch("lumen.library.render_raw", side_effect=self.render)]
         for patcher in patchers:
@@ -4958,7 +4958,7 @@ class DevelopWebTests(unittest.TestCase):
     def render(self, source, destination, executable, *, settings=None, long_edge=0,
                image_format="tiff16", histogram=False, runner=None):
         self.calls.append({"settings": settings, "long_edge": long_edge, "histogram": histogram})
-        if self.fail:
+        if self.render_fails:
             from lumen.rawdevelop import DevelopError
             raise DevelopError(f"The raw developer could not develop {Path(source).name}.")
         Image.new("RGB", (64, 48), (200, 100, 50)).save(destination, format="JPEG")
@@ -5011,13 +5011,29 @@ class DevelopWebTests(unittest.TestCase):
         self.assertEqual(400, self.post_json("/api/photos/1/develop", {})[0])
         self.assertEqual([], self.calls)
 
+    def test_develop_empty_settings_clear_the_frame(self):
+        self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
+        code, body = self.post_json("/api/photos/1/develop", {"settings": {}})
+        self.assertEqual((200, 1, None), (code, body["photo_id"], body["develop"]))
+        with Library(self.settings) as library:
+            self.assertIsNone(library.develop_for(1))
+            self.assertNotEqual("developed", library.catalog.get_photo(1).preview_kind)
+
+    def test_develop_full_size_render_failure_is_a_500(self):
+        self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
+        self.render_fails = True
+        self.assertEqual(500, self.request("GET", "/full/1")[0])
+
     def test_develop_save_and_clear(self):
         code, body = self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
-        self.assertEqual((200, {"photo_id": 1, "develop": {"contrast": 0.5}}), (code, body))
+        self.assertEqual((200, {"photo_id": 1, "develop": {"contrast": 0.5}}), (code, {k: body[k] for k in ("photo_id", "develop")}))
+        self.assertRegex(body["preview_url"], r"^/preview/1\?v=.+-developed-\d+$")
         with Library(self.settings) as library:
             self.assertEqual({"contrast": 0.5}, library.develop_for(1).to_dict())
         code, raw = self.request("DELETE", "/api/photos/1/develop")
-        self.assertEqual((200, {"photo_id": 1, "develop": None}), (code, json.loads(raw)))
+        raw = json.loads(raw)
+        self.assertEqual((200, None), (code, raw["develop"]))
+        self.assertRegex(raw["preview_url"], r"^/preview/1\?v=.+-refined-\d+$")
         with Library(self.settings) as library:
             self.assertIsNone(library.develop_for(1))
 
@@ -5030,7 +5046,7 @@ class DevelopWebTests(unittest.TestCase):
 
     def test_develop_unknown_photo_and_helper_failure_stay_public(self):
         self.assertEqual(400, self.post_json("/api/photos/999/develop", {"settings": {}})[0])
-        self.fail = True
+        self.render_fails = True
         for code, body in (self.preview(), self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})):
             self.assertEqual(400, code)
             self.assertIn("could not develop", body["error"])
