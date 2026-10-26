@@ -36,7 +36,8 @@ Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
 - `<library>/cache/full/` holds the camera's embedded full-size JPEGs by fingerprint (served at `GET /full/<id>`); manual place rows (`source='manual'`) outrank every GeoNames and online row and survive index rebuilds.
 - Project-local darktable: `vendor/apps/darktable.app/Contents/MacOS/darktable-cli`, version 5.6.2; `lumen doctor` reports it available. A real Sony `.ARW` export was verified 2026-10-22 (see `docs/HANDOFF.md`).
 - Project-local Siril: `vendor/apps/Siril.app/Contents/MacOS/siril-cli`, Apple Silicon, version 1.4.4.
-- Both are on the user's shell `PATH` today, but the fallback finds them without it.
+- Native helpers are compiled by `scripts/bootstrap.sh` into `<library>/cache/bin/` (`vision_analyzer`, `raw_developer`). `raw_developer` (`tools/raw_developer.swift`, `Settings.raw_developer_path`, reported by `lumen doctor` and `/api/status`) renders raws through Core Image with the photographer's develop settings and decodes ALL raw JPEG export, because darktable's rawspeed refuses Sony reduced-size lossless ARW. It is required for raw export (a missing helper refuses the request naming `scripts/bootstrap.sh`); `--profile` and non-raw exports still use darktable; `sips` is no longer in the export path. Develop settings live in `photo_develop`; saving re-renders the preview but never re-ranks the burst.
+- Both darktable and Siril are on the user's shell `PATH` today, but the fallback finds them without it.
 - darktable-cli reads the user's `~/.config/darktable` config, so Lumen pins `--core --conf plugins/lighttable/export/metadata_flags=5` (EXIF + geotag). JPEG export keeps all EXIF and GPS by user decision (2026-10-22).
 - oMLX status is live external state. Trust `/api/status`/`lumen doctor`, not configured model names, before claiming a model is loaded or vision-capable.
 - Two model roles: `LUMEN_OMLX_FAST_MODEL` (default `Qwen3-VL-8B-Instruct-4bit`; tagging, reject scan, astro triage) and `LUMEN_OMLX_REVIEW_MODEL` (defaults to `LUMEN_OMLX_MODEL`; critique, captions, digest, composition review). Every tagger is built by `Library.tagger_for(role)`, which reads live `/api/status` and refuses an unloaded model; `lumen doctor` and `/api/status` report `omlx_roles`. Tests patch `lumen.library.get_server_status`, `lumen.diagnostics.get_server_status`, and `lumen.library.OmlxTagger`; no test contacts oMLX.
@@ -56,7 +57,7 @@ Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
 - Travel plan (complete, on `main`): `docs/superpowers/plans/2026-10-22-travel-volume-culling.md`
 - Approved design: `docs/superpowers/specs/2026-10-22-local-ai-assist-design.md`
 - Local AI assist plan (complete, on `main`): `docs/superpowers/plans/2026-10-22-local-ai-assist.md`
-- Approved design: `docs/superpowers/specs/2026-10-26-develop-controls-design.md`
-- Develop controls plan (not started): `docs/superpowers/plans/2026-10-26-develop-controls.md`
+- Implemented design: `docs/superpowers/specs/2026-10-26-develop-controls-design.md`
+- Develop controls plan (complete, on branch `develop-controls`): `docs/superpowers/plans/2026-10-26-develop-controls.md`
 
 Update `docs/HANDOFF.md` after every reviewed milestone or before stopping. Deferred work goes in `docs/BACKLOG.md`.

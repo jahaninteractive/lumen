@@ -71,11 +71,14 @@ It is a personal tool built for one photographer's workflow and shared as is.
 - Near-duplicate clusters inside a burst from a perceptual difference hash.
 - 480 px thumbnail tier for the contact sheet, with Small/Medium/Large tiles.
 - A frame view (Enter on any frame) that gathers the full-size image, decisions,
-  scores, place, keywords, caption, and crops in one dialog with Frame and Crop tabs.
+  scores, place, keywords, caption, and crops in one dialog with Frame, Crop, and Develop tabs.
 - Non-destructive crop suggestions with optional local oMLX composition advice,
   plus your own drawn crop with an aspect lock.
 - Typed keywords that survive re-tagging, and per-frame or per-burst place
   correction that can be remembered for nearby frames.
+- Non-destructive develop controls (brightness, white balance, contrast,
+  sharpness, noise reduction, tone curve) that show on the sheet and are baked
+  into exported JPEGs.
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
 - sRGB JPEG export for the current photo, all keepers, or the frames the contact sheet filters show, with Full (quality 92,
   full resolution), Share (2048 px), and Web (1600 px) presets, optional
@@ -269,7 +272,7 @@ pixels for a sharpness check, and the button names the real pixel size. Arrow
 keys pan the full-size image. `[` and `]` step through the sheet without
 closing; `Esc` returns to the frame you started on.
 
-The right column has two remembered tabs:
+The right column has three remembered tabs:
 
 - **Frame**: why the frame ranked where it did, its scores, the decision
   buttons, the location line with **Edit place**, keywords with a box to type
@@ -277,6 +280,27 @@ The right column has two remembered tabs:
   and the local AI buttons.
 - **Crop**: your own crop, the suggested crops, **Ask local AI**, and
   **Export this frame**, which uses the Export tab's size and watermark.
+- **Develop**: adjust the picture itself, described below.
+
+**Develop.** The Develop tab adjusts a raw frame without touching the file.
+At the top, a histogram of the current render shares one box with a tone curve;
+drag any of its five points, or focus one and nudge it with the arrow keys
+(each nudge is announced). Below are sections for Brightness (exposure in
+stops), White Balance (temperature and tint), Contrast, Sharpness, and Noise
+Reduction (luminance and colour). Every control has a slider, a number box, and
+its own Reset; **Reset all** and **Reset the curve** undo more at once. A box
+that reads "not set" means Lumen is leaving that setting to the camera's own
+look, which is different from setting it to its middle value. Your changes
+save when you leave the tab or step to another frame, and the frame's tile on
+the sheet is re-rendered to match (the Best badge in a burst does not move).
+Full size shows the developed picture too. **Apply to every frame in this
+burst** copies the settings to each raw in the burst, rejected ones included,
+as a background job; frames that are not raw or whose original is offline are
+skipped and counted. **Export this frame** bakes the settings into the JPEG;
+tick **Also export the untouched version** (here or in the Export tab) to get
+a second file named `-lumen-original.jpg` beside it. Develop is unavailable
+while the original is offline, and the tab says so. A profile export (darktable
+XMP) cannot be combined with develop settings.
 
 **Your own crop.** Drag on the image to draw a rectangle; the outside dims and
 the view switches to the Crop tab, where a **Your crop** card shows the
@@ -507,8 +531,10 @@ uv run lumen export --keepers --preset share --json
 uv run lumen export --keepers --preset web --watermark "© Your Name" --json
 ```
 
-If `darktable-cli` is unavailable, the Export panel explains why and disables
-export. Install darktable as described above, add its executable directory to
+Raw frames are rendered by a small native helper that `scripts/bootstrap.sh`
+builds; if it is missing, exporting a raw is refused with a message telling you
+to run the script again. If `darktable-cli` is unavailable, the Export panel
+explains why and disables export. Install darktable as described above, add its executable directory to
 `PATH` if needed, restart Lumen, and reload the page. Check with
 `uv run lumen doctor --json`. Import and review remain usable.
 
