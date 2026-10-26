@@ -4966,6 +4966,7 @@ class DevelopWebTests(unittest.TestCase):
                              neutral_temperature=5500.0, neutral_tint=3.0)
 
     post_json = WebTests.post_json
+    get_json = WebTests.get_json
 
     def request(self, method, path, headers=None):
         request = urllib.request.Request(self.base + path, headers=headers or {}, method=method,
@@ -5036,6 +5037,18 @@ class DevelopWebTests(unittest.TestCase):
         self.assertRegex(raw["preview_url"], r"^/preview/1\?v=.+-refined-\d+$")
         with Library(self.settings) as library:
             self.assertIsNone(library.develop_for(1))
+
+    def test_apply_to_group_starts_a_job_and_validates_the_request(self):
+        url = "/api/photos/1/develop/apply-to-group"
+        self.assertEqual(400, self.post_json(url, {})[0], "no settings saved yet")
+        self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.5}})
+        self.assertEqual(400, self.post_json(url, {"extra": 1})[0])
+        self.assertEqual(400, self.post_json("/api/photos/999/develop/apply-to-group", {})[0])
+        self.assertEqual(403, self.post_json(url, {}, headers={"Origin": "https://attacker.example"})[0])
+        code, job = self.post_json(url, {})
+        finished = WebTests.wait_job(self, job["job_id"])
+        self.assertEqual((202, "develop_group", "succeeded"), (code, job["kind"], finished["status"]))
+        self.assertNotIn(str(self.root), json.dumps(finished))
 
     def test_develop_rejects_cross_origin_and_foreign_host(self):
         for headers in ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"}):

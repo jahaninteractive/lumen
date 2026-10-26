@@ -659,6 +659,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("crop could not be cleared for this photo") from error
                     self._send_json({"photo_id": photo_id, "active_crop": None})
                     return
+                if match := re.fullmatch(r"/api/photos/(\d+)/develop/apply-to-group", path):
+                    if payload:
+                        raise ValueError("apply to burst requires an empty JSON object")
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        job = library.start_develop_group_job(int(match.group(1)))
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
                 match = re.fullmatch(r"/api/photos/(\d+)/develop(/preview)?", path)
                 if match:
                     preview = match.group(2) is not None

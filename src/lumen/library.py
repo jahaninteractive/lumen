@@ -1457,6 +1457,58 @@ class Library:
         self._submit_job(runner, job, work)
         return job
 
+    def start_develop_group_job(self, photo_id: int) -> Job:
+        """Copy one frame's develop settings onto every other frame of its burst, in the background. Rejected
+        frames are included; non-raw and offline frames are skipped and counted, never failed."""
+        photo = self.catalog.get_photo(photo_id) if type(photo_id) is int else None
+        if photo is None:
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        if photo.group_id is None or self.catalog.get_develop(photo_id) is None:
+            raise ValueError("develop this frame first; it has no settings to apply")
+        ids = [other for other in self.catalog.group_photo_ids(photo.group_id) if other != photo_id]
+        manifest = {"kind": "develop_group", "source_photo_id": photo_id, "photo_ids": ids}
+        runner = self.job_runner
+        job = self.catalog.create_prepared_job("develop_group", lambda job_id: self._write_job_files(job_id, manifest))
+
+        def work(context) -> None:
+            with Library(self.settings, job_runner=runner) as worker:
+                counts = {"applied": 0, "skipped_non_raw": 0, "skipped_offline": 0, "failed": 0}
+                written: list[int] = []
+                for index, other_id in enumerate(ids, 1):
+                    if context.cancelled:
+                        break
+                    name = None
+                    with worker._mutation():
+                        other = worker.catalog.get_photo(other_id)
+                        source = worker.catalog.get_develop(photo_id)
+                        if other is not None:
+                            name = Path(other.path).name
+                        if other is None or source is None:  # Removed or cleared since the job started.
+                            counts["failed"] += 1
+                        elif other.format.upper() != "ARW":
+                            counts["skipped_non_raw"] += 1
+                        elif not Path(other.path).is_file():  # The volume is routinely unplugged.
+                            counts["skipped_offline"] += 1
+                        else:
+                            try:  # DevelopSettings(source.fields) raises: fields is read-only.
+                                worker.save_develop(other_id, DevelopSettings.from_dict(source.to_dict()))
+                            except (DevelopError, ValueError, OSError) as error:
+                                counts["failed"] += 1
+                                worker._log_job(job, f"{name}: {error}")
+                            else:
+                                counts["applied"] += 1
+                                written.append(other_id)
+                    context.update_progress(index / len(ids), label=name[:200] if name else None,
+                                            processed=index, total=len(ids))
+                if written:
+                    with worker._mutation():
+                        worker.catalog.append_event(photo_id, "develop_applied_to_group",
+                                                    {"source_photo_id": photo_id, "photo_ids": written})
+                worker._write_job_files(job.id, manifest | {"summary": counts})
+
+        self._submit_job(runner, job, work)
+        return job
+
     def _export_one(self, photo: Photo, request: ExportRequest, pipeline) -> ExportResult:
         rendered = None
         artifact = None
