@@ -15,7 +15,7 @@ from unittest.mock import patch
 from PIL import Image, ImageCms
 
 from lumen.config import Settings
-from lumen.domain import DevelopSettings
+from lumen.domain import DEVELOP_RANGES, DevelopSettings
 from lumen.library import Library
 from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionReview, OmlxError
@@ -1445,7 +1445,7 @@ const tabElements = ['ingest', 'import', 'review', 'astro', 'export', 'clear'].m
   tab.setAttribute('aria-selected', String(name === 'export'));
   return tab;
 });
-const frameTabElements = ['frame', 'crop'].map((name, index) => {
+const frameTabElements = ['frame', 'crop', 'develop'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -1538,6 +1538,12 @@ const exportPosts = [];
 let exportPolls = 0;
 let exportCancels = 0;
 const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
+const developPosts = [];
+let developHold = false;
+const heldDevelop = [];
+let developPolls = 0;
+const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: [0.1, 0.5, 1, 0.2], neutral_temperature: 5600, neutral_tint: 7 });
+const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const refinePosts = [];
 let refinePolls = 0;
 const refineJob = (status, progress, extra = {}) => ({ job_id: 13, kind: 'refine_previews', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
@@ -1704,9 +1710,25 @@ async function fetch(url, options = {}) {
     captionPosts.push({ url, body });
     payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
   }
+  else if (/^\/api\/photos\/\d+\/develop(\/preview|\/apply-to-group)?$/.test(url)) {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    developPosts.push({ url, body, signal: options.signal });
+    if (url.endsWith('/apply-to-group')) payload = developJob('queued', 0);
+    else if (!url.endsWith('/preview')) payload = { photo_id: Number(url.split('/')[3]), develop: Object.keys(body.settings).length ? body.settings : null, preview_url: '/preview/1?v=saved-developed' };
+    else if (developHold) return new Promise(resolve => heldDevelop.push(() => resolve({ ok: true, json: async () => developPreview() })));
+    else payload = developPreview();
+  }
+  else if (url === '/api/jobs/21') {
+    developPolls += 1;
+    payload = developPolls < 2 ? developJob('running', 0.5, { processed: 1, total: 2 })
+      : developJob('succeeded', 1, { processed: 2, total: 2, result: { applied: 2, skipped_non_raw: 0, skipped_offline: 1, failed: 0 } });
+  }
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
-    photo: (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
-      : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null },
+    develop: scenario === 'develop' && url.endsWith('/1') ? { exposure_ev: 0.5 } : null,
+    photo: Object.assign({ format: 'ARW', offline: scenario === 'develop-offline' },
+      (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
+      : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null }),
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
       : scenario.startsWith('keyword') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
   else if (/^\/api\/photos\/\d+\/crops$/.test(url)) {
@@ -2476,7 +2498,7 @@ const regression = `
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
     const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
-    const [frameTab, cropTab] = frameTabElements;
+    const [frameTab, cropTab, developTabButton] = frameTabElements;
     await key('Enter', card(1), element('#contact-sheet'));
     await new Promise(setImmediate);
     assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'the frame view opens on Frame by default');
@@ -2495,9 +2517,9 @@ const regression = `
     assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'ArrowLeft on Crop selects Frame');
     assert.equal(focused, frameTab);
     await key('End', frameTab, frameTab);
-    assert.equal(cropTab.getAttribute('aria-selected'), 'true');
-    assert.equal(focused, cropTab);
-    await key('Home', cropTab, cropTab);
+    assert.equal(developTabButton.getAttribute('aria-selected'), 'true', 'End selects the last tab, Develop');
+    assert.equal(focused, developTabButton);
+    await key('Home', developTabButton, developTabButton);
     assert.equal(frameTab.getAttribute('aria-selected'), 'true');
     await key('ArrowRight', frameTab, frameTab);
     assert.equal(cropTab.getAttribute('aria-selected'), 'true');
@@ -2513,6 +2535,112 @@ const regression = `
     element('#crop-panel').append(cropButton);
     await key('x', cropButton, loupe);
     assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/1/decision', body: { decision: 'reject' } }, 'culling keys work from the Crop panel');
+    return;
+  }
+  if (scenario === 'develop' || scenario === 'develop-offline') {
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
+    Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', clientWidth: 800, clientHeight: 600 });
+    const tab = element('#develop-tab');
+    const flush = () => new Promise(setImmediate);
+    const field = name => element('#develop-' + name + '-value');
+    await key('Home', card(1), element('#contact-sheet'));
+    await key('Enter', card(1), element('#contact-sheet'));
+    await flush();
+    if (scenario === 'develop-offline') {
+      assert.equal(tab.disabled, true, 'an offline original leaves the tab in the rail but disabled');
+      assert.ok(element('#develop-unavailable').textContent.includes('offline'), element('#develop-unavailable').textContent);
+      assert.equal(element('#develop-unavailable').hidden, false);
+      assert.equal(element('#develop-workspace').hidden, true);
+      assert.equal(element('#develop-apply-group').disabled, true, 'a burst cannot be developed from a frame that cannot be rendered');
+      assert.equal(element('#develop-exposure_ev').disabled, true);
+      assert.equal(element('#develop-point-0').getAttribute('tabindex'), '-1');
+      assert.deepEqual(developPosts, [], 'nothing is rendered without the raw');
+      return;
+    }
+    assert.equal(tab.disabled, false);
+    assert.equal(element('#develop-workspace').hidden, false);
+    tab.listeners.click();
+    await flush();
+    assert.deepEqual(developPosts.map(post => [post.url, post.body]), [['/api/photos/1/develop/preview', { settings: { exposure_ev: 0.5 }, long_edge: 800 }]],
+      'the saved settings render as they are, at the viewport long edge');
+    assert.equal(viewport.children[0].src, 'data:image/jpeg;base64,RENDER', 'the viewport shows the render, whole and uncropped');
+    assert.equal(viewport.children[0].className, 'fit');
+    assert.equal(element('#develop-histogram').getAttribute('d').startsWith('M0.00,60'), true, 'the histogram is drawn behind the curve');
+    assert.equal(field('exposure_ev').value, '0.50');
+    assert.equal(field('contrast').value, '', 'an untouched field shows nothing, because the file sets it');
+    assert.equal(element('#develop-temperature_k').value, '5600', "white balance parks on this frame's own neutral");
+    assert.equal(field('temperature_k').value, '', 'parking a handle is not an edit');
+    assert.equal(element('#develop-contrast-reset').disabled, true, 'nothing to reset until a field is set');
+
+    const contrast = element('#develop-contrast');
+    contrast.value = '0.3';
+    await contrast.listeners.change();
+    await flush();
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5, contrast: 0.3 }, 'only the fields the photographer touched are sent');
+    assert.equal(field('contrast').value, '0.30');
+    assert.equal(element('#announcer').textContent, 'Contrast 0.30');
+    await element('#develop-contrast-reset').listeners.click();
+    await flush();
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5 }, 'Reset deletes the field rather than setting it to zero');
+    assert.equal(field('contrast').value, '');
+    assert.ok(element('#announcer').textContent.includes("own value"));
+    field('tint').value = '-40';
+    await field('tint').listeners.change();
+    await flush();
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5, tint: -40 }, 'the numeric field sets the same key');
+    field('tint').value = '';
+    await field('tint').listeners.change();
+    await flush();
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5 }, 'emptying the numeric field clears the key');
+
+    const svg = Object.assign(element('#develop-curve'), { box: { left: 0, top: 0, width: 200, height: 120 } });
+    const pointer = (type, x, y) => svg.listeners[type]({ button: 0, pointerId: 1, clientX: x, clientY: y, preventDefault() {} });
+    const renders = developPosts.length;
+    pointer('pointerdown', 100, 30);
+    pointer('pointermove', 100, 24);
+    assert.equal(developPosts.length, renders, 'a drag in progress renders nothing');
+    assert.equal(element('#develop-point-2').getAttribute('cy'), '12.00', 'the dragged point follows the pointer');
+    pointer('pointerup', 100, 24);
+    await flush();
+    assert.equal(developPosts.length, renders + 1, 'one gesture, one render');
+    const curve = developPosts.at(-1).body.settings.curve;
+    assert.equal(curve.length, 5);
+    assert.deepEqual(curve[2], [0.5, 0.8], 'the middle point took the release position');
+    assert.ok(curve.every((point, index) => index === 0 || point[0] > curve[index - 1][0]), 'x values strictly ascend: ' + JSON.stringify(curve));
+    pointer('pointerdown', 100, 24);
+    pointer('pointerup', 190, 24);
+    await flush();
+    const squeezed = developPosts.at(-1).body.settings.curve;
+    assert.ok(Math.abs(squeezed[2][0] - 0.74) < 1e-9, 'a point stops short of its neighbour, so x values never tie: ' + squeezed[2][0]);
+    const point = element('#develop-point-1');
+    assert.equal(point.getAttribute('tabindex'), '0', 'every point is reachable by keyboard');
+    point.listeners.keydown({ key: 'ArrowUp', preventDefault() {}, stopPropagation() {} });
+    await flush();
+    assert.ok(Math.abs(developPosts.at(-1).body.settings.curve[1][1] - 0.26) < 1e-9, 'an arrow key nudges by one percent');
+    assert.ok(element('#announcer').textContent.startsWith('Tone curve point 2'), element('#announcer').textContent);
+
+    await element('#develop-apply-group').listeners.click();
+    assert.equal(developPosts.at(-2).url, '/api/photos/1/develop', 'the settings are stored before the job copies them');
+    assert.deepEqual([developPosts.at(-1).url, developPosts.at(-1).body], ['/api/photos/1/develop/apply-to-group', {}]);
+    assert.equal(element('#export-dialog').hidden, false, 'the burst job uses the existing progress dialog');
+    assert.equal(element('#export-dialog-heading').textContent, 'Apply develop to burst');
+    await settle();
+    assert.ok(element('#export-dialog-status').textContent.includes('2 developed, 1 skipped, 0 failed.'), element('#export-dialog-status').textContent);
+    assert.ok(!(element('#export-status').textContent || '').includes('Apply develop'), 'a develop job never writes into the export panel');
+    assert.equal(card(1).children[0].src, '/thumb/1?v=saved-developed', 'the contact-sheet tile follows the re-rendered preview');
+
+    const saves = developPosts.filter(post => post.url === '/api/photos/1/develop').length;
+    element('#close-loupe').listeners.click();
+    await flush();
+    assert.equal(developPosts.filter(post => post.url === '/api/photos/1/develop').length, saves, 'nothing changed since the last save, so closing saves nothing');
+    const stored = developPosts.filter(post => post.url === '/api/photos/1/develop').at(-1).body;
+    assert.deepEqual(Object.keys(stored), ['settings']);
+    assert.equal(stored.settings.exposure_ev, 0.5);
+    assert.equal(stored.settings.curve.length, 5);
+    assert.ok(!('contrast' in stored.settings) && !('tint' in stored.settings), 'a reset field is never saved');
     return;
   }
   if (scenario === 'frame-view-full') {
@@ -3876,7 +4004,7 @@ const regression = `
 let finished = false;  // Timers are stubbed, so a never-settling await would otherwise exit 0 with assertions skipped.
 process.on('exit', () => { if (!finished) { console.error('scenario did not finish'); process.exitCode = 1; } });
 vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regression, {
-  assert: require('node:assert/strict'), URLSearchParams, setImmediate, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
+  assert: require('node:assert/strict'), URLSearchParams, AbortController, setImmediate, scenario: process.argv[2], apiBase: process.argv[3], httpFetch: globalThis.fetch,
 }).then(() => { finished = true; }, error => { finished = true; console.error(error); process.exitCode = 1; });
 """
         app = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js"
@@ -3968,6 +4096,38 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_frame_view_full_size_toggle(self):
         self.run_javascript_cleanup_regression("frame-view-full")
 
+    def test_develop_controls_match_the_server_ranges(self):
+        """A slider that offers a value the server rejects is a 400 the photographer cannot explain."""
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        panel = by_id["develop-panel"]
+        for key, (low, high) in DEVELOP_RANGES.items():
+            for node in (by_id[f"develop-{key}"], by_id[f"develop-{key}-value"]):
+                self.assertIn(panel, node["parents"], f"{key} lives in the Develop panel")
+                self.assertEqual((float(low), float(high)), (float(node["attrs"]["min"]), float(node["attrs"]["max"])), key)
+                self.assertGreater(float(node["attrs"]["step"]), 0, key)
+            self.assertEqual("range", by_id[f"develop-{key}"]["attrs"]["type"])
+            self.assertEqual(("number", "not set"), (by_id[f"develop-{key}-value"]["attrs"]["type"],
+                                                     by_id[f"develop-{key}-value"]["attrs"]["placeholder"]),
+                             "an unset field shows that it is unset, never a value the file did not choose")
+            self.assertEqual("Reset", by_id[f"develop-{key}-reset"]["text"].strip())
+        self.assertEqual(5, len([node for node in parser.nodes if node["attrs"].get("class") == "curve-point"]),
+                         "five curve points, each keyboard reachable")
+        for node in (node for node in parser.nodes if node["attrs"].get("class") == "curve-point"):
+            self.assertEqual(("slider", "0"), (node["attrs"].get("role"), node["attrs"].get("tabindex")))
+        summaries = [" ".join(node["text"].split()) for node in parser.nodes if node["tag"] == "summary" and panel in node["parents"]]
+        self.assertEqual(["Brightness", "White Balance", "Contrast", "Sharpness", "Noise Reduction"], summaries, "IEDT's order")
+        self.assertIn(by_id["export-controls"], by_id["export-keep-original"]["parents"])
+        self.assertEqual("checkbox", by_id["export-keep-original"]["attrs"]["type"])
+
+    def test_javascript_develop_tab_sends_only_touched_fields(self):
+        self.run_javascript_cleanup_regression("develop")
+
+    def test_javascript_develop_tab_is_disabled_when_the_original_is_offline(self):
+        self.run_javascript_cleanup_regression("develop-offline")
+
     def test_javascript_frame_view_crop_draw(self):
         css = (Path(__file__).parent.parent / "src/lumen/static/styles.css").read_text()
         self.assertIn("#loupe-viewport img.fit { max-width: 100%; max-height: 100%; }", css, "the frame view shows its preview whole")
@@ -3987,6 +4147,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for tab, panel, selected, contents in (
             ("frame-tab", "frame-panel", "true", ["inspection"]),
             ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai", "loupe-export"]),
+            ("develop-tab", "develop-panel", "false", ["develop-curve", "develop-exposure_ev", "develop-exposure_ev-value",
+                                                       "develop-exposure_ev-reset", "develop-reset-all", "develop-apply-group", "develop-export"]),
         ):
             self.assertIn(tablist, by_id[tab]["parents"])
             self.assertEqual(("tab", panel, selected), (by_id[tab]["attrs"].get("role"), by_id[tab]["attrs"].get("aria-controls"), by_id[tab]["attrs"].get("aria-selected")))
@@ -4997,6 +5159,21 @@ class DevelopWebTests(unittest.TestCase):
 
     def preview(self, **body):
         return self.post_json("/api/photos/1/develop/preview", {"settings": {"contrast": 0.5}, "long_edge": 512} | body)
+
+    def test_photo_detail_carries_saved_develop_settings_and_the_offline_flag(self):
+        """The Develop tab fills its controls from this payload and disables itself when the original is away."""
+        payload = self.get_json("/api/photos/1")[1]
+        self.assertIsNone(payload["develop"], "an undeveloped frame reports no settings, not an empty object")
+        self.assertFalse(payload["photo"]["offline"])
+        self.post_json("/api/photos/1/develop", {"settings": {"exposure_ev": 0.5, "curve": [[0, 0], [0.2, 0.3], [0.5, 0.5], [0.7, 0.8], [1, 1]]}})
+        payload = self.get_json("/api/photos/1")[1]
+        self.assertEqual({"exposure_ev": 0.5, "curve": [[0, 0], [0.2, 0.3], [0.5, 0.5], [0.7, 0.8], [1, 1]]}, payload["develop"],
+                         "only the fields the photographer set come back")
+        self.assertFalse(payload["photo"]["offline"])
+        Path(self.photo.path).rename(self.root / "moved.jpg")
+        payload = self.get_json("/api/photos/1")[1]
+        self.assertTrue(payload["photo"]["offline"], "an unreachable original is reported, so no control offers a render")
+        self.assertNotIn(str(self.root), json.dumps(payload))
 
     def test_develop_preview_returns_an_image_and_a_histogram(self):
         code, body = self.preview()

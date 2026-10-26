@@ -4,6 +4,8 @@ const state = {
   groups: [], photoCount: 0, selectedId: null, selectedGroupId: null, status: null, profile: null, acting: false, composition: null, critique: null, recommendedCropId: null, compositionRequest: 0, reviewRequest: 0,
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
+  // Develop holds only the fields the photographer touched; saved is the last body the server was given.
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, histogram: [], controller: null, drag: null },
   mergeSelection: new Set(), clearedFrames: 0,
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -525,6 +527,7 @@ async function inspect(photo) {
   if (critiqueLoad) state.critique = { groupId, data: critique };
   state.details = details;
   renderInspector(photo);
+  fillDevelop(photo);
 }
 
 // Plain-language reason for the frame's place in its burst, from the same numbers the meters show.
@@ -1559,7 +1562,7 @@ document.querySelector('#reject-all-yes').addEventListener('click', () => {
   return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
 });
 
-const JOB_NAMES = { import: 'Import', export: 'Export', tag: 'Tagging', assist: 'Local AI assist', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+const JOB_NAMES = { import: 'Import', export: 'Export', develop_group: 'Apply develop to burst', tag: 'Tagging', assist: 'Local AI assist', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
@@ -1570,7 +1573,8 @@ function jobText(job) {
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
     : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.`
-    : job.kind === 'export' && job.result ? ` ${result.exported} saved, ${result.failed} failed${result.skipped ? `, ${result.skipped} skipped` : ''}.` : '';
+    : job.kind === 'export' && job.result ? ` ${result.exported} saved, ${result.failed} failed${result.skipped ? `, ${result.skipped} skipped` : ''}.`
+    : job.kind === 'develop_group' && job.result ? ` ${result.applied} developed, ${result.skipped_non_raw + result.skipped_offline} skipped, ${result.failed} failed.` : '';
   const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
   return {
     queued: `${name} queued.`,
@@ -1599,7 +1603,7 @@ function watchJob(job) {
     const detail = JOB_ACTIVE.includes(job.status) && job.total ? ` ${job.processed} of ${job.total}${job.label ? ` · ${job.label}` : ''}` : '';
     aiStatus(JOB_ACTIVE.includes(job.status) ? 'running' : job.status === 'succeeded' ? 'done' : 'failed', text + detail);
   }
-  if (job.kind === 'export') renderExportDialog(job);
+  if (job.kind === 'export' || job.kind === 'develop_group') renderExportDialog(job);
   if (job.kind === 'astro') setAstroJob(job);
   else {
     if (job.kind === 'ingest') renderIngest(job);
@@ -1659,8 +1663,10 @@ document.querySelector('#cancel-job').addEventListener('click', cancelCurrentJob
 
 // A keepers export runs as a job; this modal shows its progress and offers Cancel, then the outcome and Close.
 const exportDialog = document.querySelector('#export-dialog');
+// Shared by the export job and the burst develop job: one progress dialog, named after the job it watches.
 function renderExportDialog(job) {
   const active = JOB_ACTIVE.includes(job.status);
+  document.querySelector('#export-dialog-heading').textContent = job.kind === 'export' ? 'Exporting JPEGs' : JOB_NAMES[job.kind];
   const percent = Math.round((job.progress || 0) * 100);
   const progress = document.querySelector('#export-dialog-progress');
   progress.value = percent;
@@ -1672,7 +1678,7 @@ function renderExportDialog(job) {
   document.querySelector('#export-dialog-cancel').hidden = !active;
   document.querySelector('#export-dialog-close').hidden = active;
   if (active && !exportDialog.open) { if (exportDialog.showModal) exportDialog.showModal(); else exportDialog.hidden = false; }
-  if (!active) {
+  if (!active && job.kind === 'export') {
     document.querySelector('#export-status').textContent = text;
     const list = document.querySelector('#export-results');
     list.replaceChildren();
@@ -1997,6 +2003,7 @@ function updateWorkflow() {
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
 
+  syncDevelopControls();
   renderAstroLights(group);
   const siril = state.status?.tools?.['siril-cli']?.available === true;
   const job = state.astro.job;
@@ -2227,6 +2234,7 @@ function showView(dialog) {
 function closeView() {
   const dialog = openView;
   if (!dialog) return;
+  saveDevelop();  // leaving the panel saves; the RAW is untouched either way
   openView = null;
   comparing = [];
   if (dialog.close) dialog.close();
@@ -2338,6 +2346,7 @@ function openLoupe(photoId) {
 
 // The frame view selects the frame as a sheet click does, then gathers its inspector and crops at preview size.
 function showFrame(photo) {
+  if (state.develop.photoId !== photo.id) saveDevelop();  // the frame being left keeps its settings
   document.querySelector('#loupe-heading').textContent = photo.name;
   selectFrameTab.restore();
   showPreview(loupeViewport, photo, undefined, () => drawCropOverlay(shownCropRect()), true);
@@ -2453,7 +2462,9 @@ const fullButton = document.querySelector('#loupe-full');
 const cropOverlay = document.querySelector('#crop-overlay');
 const cropOutline = document.querySelector('#crop-outline');
 const cropLock = document.querySelector('#crop-lock');
-const selectFrameTab = wireTablist('#frame-tabs', 'lumen-frame-tab');
+const selectFrameTab = wireTablist('#frame-tabs', 'lumen-frame-tab', tab => {
+  if (tab.id === 'develop-tab') renderDevelopPreview();  // the panel's render is also the histogram's source
+});
 loupeViewport.addEventListener('keydown', event => {
   if (event.key === 'Escape' && cropDrag) {  // cancel the drag; the dialog never sees this Escape
     event.preventDefault();
@@ -2522,6 +2533,267 @@ try {
 } catch { /* per-visit only */ }
 fullButton.addEventListener('click', toggleFullSize);
 document.querySelector('#loupe-export').addEventListener('click', () => exportCurrentFrame());
+
+// The Develop tab. Only the fields the photographer actually moved are ever sent: Apple's raw pipeline seeds the
+// neutral white balance and the baseline noise reduction from each file, so "not set" and "set to the default" are
+// different states, and Reset deletes a key rather than guessing the value it would have had.
+// min and max repeat the server's own ranges, which the markup also carries; a test holds the three in step.
+const DEVELOP_CONTROLS = [
+  { key: 'exposure_ev', label: 'Exposure', unit: ' EV', min: -3, max: 3, park: 0, decimals: 2 },
+  { key: 'temperature_k', label: 'Temperature', unit: ' K', min: 2000, max: 12000, park: 5500, decimals: 0 },
+  { key: 'tint', label: 'Tint', unit: '', min: -150, max: 150, park: 0, decimals: 0 },
+  { key: 'contrast', label: 'Contrast', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
+  { key: 'sharpness', label: 'Sharpness', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
+  { key: 'luminance_nr', label: 'Luminance noise reduction', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
+  { key: 'color_nr', label: 'Colour noise reduction', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
+];
+const CURVE_IDENTITY = [[0, 0], [0.25, 0.25], [0.5, 0.5], [0.75, 0.75], [1, 1]];
+const CURVE_GAP = 0.01;  // the server rejects equal x values, so a dragged point stops short of its neighbour
+const [CURVE_W, CURVE_H] = [100, 60];  // the viewBox in index.html
+
+function developClamp(value, low, high) {
+  return Math.max(low, Math.min(high, value));
+}
+
+function developCurve() {
+  return state.develop.fields.curve || CURVE_IDENTITY;
+}
+
+function curveText(index) {
+  const [x, y] = developCurve()[index];
+  return `point ${index + 1}: input ${Math.round(x * 100)}%, output ${Math.round(y * 100)}%`;
+}
+
+// One widget: the histogram as a stepped path behind the curve, both in the viewBox's own units.
+function drawDevelopWidget() {
+  const buckets = state.develop.histogram;
+  const peak = Math.max(1e-9, ...buckets);
+  const step = CURVE_W / Math.max(1, buckets.length);
+  document.querySelector('#develop-histogram').setAttribute('d', buckets.map((value, index) => {
+    const [left, right] = [index * step, (index + 1) * step];
+    const top = CURVE_H * (1 - developClamp(value / peak, 0, 1));
+    return `M${left.toFixed(2)},${CURVE_H}L${left.toFixed(2)},${top.toFixed(2)}L${right.toFixed(2)},${top.toFixed(2)}L${right.toFixed(2)},${CURVE_H}Z`;
+  }).join(''));
+  const place = ([x, y]) => `${(x * CURVE_W).toFixed(2)},${((1 - y) * CURVE_H).toFixed(2)}`;
+  document.querySelector('#develop-curve-line').setAttribute('d', developCurve().map((point, index) => `${index ? 'L' : 'M'}${place(point)}`).join(''));
+  developCurve().forEach((point, index) => {
+    const node = document.querySelector(`#develop-point-${index}`);
+    node.setAttribute('cx', (point[0] * CURVE_W).toFixed(2));
+    node.setAttribute('cy', ((1 - point[1]) * CURVE_H).toFixed(2));
+    node.setAttribute('aria-valuenow', String(Math.round(point[1] * 100)));
+    node.setAttribute('aria-valuetext', curveText(index));
+  });
+}
+
+// White balance parks on this frame's own neutral, which the last render reported; the amounts park mid-range,
+// because the file's baseline for them is not reported and must not be invented.
+function developPark(control) {
+  const neutral = { temperature_k: state.develop.neutral?.temperature, tint: state.develop.neutral?.tint }[control.key];
+  return Number.isFinite(neutral) ? neutral : control.park;
+}
+
+function syncDevelopControls() {
+  const { fields, ready } = state.develop;
+  const touched = Object.keys(fields).length > 0;
+  DEVELOP_CONTROLS.forEach(control => {
+    const set = control.key in fields;
+    const value = set ? fields[control.key] : developPark(control);
+    const range = document.querySelector(`#develop-${control.key}`);
+    const field = document.querySelector(`#develop-${control.key}-value`);
+    if (range !== document.activeElement) range.value = String(value);  // never move a handle under the pointer
+    if (field !== document.activeElement) field.value = set ? value.toFixed(control.decimals) : '';
+    range.disabled = field.disabled = !ready;
+    document.querySelector(`#develop-${control.key}-reset`).disabled = !ready || !set;
+  });
+  CURVE_IDENTITY.forEach((_point, index) => document.querySelector(`#develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
+  document.querySelector('#develop-reset-all').disabled = !ready || (!touched && state.develop.saved === '{}');
+  document.querySelector('#develop-apply-group').disabled = state.busy || !ready || !touched;
+  document.querySelector('#develop-export').disabled = document.querySelector('#loupe-export').disabled;
+}
+
+// The frame's saved settings and its offline flag arrive with its details; every render needs the raw itself.
+function fillDevelop(photo) {
+  const detail = state.details?.photo || {};
+  const saved = state.details?.develop || {};
+  const develop = state.develop;
+  develop.controller?.abort();
+  Object.assign(develop, {
+    photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
+    neutral: null, histogram: [], drag: null, controller: null,
+  });
+  develop.saved = JSON.stringify(develop.fields);
+  const offline = detail.offline === true;
+  const raw = String(detail.format || '').toUpperCase() === 'ARW';
+  develop.ready = !offline && raw;
+  const reason = offline ? 'The original is offline. Plug its drive back in and reopen this frame: every develop render reads the raw.'
+    : raw ? '' : 'Develop reads raw files; this frame is not one.';
+  document.querySelector('#develop-tab').disabled = !develop.ready;
+  const message = document.querySelector('#develop-unavailable');
+  message.textContent = reason;
+  message.hidden = develop.ready;
+  document.querySelector('#develop-workspace').hidden = !develop.ready;
+  document.querySelector('#develop-status').textContent = '';  // the reason above says it once
+  drawDevelopWidget();
+  syncDevelopControls();
+  if (develop.ready && document.querySelector('#develop-tab').getAttribute('aria-selected') === 'true') renderDevelopPreview();
+}
+
+// One gesture, one render: the whole frame, uncropped, with the newer request cancelling the older.
+async function renderDevelopPreview() {
+  const develop = state.develop;
+  const photo = photoById(state.selectedId);
+  if (!photo || !develop.ready || develop.photoId !== photo.id) return;
+  develop.controller?.abort();
+  const controller = new AbortController();
+  develop.controller = controller;
+  const edge = Math.max(640, Math.round(Math.max(loupeViewport.clientWidth || 0, loupeViewport.clientHeight || 0)));
+  const status = document.querySelector('#develop-status');
+  status.textContent = 'Rendering this frame from the raw…';
+  try {
+    const result = await request(`/api/photos/${photo.id}/develop/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({ settings: develop.fields, long_edge: edge }),
+    });
+    if (controller.signal.aborted || develop.photoId !== photo.id) return;
+    develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
+    develop.histogram = Array.isArray(result.histogram) ? result.histogram : [];
+    drawDevelopWidget();
+    syncDevelopControls();
+    showPreview(loupeViewport, photo, result.image, () => drawCropOverlay(shownCropRect()), true);
+    fullButton.textContent = 'Full size';  // the viewport now holds the develop render, not the full-size JPEG
+    fullButton.setAttribute('aria-pressed', 'false');
+    const touched = Object.keys(develop.fields).length;
+    status.textContent = touched ? `${touched} setting${touched === 1 ? '' : 's'} applied to this render. Nothing is saved until you leave the frame or export.` : 'The frame as the camera recorded it.';
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    status.textContent = `${error.message}. The sliders still work; the render will be retried on your next change.`;
+    announce(status.textContent);
+  }
+}
+
+// Saved on leaving the frame and before any export, so the stored settings are what the exported JPEG bakes in.
+// An empty settings object is how the server is told to clear the frame.
+async function saveDevelop() {
+  const develop = state.develop;
+  const photoId = develop.photoId;
+  const body = JSON.stringify(develop.fields);
+  if (!develop.ready || photoId === null || body === develop.saved) return;
+  develop.saved = body;  // one save per change, even if the panel closes twice
+  try {
+    const result = await post(`/api/photos/${photoId}/develop`, { settings: JSON.parse(body) });
+    const photo = photoById(photoId);
+    if (photo && result.preview_url) {
+      photo.preview_url = result.preview_url;  // the save re-rendered the contact-sheet preview
+      photo.preview_kind = result.develop ? 'developed' : 'refined';
+      refreshFrame(photoId);
+      if (state.composition?.photo_id === photoId) state.composition.preview_url = result.preview_url;
+    }
+    announce(result.develop ? 'Develop settings saved.' : 'Develop settings cleared.');
+  } catch (error) {
+    develop.saved = null;  // unknown server state: every later body differs, so the next close tries again
+    document.querySelector('#develop-status').textContent = `Develop settings could not be saved: ${error.message}`;
+    announce(document.querySelector('#develop-status').textContent);
+  }
+}
+
+function setDevelopField(control, value) {
+  if (value === null) delete state.develop.fields[control.key];
+  else state.develop.fields[control.key] = value;
+  syncDevelopControls();
+  announce(value === null ? `${control.label} reset to this file's own value` : `${control.label} ${value.toFixed(control.decimals)}${control.unit}`);
+  renderDevelopPreview();
+}
+
+DEVELOP_CONTROLS.forEach(control => {
+  const range = document.querySelector(`#develop-${control.key}`);
+  const field = document.querySelector(`#develop-${control.key}-value`);
+  const bounded = value => developClamp(value, control.min, control.max);
+  range.addEventListener('change', () => setDevelopField(control, bounded(Number(range.value))));  // change, not input: one render per gesture
+  field.addEventListener('change', () => {
+    const typed = field.value.trim();
+    setDevelopField(control, typed === '' || !Number.isFinite(Number(typed)) ? null : bounded(Number(typed)));
+  });
+  document.querySelector(`#develop-${control.key}-reset`).addEventListener('click', () => setDevelopField(control, null));
+});
+
+// Dragging a point keeps the x values strictly ascending, which is what the server validates.
+function moveCurvePoint(index, x, y) {
+  const points = developCurve().map(point => [...point]);
+  const low = index === 0 ? 0 : points[index - 1][0] + CURVE_GAP;
+  const high = index === points.length - 1 ? 1 : points[index + 1][0] - CURVE_GAP;
+  points[index] = [developClamp(x, low, Math.max(low, high)), developClamp(y, 0, 1)];
+  state.develop.fields.curve = points;
+  drawDevelopWidget();
+  syncDevelopControls();
+}
+
+const curveSvg = document.querySelector('#develop-curve');
+function curvePointerAt(event) {
+  const box = curveSvg.getBoundingClientRect();
+  return [developClamp((event.clientX - box.left) / Math.max(1, box.width), 0, 1),
+    developClamp(1 - (event.clientY - box.top) / Math.max(1, box.height), 0, 1)];
+}
+curveSvg.addEventListener('pointerdown', event => {
+  if (event.button !== 0 || !state.develop.ready) return;
+  event.preventDefault();
+  const [x, y] = curvePointerAt(event);
+  const distance = index => Math.hypot(developCurve()[index][0] - x, developCurve()[index][1] - y);
+  state.develop.drag = developCurve().reduce((best, _point, index) => (distance(index) < distance(best) ? index : best), 0);
+  curveSvg.setPointerCapture(event.pointerId);
+  document.querySelector(`#develop-point-${state.develop.drag}`).focus({ preventScroll: true });
+  moveCurvePoint(state.develop.drag, x, y);
+});
+curveSvg.addEventListener('pointermove', event => {
+  if (state.develop.drag === null) return;
+  moveCurvePoint(state.develop.drag, ...curvePointerAt(event));
+});
+curveSvg.addEventListener('pointerup', event => {  // the render waits for the release: one gesture, one render
+  const index = state.develop.drag;
+  if (index === null) return;
+  state.develop.drag = null;
+  moveCurvePoint(index, ...curvePointerAt(event));
+  announce(`Tone curve ${curveText(index)}`);
+  renderDevelopPreview();
+});
+curveSvg.addEventListener('pointercancel', () => { state.develop.drag = null; });
+// The keyboard fallback: arrow keys nudge the focused point by 1%.
+const CURVE_KEYS = { ArrowLeft: [-0.01, 0], ArrowRight: [0.01, 0], ArrowDown: [0, -0.01], ArrowUp: [0, 0.01] };
+CURVE_IDENTITY.forEach((_point, index) => {
+  document.querySelector(`#develop-point-${index}`).addEventListener('keydown', event => {
+    const delta = CURVE_KEYS[event.key];
+    if (!delta || !state.develop.ready) return;
+    event.preventDefault();
+    event.stopPropagation();  // a nudge is not a pan and not a culling key
+    const [x, y] = developCurve()[index];
+    moveCurvePoint(index, x + delta[0], y + delta[1]);
+    announce(`Tone curve ${curveText(index)}`);
+    renderDevelopPreview();
+  });
+});
+
+document.querySelector('#develop-reset-all').addEventListener('click', async () => {
+  state.develop.fields = {};
+  syncDevelopControls();
+  announce('Every develop setting reset; this frame goes back to its own rendering.');
+  await saveDevelop();  // the clear also re-renders the contact-sheet preview
+  renderDevelopPreview();
+});
+document.querySelector('#develop-export').addEventListener('click', () => exportCurrentFrame());
+document.querySelector('#develop-apply-group').addEventListener('click', async () => {
+  const photoId = state.develop.photoId;
+  state.busy = true;
+  updateWorkflow();
+  try {
+    await saveDevelop();  // the job copies the stored settings, so this frame's must be stored first
+    watchJob(await post(`/api/photos/${photoId}/develop/apply-to-group`));
+  } catch (error) {
+    document.querySelector('#develop-status').textContent = `Apply to this burst could not start: ${error.message}`;
+    announce(document.querySelector('#develop-status').textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+});
 SIDES.forEach((side, index) => {
   const part = name => document.querySelector(`#compare-${side}-${name}`);
   const viewport = part('viewport');
@@ -2559,8 +2831,10 @@ function showExportResults(results, size) {
 
 // Export tab and "Export this frame" share one path; a current-frame result is mirrored into the frame view.
 async function runExport(scope) {
+  await saveDevelop();  // export bakes in the stored settings, so the panel's work must be stored first
   const preset = document.querySelector('input[name="export-preset"]:checked').value;
   const payload = { scope, profile: state.profile, preset };
+  if (document.querySelector('#export-keep-original').checked) payload.keep_original = true;
   const watermark = document.querySelector('#export-watermark').value.trim();
   if (watermark) payload.watermark = watermark;
   if (scope === 'current') payload.photo_id = state.selectedId;

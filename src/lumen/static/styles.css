@@ -179,7 +179,18 @@ legend { padding: 0; font-weight: 700; }
 .crop-warning { min-height: 1.5rem; color: var(--danger); }
 .crop-marker { min-height: 1.5rem; color: var(--cyan); }
 #more-crop-shapes { margin-top: 1rem; }
-#more-crop-shapes summary, #vocabulary-panel summary { min-height: 44px; padding: .65rem 0; color: var(--cyan); cursor: pointer; font-weight: 700; }
+#more-crop-shapes summary, #vocabulary-panel summary, #develop-panel summary { min-height: 44px; padding: .65rem 0; color: var(--cyan); cursor: pointer; font-weight: 700; }
+
+/* The histogram and the tone curve are one widget: bars behind, the curve and its five draggable points over them. */
+#develop-curve { display: block; width: 100%; aspect-ratio: 5 / 3; margin: .5rem 0; border: 1px solid var(--line); border-radius: 6px; background: #08090a; touch-action: none; }
+#develop-histogram { fill: var(--cyan); fill-opacity: .4; }
+#develop-curve-line { fill: none; stroke: var(--amber); stroke-width: .8; }
+.curve-point { fill: var(--amber); stroke: var(--charcoal); stroke-width: .5; cursor: grab; }
+.curve-point:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
+.develop-row { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr) 5.5rem auto; align-items: center; gap: .5rem; margin: .35rem 0; }
+.develop-row input[type="range"] { min-height: 32px; border: 0; accent-color: var(--amber); }
+.develop-row input[type="number"] { padding: .35rem; color: var(--paper); background: var(--graphite); font-variant-numeric: tabular-nums; }
+.develop-row button { padding: .35rem .6rem; }
 .cleanup-group { border-top: 1px solid var(--line); margin-top: 1.25rem; padding-top: 1rem; }
 .cleanup-group label { display: block; margin-top: 1rem; font-weight: 700; }
 button.danger { color: var(--danger); border-color: var(--danger); background: transparent; }

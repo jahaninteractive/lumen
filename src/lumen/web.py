@@ -341,15 +341,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             if match:
                 with Library(settings) as library:
                     item = library.get_photo(int(match.group(1)))
+                    develop = library.develop_for(item["photo"].id) if item else None
                 if not item:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 photo = asdict(item["photo"])
                 version = preview_version(photo["fingerprint"], photo["preview_kind"], photo.get("preview_path"))
+                # The Develop tab needs both before it offers a control: every render reads the original.
+                photo["offline"] = not Path(photo["path"]).is_file()
                 for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                     photo.pop(key, None)
                 photo["preview_url"] = f"/preview/{photo['id']}?v={version}"
-                self._send_json({"photo": photo, "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
+                self._send_json({"photo": photo, "develop": develop and develop.to_dict(),
+                                 "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
                 return
             match = re.fullmatch(r"/full/(\d+)", path)
             if match:

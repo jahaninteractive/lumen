@@ -87,6 +87,7 @@
               <label><input type="radio" name="export-scope" value="keepers"> All keepers <span id="keeper-count">0 keepers</span></label>
               <label><input type="radio" name="export-scope" value="filtered"> Frames the contact sheet filters show <span id="filtered-export-count">0 frames</span></label>
             </div>
+            <label class="toggle" for="export-keep-original"><input type="checkbox" id="export-keep-original"> Also export the untouched version</label>
             <fieldset id="export-preset">
               <legend>Size</legend>
               <div class="scope-options">
@@ -455,6 +456,7 @@
       <div id="frame-tabs" class="tab-rail" role="tablist" aria-label="Frame view">
         <button type="button" id="frame-tab" role="tab" aria-controls="frame-panel" aria-selected="true" tabindex="0">Frame</button>
         <button type="button" id="crop-tab" role="tab" aria-controls="crop-panel" aria-selected="false" tabindex="-1">Crop</button>
+        <button type="button" id="develop-tab" role="tab" aria-controls="develop-panel" aria-selected="false" tabindex="-1">Develop</button>
       </div>
       <section id="frame-panel" role="tabpanel" aria-labelledby="frame-tab">
         <div id="inspection"></div>
@@ -488,6 +490,87 @@
         <div class="button-row">
           <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
         </div>
+      </section>
+      <section id="develop-panel" role="tabpanel" aria-labelledby="develop-tab" hidden>
+        <p id="develop-unavailable" hidden></p>
+        <div id="develop-workspace" hidden>
+          <svg id="develop-curve" viewBox="0 0 100 60" role="group" aria-label="Histogram and tone curve">
+            <path id="develop-histogram" aria-hidden="true"></path>
+            <path id="develop-curve-line" aria-hidden="true"></path>
+            <circle id="develop-point-0" class="curve-point" r="2" cx="0" cy="60" tabindex="0" role="slider" aria-label="Tone curve point 1 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></circle>
+            <circle id="develop-point-1" class="curve-point" r="2" cx="25" cy="45" tabindex="0" role="slider" aria-label="Tone curve point 2 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="25"></circle>
+            <circle id="develop-point-2" class="curve-point" r="2" cx="50" cy="30" tabindex="0" role="slider" aria-label="Tone curve point 3 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></circle>
+            <circle id="develop-point-3" class="curve-point" r="2" cx="75" cy="15" tabindex="0" role="slider" aria-label="Tone curve point 4 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="75"></circle>
+            <circle id="develop-point-4" class="curve-point" r="2" cx="100" cy="0" tabindex="0" role="slider" aria-label="Tone curve point 5 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"></circle>
+          </svg>
+          <p class="quiet">The histogram is this render's. Drag a curve point, or focus one and nudge it with the arrow keys.</p>
+          <details open>
+            <summary>Brightness</summary>
+            <div class="develop-row">
+              <label for="develop-exposure_ev">Exposure (EV)</label>
+              <input type="range" id="develop-exposure_ev" min="-3" max="3" step="0.05" value="0">
+              <input type="number" id="develop-exposure_ev-value" min="-3" max="3" step="0.05" placeholder="not set" aria-label="Exposure in EV">
+              <button type="button" class="secondary" id="develop-exposure_ev-reset">Reset</button>
+            </div>
+          </details>
+          <details>
+            <summary>White Balance</summary>
+            <div class="develop-row">
+              <label for="develop-temperature_k">Temperature (K)</label>
+              <input type="range" id="develop-temperature_k" min="2000" max="12000" step="50" value="5500">
+              <input type="number" id="develop-temperature_k-value" min="2000" max="12000" step="50" placeholder="not set" aria-label="Temperature in kelvin">
+              <button type="button" class="secondary" id="develop-temperature_k-reset">Reset</button>
+            </div>
+            <div class="develop-row">
+              <label for="develop-tint">Tint</label>
+              <input type="range" id="develop-tint" min="-150" max="150" step="1" value="0">
+              <input type="number" id="develop-tint-value" min="-150" max="150" step="1" placeholder="not set" aria-label="Tint">
+              <button type="button" class="secondary" id="develop-tint-reset">Reset</button>
+            </div>
+            <p class="quiet">The handles start at this frame's own neutral, which the camera and the light set. Until you move one, nothing is sent.</p>
+          </details>
+          <details>
+            <summary>Contrast</summary>
+            <div class="develop-row">
+              <label for="develop-contrast">Contrast</label>
+              <input type="range" id="develop-contrast" min="0" max="1" step="0.01" value="0.5">
+              <input type="number" id="develop-contrast-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Contrast">
+              <button type="button" class="secondary" id="develop-contrast-reset">Reset</button>
+            </div>
+          </details>
+          <details>
+            <summary>Sharpness</summary>
+            <div class="develop-row">
+              <label for="develop-sharpness">Sharpness</label>
+              <input type="range" id="develop-sharpness" min="0" max="1" step="0.01" value="0.5">
+              <input type="number" id="develop-sharpness-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Sharpness">
+              <button type="button" class="secondary" id="develop-sharpness-reset">Reset</button>
+            </div>
+          </details>
+          <details>
+            <summary>Noise Reduction</summary>
+            <div class="develop-row">
+              <label for="develop-luminance_nr">Luminance</label>
+              <input type="range" id="develop-luminance_nr" min="0" max="1" step="0.01" value="0.5">
+              <input type="number" id="develop-luminance_nr-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Luminance noise reduction">
+              <button type="button" class="secondary" id="develop-luminance_nr-reset">Reset</button>
+            </div>
+            <div class="develop-row">
+              <label for="develop-color_nr">Colour</label>
+              <input type="range" id="develop-color_nr" min="0" max="1" step="0.01" value="0.5">
+              <input type="number" id="develop-color_nr-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Colour noise reduction">
+              <button type="button" class="secondary" id="develop-color_nr-reset">Reset</button>
+            </div>
+            <p class="quiet">Every raw file arrives with its own baseline noise reduction. A Reset gives that baseline back; it does not set the amount to zero.</p>
+          </details>
+          <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own. Your RAW files never change.</p>
+          <div class="button-row">
+            <button type="button" id="develop-reset-all" class="secondary">Reset all</button>
+            <button type="button" id="develop-apply-group" class="secondary">Apply to every frame in this burst</button>
+            <button type="button" id="develop-export" aria-describedby="export-availability">Export this frame</button>
+          </div>
+        </div>
+        <p id="develop-status" role="status" aria-live="polite"></p>
       </section>
       <div class="button-row">
         <button type="button" id="close-loupe" class="secondary">Close</button>
