@@ -112,6 +112,18 @@ class RenderRawTests(unittest.TestCase):
 
         self.assertNotIn(str(self.root), str(caught.exception))
 
+    def test_render_raw_gives_the_helper_the_caller_s_timeout(self):
+        seen = []
+
+        def runner(*args, **kwargs):
+            seen.append(kwargs["timeout"])
+            raise subprocess.TimeoutExpired(cmd="raw_developer", timeout=kwargs["timeout"])
+
+        for call in ({}, {"timeout": 600}):
+            with self.subTest(call=call), self.assertRaises(DevelopError):
+                render_raw(self.source, self.destination, self.root / "raw_developer", runner=runner, **call)
+        self.assertEqual([300, 600], seen, "an export asks for longer than an interactive render")
+
     def test_render_raw_raises_develop_error_on_timeout(self):
         def runner(*args, **kwargs):
             raise subprocess.TimeoutExpired(cmd="raw_developer", timeout=300)

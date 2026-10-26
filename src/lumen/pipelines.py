@@ -107,6 +107,9 @@ class JpegExportResult(PipelineResult):
 # Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
 RAW_EXTENSIONS = frozenset({".arw"})
 DECODERS = frozenset({"darktable", "coreimage"})
+# A full-size export render keeps the budget the macOS decoder had; the interactive preview keeps the shorter
+# default in `rawdevelop`, so a slow export never makes the Develop tab feel hung.
+EXPORT_RENDER_TIMEOUT_SECONDS = 600
 
 
 class DarktablePipeline:
@@ -141,6 +144,8 @@ class DarktablePipeline:
         # A profile keeps the darktable route reachable; a non-raw has to take it, since the raw developer only
         # decodes raws. Everything else — every raw in this library — renders through the raw developer.
         decoder = "darktable" if profile is not None or source.suffix.lower() not in RAW_EXTENSIONS else "coreimage"
+        if decoder not in DECODERS:  # Provenance has to name the renderer; a new route declares itself here.
+            raise ValueError(f"unknown export decoder: {decoder!r}")
         settings = {
             "preset": preset, "quality": options["quality"], "long_edge": options["long_edge"],
             "color_space": "sRGB", "include_gps": options["include_gps"], "caption_used": caption_used,
@@ -188,7 +193,8 @@ class DarktablePipeline:
                 render = work / "render.tif"
                 if decoder == "coreimage":
                     # DevelopError carries a photographer-safe message and is handled like any other failure below.
-                    render_raw(staged_source, render, Path(self.raw_developer), settings=develop, runner=runner)
+                    render_raw(staged_source, render, Path(self.raw_developer), settings=develop,
+                               timeout=EXPORT_RENDER_TIMEOUT_SECONDS, runner=runner)
                     rendered = PipelineResult(True, 0, render, (str(self.raw_developer),), "")
                 else:
                     rendered = self.run(staged_source, render, profile, runner=runner)

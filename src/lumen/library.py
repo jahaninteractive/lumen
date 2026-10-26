@@ -1443,7 +1443,7 @@ class Library:
         """Export in the background with progress and cancel; failures are counted and logged by basename."""
         self._prepare_export(request)
         manifest = {"kind": "export", "preset": request.preset, "profile": str(request.profile) if request.profile else None,
-                    "photo_ids": list(request.photo_ids)}
+                    "keep_original": request.keep_original, "photo_ids": list(request.photo_ids)}
         runner = self.job_runner
         job = self.catalog.create_prepared_job("export", lambda job_id: self._write_job_files(job_id, manifest))
 
@@ -1567,7 +1567,8 @@ class Library:
                     place=photo.place, country=photo.place_country)
                 if not rendered.success:
                     if done:  # The developed JPEG published; the companion did not, so neither stands.
-                        raise RuntimeError(rendered.message)
+                        raise RuntimeError(f"the untouched version failed, so the developed JPEG was withdrawn "
+                                           f"as well and nothing was exported: {rendered.message}")
                     return ExportResult(photo.id, False, None, rendered.message)
                 published = [rendered, None]
                 done.append(published)

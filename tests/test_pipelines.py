@@ -13,15 +13,20 @@ from lumen.pipelines import DarktablePipeline, PipelineRegistry, SirilPipeline, 
 from lumen.rawdevelop import DevelopRender
 
 
-def render_raw_stub(calls, *, size=(80, 60), xmp=None):
-    """Stand-in for the native raw developer: records the request and writes an sRGB TIFF. Never runs Core Image."""
-    def render(source, destination, executable, *, settings=None, long_edge=0,
-               image_format="tiff16", histogram=False, runner=None):
+def render_raw_stub(calls, *, size=(80, 60), xmp=None, icc=True):
+    """Stand-in for the native raw developer: records the request and writes an sRGB TIFF carrying camera EXIF
+    and a GPS IFD, as the real helper does (measured against a Sony ARW). Never runs Core Image."""
+    def render(source, destination, executable, *, settings=None, long_edge=0, image_format="tiff16",
+               histogram=False, timeout=None, runner=None):
         calls.append({"source": Path(source), "destination": Path(destination), "executable": Path(executable),
-                      "settings": settings, "format": image_format, "long_edge": long_edge})
+                      "settings": settings, "format": image_format, "long_edge": long_edge, "timeout": timeout})
+        exif = Image.Exif()
+        exif[271], exif[272] = "Sony", "ILCE-7CM2"
+        exif[34665] = {36867: "2026:10:21 10:00:00", 34855: 640, 42036: "FE 70-200mm F4 G OSS II"}
+        exif[34853] = {1: "S", 2: (25.0, 44.0, 12.0), 5: 0, 6: 1180.0}
         Image.new("RGB", size, "red").save(
-            destination, format="TIFF", **({"tiffinfo": {700: xmp}} if xmp else {}),
-            icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+            destination, format="TIFF", exif=exif.tobytes(), **({"tiffinfo": {700: xmp}} if xmp else {}),
+            **({"icc_profile": ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()} if icc else {}))
         return DevelopRender(path=Path(destination), width=size[0], height=size[1],
                              histogram=(), neutral_temperature=5500.0, neutral_tint=0.0)
     return render
@@ -62,6 +67,55 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(("tiff16", 0), (calls[0]["format"], calls[0]["long_edge"]))
             self.assertEqual(source.name, calls[0]["source"].name)
             self.assertNotEqual(source, calls[0]["source"], "the staged copy renders, never the original")
+            self.assertEqual(600, calls[0]["timeout"], "a full-size export render keeps the longer budget")
+
+    def test_raw_export_carries_camera_metadata_and_keeps_gps_only_for_the_full_preset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            pipeline = self.raw_pipeline(root)
+            for preset, keeps_gps in (("full", True), ("share", False), ("web", False)):
+                with self.subTest(preset=preset):
+                    with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([], size=(2400, 1600))):
+                        result = pipeline.export_jpeg(
+                            source, preset=preset, develop={"exposure_ev": 0.5},
+                            runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+                    self.assertTrue(result.success, result.message)
+                    with Image.open(result.output) as image:
+                        exif = image.getexif()
+                        capture = exif.get_ifd(34665)
+                        self.assertEqual(("Sony", "ILCE-7CM2"), (exif[271], exif[272]))
+                        self.assertEqual("2026:10:21 10:00:00", capture[36867])
+                        self.assertEqual(640, capture[34855])
+                        self.assertEqual("FE 70-200mm F4 G OSS II", capture[42036])
+                        self.assertEqual(keeps_gps, bool(dict(exif.get_ifd(34853))))
+                        self.assertIn("sRGB", ImageCms.getProfileDescription(
+                            ImageCms.ImageCmsProfile(io.BytesIO(image.info["icc_profile"]))))
+
+    def test_raw_export_refuses_a_render_without_an_icc_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([], icc=False)):
+                result = self.raw_pipeline(root).export_jpeg(
+                    source, runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+            self.assertFalse(result.success)
+            self.assertIn("ICC profile", result.message)
+            self.assertIn("coreimage", result.message)
+            self.assertEqual([], list((root / "outputs" / "jpeg").glob("*.jpg")))
+
+    def test_export_refuses_a_decoder_provenance_cannot_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00712.ARW"
+            source.write_bytes(b"raw")
+            with patch("lumen.pipelines.DECODERS", frozenset({"darktable"})), \
+                    patch("lumen.pipelines.render_raw", side_effect=AssertionError("nothing may render")), \
+                    self.assertRaises(ValueError) as refusal:
+                self.raw_pipeline(root).export_jpeg(source, runner=lambda *args, **kwargs: self.fail("nothing may run"))
+            self.assertIn("coreimage", str(refusal.exception))
 
     def test_export_passes_the_stored_develop_settings_to_the_helper(self):
         with tempfile.TemporaryDirectory() as directory:

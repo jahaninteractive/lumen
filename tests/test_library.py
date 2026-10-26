@@ -23,7 +23,7 @@ from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, 
 from lumen import geonames as geonames_module
 from lumen import library as library_module
 from lumen import ingest as ingest_module
-from lumen.pipelines import DarktablePipeline
+from lumen.pipelines import DarktablePipeline, JpegExportResult
 from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
@@ -1319,6 +1319,35 @@ class LibraryTests(unittest.TestCase):
             self.assertNotIn(str(self.root), json.dumps(status))
             artifacts = library.catalog.list_artifacts()
             self.assertEqual([(ids[1], "share")], [(artifact.photo_id, artifact.settings["preset"]) for artifact in artifacts])
+            manifest = json.loads(Path(library.catalog.get_job(job.id).manifest_path).read_text())
+            self.assertEqual(("share", False), (manifest["preset"], manifest["keep_original"]))
+
+    def test_a_failed_untouched_companion_withdraws_the_developed_jpeg_too(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.raw_export_frame(library, DevelopSettings({"exposure_ev": 0.5}))
+            self.install_raw_developer(library)
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir,
+                                        raw_developer=library.settings.raw_developer_path)
+            render_one = pipeline.export_jpeg
+
+            def export_jpeg(*args, **kwargs):
+                if kwargs.get("stem_suffix") == "original":  # The second render of the pair fails.
+                    return JpegExportResult(False, 1, Path("unused"), (), "the raw developer could not develop it", {}, "")
+                return render_one(*args, **kwargs)
+
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), \
+                    patch.object(pipeline, "export_jpeg", side_effect=export_jpeg), \
+                    patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])), \
+                    patch("lumen.pipelines.subprocess.run", side_effect=self.os_version_runner):
+                result = library.export_jpegs(library_module.ExportRequest((photo_id,), None, keep_original=True))[0]
+            self.assertFalse(result.success)
+            self.assertIn("the developed JPEG was withdrawn", result.message)
+            self.assertIn("the raw developer could not develop it", result.message)
+            self.assertEqual([], library.catalog.list_artifacts())
+            self.assertEqual([], [event for event in library.catalog.events_for(photo_id) if event.kind == "exported"])
+            self.assertEqual([], list(library.settings.jpeg_output_dir.iterdir()))
+            sidecar = json.loads(next(library.settings.sidecar_dir.glob("*.lumen.json")).read_text())
+            self.assertEqual([], sidecar["artifacts"])
 
     def test_export_bookkeeping_failure_compensates_and_continues(self):
         for failure in ("artifact", "event", "sidecar"):

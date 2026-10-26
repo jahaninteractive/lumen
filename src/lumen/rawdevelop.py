@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-RENDER_TIMEOUT_SECONDS = 300
+RENDER_TIMEOUT_SECONDS = 300  # Interactive renders; a full-size export asks for longer.
 
 
 class DevelopError(RuntimeError):
@@ -48,6 +48,7 @@ def render_raw(
     long_edge: int = 0,
     image_format: str = "tiff16",
     histogram: bool = False,
+    timeout: float = RENDER_TIMEOUT_SECONDS,
     runner=subprocess.run,
 ) -> DevelopRender:
     """Develop `source` into `destination`, returning the render's size and histogram."""
@@ -85,7 +86,7 @@ def render_raw(
             input=json.dumps(request),
             capture_output=True,
             text=True,
-            timeout=RENDER_TIMEOUT_SECONDS,
+            timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired:
