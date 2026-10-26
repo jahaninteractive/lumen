@@ -1,3 +1,4 @@
+import re
 import tempfile
 import sqlite3
 import unittest
@@ -8,7 +9,7 @@ from pathlib import Path
 from lumen.catalog import Catalog, GroupFilters
 from lumen.config import Settings
 from lumen.library import Library
-from lumen.domain import Artifact, Job, Photo, PhotoEdit, PhotoMetrics
+from lumen.domain import Artifact, DEVELOP_RANGES, DevelopSettings, Job, Photo, PhotoEdit, PhotoMetrics
 from lumen.composition import CropRect
 
 
@@ -800,6 +801,122 @@ class CatalogTests(unittest.TestCase):
         self.assertNotIn("LIKE", blank.where()[0])
         self.assertEqual(["keyword: tern"], self.catalog.match_terms(tern, "heron | tern"))
         self.assertEqual([], self.catalog.match_terms(tern, " | "))
+
+
+class DevelopSettingsTests(unittest.TestCase):
+    GOOD_CURVE = ((0, 0), (0.25, 0.2), (0.5, 0.5), (0.75, 0.8), (1, 1))
+
+    def test_develop_settings_reject_an_out_of_range_value(self):
+        with self.assertRaises(ValueError):
+            DevelopSettings({"exposure_ev": 4.0})
+
+    def test_develop_settings_reject_an_unknown_key(self):
+        with self.assertRaises(ValueError):
+            DevelopSettings({"saturation": 0.5})
+
+    def test_develop_settings_reject_a_non_finite_value(self):
+        for bad in (float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                DevelopSettings({"contrast": bad})
+
+    def test_develop_settings_reject_a_bool(self):
+        with self.assertRaises(ValueError):
+            DevelopSettings({"contrast": True})
+
+    def test_develop_settings_reject_a_curve_without_five_points(self):
+        with self.assertRaises(ValueError):
+            DevelopSettings({"curve": self.GOOD_CURVE[:4]})
+
+    def test_develop_settings_reject_a_curve_whose_x_values_do_not_ascend(self):
+        for curve in (((0, 0), (0.5, 0.2), (0.5, 0.4), (0.75, 0.8), (1, 1)),
+                      ((0, 0), (0.6, 0.2), (0.5, 0.4), (0.75, 0.8), (1, 1))):
+            with self.assertRaises(ValueError):
+                DevelopSettings({"curve": curve})
+
+    def test_develop_settings_reject_a_curve_point_outside_zero_to_one(self):
+        with self.assertRaises(ValueError):
+            DevelopSettings({"curve": ((0, 0), (0.25, 0.2), (0.5, 1.5), (0.75, 0.8), (1, 1))})
+        with self.assertRaises(ValueError):
+            DevelopSettings({"curve": ((0, 0), (0.25, 0.2), (0.5, 0.5), (0.75, 0.8), (1.1, 1))})
+
+    def test_develop_settings_reject_malformed_curve_points(self):
+        for curve in ("abcde", ((0, 0),) * 4 + ((1,),), ((0, 0), (0.2, True), (0.4, 0), (0.6, 0), (1, 1))):
+            with self.assertRaises(ValueError):
+                DevelopSettings({"curve": curve})
+
+    def test_develop_settings_round_trip_only_the_fields_that_were_set(self):
+        self.assertEqual(DevelopSettings.from_dict({"contrast": 0.55}).to_dict(), {"contrast": 0.55})
+        self.assertTrue(DevelopSettings({}).is_empty)
+        self.assertFalse(DevelopSettings({"tint": 0}).is_empty)
+
+    def test_develop_settings_curve_round_trips_through_json_lists(self):
+        settings = DevelopSettings({"curve": [list(point) for point in self.GOOD_CURVE]})
+        self.assertEqual(settings, DevelopSettings.from_dict(settings.to_dict()))
+
+    def test_develop_ranges_match_the_helper_known_settings(self):
+        source = (Path(__file__).resolve().parent.parent / "tools" / "raw_developer.swift").read_text()
+        block = source.split("let knownSettings = [", 1)[1].split("]", 1)[0]
+        known = set(re.findall(r'"([a-z_]+)"', block))
+        self.assertEqual(known, set(DEVELOP_RANGES) | {"curve"})
+
+
+class CatalogDevelopTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.catalog = Catalog(Path(self.tmp.name) / "catalog.sqlite3")
+        self.photo_id = self.catalog.upsert_photo(
+            Photo(path="/photos/dev.ARW", fingerprint="abc", captured_at=None, camera_id="unknown"))
+
+    def tearDown(self):
+        self.catalog.close()
+        self.tmp.cleanup()
+
+    def kinds(self):
+        return [event.kind for event in self.catalog.events_for(self.photo_id)]
+
+    def test_save_develop_round_trips_through_the_catalog(self):
+        settings = DevelopSettings({"contrast": 0.55, "temperature_k": 5200})
+        self.assertEqual(settings, self.catalog.save_develop(self.photo_id, settings, "abc"))
+        self.assertEqual(settings, self.catalog.get_develop(self.photo_id))
+        self.assertIsNone(self.catalog.get_develop(self.photo_id + 1))
+
+    def test_save_develop_records_a_develop_changed_event(self):
+        self.catalog.save_develop(self.photo_id, DevelopSettings({"tint": 5}), "abc")
+        self.assertEqual(["develop_changed"], self.kinds())
+        self.assertEqual(1, len(self.catalog.develop_event_ids(self.photo_id)))
+
+    def test_clear_develop_records_a_develop_cleared_event_with_the_previous_settings(self):
+        settings = DevelopSettings({"tint": 5})
+        self.catalog.save_develop(self.photo_id, settings, "abc")
+        self.assertEqual(settings, self.catalog.clear_develop(self.photo_id))
+        self.assertIsNone(self.catalog.get_develop(self.photo_id))
+        self.assertEqual(["develop_changed", "develop_cleared"], self.kinds())
+        self.assertEqual({"tint": 5}, self.catalog.events_for(self.photo_id)[-1].details["settings"])
+
+    def test_clear_develop_returns_none_when_nothing_was_saved(self):
+        self.assertIsNone(self.catalog.clear_develop(self.photo_id))
+        self.assertEqual([], self.kinds())
+
+    def test_invalidate_develop_records_the_fingerprints_and_removes_the_row(self):
+        self.catalog.save_develop(self.photo_id, DevelopSettings({"tint": 5}), "abc")
+        self.assertIsNotNone(self.catalog.invalidate_develop(self.photo_id, "abc", "def"))
+        self.assertIsNone(self.catalog.get_develop(self.photo_id))
+        event = self.catalog.events_for(self.photo_id)[-1]
+        self.assertEqual("develop_invalidated_source_replaced", event.kind)
+        self.assertEqual(("abc", "def"), (event.details["previous_fingerprint"], event.details["source_fingerprint"]))
+        self.assertIsNone(self.catalog.invalidate_develop(self.photo_id, "abc", "def"))
+
+    def test_save_develop_rejects_an_unknown_photo_id(self):
+        with self.assertRaises(ValueError):
+            self.catalog.save_develop(999, DevelopSettings({"tint": 5}), "abc")
+        with self.assertRaises(ValueError):
+            self.catalog.save_develop(self.photo_id, {"tint": 5}, "abc")
+
+    def test_develop_row_is_removed_with_its_photo(self):
+        self.catalog.save_develop(self.photo_id, DevelopSettings({"tint": 5}), "abc")
+        with self.catalog.connection:
+            self.catalog.connection.execute("DELETE FROM photos WHERE id = ?", (self.photo_id,))
+        self.assertIsNone(self.catalog.get_develop(self.photo_id))
 
 
 if __name__ == "__main__":

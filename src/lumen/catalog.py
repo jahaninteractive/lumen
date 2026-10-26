@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, Any, Iterable
 
 from .composition import CropRect
-from .domain import DECISIONS, PREVIEW_KINDS, Artifact, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
+from .domain import DECISIONS, PREVIEW_KINDS, Artifact, DevelopSettings, Job, Photo, PhotoEdit, PhotoMetrics, ProvenanceEvent
 
 
 _UNCHANGED = object()
@@ -191,6 +191,12 @@ class Catalog:
                 author TEXT NOT NULL,
                 rationale TEXT NOT NULL,
                 selected_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS photo_develop (
+                photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+                settings_json TEXT NOT NULL,
+                source_fingerprint TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY,
@@ -431,6 +437,59 @@ class Catalog:
                 (now,),
             )
         return cursor.rowcount
+
+    def get_develop(self, photo_id: int) -> DevelopSettings | None:
+        row = self.connection.execute(
+            "SELECT settings_json FROM photo_develop WHERE photo_id = ?", (photo_id,)).fetchone()
+        return DevelopSettings.from_dict(json.loads(row["settings_json"])) if row else None
+
+    def develop_event_ids(self, photo_id: int) -> list[int]:
+        return [int(row[0]) for row in self.connection.execute(
+            "SELECT id FROM provenance WHERE photo_id = ? AND kind LIKE 'develop\\_%' ESCAPE '\\' ORDER BY id",
+            (photo_id,),
+        )]
+
+    def save_develop(self, photo_id: int, settings: DevelopSettings, source_fingerprint: str) -> DevelopSettings:
+        if not isinstance(settings, DevelopSettings):
+            raise ValueError("develop settings are invalid")
+        if self.get_photo(photo_id) is None:
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        details = settings.to_dict()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO photo_develop (photo_id, settings_json, source_fingerprint, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(photo_id) DO UPDATE SET settings_json=excluded.settings_json,
+                source_fingerprint=excluded.source_fingerprint, updated_at=excluded.updated_at""",
+                (photo_id, json.dumps(details, sort_keys=True, separators=(",", ":")),
+                 source_fingerprint, datetime.now(timezone.utc).isoformat()),
+            )
+            self._insert_event(photo_id, "develop_changed", {"settings": details})
+        return settings
+
+    def clear_develop(self, photo_id: int) -> DevelopSettings | None:
+        previous = self.get_develop(photo_id)
+        if previous is None:
+            return None
+        with self.connection:
+            self.connection.execute("DELETE FROM photo_develop WHERE photo_id = ?", (photo_id,))
+            self._insert_event(photo_id, "develop_cleared", {"settings": previous.to_dict()})
+        return previous
+
+    def invalidate_develop(self, photo_id: int, previous_fingerprint: str,
+                           source_fingerprint: str) -> DevelopSettings | None:
+        previous = self.get_develop(photo_id)
+        if previous is None:
+            return None
+        with self.connection:
+            self.connection.execute("DELETE FROM photo_develop WHERE photo_id = ?", (photo_id,))
+            self._insert_event(photo_id, "develop_invalidated_source_replaced", {
+                "settings": previous.to_dict(),
+                "previous_fingerprint": previous_fingerprint,
+                "source_fingerprint": source_fingerprint,
+                "reason": "source content changed; saved develop settings are no longer trusted",
+            })
+        return previous
 
     def get_crop(self, photo_id: int) -> PhotoEdit | None:
         row = self.connection.execute("SELECT * FROM photo_edits WHERE photo_id = ?", (photo_id,)).fetchone()

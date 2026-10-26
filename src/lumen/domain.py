@@ -42,6 +42,57 @@ class CropRect:
                 min(height, round((self.top + self.height) * height)))
 
 
+DEVELOP_RANGES = {
+    "exposure_ev": (-3.0, 3.0), "temperature_k": (2000, 12000), "tint": (-150, 150),
+    "contrast": (0.0, 1.0), "sharpness": (0.0, 1.0), "luminance_nr": (0.0, 1.0), "color_nr": (0.0, 1.0),
+}
+CURVE_POINTS = 5
+
+
+def _develop_number(value: Any, low: float, high: float, name: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+        raise ValueError(f"develop {name} must be a finite number")
+    if not low <= value <= high:
+        raise ValueError(f"develop {name} must be from {low} through {high}")
+    return value
+
+
+@dataclass(frozen=True, slots=True, eq=True)
+class DevelopSettings:
+    """Only the controls the photographer changed; an absent key leaves the file's own default alone."""
+    fields: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fields, dict):
+            raise ValueError("develop settings must be an object")
+        clean: dict[str, Any] = {}
+        for key, value in self.fields.items():
+            if key == "curve":
+                if (not isinstance(value, (list, tuple)) or len(value) != CURVE_POINTS
+                        or any(not isinstance(p, (list, tuple)) or len(p) != 2 for p in value)):
+                    raise ValueError(f"develop curve must be {CURVE_POINTS} (x, y) points")
+                clean[key] = tuple((float(_develop_number(x, 0, 1, "curve x")),
+                                    float(_develop_number(y, 0, 1, "curve y"))) for x, y in value)
+                if any(a[0] >= b[0] for a, b in zip(clean[key], clean[key][1:])):
+                    raise ValueError("develop curve x values must strictly ascend")
+            elif key in DEVELOP_RANGES:
+                clean[key] = _develop_number(value, *DEVELOP_RANGES[key], key)
+            else:
+                raise ValueError(f"unknown develop setting: {key}")
+        object.__setattr__(self, "fields", clean)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.fields
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: [list(p) for p in v] if k == "curve" else v for k, v in self.fields.items()}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DevelopSettings":
+        return cls(dict(data) if isinstance(data, dict) else data)
+
+
 @dataclass(slots=True)
 class Photo:
     path: str
