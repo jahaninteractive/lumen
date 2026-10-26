@@ -38,6 +38,8 @@ mkdir -p "$native_bin" "$module_cache"
 CLANG_MODULE_CACHE_PATH="$module_cache" swiftc \
   "$project_root/tools/vision_analyzer.swift" \
   -o "$native_bin/vision_analyzer"
+# -O here but not above: the developer renders while the photographer waits on a slider,
+# so its speed is on the interactive path; face analysis runs in the background.
 CLANG_MODULE_CACHE_PATH="$module_cache" swiftc -O \
   "$project_root/tools/raw_developer.swift" \
   -o "$native_bin/raw_developer"

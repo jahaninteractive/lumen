@@ -18,9 +18,13 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("swiftc: ready", result.stdout)
 
     def test_bootstrap_compiles_both_native_helpers(self):
-        script = Path("scripts/bootstrap.sh").read_text()
-        self.assertIn("tools/vision_analyzer.swift", script)
-        self.assertIn("tools/raw_developer.swift", script)
+        # Comments stripped, so a commented-out compile step fails this rather than passing it.
+        live = " ".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())
+        for helper in ("vision_analyzer", "raw_developer"):
+            self.assertRegex(
+                live,
+                rf'swiftc[^"]*"\$project_root/tools/{helper}\.swift"\s*\\?\s*-o\s*"\$native_bin/{helper}"',
+            )
 
     def test_web_ui_displays_live_omlx_summary(self):
         script = Path("src/lumen/static/app.js").read_text()

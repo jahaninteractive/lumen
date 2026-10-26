@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -119,6 +121,129 @@ class RenderRawTests(unittest.TestCase):
             render_raw(self.source, self.destination, self.root / "missing")
 
         self.assertNotIn(str(self.root), str(caught.exception))
+
+    def test_render_raw_rejects_a_stale_destination_left_by_an_earlier_render(self):
+        self.destination.write_bytes(b"an earlier render")
+        executable = self._stub(f"printf '%s' '{json.dumps(RESPONSE)}'")
+
+        with self.assertRaises(DevelopError):
+            render_raw(self.source, self.destination, executable)
+
+        self.assertFalse(self.destination.exists(), "the stale render must not survive as this run's output")
+
+    def test_render_raw_leaves_no_file_behind_when_the_render_fails(self):
+        half_written = f"printf 'half a tiff' > '{self.destination}'\n"
+        failures = {
+            "non-zero exit": self._stub(half_written + "exit 3"),
+            "unparseable stdout": self._stub(half_written + "printf 'not json'"),
+            "malformed payload": self._stub(half_written + """printf '%s' '{"width":"wide"}'"""),
+            "overflowing payload": self._stub(half_written + """printf '%s' '{"width":1e400,"height":1,"neutral_temperature":0,"neutral_tint":0}'"""),
+        }
+        for label, executable in failures.items():
+            with self.subTest(label):
+                with self.assertRaises(DevelopError):
+                    render_raw(self.source, self.destination, executable)
+                self.assertFalse(self.destination.exists(), f"{label} left a truncated image behind")
+
+    def test_render_raw_leaves_no_file_behind_when_the_render_times_out(self):
+        self.destination.write_bytes(b"half a tiff")
+
+        def runner(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="raw_developer", timeout=300)
+
+        with self.assertRaises(DevelopError):
+            render_raw(self.source, self.destination, self.root / "raw_developer", runner=runner)
+
+        self.assertFalse(self.destination.exists())
+
+    def test_render_raw_refuses_to_write_over_the_camera_original(self):
+        original = self.source.read_bytes()
+        link = self.root / "alias.ARW"
+        os.symlink(self.source, link)
+        hard_link = self.root / "hardlink.ARW"
+        os.link(self.source, hard_link)
+
+        for destination in (self.source, link, hard_link):
+            with self.subTest(str(destination)):
+                with self.assertRaises(DevelopError) as caught:
+                    render_raw(self.source, destination, self._responder())
+                self.assertIn("DSC02733.ARW", str(caught.exception))
+                self.assertNotIn(str(self.root), str(caught.exception))
+
+        self.assertEqual(original, self.source.read_bytes())
+        self.assertFalse(self.request_log.exists(), "the helper must never be run against the original")
+
+
+@unittest.skipUnless(shutil.which("swiftc"), "swiftc is required to build the native helper")
+class NativeHelperRequestTests(unittest.TestCase):
+    """The helper itself, built from source. No request here reaches Core Image:
+    every one is rejected during validation, before the raw is opened."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.executable = Path(cls.directory.name) / "raw_developer"
+        build = subprocess.run(
+            ["swiftc", "-O", "tools/raw_developer.swift", "-o", str(cls.executable)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if build.returncode != 0:
+            raise AssertionError(f"tools/raw_developer.swift does not compile:\n{build.stderr}")
+
+    def _run(self, request: dict) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(self.executable)],
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+    def test_a_present_but_invalid_field_fails_rather_than_rendering_without_it(self):
+        base = {"source": "/nowhere/DSC00001.ARW", "destination": str(Path(self.directory.name) / "out.tif")}
+        invalid = {
+            "a string where a number belongs": {"settings": {"exposure_ev": "0.5"}},
+            "a boolean where a number belongs": {"settings": {"exposure_ev": True}},
+            "a string long edge": {"long_edge": "1100"},
+            "a negative long edge": {"long_edge": -5},
+            "settings that are not an object": {"settings": []},
+            "a curve of the wrong length": {"settings": {"curve": [[0, 0], [1, 1]]}},
+            "a curve that does not ascend": {"settings": {"curve": [[0, 0], [0.5, 0.2], [0.25, 0.5], [0.75, 0.8], [1, 1]]}},
+            "a misspelled setting": {"settings": {"exposure": 0.5}},
+            "an unsupported format": {"format": "png"},
+            "a non-boolean histogram flag": {"histogram": "yes"},
+        }
+        for label, overrides in invalid.items():
+            with self.subTest(label):
+                completed = self._run(base | overrides)
+                # Exit 2 is "bad request", raised before the raw is opened. Any other
+                # code would mean the helper got as far as rendering without the setting.
+                self.assertEqual(2, completed.returncode, f"{label} was silently ignored")
+                self.assertTrue(completed.stderr.strip(), f"{label} reported nothing on stderr")
+                self.assertEqual("", completed.stdout.strip())
+
+    def test_an_absent_field_is_not_an_invalid_one(self):
+        # Reaches the decoder and fails there, proving validation let the request through.
+        completed = self._run({
+            "source": "/nowhere/DSC00001.ARW",
+            "destination": str(Path(self.directory.name) / "out.tif"),
+            "settings": {},
+        })
+
+        self.assertNotEqual(2, completed.returncode)
+        self.assertIn("DSC00001.ARW", completed.stderr)
+
+    def test_the_helper_leaves_nothing_behind_when_it_cannot_decode_the_source(self):
+        destination = Path(self.directory.name) / "leftover.tif"
+        self._run({"source": "/nowhere/DSC00001.ARW", "destination": str(destination)})
+
+        self.assertFalse(destination.exists())
+        self.assertEqual([], list(Path(self.directory.name).glob("*.partial")))
 
 
 if __name__ == "__main__":

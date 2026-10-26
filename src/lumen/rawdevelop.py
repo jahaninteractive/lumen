@@ -24,6 +24,14 @@ class DevelopRender:
     neutral_tint: float
 
 
+def _discard(destination: Path) -> None:
+    """Leave nothing behind that a later step could mistake for a finished render."""
+    try:
+        destination.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def render_raw(
     source: Path,
     destination: Path,
@@ -37,6 +45,25 @@ def render_raw(
 ) -> DevelopRender:
     """Develop `source` into `destination`, returning the render's size and histogram."""
     name = source.name
+
+    def failed(message: str) -> DevelopError:
+        _discard(destination)
+        return DevelopError(message)
+
+    # The camera original is never written, whatever a caller asks for.
+    try:
+        # resolve() catches symlinks and the plain case; samefile also catches a hard
+        # link and a case-insensitive filesystem, but only once the destination exists.
+        writes_over_the_original = destination.resolve() == source.resolve() or (
+            destination.exists() and source.samefile(destination)
+        )
+    except OSError:
+        raise DevelopError(f"The raw developer could not resolve a path for {name}.") from None
+    if writes_over_the_original:
+        raise DevelopError(f"The raw developer refused to write over the original {name}.")
+
+    # Clear any earlier render first, so "the file exists" can only mean this run wrote it.
+    _discard(destination)
     request = {
         "source": str(source),
         "destination": str(destination),
@@ -55,11 +82,11 @@ def render_raw(
             check=False,
         )
     except subprocess.TimeoutExpired:
-        raise DevelopError(f"Developing {name} took too long and was stopped.") from None
-    except (OSError, subprocess.SubprocessError):
-        raise DevelopError(f"The raw developer could not be run for {name}.") from None
+        raise failed(f"Developing {name} took too long and was stopped.") from None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise failed(f"The raw developer could not be run for {name}.") from None
     if completed.returncode != 0:
-        raise DevelopError(f"The raw developer could not develop {name}.")
+        raise failed(f"The raw developer could not develop {name}.")
     try:
         payload = json.loads(completed.stdout)
         render = DevelopRender(
@@ -70,8 +97,8 @@ def render_raw(
             neutral_temperature=float(payload["neutral_temperature"]),
             neutral_tint=float(payload["neutral_tint"]),
         )
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        raise DevelopError(f"The raw developer returned an unreadable result for {name}.") from None
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError):
+        raise failed(f"The raw developer returned an unreadable result for {name}.") from None
     if not destination.is_file():
-        raise DevelopError(f"The raw developer wrote no image for {name}.")
+        raise failed(f"The raw developer wrote no image for {name}.")
     return render
