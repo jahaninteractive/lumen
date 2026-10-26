@@ -59,8 +59,20 @@ func luminanceHistogram(_ image: CIImage, _ context: CIContext, _ displaySpace: 
     // Bin the pixels actually seen: the histogram is drawn under the tone curve, so it
     // must describe sRGB display values, not Core Image's linear working-space ones.
     let display = image.matchedFromWorkingSpace(to: displaySpace) ?? image
+    // Flatten to Rec. 709 luma per pixel *before* binning. Binning each channel and then
+    // weighting the three counts averages three distributions, which is a different curve
+    // once a subject is saturated — and a sunset is exactly that.
+    let weights = CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
+    let greyscale = CIFilter.colorMatrix()
+    greyscale.inputImage = display
+    greyscale.rVector = weights
+    greyscale.gVector = weights
+    greyscale.bVector = weights
+    greyscale.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+    greyscale.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+    guard let luma = greyscale.outputImage else { return [] }
     let filter = CIFilter.areaHistogram()
-    filter.inputImage = display
+    filter.inputImage = luma
     filter.extent = display.extent
     filter.count = buckets
     filter.scale = 1
@@ -78,12 +90,8 @@ func luminanceHistogram(_ image: CIImage, _ context: CIContext, _ displaySpace: 
             colorSpace: nil
         )
     }
-    return (0..<buckets).map { (index: Int) -> Double in
-        let red: Double = Double(pixels[index * 4])
-        let green: Double = Double(pixels[index * 4 + 1])
-        let blue: Double = Double(pixels[index * 4 + 2])
-        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-    }
+    // Every channel now holds the same luma distribution, so one of them is the histogram.
+    return (0..<buckets).map { (index: Int) -> Double in Double(pixels[index * 4]) }
 }
 
 // MARK: - Request

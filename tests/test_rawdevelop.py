@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lumen.rawdevelop import DevelopError, DevelopRender, render_raw
+from lumen.rawdevelop import DevelopError, DevelopRender, _partial_path, render_raw
 
 RESPONSE = {
     "width": 1100,
@@ -25,7 +25,13 @@ class RenderRawTests(unittest.TestCase):
         self.source = self.root / "DSC02733.ARW"
         self.source.write_bytes(b"not really a raw")
         self.destination = self.root / "out.tif"
+        # What the native helper renders into before renaming onto the destination.
+        self.partial = _partial_path(self.destination)
         self.request_log = self.root / "request.json"
+
+    def assertNothingLeftBehind(self, label: str) -> None:
+        self.assertFalse(self.destination.exists(), f"{label} left a truncated image behind")
+        self.assertFalse(self.partial.exists(), f"{label} left the helper's temp file behind")
 
     def _stub(self, body: str) -> Path:
         executable = self.root / "raw_developer"
@@ -132,7 +138,12 @@ class RenderRawTests(unittest.TestCase):
         self.assertFalse(self.destination.exists(), "the stale render must not survive as this run's output")
 
     def test_render_raw_leaves_no_file_behind_when_the_render_fails(self):
-        half_written = f"printf 'half a tiff' > '{self.destination}'\n"
+        # A helper interrupted mid-write leaves both a part-written destination and its
+        # temp sibling; neither may survive into the photographer's library.
+        half_written = (
+            f"printf 'half a tiff' > '{self.destination}'\n"
+            f"printf 'half a tiff' > '{self.partial}'\n"
+        )
         failures = {
             "non-zero exit": self._stub(half_written + "exit 3"),
             "unparseable stdout": self._stub(half_written + "printf 'not json'"),
@@ -143,10 +154,11 @@ class RenderRawTests(unittest.TestCase):
             with self.subTest(label):
                 with self.assertRaises(DevelopError):
                     render_raw(self.source, self.destination, executable)
-                self.assertFalse(self.destination.exists(), f"{label} left a truncated image behind")
+                self.assertNothingLeftBehind(label)
 
     def test_render_raw_leaves_no_file_behind_when_the_render_times_out(self):
         self.destination.write_bytes(b"half a tiff")
+        self.partial.write_bytes(b"half a tiff")
 
         def runner(*args, **kwargs):
             raise subprocess.TimeoutExpired(cmd="raw_developer", timeout=300)
@@ -154,7 +166,7 @@ class RenderRawTests(unittest.TestCase):
         with self.assertRaises(DevelopError):
             render_raw(self.source, self.destination, self.root / "raw_developer", runner=runner)
 
-        self.assertFalse(self.destination.exists())
+        self.assertNothingLeftBehind("a timeout")
 
     def test_render_raw_refuses_to_write_over_the_camera_original(self):
         original = self.source.read_bytes()
@@ -237,13 +249,6 @@ class NativeHelperRequestTests(unittest.TestCase):
 
         self.assertNotEqual(2, completed.returncode)
         self.assertIn("DSC00001.ARW", completed.stderr)
-
-    def test_the_helper_leaves_nothing_behind_when_it_cannot_decode_the_source(self):
-        destination = Path(self.directory.name) / "leftover.tif"
-        self._run({"source": "/nowhere/DSC00001.ARW", "destination": str(destination)})
-
-        self.assertFalse(destination.exists())
-        self.assertEqual([], list(Path(self.directory.name).glob("*.partial")))
 
 
 if __name__ == "__main__":

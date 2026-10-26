@@ -24,12 +24,19 @@ class DevelopRender:
     neutral_tint: float
 
 
+def _partial_path(destination: Path) -> Path:
+    """The sibling the helper renders into before renaming. Must match raw_developer.swift."""
+    return destination.with_name(f".{destination.name}.partial")
+
+
 def _discard(destination: Path) -> None:
-    """Leave nothing behind that a later step could mistake for a finished render."""
-    try:
-        destination.unlink(missing_ok=True)
-    except OSError:
-        pass
+    """Leave nothing behind that a later step could mistake for a finished render, and no
+    stray temp file either: a helper killed mid-write cannot clean up after itself."""
+    for path in (destination, _partial_path(destination)):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def render_raw(
