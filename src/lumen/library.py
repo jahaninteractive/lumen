@@ -1474,36 +1474,41 @@ class Library:
             with Library(self.settings, job_runner=runner) as worker:
                 counts = {"applied": 0, "skipped_non_raw": 0, "skipped_offline": 0, "failed": 0}
                 written: list[int] = []
-                for index, other_id in enumerate(ids, 1):
-                    if context.cancelled:
-                        break
-                    name = None
-                    with worker._mutation():
-                        other = worker.catalog.get_photo(other_id)
-                        source = worker.catalog.get_develop(photo_id)
-                        if other is not None:
-                            name = Path(other.path).name
-                        if other is None or source is None:  # Removed or cleared since the job started.
-                            counts["failed"] += 1
-                        elif other.format.upper() != "ARW":
-                            counts["skipped_non_raw"] += 1
-                        elif not Path(other.path).is_file():  # The volume is routinely unplugged.
-                            counts["skipped_offline"] += 1
-                        else:
-                            try:  # DevelopSettings(source.fields) raises: fields is read-only.
-                                worker.save_develop(other_id, DevelopSettings.from_dict(source.to_dict()))
-                            except (DevelopError, ValueError, OSError) as error:
+                try:  # The frames written are recorded however the loop ends, crash included.
+                    for index, other_id in enumerate(ids, 1):
+                        if context.cancelled:
+                            break
+                        name = None
+                        with worker._mutation():
+                            other = worker.catalog.get_photo(other_id)
+                            source = worker.catalog.get_develop(photo_id)
+                            if other is not None:
+                                name = Path(other.path).name
+                            if other is None or source is None:  # Removed or cleared since the job started.
                                 counts["failed"] += 1
-                                worker._log_job(job, f"{name}: {error}")
+                                worker._log_job(job, f"{name or f'photo {other_id}'}: "
+                                                     + ("removed since the job started" if other is None
+                                                        else "the source frame's settings were cleared"))
+                            elif other.format.upper() != "ARW":
+                                counts["skipped_non_raw"] += 1
+                            elif not Path(other.path).is_file():  # The volume is routinely unplugged.
+                                counts["skipped_offline"] += 1
                             else:
-                                counts["applied"] += 1
-                                written.append(other_id)
-                    context.update_progress(index / len(ids), label=name[:200] if name else None,
-                                            processed=index, total=len(ids))
-                if written:
-                    with worker._mutation():
-                        worker.catalog.append_event(photo_id, "develop_applied_to_group",
-                                                    {"source_photo_id": photo_id, "photo_ids": written})
+                                try:  # DevelopSettings(source.fields) raises: fields is read-only.
+                                    worker.save_develop(other_id, DevelopSettings.from_dict(source.to_dict()))
+                                except (DevelopError, ValueError, OSError) as error:
+                                    counts["failed"] += 1
+                                    worker._log_job(job, f"{name}: {error}")
+                                else:
+                                    counts["applied"] += 1
+                                    written.append(other_id)
+                        context.update_progress(index / len(ids), label=name[:200] if name else None,
+                                                processed=index, total=len(ids))
+                finally:
+                    if written:
+                        with worker._mutation():
+                            worker.catalog.append_event(photo_id, "develop_applied_to_group",
+                                                        {"source_photo_id": photo_id, "photo_ids": written})
                 worker._write_job_files(job.id, manifest | {"summary": counts})
 
         self._submit_job(runner, job, work)

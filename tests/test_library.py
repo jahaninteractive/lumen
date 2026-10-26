@@ -1924,11 +1924,16 @@ class LibraryTests(unittest.TestCase):
             ids = self.burst(library, names=("DSC0002.jpg",))
             with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
                 library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
+            before = library.catalog.get_photo(ids[1])
             with patch("lumen.library.render_raw", side_effect=self.develop_render([], fails=True)):
                 job = library.start_develop_group_job(ids[0])
                 library.wait_for_job(job.id, 10)
             status = library.job_status(job.id)
+            after = library.catalog.get_photo(ids[1])
+            stored = library.develop_for(ids[1])
 
+        self.assertIsNone(stored)
+        self.assertEqual((before.preview_kind, before.preview_path), (after.preview_kind, after.preview_path))
         self.assertEqual(1, status["result"]["failed"])
         self.assertTrue(status["log_tail"][0].startswith("DSC0002.jpg: "))
 
@@ -1938,8 +1943,10 @@ class LibraryTests(unittest.TestCase):
             with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
                 library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
             self.run_group_job(library, ids[0])
-            events = [e for i in ids for e in library.catalog.events_for(i) if e.kind == "develop_applied_to_group"]
+            events = [e for e in library.catalog.events_for(ids[0]) if e.kind == "develop_applied_to_group"]
+            elsewhere = [e for i in ids[1:] for e in library.catalog.events_for(i) if e.kind == "develop_applied_to_group"]
 
+        self.assertEqual([], elsewhere)
         self.assertEqual(1, len(events))
         self.assertEqual({"source_photo_id": ids[0], "photo_ids": ids[1:]}, events[0].details)
 
@@ -1953,13 +1960,87 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual([], library.catalog.list_jobs())
 
     def test_apply_to_group_reports_progress_per_frame(self):
+        seen = []
+        from lumen.jobs import JobContext
+        original = JobContext.update_progress
+        def spy(context, progress, **kwargs):
+            seen.append((kwargs.get("processed"), kwargs.get("total"), progress))
+            return original(context, progress, **kwargs)
         with Library(Settings(library_dir=self.library_dir)) as library:
             ids = self.burst(library)
             with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
                 library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
+            with patch.object(JobContext, "update_progress", spy):
+                status = self.run_group_job(library, ids[0])
+
+        self.assertEqual([(1, 3, 1 / 3), (2, 3, 2 / 3), (3, 3, 1.0)], seen)
+        self.assertEqual((3, 3, 1.0), (status["processed"], status["total"], status["progress"]))
+
+    def test_apply_to_group_never_touches_frames_outside_the_burst(self):
+        outsider = self.source_dir / "DSC0009.jpg"
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library, names=("DSC0002.jpg",))
+            Image.new("RGB", (320, 240), (10, 10, 10)).save(outsider, quality=95)
+            library.import_path(outsider)
+            other = max(photo.id for photo in library.catalog.list_photos())
+            with library.catalog.connection:
+                library.catalog.connection.execute("UPDATE photos SET format = 'ARW'")
+            self.assertNotEqual(library.catalog.get_photo(ids[0]).group_id, library.catalog.get_photo(other).group_id)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
             status = self.run_group_job(library, ids[0])
 
-        self.assertEqual((3, 3, 1.0), (status["processed"], status["total"], status["progress"]))
+            self.assertIsNone(library.develop_for(other))
+        self.assertEqual({"applied": 1, "skipped_non_raw": 0, "skipped_offline": 0, "failed": 0}, status["result"])
+
+    def test_apply_to_group_stops_when_cancelled_and_records_only_what_was_written(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
+            holder = []
+            with patch("lumen.library.render_raw", side_effect=self.develop_render(
+                    [], before_render=lambda: library.job_runner.cancel(holder[0]))):
+                job = library.start_develop_group_job(ids[0])
+                holder.append(job.id)
+                library.wait_for_job(job.id, 10)
+            stored = [library.develop_for(i) for i in ids[1:]]
+            events = [e for e in library.catalog.events_for(ids[0]) if e.kind == "develop_applied_to_group"]
+
+        self.assertEqual(1, sum(item is not None for item in stored), "the remaining frames were not written")
+        self.assertEqual([{"source_photo_id": ids[0], "photo_ids": [ids[1]]}], [e.details for e in events])
+
+    def test_apply_to_group_records_the_frames_written_even_when_the_job_crashes(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
+            good, calls = self.develop_render([]), []
+            def crash_on_third(*args, **kwargs):
+                calls.append(1)
+                if len(calls) == 3:
+                    raise RuntimeError("disk on fire")
+                return good(*args, **kwargs)
+            with patch("lumen.library.render_raw", side_effect=crash_on_third):
+                job = library.start_develop_group_job(ids[0])
+                library.wait_for_job(job.id, 10)
+            events = [e for e in library.catalog.events_for(ids[0]) if e.kind == "develop_applied_to_group"]
+            status = library.job_status(job.id)
+
+        self.assertEqual("failed", status["status"])
+        self.assertEqual([{"source_photo_id": ids[0], "photo_ids": ids[1:3]}], [e.details for e in events])
+
+    def test_apply_to_group_counts_and_logs_a_frame_that_vanished_mid_job(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library, names=("DSC0002.jpg",))
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
+            real = library.catalog.group_photo_ids
+            with patch.object(library.catalog, "group_photo_ids", side_effect=lambda g: real(g) + [9999]):
+                status = self.run_group_job(library, ids[0])
+
+        self.assertEqual((1, 1), (status["result"]["applied"], status["result"]["failed"]))
+        self.assertEqual(["photo 9999: removed since the job started"], status["log_tail"])
 
     def test_save_develop_remeasures_metrics(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
