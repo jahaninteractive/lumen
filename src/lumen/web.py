@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlsplit
 
 from .astro import RECIPES
 from .catalog import GroupFilters
-from .cli import _cleanup_error_payload, _json_default, _serializable_groups
+from .cli import _cleanup_error_payload, _json_default, _serializable_groups, preview_version
 from .config import Settings
 from .diagnostics import doctor_report
 from .digest import parse_day
@@ -265,7 +265,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 with Library(settings) as library:
                     suggestions = library.reject_suggestions()
                 for item in suggestions:  # The fingerprint only versions the preview URL; it never reaches the browser.
-                    version = f"{item.pop('fingerprint16')}-{item.pop('preview_kind')}"
+                    version = preview_version(item.pop("fingerprint16"), item.pop("preview_kind"),
+                                              item.pop("preview_path"))
                     item["preview_url"] = f"/preview/{item['photo_id']}?v={version}"
                 self._send_json({"suggestions": suggestions, "count": len(suggestions)})
                 return
@@ -306,7 +307,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError(f"unknown photo ID: {photo_id}")
                     self._send_json({
                         "photo_id": photo_id,
-                        "preview_url": f"/preview/{photo_id}?v={photo.fingerprint[:16]}-{photo.preview_kind}",
+                        "preview_url": f"/preview/{photo_id}?v="
+                                       f"{preview_version(photo.fingerprint, photo.preview_kind, photo.preview_path)}",
                         "candidates": [asdict(candidate) for candidate in candidates],
                         "active_crop": active.to_dict() if active else None,
                         "source_width": candidates[0].pixel_box[2],
@@ -323,10 +325,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 photo = asdict(item["photo"])
-                preview_version = f"{photo['fingerprint'][:16]}-{photo['preview_kind']}"
+                version = preview_version(photo["fingerprint"], photo["preview_kind"], photo.get("preview_path"))
                 for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                     photo.pop(key, None)
-                photo["preview_url"] = f"/preview/{photo['id']}?v={preview_version}"
+                photo["preview_url"] = f"/preview/{photo['id']}?v={version}"
                 self._send_json({"photo": photo, "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
                 return
             match = re.fullmatch(r"/full/(\d+)", path)

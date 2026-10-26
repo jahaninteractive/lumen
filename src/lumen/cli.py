@@ -426,6 +426,16 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def preview_version(fingerprint: str, preview_kind: str, preview_path: str | None) -> str:
+    """Cache key for a preview URL. The file's mtime is in it because a develop save rewrites the same
+    content-addressed path under the same fingerprint and kind, so nothing else would change."""
+    try:
+        stamp = Path(preview_path).stat().st_mtime_ns if preview_path else 0
+    except OSError:
+        stamp = 0
+    return f"{fingerprint[:16]}-{preview_kind}-{stamp}"
+
+
 def _serializable_groups(groups: list[dict]) -> list[dict]:
     result = []
     for group in groups:
@@ -434,7 +444,8 @@ def _serializable_groups(groups: list[dict]) -> list[dict]:
         for photo in group["photos"]:
             item = dict(photo)
             item["name"] = Path(item["path"]).name
-            item["preview_url"] = f"/preview/{item['id']}?v={item['fingerprint'][:16]}-{item['preview_kind']}"
+            version = preview_version(item["fingerprint"], item["preview_kind"], item.get("preview_path"))
+            item["preview_url"] = f"/preview/{item['id']}?v={version}"
             for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                 item.pop(key, None)
             item.pop("astro_json", None)

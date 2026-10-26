@@ -164,7 +164,7 @@ class PreviewTests(unittest.TestCase):
             destination = root / "cache" / "preview.jpg"
             source.write_bytes(b"heic")
             provider = ExifToolPreviewProvider()
-            real_normalize = provider._normalize
+            real_normalize = provider.normalize
 
             def normalize(candidate, output):
                 if candidate == source:
@@ -176,7 +176,7 @@ class PreviewTests(unittest.TestCase):
                 Image.new("RGB", (80, 60), (1, 2, 3)).save(output, format="JPEG")
                 return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
-            with patch.object(provider, "_normalize", side_effect=normalize), patch(
+            with patch.object(provider, "normalize", side_effect=normalize), patch(
                 "lumen.previews.shutil.which", side_effect=lambda name: "/usr/bin/sips" if name == "sips" else None
             ), patch("lumen.previews.subprocess.run", side_effect=fake_run):
                 result = provider.create_preview(source, destination)

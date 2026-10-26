@@ -10,7 +10,9 @@ from typing import Any
 MAX_IMAGE_DIMENSION = 100_000
 MAX_IMAGE_PIXELS = 1_000_000_000
 DECISIONS = frozenset({"none", "flag", "reject"})
-PREVIEW_KINDS = frozenset({"embedded", "refined"})
+# "refined" means rendered from the raw rather than from the embedded JPEG; "developed" adds the
+# photographer's own develop settings on top.
+PREVIEW_KINDS = frozenset({"embedded", "refined", "developed"})
 SUPPORTED_EXTENSIONS = frozenset({".arw", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic"})
 JOB_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled", "interrupted"})
 MAX_JOB_ERROR_LENGTH = 1000

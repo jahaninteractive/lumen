@@ -71,7 +71,7 @@ class ExifToolPreviewProvider:
         suffix = source.suffix.lower()
         if suffix in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic"}:
             try:
-                return self._normalize(source, destination)
+                return self.normalize(source, destination)
             except OSError:
                 pass
 
@@ -104,7 +104,7 @@ class ExifToolPreviewProvider:
                 except subprocess.SubprocessError:
                     result = None
                 if result and result.returncode == 0 and candidate.exists():
-                    return self._normalize(candidate, destination)
+                    return self.normalize(candidate, destination)
 
         darktable = find_tool("darktable-cli")
         if darktable:
@@ -120,7 +120,7 @@ class ExifToolPreviewProvider:
                 except subprocess.SubprocessError:
                     result = None
                 if result and result.returncode == 0 and candidate.exists():
-                    return self._normalize(candidate, destination)
+                    return self.normalize(candidate, destination)
         raise PreviewError(f"No local preview provider could decode {source.name}")
 
     def create_refined_preview(self, source: Path, destination: Path, *, darktable: str, runner=subprocess.run) -> Path:
@@ -142,7 +142,7 @@ class ExifToolPreviewProvider:
             if not candidate.is_file():
                 raise PreviewError(f"darktable wrote no preview for {source.name}")
             try:
-                return self._normalize(candidate, destination)
+                return self.normalize(candidate, destination)
             except OSError as error:
                 destination.with_suffix(destination.suffix + ".tmp").unlink(missing_ok=True)
                 raise PreviewError(f"darktable's preview for {source.name} could not be read") from error
@@ -151,9 +151,11 @@ class ExifToolPreviewProvider:
         with tempfile.NamedTemporaryFile(suffix=".jpg") as temporary:
             temporary.write(data)
             temporary.flush()
-            return self._normalize(Path(temporary.name), destination)
+            return self.normalize(Path(temporary.name), destination)
 
-    def _normalize(self, source: Path, destination: Path) -> Path:
+    def normalize(self, source: Path, destination: Path) -> Path:
+        """Write `source` into `destination` as an EXIF-transposed sRGB JPEG at most `max_size` on its long
+        edge, through a sibling temporary so `destination` is never half-written."""
         with Image.open(source) as opened:
             image = ImageOps.exif_transpose(opened).convert("RGB")
             image.thumbnail((self.max_size, self.max_size), Image.Resampling.LANCZOS)

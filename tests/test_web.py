@@ -15,7 +15,9 @@ from unittest.mock import patch
 from PIL import Image, ImageCms
 
 from lumen.config import Settings
+from lumen.domain import DevelopSettings
 from lumen.library import Library
+from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionReview, OmlxError
 from lumen.pipelines import DarktablePipeline
 from lumen.web import make_server
@@ -772,17 +774,22 @@ class WebTests(unittest.TestCase):
             self.assertNotIn(str(self.root), json.dumps(body))
             self.assertNotIn(fingerprint, json.dumps(body))
 
+    def preview_version(self, kind):
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            photo = library.catalog.list_photos()[0]
+            return f"{photo.fingerprint[:16]}-{kind}-{Path(photo.preview_path).stat().st_mtime_ns}"
+
     def test_preview_url_version_changes_after_refinement_and_cards_show_refined_mark(self):
         with Library(Settings(library_dir=self.root / "library")) as library:
-            version = library.catalog.list_photos()[0].fingerprint[:16]
+            version = self.preview_version("embedded")
             group_id = library.list_groups()[0]["id"]
         before = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]
-        self.assertEqual((f"/preview/1?v={version}-embedded", "embedded"), (before["preview_url"], before["preview_kind"]))
+        self.assertEqual((f"/preview/1?v={version}", "embedded"), (before["preview_url"], before["preview_kind"]))
         with patch("lumen.library.find_tool", return_value=write_fake_darktable(self.root)):
             code, started = self.post_json("/api/previews/refine", {"scope": "group", "group_id": group_id})
             self.assertEqual(202, code, started)
             self.assertEqual("succeeded", self.wait_job(started["job_id"])["status"])
-        refined_url = f"/preview/1?v={version}-refined"
+        refined_url = f"/preview/1?v={self.preview_version('refined')}"
         after = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]
         self.assertEqual((refined_url, "refined"), (after["preview_url"], after["preview_kind"]))
         photo = self.get_json("/api/photos/1")[1]["photo"]
@@ -796,6 +803,28 @@ class WebTests(unittest.TestCase):
                 self.assertEqual(2048, max(preview.size))
         self.run_javascript_cleanup_regression("refine")
 
+    def test_preview_url_changes_after_a_develop_save(self):
+        """A second develop save keeps the fingerprint and the kind, so only the file's mtime can bust the tile."""
+        def render(source, destination, executable, *, settings=None, long_edge=0,
+                   image_format="tiff16", histogram=False, runner=None):
+            Image.effect_noise((2048, 1536), 64).convert("RGB").save(destination, format="JPEG", quality=95)
+            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram=(),
+                                 neutral_temperature=5500.0, neutral_tint=0.0)
+
+        seen = []
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=render):
+                for exposure in (0.5, 1.0):
+                    library.save_develop(photo_id, DevelopSettings({"exposure_ev": exposure}))
+                    tile = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]
+                    frame = self.get_json("/api/photos/1")[1]["photo"]
+                    self.assertEqual(tile["preview_url"], frame["preview_url"], "sheet and inspector agree")
+                    seen.append(tile["preview_url"])
+
+        self.assertEqual(["developed", "developed"], [url.split("-")[-2] for url in seen])
+        self.assertNotEqual(seen[0], seen[1], "the second save of an already-developed frame still busts the tile")
+
     def test_crop_api_returns_safe_candidates_and_active_edit(self):
         with patch("lumen.library.read_image_dimensions", return_value=(4000, 3000)), patch(
             "lumen.library.analyze_subject_regions", return_value=None
@@ -803,7 +832,7 @@ class WebTests(unittest.TestCase):
             with urllib.request.urlopen(self.base + "/api/photos/1/crops", timeout=3) as response:
                 payload = json.load(response)
             self.assertEqual(1, payload["photo_id"])
-            self.assertRegex(payload["preview_url"], r"^/preview/1\?v=[0-9a-f]{16}-embedded$")
+            self.assertRegex(payload["preview_url"], r"^/preview/1\?v=[0-9a-f]{16}-embedded-\d+$")
             self.assertIsNone(payload["active_crop"])
             self.assertGreaterEqual(len(payload["candidates"]), 2)
             self.assertEqual("original", payload["candidates"][0]["kind"])

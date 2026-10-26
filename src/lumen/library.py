@@ -23,7 +23,8 @@ from .catalog import Catalog, GroupFilters
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
 from .digest import day_facts, render_facts_table
-from .domain import MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, Job, Photo, PhotoEdit
+from .domain import (MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, DevelopSettings, Job,
+                     Photo, PhotoEdit)
 from .geonames import Place, PlaceIndex, online_lookup
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
@@ -32,6 +33,7 @@ from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxErro
 from .pipelines import EXPORT_PRESETS, PipelineRegistry, validate_watermark
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
+from .rawdevelop import DevelopError, render_raw
 from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_cache, prune_thumbnails, read_image_dimensions,
                        read_metadata)
 from .scoring import RankedPhoto, rank_group
@@ -555,7 +557,8 @@ class Library:
     def reject_suggestions(self) -> list[dict]:
         """Advisory reject suggestions still awaiting the photographer; web turns fingerprint16 into preview_url."""
         rows = self.catalog.connection.execute("""
-            SELECT photos.id, photos.path, photos.group_id, photos.fingerprint, photos.preview_kind, tags.data_json
+            SELECT photos.id, photos.path, photos.group_id, photos.fingerprint, photos.preview_kind,
+                   photos.preview_path, tags.data_json
             FROM tags JOIN photos ON photos.id = tags.photo_id
             WHERE json_extract(tags.data_json, '$.problems.suggest_reject') = 1
               AND json_extract(tags.data_json, '$.problems.dismissed_at') IS NULL
@@ -567,7 +570,8 @@ class Library:
             problems = json.loads(row["data_json"])["problems"]
             result.append({"photo_id": row["id"], "name": Path(row["path"]).name, "group_id": row["group_id"],
                            "problems": problems["items"], "confidence": problems["confidence"],
-                           "fingerprint16": row["fingerprint"][:16], "preview_kind": row["preview_kind"]})
+                           "fingerprint16": row["fingerprint"][:16], "preview_kind": row["preview_kind"],
+                           "preview_path": row["preview_path"]})
         return result
 
     @_coordinated
@@ -653,6 +657,9 @@ class Library:
             except OSError:
                 return False
 
+        if photo.preview_kind == "developed":
+            self._log_job(job, f"{source.name}: developed by hand; refining would discard the develop settings")
+            return "skipped"
         if not unchanged():
             self._log_job(job, f"{source.name}: source changed or is unavailable since import; reimport before refining")
             return "skipped"
@@ -918,6 +925,72 @@ class Library:
         if self.catalog.get_crop(photo_id) is None:
             return
         self._change_crop(photo_id, None)
+
+    @_coordinated
+    def save_develop(self, photo_id: int, settings: DevelopSettings) -> DevelopSettings:
+        """Store these develop settings and re-render the frame's preview from the raw with them applied."""
+        if not isinstance(settings, DevelopSettings):
+            raise ValueError("develop settings are invalid")
+        self._develop(photo_id, settings)
+        return settings
+
+    @_coordinated
+    def clear_develop(self, photo_id: int) -> None:
+        """Drop the saved settings and re-render from the raw with none. The embedded preview is long gone, so
+        the frame becomes `refined` rather than `embedded`: rendered from the raw, with nothing added."""
+        if type(photo_id) is not int or not self.catalog.get_photo(photo_id):
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        if self.catalog.get_develop(photo_id) is None:
+            return
+        self._develop(photo_id, None)
+
+    def develop_for(self, photo_id: int) -> DevelopSettings | None:
+        return self.catalog.get_develop(photo_id)
+
+    def _develop(self, photo_id: int, settings: DevelopSettings | None) -> None:
+        """Re-render one contact-sheet preview from the raw and re-measure it. It deliberately does not re-rank
+        the burst: a develop choice is the photographer's, and must never move the Best badge. Nothing inside the
+        library changes until the render and the measurement have both succeeded."""
+        if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        source = Path(photo.path)
+        try:
+            current = fingerprint_file(source)
+        except OSError:
+            raise DevelopError(f"{source.name} is unavailable; reimport it before developing.") from None
+        if current != photo.fingerprint:  # Other bytes: saved settings no longer describe this file.
+            self.catalog.invalidate_develop(photo_id, photo.fingerprint, current)
+            self._write_sidecar(photo_id)
+            raise DevelopError(f"{source.name} changed since import; reimport it before developing.")
+        # ponytail: previews are content-addressed, so two copies of one file share this path and the last
+        # develop wins; give the path a per-photo suffix if duplicate frames are ever developed apart.
+        destination = self.settings.preview_dir / f"{photo.fingerprint}-2048.jpg"
+        with tempfile.TemporaryDirectory(prefix=".develop-", dir=self.settings.cache_dir) as directory:
+            rendered, normalized = Path(directory) / "render.jpg", Path(directory) / "preview.jpg"
+            render_raw(source, rendered, self.settings.raw_developer_path,
+                       settings={} if settings is None else settings.to_dict(),
+                       long_edge=self.previews.max_size, image_format="jpeg")
+            try:
+                self.previews.normalize(rendered, normalized)
+                metrics = measure_image(normalized)
+                metrics.astro = analyze_astro(normalized)
+                if vision := analyze_faces(normalized, self.settings.vision_analyzer_path):
+                    apply_vision_result(metrics, vision)
+            except (OSError, PreviewError, ValueError) as error:
+                raise DevelopError(f"The rendered preview for {source.name} could not be read.") from error
+            normalized.replace(destination)  # The render succeeded: only now does the library change.
+        previous = Path(photo.preview_path) if photo.preview_path else None
+        self.catalog.update_preview(photo_id, str(destination), "refined" if settings is None else "developed")
+        self.catalog.save_metrics(photo_id, metrics)  # total_score is left as the last ranking wrote it.
+        if settings is None:
+            self.catalog.clear_develop(photo_id)
+        else:
+            self.catalog.save_develop(photo_id, settings, photo.fingerprint)
+        self._write_sidecar(photo_id)
+        # The old preview goes only when no other photo still shows it (the cleanup retention rule).
+        if (previous and previous != destination and previous.resolve().parent == self.settings.preview_dir.resolve()
+                and not self.catalog.preview_references(str(previous))):
+            previous.unlink(missing_ok=True)
 
     @_coordinated
     def review_composition(self, photo_id: int, tagger):

@@ -26,7 +26,8 @@ from lumen.pipelines import DarktablePipeline
 from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
-from lumen.domain import PhotoEdit
+from lumen.domain import DevelopSettings, PhotoEdit
+from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, RejectReview, TagResult
 from lumen.omlx import AstroResponseError, TagResponseError, parse_composition_response, parse_tag_response
 from lumen.catalog import GroupFilters
@@ -1794,6 +1795,204 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual({"refined"}, set(kinds().values()))
             manifest = json.loads(Path(library.catalog.get_job(status["job_id"]).manifest_path).read_text())
             self.assertEqual(("refine_previews", "all"), (manifest["kind"], manifest["scope"]))
+
+    def develop_render(self, calls, *, noisy=True, fails=False, before_render=lambda: None):
+        """Stand-in for the native helper: records the request and writes a JPEG. Never runs Core Image."""
+        def render(source, destination, executable, *, settings=None, long_edge=0,
+                   image_format="tiff16", histogram=False, runner=None):
+            calls.append({"source": Path(source), "destination": Path(destination),
+                          "executable": Path(executable), "settings": settings,
+                          "long_edge": long_edge, "format": image_format})
+            before_render()
+            if fails:
+                raise library_module.DevelopError(f"The raw developer could not develop {Path(source).name}.")
+            image = (Image.effect_noise((2048, 1536), 64).convert("RGB") if noisy
+                     else Image.new("RGB", (2048, 1536), (118, 118, 118)))
+            image.save(destination, format="JPEG", quality=95)
+            return DevelopRender(path=Path(destination), width=image.width, height=image.height,
+                                 histogram=(), neutral_temperature=5500.0, neutral_tint=0.0)
+        return render
+
+    def test_save_develop_rerenders_the_preview_and_marks_it_developed(self):
+        calls = []
+        settings = DevelopSettings({"exposure_ev": 0.5, "contrast": 0.3})
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            embedded = Path(library.catalog.get_photo(photo_id).preview_path)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render(calls)):
+                saved = library.save_develop(photo_id, settings)
+            photo = library.catalog.get_photo(photo_id)
+            stored = library.develop_for(photo_id)
+            sidecar = json.loads(library.sidecars.paths(photo)[0].read_text())
+            kinds = [event.kind for event in library.catalog.events_for(photo_id)]
+
+        self.assertEqual(settings, saved)
+        self.assertEqual(settings, stored)
+        self.assertEqual("developed", photo.preview_kind)
+        self.assertEqual(f"{photo.fingerprint}-2048.jpg", Path(photo.preview_path).name)
+        with Image.open(photo.preview_path) as preview:
+            self.assertEqual(2048, max(preview.size))
+        self.assertFalse(embedded.exists(), "the unshared embedded preview goes with the cleanup rule")
+        self.assertEqual(1, len(calls))
+        self.assertEqual(self.image_path.resolve(), calls[0]["source"])
+        self.assertEqual({"exposure_ev": 0.5, "contrast": 0.3}, calls[0]["settings"])
+        self.assertEqual(("jpeg", 2048), (calls[0]["format"], calls[0]["long_edge"]))
+        self.assertTrue(calls[0]["destination"].is_relative_to(self.library_dir), "every render stays in the library")
+        self.assertIn("develop_changed", kinds)
+        self.assertEqual("developed", sidecar["preview_kind"])
+
+    def test_save_develop_remeasures_metrics(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            before = library.catalog.get_metrics(photo_id)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(photo_id, DevelopSettings({"contrast": 0.9}))
+            after = library.catalog.get_metrics(photo_id)
+
+        self.assertNotEqual(before.sharpness, after.sharpness)
+        self.assertGreater(after.sharpness, 0.9)
+
+    def test_save_develop_leaves_the_group_pick_untouched(self):
+        """The decisive test: developing a frame must never move the Best badge."""
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            (best, alternate, worst), _ = self.import_burst(library, (118, 70, 30))
+            group_id = self.group_of(library, best)["id"]
+            pick_before = library.catalog.connection.execute(
+                "SELECT automatic_pick_id FROM photo_groups WHERE id = ?", (group_id,)).fetchone()[0]
+            self.assertEqual(best, pick_before)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(worst, DevelopSettings({"sharpness": 1.0}))
+            pick_after = library.catalog.connection.execute(
+                "SELECT automatic_pick_id FROM photo_groups WHERE id = ?", (group_id,)).fetchone()[0]
+            developed = library.catalog.get_metrics(worst).sharpness
+            picked = library.catalog.get_metrics(best).sharpness
+
+        self.assertEqual(pick_before, pick_after)
+        self.assertGreater(developed, picked, "the developed frame would have won a re-rank")
+
+    def test_clear_develop_rerenders_with_no_settings_and_marks_it_refined(self):
+        calls = []
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render(calls)):
+                library.save_develop(photo_id, DevelopSettings({"exposure_ev": 1.0}))
+                library.clear_develop(photo_id)
+                library.clear_develop(photo_id)  # nothing saved any more: no second render
+            photo = library.catalog.get_photo(photo_id)
+            stored = library.develop_for(photo_id)
+            kinds = [event.kind for event in library.catalog.events_for(photo_id)]
+
+        self.assertEqual(2, len(calls))
+        self.assertEqual({}, calls[1]["settings"])
+        self.assertEqual("refined", photo.preview_kind)
+        self.assertTrue(Path(photo.preview_path).is_file())
+        self.assertIsNone(stored)
+        self.assertIn("develop_cleared", kinds)
+
+    def test_refine_previews_skips_a_developed_frame(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.25}))
+            developed = Path(library.catalog.get_photo(photo_id).preview_path).read_bytes()
+
+            status = self.refine(library, ("DSC0001",), all_photos=True)
+
+            photo = library.catalog.get_photo(photo_id)
+            log = Path(library.catalog.get_job(status["job_id"]).log_path).read_text()
+
+        self.assertEqual({"refined": 0, "skipped": 1, "failed": 0}, status["result"])
+        self.assertEqual("developed", photo.preview_kind)
+        self.assertEqual(developed, Path(photo.preview_path).read_bytes(), "refine never overwrites a developed preview")
+        self.assertIn("DSC0001.jpg", log)
+        self.assertNotIn(str(self.root), log)
+
+    def test_save_develop_invalidates_when_the_source_fingerprint_changed(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.5}))
+            Image.new("RGB", (320, 240), (10, 200, 10)).save(self.image_path, quality=95)
+            calls = []
+            with patch("lumen.library.render_raw", side_effect=self.develop_render(calls)):
+                with self.assertRaises(library_module.DevelopError) as caught:
+                    library.save_develop(photo_id, DevelopSettings({"contrast": 0.4}))
+            stored = library.develop_for(photo_id)
+            kinds = [event.kind for event in library.catalog.events_for(photo_id)]
+
+        self.assertEqual([], calls, "a changed source is never developed")
+        self.assertIsNone(stored)
+        self.assertEqual("develop_invalidated_source_replaced", kinds[-1])
+        self.assertIn("DSC0001.jpg", str(caught.exception))
+        self.assertNotIn(str(self.image_path), str(caught.exception))
+
+    def test_save_develop_takes_the_mutation_lock(self):
+        locked = []
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            lock_path = library.settings.library_dir.resolve() / library.settings.mutation_lock_path.name
+
+            def probe():
+                with lock_path.open("a+b") as handle:
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        locked.append(True)
+                    else:
+                        fcntl.flock(handle, fcntl.LOCK_UN)
+                        locked.append(False)
+
+            render = self.develop_render([], before_render=probe)
+            with patch("lumen.library.render_raw", side_effect=render):
+                library.save_develop(photo_id, DevelopSettings({"tint": 10}))
+
+        self.assertEqual([True], locked, "the whole develop save runs under the library mutation lock")
+
+    def test_save_develop_surfaces_a_public_message_when_the_helper_fails(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([], fails=True)):
+                with self.assertRaises(library_module.DevelopError) as caught:
+                    library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.5}))
+            message = str(caught.exception)
+            photo = library.catalog.get_photo(photo_id)
+            stored = library.develop_for(photo_id)
+
+        self.assertIn("DSC0001.jpg", message)
+        self.assertNotIn(str(self.image_path), message)
+        self.assertNotIn(str(self.root), message)
+        self.assertEqual("embedded", photo.preview_kind, "a failed render never changes the preview kind")
+        self.assertIsNone(stored, "a failed render never stores settings")
+
+    def test_save_develop_leaves_the_old_preview_in_place_when_the_render_fails(self):
+        first = DevelopSettings({"exposure_ev": 0.5})
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(photo_id, first)
+            preview = Path(library.catalog.get_photo(photo_id).preview_path)
+            bytes_before, metrics_before = preview.read_bytes(), library.catalog.get_metrics(photo_id)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([], noisy=False, fails=True)):
+                with self.assertRaises(library_module.DevelopError):
+                    library.save_develop(photo_id, DevelopSettings({"contrast": 0.9}))
+            photo = library.catalog.get_photo(photo_id)
+            metrics_after, stored = library.catalog.get_metrics(photo_id), library.develop_for(photo_id)
+            leftovers = sorted(path.name for path in library.settings.preview_dir.iterdir()
+                               if path.name.startswith(".") or path.suffix != ".jpg")
+
+        self.assertEqual(bytes_before, preview.read_bytes())
+        self.assertEqual(metrics_before, metrics_after)
+        self.assertEqual(("developed", str(preview)), (photo.preview_kind, photo.preview_path))
+        self.assertEqual(first, stored, "the saved settings still describe the shown preview")
+        self.assertEqual([], leftovers, "a failed render leaves no temporary file behind")
 
     def test_import_skips_frames_in_the_cleared_ledger_unless_included(self):
         cleared = self.source_dir / "a.jpg"
