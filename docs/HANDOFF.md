@@ -1,10 +1,10 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-26 (Africa/Johannesburg) — contact sheet header on branch `contact-sheet-header` (not yet merged)
+Last updated: 2026-10-26 (Africa/Johannesburg) — contact sheet header, merged to `main`
 
 ## Resume here
 
-**Contact sheet header (2026-10-26, branch `contact-sheet-header`, not yet merged; full suite OK, warning-strict, `node --check` OK; browser-checked at 1440, 1000, and 390 px against the live library).** Shipped:
+**Contact sheet header (2026-10-26, on `main`; full suite OK, warning-strict, `node --check` OK; browser-checked at 1440, 1000, and 390 px against the live library).** Shipped:
 - Every filter control applies on `change` (text keeps its 300 ms debounce; Enter still submits). Apply and `details#filter-more` (and `lumen-filter-more`) are gone. The photographer had stopped using the filters because dropdown changes did nothing until an off-screen Apply.
 - `fieldset#filter-status` radios `#status-{all,keepers,flag,none,reject}` replace `#filter-decision`, `#filter-keepers`, `#show-rejected`; `STATUSES` maps them to `keepers_only=1` or `decision=<v>`. "All" hides rejected (the server default); `show_rejected` stays a server/CLI field but the UI no longer sends it. `#rejected-count` sits in the Rejected label.
 - Heading row: title, `#photo-count` ("N of M frames" while `location.search` is set, M = library `photo_count`), Tiles, Refine, Refine previews, Compare marked, Shortcuts. Filter form: row one search, Expand, status, rating, Reset; row two dates, camera, Tagged only. `.pair` keeps labels with controls; status becomes chips under 680 px.
