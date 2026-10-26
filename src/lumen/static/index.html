@@ -242,58 +242,57 @@
         <div class="section-heading">
           <h1 id="contact-heading">Contact sheet</h1>
           <span id="photo-count">0 frames</span>
-          <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
+          <span class="view-controls">
+            <span class="pair"><label for="tile-size">Tiles</label>
+            <select id="tile-size">
+              <option value="small">Small</option>
+              <option value="medium" selected>Medium</option>
+              <option value="large">Large</option>
+            </select></span>
+            <span class="pair"><label for="refine-scope">Refine</label>
+            <select id="refine-scope" aria-describedby="refine-availability">
+              <option value="group">Selected burst</option>
+              <option value="filtered">Filtered frames</option>
+              <option value="all">Whole catalog</option>
+            </select></span>
+            <button type="button" id="refine-previews" class="secondary" aria-describedby="refine-availability" disabled>Refine previews</button>
+          </span>
           <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" disabled>Compare marked</button>
+          <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
         </div>
-        <div class="refine-row">
-          <label for="tile-size">Tiles</label>
-          <select id="tile-size">
-            <option value="small">Small</option>
-            <option value="medium" selected>Medium</option>
-            <option value="large">Large</option>
-          </select>
-          <label for="refine-scope">Refine</label>
-          <select id="refine-scope" aria-describedby="refine-availability">
-            <option value="group">Selected burst</option>
-            <option value="filtered">Filtered frames</option>
-            <option value="all">Whole catalog</option>
-          </select>
-          <button type="button" id="refine-previews" class="secondary" aria-describedby="refine-availability" disabled>Refine previews</button>
-          <span id="refine-availability" class="quiet"></span>
-          <span id="refine-status"></span>
-        </div>
+        <p id="refine-availability" class="quiet refine-note"></p>
+        <p id="refine-status" class="refine-note"></p>
         <form id="filter-form" class="filter-form" aria-label="Filter frames">
-          <div><label for="filter-text">Tag text</label><input type="search" id="filter-text" autocomplete="off" placeholder="fox, harbour…">
-            <button type="button" id="expand-search" class="secondary" aria-describedby="expand-search-availability">Expand with local AI</button><p id="expand-search-availability" class="quiet"></p></div>
-          <button type="submit">Apply</button>
-          <button type="button" id="reset-filters" class="secondary">Reset</button>
-          <details id="filter-more">
-            <summary>More filters</summary>
-            <div class="filter-fields">
-              <div><label for="filter-from">From</label><input type="date" id="filter-from"></div>
-              <div><label for="filter-to">To</label><input type="date" id="filter-to"></div>
-              <div><label for="filter-camera">Camera</label><select id="filter-camera"><option value="">Any camera</option></select></div>
-              <div><label for="filter-decision">Decision</label>
-                <select id="filter-decision">
-                  <option value="any">Any decision</option>
-                  <option value="flag">Flagged</option>
-                  <option value="reject">Rejected</option>
-                  <option value="none">No decision</option>
-                </select></div>
-              <div><label for="filter-rating">Minimum rating</label>
-                <select id="filter-rating">
-                  <option value="0">Any rating</option>
-                  <option value="1">1 star</option>
-                  <option value="2">2 stars</option>
-                  <option value="3">3 stars</option>
-                  <option value="4">4 stars</option>
-                  <option value="5">5 stars</option>
-                </select></div>
-              <label for="filter-keepers" class="toggle"><input type="checkbox" id="filter-keepers"> Keepers only</label>
-              <label for="filter-tagged" class="toggle"><input type="checkbox" id="filter-tagged"> Tagged only</label>
-              <label for="show-rejected" class="toggle"><input type="checkbox" id="show-rejected"> Show rejected <span id="rejected-count">(0)</span></label>
-            </div>
-          </details>
+          <div class="filter-row">
+            <label for="filter-text" class="sr-only">Tag text</label>
+            <input type="search" id="filter-text" autocomplete="off" placeholder="Search tags or place: fox, harbour…">
+            <button type="button" id="expand-search" class="secondary" aria-describedby="expand-search-availability">Expand with local AI</button>
+            <fieldset id="filter-status" class="segmented">
+              <legend class="sr-only">Show</legend>
+              <label for="status-all"><input type="radio" name="filter-status" id="status-all" value="all" checked><span>All</span></label>
+              <label for="status-keepers"><input type="radio" name="filter-status" id="status-keepers" value="keepers"><span>Keepers</span></label>
+              <label for="status-flag"><input type="radio" name="filter-status" id="status-flag" value="flag"><span>Flagged</span></label>
+              <label for="status-none"><input type="radio" name="filter-status" id="status-none" value="none"><span>Unsorted</span></label>
+              <label for="status-reject"><input type="radio" name="filter-status" id="status-reject" value="reject"><span>Rejected <span id="rejected-count">(0)</span></span></label>
+            </fieldset>
+            <span class="pair"><label for="filter-rating">Rating</label>
+            <select id="filter-rating">
+              <option value="0">Any</option>
+              <option value="1">1★ +</option>
+              <option value="2">2★ +</option>
+              <option value="3">3★ +</option>
+              <option value="4">4★ +</option>
+              <option value="5">5★</option>
+            </select></span>
+            <button type="button" id="reset-filters" class="secondary">Reset</button>
+          </div>
+          <p id="expand-search-availability" class="quiet"></p>
+          <div class="filter-row">
+            <span class="pair"><label for="filter-from">From</label><input type="date" id="filter-from"></span>
+            <span class="pair"><label for="filter-to">To</label><input type="date" id="filter-to"></span>
+            <label for="filter-camera" class="sr-only">Camera</label><select id="filter-camera"><option value="">Any camera</option></select>
+            <label for="filter-tagged" class="toggle"><input type="checkbox" id="filter-tagged"> Tagged only</label>
+          </div>
         </form>
         <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>
         <button type="button" id="show-more" class="secondary" hidden>Show 200 more</button>

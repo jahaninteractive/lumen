@@ -1360,6 +1360,11 @@ function byData(selector) {
   return ['#batch-list', '#contact-sheet', '#inspection'].flatMap(name => tree(element(name)))
     .filter(node => node.dataset && key in node.dataset && (match[2] === undefined || String(node.dataset[key]) === match[2]));
 }
+// Radios in one group are exclusive in a browser; the fake elements need it done by hand.
+function pickStatus(value) {
+  ['all', 'keepers', 'flag', 'none', 'reject'].forEach(name => { element('#status-' + name).checked = name === value; });
+  return element('#status-' + value);
+}
 function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
@@ -1413,7 +1418,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : scenario === 'filter-more' && key === 'lumen-filter-more' && !(key in stored) ? '1' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -1854,10 +1859,9 @@ const regression = `
     assert.ok(texts(2).includes('Flagged') && !texts(2).includes('Best'));
     assert.ok(texts(1).includes('Best') && !texts(1).includes('Rejected'));
     assert.equal(groupLoads, loadsBefore);
-    element('#show-rejected').checked = true;
-    await element('#show-rejected').listeners.change();
-    assert.equal(groupLoads, loadsBefore + 1, 'the hide-rejected toggle reloads with the rejected frames');
-    assert.equal(lastGroupsUrl, '/api/groups?show_rejected=1');
+    await pickStatus('reject').listeners.change();
+    assert.equal(groupLoads, loadsBefore + 1, 'choosing Rejected reloads with the rejected frames');
+    assert.equal(lastGroupsUrl, '/api/groups?decision=reject');
     return;
   }
   if (scenario === 'keywords' || scenario === 'keywords-unloaded') {
@@ -2813,32 +2817,27 @@ const regression = `
     deferGroups = false;
     return;
   }
-  if (scenario === 'filter-more') {
-    const more = element('#filter-more');
-    const summary = element('#filter-more summary');
-    assert.equal(more.open, true, 'the open section is restored from the last visit');
+  if (scenario === 'filter-live') {
     await load();
-    assert.equal(summary.textContent, 'More filters');
+    const loads = groupLoads;
     element('#filter-rating').value = '3';
-    element('#filter-keepers').checked = true;
-    element('#filter-form').listeners.change();
-    assert.equal(summary.textContent, 'More filters (2 active)');
-    element('#filter-text').value = 'fox';
-    element('#filter-form').listeners.input();
-    assert.equal(summary.textContent, 'More filters (2 active)', 'tag text sits outside the section');
-    assert.equal(filterQuery(), 'min_rating=3&keepers_only=1&text=fox');
-    await element('#reset-filters').listeners.click();
-    assert.equal(summary.textContent, 'More filters');
-    assert.deepEqual([element('#filter-rating').value, element('#filter-keepers').checked], ['0', false]);
-    location.search = '?decision=flag&camera=ILCE-7M4%3A1&show_rejected=1';
+    await element('#filter-rating').listeners.change();
+    assert.equal(groupLoads, loads + 1, 'a filter applies as soon as it changes');
+    assert.equal(lastGroupsUrl, '/api/groups?min_rating=3');
+    assert.equal(element('#photo-count').textContent, '2 of 2 frames', 'a narrowed sheet counts against the library');
+    await pickStatus('keepers').listeners.change();
+    assert.equal(lastGroupsUrl, '/api/groups?min_rating=3&keepers_only=1');
+    for (const control of ['#filter-from', '#filter-to', '#filter-camera', '#filter-tagged', '#status-all', '#status-flag', '#status-none', '#status-reject']) {
+      assert.equal(typeof element(control).listeners.change, 'function', control + ' applies on change');
+    }
+    location.search = '?decision=flag&camera=ILCE-7M4%3A1';
     await load();
-    assert.equal(summary.textContent, 'More filters (3 active)', 'a reload counts the filters from the URL');
-    more.open = false;
-    more.listeners.toggle();
-    assert.equal(stored['lumen-filter-more'], undefined);
-    more.open = true;
-    more.listeners.toggle();
-    assert.equal(stored['lumen-filter-more'], '1');
+    assert.deepEqual(['all', 'keepers', 'flag', 'none', 'reject'].map(value => element('#status-' + value).checked), [false, false, true, false, false], 'a reload restores the status from the URL');
+    assert.equal(filterQuery(), 'camera=ILCE-7M4%3A1&decision=flag');
+    await element('#reset-filters').listeners.click();
+    assert.equal(lastGroupsUrl, '/api/groups');
+    assert.deepEqual([element('#filter-rating').value, element('#status-all').checked, element('#status-flag').checked], ['0', true, false]);
+    assert.equal(element('#photo-count').textContent, '2 frames');
     return;
   }
   if (scenario === 'filters') {
@@ -2868,14 +2867,13 @@ const regression = `
     element('#filter-from').value = '2026-10-21';
     element('#filter-to').value = '2026-10-22';
     element('#filter-camera').value = 'ILCE-7M4:1';
-    element('#filter-decision').value = 'flag';
+    pickStatus('flag');
     element('#filter-rating').value = '2';
-    element('#filter-keepers').checked = true;
     element('#filter-tagged').checked = true;
     element('#filter-text').value = ' red fox ';
     groups = groups.slice(0, 3);
     await element('#filter-form').listeners.submit({ preventDefault() {} });
-    const query = 'date_from=2026-10-21&date_to=2026-10-22&camera=ILCE-7M4%3A1&decision=flag&min_rating=2&keepers_only=1&tagged_only=1&text=red+fox';
+    const query = 'date_from=2026-10-21&date_to=2026-10-22&camera=ILCE-7M4%3A1&min_rating=2&tagged_only=1&text=red+fox&decision=flag';
     assert.equal(location.search, '?' + query);
     assert.equal(lastGroupsUrl, '/api/groups?' + query);
     assert.equal(element('#announcer').textContent, 'Showing 200 of 390 frames');
@@ -2894,15 +2892,15 @@ const regression = `
     await document.querySelectorAll('.batch-button')[0].listeners.click();
     assert.equal(cards().length, 390, 'choosing a burst keeps the revealed pages');
 
-    for (const name of ['#filter-from', '#filter-to', '#filter-camera', '#filter-decision', '#filter-rating', '#filter-text']) element(name).value = '';
-    element('#filter-keepers').checked = false;
+    for (const name of ['#filter-from', '#filter-to', '#filter-camera', '#filter-rating', '#filter-text']) element(name).value = '';
+    pickStatus('all');
     element('#filter-tagged').checked = false;
     await load();
     assert.equal(groupLoads, loadsBefore + 1);
     assert.equal(lastGroupsUrl, '/api/groups?' + query, 'a reload keeps the filters from the URL');
-    assert.deepEqual(['#filter-from', '#filter-to', '#filter-camera', '#filter-decision', '#filter-rating', '#filter-text'].map(name => element(name).value),
-      ['2026-10-21', '2026-10-22', 'ILCE-7M4:1', 'flag', '2', 'red fox']);
-    assert.deepEqual([element('#filter-keepers').checked, element('#filter-tagged').checked, element('#show-rejected').checked], [true, true, false]);
+    assert.deepEqual(['#filter-from', '#filter-to', '#filter-camera', '#filter-rating', '#filter-text'].map(name => element(name).value),
+      ['2026-10-21', '2026-10-22', 'ILCE-7M4:1', '2', 'red fox']);
+    assert.deepEqual([element('#status-flag').checked, element('#status-keepers').checked, element('#filter-tagged').checked], [true, false, true]);
 
     element('#filter-to').value = '2026-10-01';
     groupsError = 'invalid filter: date_to';
@@ -2919,8 +2917,8 @@ const regression = `
     await element('#reset-filters').listeners.click();
     assert.equal(location.search, '');
     assert.equal(lastGroupsUrl, '/api/groups');
-    assert.deepEqual(['#filter-from', '#filter-camera', '#filter-decision', '#filter-rating', '#filter-text'].map(name => element(name).value), ['', '', 'any', '0', '']);
-    assert.equal(element('#filter-keepers').checked, false);
+    assert.deepEqual(['#filter-from', '#filter-camera', '#filter-rating', '#filter-text'].map(name => element(name).value), ['', '', '0', '']);
+    assert.deepEqual([element('#status-all').checked, element('#status-flag').checked], [true, false]);
     assert.equal(more.hidden, true);
     assert.equal(element('#announcer').textContent, 'Showing 3 of 3 frames');
     groups = [];
@@ -2987,8 +2985,7 @@ const regression = `
     assert.equal(element('#remove-group').disabled, false);
     assert.equal(element('#inspection').textContent, NO_KEEPER);
     groups = [{ id: 1, automatic_pick_id: 1, frame_count: 2, rejected_count: 2, photos: [rejected(1), rejected(2)] }, group(2, [3])];
-    element('#show-rejected').checked = true;
-    await element('#show-rejected').listeners.change();
+    await pickStatus('reject').listeners.change();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const texts = id => tree(card(id)).map(node => node.textContent);
     assert.ok(texts(1).includes('Rejected'));
@@ -3802,26 +3799,24 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_decisions_update_cards_in_place_and_keeper_count(self):
         self.run_javascript_cleanup_regression("decisions")
 
-    def test_javascript_filter_more_folds_secondary_filters(self):
+    def test_filter_bar_is_two_rows_without_apply_or_fold(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         form = by_id["filter-form"]
-        row = [node for node in parser.nodes if node["parents"] and node["parents"][-1] is form]
-        self.assertEqual(["div", "button", "button", "details"], [node["tag"] for node in row])
-        for name in ("filter-text", "expand-search", "expand-search-availability"):
-            self.assertIn(row[0], by_id[name]["parents"])
-        self.assertEqual(("submit", "Apply"), (row[1]["attrs"].get("type"), row[1]["text"].strip()))
-        self.assertIs(by_id["reset-filters"], row[2])
-        details = by_id["filter-more"]
-        self.assertIs(details, row[3])
-        summaries = [node for node in parser.nodes if node["tag"] == "summary" and node["parents"][-1] is details]
-        self.assertEqual(["More filters"], [node["text"].strip() for node in summaries])
-        for name in ("filter-from", "filter-to", "filter-camera", "filter-decision", "filter-rating", "filter-keepers", "filter-tagged", "show-rejected"):
-            self.assertIn(details, by_id[name]["parents"], f"{name} folds into More filters")
-        self.assertEqual(3, sum(1 for node in parser.nodes if "toggle" in node["attrs"].get("class", "").split() and details in node["parents"]))
-        self.run_javascript_cleanup_regression("filter-more")
+        rows = [node for node in parser.nodes if node["parents"] and node["parents"][-1] is form and "filter-row" in node["attrs"].get("class", "")]
+        self.assertEqual(2, len(rows))
+        for name in ("filter-text", "expand-search", "filter-status", "filter-rating", "reset-filters"):
+            self.assertIn(rows[0], by_id[name]["parents"], f"{name} sits on the first row")
+        for name in ("filter-from", "filter-to", "filter-camera", "filter-tagged"):
+            self.assertIn(rows[1], by_id[name]["parents"], f"{name} sits on the second row")
+        heading = by_id["contact-heading"]["parents"][-1]
+        for name in ("tile-size", "refine-scope", "refine-previews", "open-compare", "shortcuts-button"):
+            self.assertIn(heading, by_id[name]["parents"], f"{name} sits in the heading row, apart from the filters")
+        self.assertFalse(any(node["tag"] in {"details", "summary"} and form in node["parents"] for node in parser.nodes), "no folded section")
+        self.assertFalse(any(node["tag"] == "button" and node["attrs"].get("type") == "submit" and form in node["parents"] for node in parser.nodes), "no Apply button")
+        self.run_javascript_cleanup_regression("filter-live")
 
     def test_javascript_filters_write_url_group_days_and_page_frames(self):
         self.run_javascript_cleanup_regression("filters")
@@ -4098,8 +4093,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         form = by_id["filter-form"]
         self.assertEqual("form", form["tag"])
         controls = {"filter-from": ("input", "date"), "filter-to": ("input", "date"), "filter-camera": ("select", None),
-                    "filter-decision": ("select", None), "filter-rating": ("select", None), "filter-keepers": ("input", "checkbox"),
-                    "filter-tagged": ("input", "checkbox"), "show-rejected": ("input", "checkbox"), "filter-text": ("input", "search")}
+                    "filter-rating": ("select", None), "filter-tagged": ("input", "checkbox"), "filter-text": ("input", "search"),
+                    **{f"status-{value}": ("input", "radio") for value in ("all", "keepers", "flag", "none", "reject")}}
         for name, (tag, kind) in controls.items():
             with self.subTest(control=name):
                 node = by_id[name]
@@ -4107,10 +4102,11 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                 self.assertIn(form, node["parents"])
                 self.assertTrue(labels.get(name), f"{name} needs a visible label")
         options = lambda name: [node["attrs"]["value"] for node in parser.nodes if node["tag"] == "option" and by_id[name] in node["parents"]]
-        self.assertEqual(["any", "flag", "reject", "none"], options("filter-decision"))
+        self.assertEqual("fieldset", by_id["filter-status"]["tag"])
+        self.assertTrue(any(node["tag"] == "legend" and node["text"].strip() == "Show" for node in parser.nodes if by_id["filter-status"] in node["parents"]))
         self.assertEqual(["0", "1", "2", "3", "4", "5"], options("filter-rating"))
         buttons = {node["text"].strip(): node["attrs"].get("type") for node in parser.nodes if node["tag"] == "button" and form in node["parents"]}
-        self.assertEqual({"Apply": "submit", "Reset": "button", "Expand with local AI": "button"}, buttons)
+        self.assertEqual({"Reset": "button", "Expand with local AI": "button"}, buttons)
         self.assertEqual("expand-search-availability", by_id["expand-search"]["attrs"].get("aria-describedby"))
         self.assertIn(form, by_id["expand-search-availability"]["parents"])
         more = by_id["show-more"]
@@ -4133,12 +4129,12 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         copy = ("Keepers are frames that are not rejected and are either flagged or best in their burst. "
                 "A single frame is best in its own burst, so it stays a keeper unless you reject it.")
         self.assertIn(copy, " ".join(by_id["export-panel"]["text"].split()))
-        toggle = by_id["show-rejected"]
-        self.assertEqual(("input", "checkbox"), (toggle["tag"], toggle["attrs"].get("type")))
-        self.assertTrue(any(node["tag"] == "label" and "Show rejected" in node["text"] for node in toggle["parents"]))
+        toggle = by_id["status-reject"]
+        self.assertEqual(("input", "radio"), (toggle["tag"], toggle["attrs"].get("type")))
+        self.assertTrue(any(node["tag"] == "label" and "Rejected" in node["text"] for node in toggle["parents"]))
         javascript = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "app.js").read_text()
         for text in ("'Flag'", "'Reject'", "'Clear decision'", "'Flagged'", "'Rejected'", "`Rating ${", "createElement('select')",
-                     "id = 'rating'", "htmlFor = 'rating'", "`Rating ${result.rating} set for ${", "'show_rejected'"):
+                     "id = 'rating'", "htmlFor = 'rating'", "`Rating ${result.rating} set for ${"):
             self.assertIn(text, javascript)
         self.assertNotRegex(javascript, r"decision[^\n]*\.innerHTML")
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()

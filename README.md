@@ -291,9 +291,13 @@ the remembered name. Remember is disabled on a frame with no GPS fix.
 
 ## Filters and paging
 
-The filter bar shows tag text with Expand, Apply, and Reset; the other filters (date range, camera, decision, minimum
-rating, keepers only, tagged only) sit under **More filters**, which counts the active ones; rejected frames are hidden
-unless **Show rejected** is ticked. Filters live in the page URL, so a reload or
+The filter bar has two rows and every control applies as soon as it changes;
+there is no Apply button. Row one holds tag text with Expand, a status choice
+(**All**, **Keepers**, **Flagged**, **Unsorted**, **Rejected**), minimum rating,
+and Reset. Row two holds the date range, camera, and **Tagged only**. **All**
+hides rejected frames; choose **Rejected** to review them. The heading shows
+"N of M frames" while a filter is on, and carries Tiles, Refine, Compare
+marked, and Shortcuts. Filters live in the page URL, so a reload or
 bookmark keeps them. Frames are grouped by capture day and shown 200 at a time;
 the button after the last frame shows the next page. Separate tag-text terms
 with `|` to match any of them (`heron | egret`). **Expand with local AI** asks

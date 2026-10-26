@@ -1209,7 +1209,8 @@ function renderGroups() {
     empty.textContent = location.search ? 'No frames match these filters.' : 'Import a folder to build your first contact sheet.';
     sheet.append(empty);
   }
-  document.querySelector('#photo-count').textContent = frameCount(photos.length);
+  // A narrowed sheet says how much of the library it shows.
+  document.querySelector('#photo-count').textContent = location.search ? `${photos.length} of ${frameCount(state.photoCount)}` : frameCount(photos.length);
   if (!state.groups.length) rail.textContent = location.search ? 'No batches match these filters.' : 'No imported batches yet.';
   updateWorkflow();
 }
@@ -1225,12 +1226,17 @@ function showMore() {
 
 // Filter state lives only in the URL query; the field names match the /api/groups parameters.
 const FILTER_CONTROLS = {
-  date_from: '#filter-from', date_to: '#filter-to', camera: '#filter-camera', decision: '#filter-decision', min_rating: '#filter-rating',
-  keepers_only: '#filter-keepers', tagged_only: '#filter-tagged', text: '#filter-text', show_rejected: '#show-rejected',
+  date_from: '#filter-from', date_to: '#filter-to', camera: '#filter-camera', min_rating: '#filter-rating', tagged_only: '#filter-tagged', text: '#filter-text',
 };
-const FLAG_FILTERS = ['keepers_only', 'tagged_only', 'show_rejected'];
-const FILTER_DEFAULTS = { decision: 'any', min_rating: '0' };
-const MORE_FILTERS = ['date_from', 'date_to', 'camera', 'decision', 'min_rating', ...FLAG_FILTERS];  // the fields inside #filter-more
+const FLAG_FILTERS = ['tagged_only'];
+const FILTER_DEFAULTS = { min_rating: '0' };
+// One status choice stands for keepers_only or a decision; "all" hides rejected frames, as the server does by default.
+const STATUSES = { all: {}, keepers: { keepers_only: '1' }, flag: { decision: 'flag' }, none: { decision: 'none' }, reject: { decision: 'reject' } };
+const statusRadio = value => document.querySelector(`#status-${value}`);
+
+function filterStatus() {
+  return Object.keys(STATUSES).find(value => statusRadio(value).checked) || 'all';
+}
 let findTimer = null;  // pending debounced apply from #find / #filter-text
 
 function cancelFind() {
@@ -1245,16 +1251,8 @@ function filterQuery() {
     const value = FLAG_FILTERS.includes(name) ? (control.checked ? '1' : '') : control.value.trim();
     if (value && value !== FILTER_DEFAULTS[name]) params.set(name, value);
   });
+  Object.entries(STATUSES[filterStatus()]).forEach(([name, value]) => params.set(name, value));
   return params.toString();
-}
-
-// The summary counts the folded fields that differ from their defaults, so a closed section still says it is narrowing.
-function updateFilterSummary() {
-  const active = MORE_FILTERS.filter(name => {
-    const control = document.querySelector(FILTER_CONTROLS[name]);
-    return FLAG_FILTERS.includes(name) ? control.checked : control.value && control.value !== FILTER_DEFAULTS[name];
-  }).length;
-  document.querySelector('#filter-more summary').textContent = active ? `More filters (${active} active)` : 'More filters';
 }
 
 function syncFilters(cameras) {
@@ -1277,7 +1275,8 @@ function syncFilters(cameras) {
     else if (!(name === 'text' && holdText)) keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');
   });
   if (!holdText) keepTyping(text[0], params.get('text') ?? '');
-  updateFilterSummary();
+  const status = params.get('keepers_only') === '1' ? 'keepers' : params.get('decision') in STATUSES ? params.get('decision') : 'all';
+  Object.keys(STATUSES).forEach(value => { statusRadio(value).checked = value === status; });
 }
 
 // A reload never rewrites the field being typed in, nor one that differs from the URL only by spaces.
@@ -2138,7 +2137,9 @@ document.querySelector('#browse-xmp').addEventListener('click', async () => {
 document.querySelector('#reset-xmp').addEventListener('click', () => rememberProfile(null));
 document.querySelectorAll('input[name="export-scope"]').forEach(input => input.addEventListener('change', updateWorkflow));
 document.querySelector('#clear-confirmation').addEventListener('input', updateWorkflow);
-document.querySelector('#show-rejected').addEventListener('change', () => applyFilters().catch(error => announce(error.message)));
+// Every filter applies as soon as it changes; the text fields debounce below, and Enter in them applies at once.
+[...Object.values(FILTER_CONTROLS).filter(selector => selector !== '#filter-text'), ...Object.keys(STATUSES).map(value => `#status-${value}`)]
+  .forEach(selector => document.querySelector(selector).addEventListener('change', () => applyFilters().catch(error => announce(error.message))));
 document.querySelector('#filter-form').addEventListener('submit', event => {
   event.preventDefault();
   cancelFind();
@@ -2181,17 +2182,7 @@ document.querySelector('#expand-search').addEventListener('click', async () => {
 document.querySelector('#reset-filters').addEventListener('click', async () => {
   cancelFind();
   await applyFilters('').catch(error => announce(error.message));
-  updateFilterSummary();
 });
-['input', 'change'].forEach(name => document.querySelector('#filter-form').addEventListener(name, updateFilterSummary));
-const filterMore = document.querySelector('#filter-more');
-filterMore.addEventListener('toggle', () => {
-  try {
-    if (filterMore.open) localStorage.setItem('lumen-filter-more', '1');
-    else localStorage.removeItem('lumen-filter-more');
-  } catch { /* per-visit only */ }
-});
-try { if (localStorage.getItem('lumen-filter-more') === '1') filterMore.open = true; } catch { /* per-visit only */ }
 document.querySelector('#show-more').addEventListener('click', showMore);
 // Tile density: a CSS variable on the sheet; medium is the stylesheet default, the choice is remembered per browser.
 const TILE_SIZES = { small: '140px', medium: null, large: '260px' };
