@@ -2050,8 +2050,15 @@ function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = nul
     tab.addEventListener('click', () => (onReselect && tab.getAttribute('aria-selected') === 'true' ? onReselect(tab) : select(tab)));
     tab.addEventListener('keydown', event => {
       const usable = tabs.filter(item => item.getAttribute('aria-disabled') !== 'true');  // an unavailable tab is still selectable by click, so its reason can be read
-      const at = usable.indexOf(tab);
-      const next = { ArrowRight: (at + 1) % usable.length, ArrowLeft: (at + usable.length - 1) % usable.length, Home: 0, End: usable.length - 1 }[event.key];
+      const at = usable.indexOf(tab);  // -1 while an unavailable tab holds the focus: step from where it sits among all the tabs
+      const passed = usable.filter(item => tabs.indexOf(item) < tabs.indexOf(tab)).length;
+      const last = usable.length - 1;
+      const next = {
+        ArrowRight: (at < 0 ? passed : at + 1) % usable.length,
+        ArrowLeft: ((at < 0 ? passed : at) + last) % usable.length,
+        Home: 0,
+        End: last,
+      }[event.key];
       if (next === undefined) return;
       event.preventDefault();
       select(usable[next]);
@@ -2660,26 +2667,27 @@ async function renderDevelopPreview() {
   const edge = Math.max(640, Math.round(Math.max(loupeViewport.clientWidth || 0, loupeViewport.clientHeight || 0)));
   const status = developNode('develop-status');
   status.textContent = 'Rendering this frame from the raw…';
-  try {
-    const result = await request(`/api/photos/${photo.id}/develop/preview`, {
+  let result;
+  try {  // only the render is a render failure; a bug in the drawing below must not be reported as one
+    result = await request(`/api/photos/${photo.id}/develop/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
       body: JSON.stringify({ settings: develop.fields, long_edge: edge }),
     });
-    if (controller.signal.aborted || develop.photoId !== photo.id) return;
-    develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
-    develop.histogram = Array.isArray(result.histogram) ? result.histogram : [];
-    drawDevelopWidget();
-    syncDevelopControls();
-    showPreview(loupeViewport, photo, result.image, () => drawCropOverlay(shownCropRect()), true);
-    fullButton.textContent = 'Full size';  // the viewport now holds the develop render, not the full-size JPEG
-    fullButton.setAttribute('aria-pressed', 'false');
-    const touched = Object.keys(develop.fields).length;
-    status.textContent = touched ? `${touched} setting${touched === 1 ? '' : 's'} applied to this render. Nothing is saved until you leave the frame or export.` : 'The frame as the camera recorded it.';
   } catch (error) {
     if (controller.signal.aborted) return;
     status.textContent = `${error.message}. The sliders still work; the render will be retried on your next change.`;
-    announce(status.textContent);
+    return announce(status.textContent);
   }
+  if (controller.signal.aborted || develop.photoId !== photo.id) return;
+  develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
+  develop.histogram = Array.isArray(result.histogram) ? result.histogram : [];
+  drawDevelopWidget();
+  syncDevelopControls();
+  showPreview(loupeViewport, photo, result.image, () => drawCropOverlay(shownCropRect()), true);
+  fullButton.textContent = 'Full size';  // the viewport now holds the develop render, not the full-size JPEG
+  fullButton.setAttribute('aria-pressed', 'false');
+  const touched = Object.keys(develop.fields).length;
+  status.textContent = touched ? `${touched} setting${touched === 1 ? '' : 's'} applied to this render. Nothing is saved until you leave the frame or export.` : 'The frame as the camera recorded it.';
 }
 
 // Saved on leaving the frame and before any export, so the stored settings are what the exported JPEG bakes in.

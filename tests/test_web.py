@@ -1541,6 +1541,7 @@ let exportCancels = 0;
 const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const developPosts = [];
 let developPolls = 0;
+let developSaveError = null;
 const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: [0.1, 0.5, 1, 0.2], neutral_temperature: 5600, neutral_tint: 7 });
 const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const refinePosts = [];
@@ -1714,7 +1715,10 @@ async function fetch(url, options = {}) {
     const body = JSON.parse(options.body);
     developPosts.push({ url, body, signal: options.signal });
     if (url.endsWith('/apply-to-group')) payload = developJob('queued', 0);
-    else if (!url.endsWith('/preview')) payload = { photo_id: Number(url.split('/')[3]), develop: Object.keys(body.settings).length ? body.settings : null, preview_url: '/preview/1?v=saved-developed' };
+    else if (!url.endsWith('/preview')) {
+      if (developSaveError) { ok = false; payload = { error: developSaveError }; }
+      else payload = { photo_id: Number(url.split('/')[3]), develop: Object.keys(body.settings).length ? body.settings : null, preview_url: '/preview/1?v=saved-developed' };
+    }
     else payload = developPreview();
   }
   else if (url === '/api/jobs/21') {
@@ -2542,7 +2546,13 @@ const regression = `
     Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
     const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', clientWidth: 800, clientHeight: 600 });
     const tab = element('#develop-tab');
-    const flush = () => new Promise(setImmediate);
+    const settled = () => new Promise(setImmediate);
+    const quiet = where => {  // a DOM bug reported as a render failure, or any failure at all, fails the scenario
+      const text = element(where).textContent || '';
+      assert.ok(!/could not|retried|unavailable|undefined|NaN|error/i.test(text), where + ' reads: ' + text);
+      return text;
+    };
+    const flush = async () => { await settled(); quiet('#develop-status'); quiet('#announcer'); };
     const field = name => element('#develop-' + name + '-value');
     await key('Home', card(1), element('#contact-sheet'));
     await key('Enter', card(1), element('#contact-sheet'));
@@ -2576,6 +2586,7 @@ const regression = `
     assert.equal(element('#develop-temperature_k').value, '5600', "white balance parks on this frame's own neutral");
     assert.equal(field('temperature_k').value, '', 'parking a handle is not an edit');
     assert.equal(element('#develop-contrast-reset').disabled, true, 'nothing to reset until a field is set');
+    assert.equal(element('#develop-status').textContent, '1 setting applied to this render. Nothing is saved until you leave the frame or export.');
     assert.equal(element('#develop-contrast').getAttribute('aria-valuetext'), 'not set', 'a parked handle is announced as unset, not as its midpoint');
     assert.equal(element('#develop-contrast').getAttribute('data-unset'), '');
     assert.equal(element('#develop-exposure_ev').getAttribute('aria-valuetext'), '0.50 EV');
@@ -2679,6 +2690,24 @@ const regression = `
     assert.equal(stored.settings.exposure_ev, 0.5);
     assert.equal(stored.settings.curve.length, 5);
     assert.ok(!('contrast' in stored.settings) && !('tint' in stored.settings), 'a reset field is never saved');
+
+    await key('Enter', card(1), element('#contact-sheet'));
+    await flush();
+    element('#develop-exposure_ev').value = '2';
+    element('#develop-exposure_ev').listeners.change();
+    await flush();
+    developSaveError = 'the catalog is busy';
+    holdUrls.add('/api/photos/1/develop');
+    await key(']', element('#loupe-viewport'), element('#loupe'));  // the filmstrip steps on while the save is held
+    for (let i = 0; i < 6; i++) await settled();
+    assert.equal(state.develop.photoId, 2);
+    const showing = element('#develop-status').textContent || '';
+    heldReplies.shift()();
+    await settled();
+    await settled();
+    assert.equal(element('#develop-status').textContent || '', showing, "a failed save never writes on another frame's panel");
+    const spoken = element('#announcer').textContent;
+    assert.ok(spoken.includes('photo-1.jpg') && spoken.includes('could not be saved'), 'the failure names the frame it belongs to: ' + spoken);
     return;
   }
   if (scenario === 'frame-view-full') {
