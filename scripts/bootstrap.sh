@@ -38,8 +38,12 @@ mkdir -p "$native_bin" "$module_cache"
 CLANG_MODULE_CACHE_PATH="$module_cache" swiftc \
   "$project_root/tools/vision_analyzer.swift" \
   -o "$native_bin/vision_analyzer"
+CLANG_MODULE_CACHE_PATH="$module_cache" swiftc -O \
+  "$project_root/tools/raw_developer.swift" \
+  -o "$native_bin/raw_developer"
 
 echo "Lumen is installed."
 echo "Native face/eye analyzer: $native_bin/vision_analyzer"
+echo "Native raw developer: $native_bin/raw_developer"
 echo "Next: uv run --project \"$project_root\" lumen doctor"
 

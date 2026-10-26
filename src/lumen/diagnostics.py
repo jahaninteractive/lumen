@@ -85,6 +85,10 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
             "available": settings.vision_analyzer_path.is_file(),
             "path": str(settings.vision_analyzer_path),
         },
+        "raw_developer": {
+            "available": settings.raw_developer_path.is_file(),
+            "path": str(settings.raw_developer_path),
+        },
         "omlx_model": {
             "name": settings.omlx_model,
             "path": str(model_path) if model_path else None,

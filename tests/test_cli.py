@@ -206,6 +206,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("exiftool", payload["tools"])
         self.assertIn("darktable-cli", payload["tools"])
         self.assertEqual({"dir": str(geonames), "files": 2, "places": 7, "online": True}, payload["geonames"])
+        self.assertIn("vision_analyzer", payload)
+        self.assertTrue(payload["raw_developer"]["path"].endswith("cache/bin/raw_developer"))
+        self.assertIn("available", payload["raw_developer"])
 
     def test_siril_command_runs_managed_script_hook(self):
         with tempfile.TemporaryDirectory() as directory:

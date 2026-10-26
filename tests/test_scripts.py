@@ -17,6 +17,11 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("exiftool: ready", result.stdout)
         self.assertIn("swiftc: ready", result.stdout)
 
+    def test_bootstrap_compiles_both_native_helpers(self):
+        script = Path("scripts/bootstrap.sh").read_text()
+        self.assertIn("tools/vision_analyzer.swift", script)
+        self.assertIn("tools/raw_developer.swift", script)
+
     def test_web_ui_displays_live_omlx_summary(self):
         script = Path("src/lumen/static/app.js").read_text()
         self.assertIn("status.omlx_live.summary", script)

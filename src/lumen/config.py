@@ -92,6 +92,10 @@ class Settings:
     def vision_analyzer_path(self) -> Path:
         return self.cache_dir / "bin" / "vision_analyzer"
 
+    @property
+    def raw_developer_path(self) -> Path:
+        return self.cache_dir / "bin" / "raw_developer"
+
     def ensure_directories(self) -> None:
         for path in (self.library_dir, self.preview_dir, self.sidecar_dir, self.output_dir, self.cache_dir, self.trash_dir):
             path.mkdir(parents=True, exist_ok=True)
