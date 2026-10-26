@@ -2046,14 +2046,16 @@ function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = nul
     try { localStorage.setItem(storageKey, tab.id); } catch { /* per-visit only */ }
     onSelect(tab);
   };
-  tabs.forEach((tab, index) => {
+  tabs.forEach(tab => {
     tab.addEventListener('click', () => (onReselect && tab.getAttribute('aria-selected') === 'true' ? onReselect(tab) : select(tab)));
     tab.addEventListener('keydown', event => {
-      const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
+      const usable = tabs.filter(item => item.getAttribute('aria-disabled') !== 'true');  // an unavailable tab is still selectable by click, so its reason can be read
+      const at = usable.indexOf(tab);
+      const next = { ArrowRight: (at + 1) % usable.length, ArrowLeft: (at + usable.length - 1) % usable.length, Home: 0, End: usable.length - 1 }[event.key];
       if (next === undefined) return;
       event.preventDefault();
-      select(tabs[next]);
-      tabs[next].focus();
+      select(usable[next]);
+      usable[next].focus();
     });
   });
   // A removed or unknown remembered id keeps the current tab.
@@ -2551,6 +2553,11 @@ const CURVE_IDENTITY = [[0, 0], [0.25, 0.25], [0.5, 0.5], [0.75, 0.75], [1, 1]];
 const CURVE_GAP = 0.01;  // the server rejects equal x values, so a dragged point stops short of its neighbour
 const [CURVE_W, CURVE_H] = [100, 60];  // the viewBox in index.html
 
+const developNodes = {};
+function developNode(id) {
+  return developNodes[id] ??= document.querySelector(`#${id}`);
+}
+
 function developClamp(value, low, high) {
   return Math.max(low, Math.min(high, value));
 }
@@ -2569,15 +2576,15 @@ function drawDevelopWidget() {
   const buckets = state.develop.histogram;
   const peak = Math.max(1e-9, ...buckets);
   const step = CURVE_W / Math.max(1, buckets.length);
-  document.querySelector('#develop-histogram').setAttribute('d', buckets.map((value, index) => {
+  developNode('develop-histogram').setAttribute('d', buckets.map((value, index) => {
     const [left, right] = [index * step, (index + 1) * step];
     const top = CURVE_H * (1 - developClamp(value / peak, 0, 1));
     return `M${left.toFixed(2)},${CURVE_H}L${left.toFixed(2)},${top.toFixed(2)}L${right.toFixed(2)},${top.toFixed(2)}L${right.toFixed(2)},${CURVE_H}Z`;
   }).join(''));
   const place = ([x, y]) => `${(x * CURVE_W).toFixed(2)},${((1 - y) * CURVE_H).toFixed(2)}`;
-  document.querySelector('#develop-curve-line').setAttribute('d', developCurve().map((point, index) => `${index ? 'L' : 'M'}${place(point)}`).join(''));
+  developNode('develop-curve-line').setAttribute('d', developCurve().map((point, index) => `${index ? 'L' : 'M'}${place(point)}`).join(''));
   developCurve().forEach((point, index) => {
-    const node = document.querySelector(`#develop-point-${index}`);
+    const node = developNode(`develop-point-${index}`);
     node.setAttribute('cx', (point[0] * CURVE_W).toFixed(2));
     node.setAttribute('cy', ((1 - point[1]) * CURVE_H).toFixed(2));
     node.setAttribute('aria-valuenow', String(Math.round(point[1] * 100)));
@@ -2598,17 +2605,21 @@ function syncDevelopControls() {
   DEVELOP_CONTROLS.forEach(control => {
     const set = control.key in fields;
     const value = set ? fields[control.key] : developPark(control);
-    const range = document.querySelector(`#develop-${control.key}`);
-    const field = document.querySelector(`#develop-${control.key}-value`);
+    const range = developNode(`develop-${control.key}`);
+    const field = developNode(`develop-${control.key}-value`);
     if (range !== document.activeElement) range.value = String(value);  // never move a handle under the pointer
     if (field !== document.activeElement) field.value = set ? value.toFixed(control.decimals) : '';
+    // The parked handle is a starting point, not this file's value: say so, because the empty field is only visual.
+    range.setAttribute('aria-valuetext', set ? `${value.toFixed(control.decimals)}${control.unit}` : 'not set');
+    if (set) range.removeAttribute('data-unset');
+    else range.setAttribute('data-unset', '');
     range.disabled = field.disabled = !ready;
-    document.querySelector(`#develop-${control.key}-reset`).disabled = !ready || !set;
+    developNode(`develop-${control.key}-reset`).disabled = !ready || !set;
   });
-  CURVE_IDENTITY.forEach((_point, index) => document.querySelector(`#develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
-  document.querySelector('#develop-reset-all').disabled = !ready || (!touched && state.develop.saved === '{}');
-  document.querySelector('#develop-apply-group').disabled = state.busy || !ready || !touched;
-  document.querySelector('#develop-export').disabled = document.querySelector('#loupe-export').disabled;
+  CURVE_IDENTITY.forEach((_point, index) => developNode(`develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
+  developNode('develop-reset-all').disabled = !ready || (!touched && state.develop.saved === '{}');
+  developNode('develop-apply-group').disabled = state.busy || !ready || !touched;
+  developNode('develop-export').disabled = developNode('loupe-export').disabled;
 }
 
 // The frame's saved settings and its offline flag arrive with its details; every render needs the raw itself.
@@ -2627,15 +2638,15 @@ function fillDevelop(photo) {
   develop.ready = !offline && raw;
   const reason = offline ? 'The original is offline. Plug its drive back in and reopen this frame: every develop render reads the raw.'
     : raw ? '' : 'Develop reads raw files; this frame is not one.';
-  document.querySelector('#develop-tab').disabled = !develop.ready;
-  const message = document.querySelector('#develop-unavailable');
+  developNode('develop-tab').setAttribute('aria-disabled', String(!develop.ready));
+  const message = developNode('develop-unavailable');
   message.textContent = reason;
   message.hidden = develop.ready;
-  document.querySelector('#develop-workspace').hidden = !develop.ready;
-  document.querySelector('#develop-status').textContent = '';  // the reason above says it once
+  developNode('develop-workspace').hidden = !develop.ready;
+  developNode('develop-status').textContent = '';  // the reason above says it once
   drawDevelopWidget();
   syncDevelopControls();
-  if (develop.ready && document.querySelector('#develop-tab').getAttribute('aria-selected') === 'true') renderDevelopPreview();
+  if (develop.ready && developNode('develop-tab').getAttribute('aria-selected') === 'true') renderDevelopPreview();
 }
 
 // One gesture, one render: the whole frame, uncropped, with the newer request cancelling the older.
@@ -2647,7 +2658,7 @@ async function renderDevelopPreview() {
   const controller = new AbortController();
   develop.controller = controller;
   const edge = Math.max(640, Math.round(Math.max(loupeViewport.clientWidth || 0, loupeViewport.clientHeight || 0)));
-  const status = document.querySelector('#develop-status');
+  const status = developNode('develop-status');
   status.textContent = 'Rendering this frame from the raw…';
   try {
     const result = await request(`/api/photos/${photo.id}/develop/preview`, {
@@ -2691,8 +2702,9 @@ async function saveDevelop() {
     announce(result.develop ? 'Develop settings saved.' : 'Develop settings cleared.');
   } catch (error) {
     develop.saved = null;  // unknown server state: every later body differs, so the next close tries again
-    document.querySelector('#develop-status').textContent = `Develop settings could not be saved: ${error.message}`;
-    announce(document.querySelector('#develop-status').textContent);
+    const message = `${photoById(photoId)?.name || 'This frame'}: develop settings could not be saved: ${error.message}`;
+    if (develop.photoId === photoId) developNode('develop-status').textContent = message;  // the panel may already show another frame
+    announce(message);
   }
 }
 
@@ -2705,15 +2717,15 @@ function setDevelopField(control, value) {
 }
 
 DEVELOP_CONTROLS.forEach(control => {
-  const range = document.querySelector(`#develop-${control.key}`);
-  const field = document.querySelector(`#develop-${control.key}-value`);
+  const range = developNode(`develop-${control.key}`);
+  const field = developNode(`develop-${control.key}-value`);
   const bounded = value => developClamp(value, control.min, control.max);
   range.addEventListener('change', () => setDevelopField(control, bounded(Number(range.value))));  // change, not input: one render per gesture
   field.addEventListener('change', () => {
     const typed = field.value.trim();
     setDevelopField(control, typed === '' || !Number.isFinite(Number(typed)) ? null : bounded(Number(typed)));
   });
-  document.querySelector(`#develop-${control.key}-reset`).addEventListener('click', () => setDevelopField(control, null));
+  developNode(`develop-${control.key}-reset`).addEventListener('click', () => setDevelopField(control, null));
 });
 
 // Dragging a point keeps the x values strictly ascending, which is what the server validates.
@@ -2727,7 +2739,7 @@ function moveCurvePoint(index, x, y) {
   syncDevelopControls();
 }
 
-const curveSvg = document.querySelector('#develop-curve');
+const curveSvg = developNode('develop-curve');
 function curvePointerAt(event) {
   const box = curveSvg.getBoundingClientRect();
   return [developClamp((event.clientX - box.left) / Math.max(1, box.width), 0, 1),
@@ -2740,7 +2752,7 @@ curveSvg.addEventListener('pointerdown', event => {
   const distance = index => Math.hypot(developCurve()[index][0] - x, developCurve()[index][1] - y);
   state.develop.drag = developCurve().reduce((best, _point, index) => (distance(index) < distance(best) ? index : best), 0);
   curveSvg.setPointerCapture(event.pointerId);
-  document.querySelector(`#develop-point-${state.develop.drag}`).focus({ preventScroll: true });
+  developNode(`develop-point-${state.develop.drag}`).focus({ preventScroll: true });
   moveCurvePoint(state.develop.drag, x, y);
 });
 curveSvg.addEventListener('pointermove', event => {
@@ -2759,7 +2771,7 @@ curveSvg.addEventListener('pointercancel', () => { state.develop.drag = null; })
 // The keyboard fallback: arrow keys nudge the focused point by 1%.
 const CURVE_KEYS = { ArrowLeft: [-0.01, 0], ArrowRight: [0.01, 0], ArrowDown: [0, -0.01], ArrowUp: [0, 0.01] };
 CURVE_IDENTITY.forEach((_point, index) => {
-  document.querySelector(`#develop-point-${index}`).addEventListener('keydown', event => {
+  developNode(`develop-point-${index}`).addEventListener('keydown', event => {
     const delta = CURVE_KEYS[event.key];
     if (!delta || !state.develop.ready) return;
     event.preventDefault();
@@ -2771,15 +2783,23 @@ CURVE_IDENTITY.forEach((_point, index) => {
   });
 });
 
-document.querySelector('#develop-reset-all').addEventListener('click', async () => {
+developNode('develop-curve-reset').addEventListener('click', () => {
+  if (!state.develop.fields.curve) return announce('The tone curve is already straight.');
+  delete state.develop.fields.curve;
+  drawDevelopWidget();
+  syncDevelopControls();
+  announce('Tone curve reset to a straight line; the sliders keep their values.');
+  renderDevelopPreview();
+});
+developNode('develop-reset-all').addEventListener('click', async () => {
   state.develop.fields = {};
   syncDevelopControls();
   announce('Every develop setting reset; this frame goes back to its own rendering.');
   await saveDevelop();  // the clear also re-renders the contact-sheet preview
   renderDevelopPreview();
 });
-document.querySelector('#develop-export').addEventListener('click', () => exportCurrentFrame());
-document.querySelector('#develop-apply-group').addEventListener('click', async () => {
+developNode('develop-export').addEventListener('click', () => exportCurrentFrame());
+developNode('develop-apply-group').addEventListener('click', async () => {
   const photoId = state.develop.photoId;
   state.busy = true;
   updateWorkflow();
@@ -2834,7 +2854,7 @@ async function runExport(scope) {
   await saveDevelop();  // export bakes in the stored settings, so the panel's work must be stored first
   const preset = document.querySelector('input[name="export-preset"]:checked').value;
   const payload = { scope, profile: state.profile, preset };
-  if (document.querySelector('#export-keep-original').checked) payload.keep_original = true;
+  if (keepOriginal.checked) payload.keep_original = true;
   const watermark = document.querySelector('#export-watermark').value.trim();
   if (watermark) payload.watermark = watermark;
   if (scope === 'current') payload.photo_id = state.selectedId;
@@ -2863,6 +2883,15 @@ async function runExport(scope) {
   }
 }
 const exportCurrentFrame = () => runExport('current');
+// The frame dialog carries its own copy, because its export buttons honour it and the export panel is not on screen.
+const keepOriginal = document.querySelector('#export-keep-original');
+const loupeKeepOriginal = document.querySelector('#loupe-keep-original');
+for (const [box, other] of [[keepOriginal, loupeKeepOriginal], [loupeKeepOriginal, keepOriginal]]) {
+  box.addEventListener('change', () => {
+    other.checked = box.checked;
+    announce(box.checked ? 'Developed frames will also export their untouched version.' : 'Only the developed version will be exported.');
+  });
+}
 document.querySelector('#export-jpegs').addEventListener('click', () => runExport(document.querySelector('input[name="export-scope"]:checked').value));
 
 // The filtered scope sends the same fields the contact sheet's URL query holds; the server validates them alike.

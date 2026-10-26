@@ -503,6 +503,9 @@
             <circle id="develop-point-3" class="curve-point" r="2" cx="75" cy="15" tabindex="0" role="slider" aria-label="Tone curve point 4 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="75"></circle>
             <circle id="develop-point-4" class="curve-point" r="2" cx="100" cy="0" tabindex="0" role="slider" aria-label="Tone curve point 5 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"></circle>
           </svg>
+          <div class="button-row">
+            <button type="button" id="develop-curve-reset" class="secondary">Reset the curve</button>
+          </div>
           <p class="quiet">The histogram is this render's. Drag a curve point, or focus one and nudge it with the arrow keys.</p>
           <details open>
             <summary>Brightness</summary>
@@ -573,6 +576,7 @@
         <p id="develop-status" role="status" aria-live="polite"></p>
       </section>
       <div class="button-row">
+        <label class="toggle" for="loupe-keep-original"><input type="checkbox" id="loupe-keep-original"> Also export the untouched version</label>
         <button type="button" id="close-loupe" class="secondary">Close</button>
       </div>
     </div>

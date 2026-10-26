@@ -1398,6 +1398,7 @@ class Element {
   contains(node) { for (; node; node = node.parent) if (node === this) return true; return false; }
   setAttribute(name, value) { this.attrs[name] = value; }
   getAttribute(name) { return this.attrs[name]; }
+  removeAttribute(name) { delete this.attrs[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   querySelector(selector) { return element('#import-form ' + selector); }
   closest(selector) {
@@ -1539,8 +1540,6 @@ let exportPolls = 0;
 let exportCancels = 0;
 const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const developPosts = [];
-let developHold = false;
-const heldDevelop = [];
 let developPolls = 0;
 const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: [0.1, 0.5, 1, 0.2], neutral_temperature: 5600, neutral_tint: 7 });
 const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
@@ -1716,7 +1715,6 @@ async function fetch(url, options = {}) {
     developPosts.push({ url, body, signal: options.signal });
     if (url.endsWith('/apply-to-group')) payload = developJob('queued', 0);
     else if (!url.endsWith('/preview')) payload = { photo_id: Number(url.split('/')[3]), develop: Object.keys(body.settings).length ? body.settings : null, preview_url: '/preview/1?v=saved-developed' };
-    else if (developHold) return new Promise(resolve => heldDevelop.push(() => resolve({ ok: true, json: async () => developPreview() })));
     else payload = developPreview();
   }
   else if (url === '/api/jobs/21') {
@@ -2550,17 +2548,21 @@ const regression = `
     await key('Enter', card(1), element('#contact-sheet'));
     await flush();
     if (scenario === 'develop-offline') {
-      assert.equal(tab.disabled, true, 'an offline original leaves the tab in the rail but disabled');
+      assert.equal(tab.getAttribute('aria-disabled'), 'true', 'an offline original leaves the tab in the rail but unavailable');
       assert.ok(element('#develop-unavailable').textContent.includes('offline'), element('#develop-unavailable').textContent);
       assert.equal(element('#develop-unavailable').hidden, false);
       assert.equal(element('#develop-workspace').hidden, true);
       assert.equal(element('#develop-apply-group').disabled, true, 'a burst cannot be developed from a frame that cannot be rendered');
       assert.equal(element('#develop-exposure_ev').disabled, true);
       assert.equal(element('#develop-point-0').getAttribute('tabindex'), '-1');
+      const [frameTab, , developTabButton] = frameTabElements;
+      await key('End', frameTab, frameTab);
+      assert.equal(developTabButton.getAttribute('aria-selected'), 'false', 'End skips the unavailable tab');
+      assert.equal(element('#crop-tab').getAttribute('aria-selected'), 'true');
       assert.deepEqual(developPosts, [], 'nothing is rendered without the raw');
       return;
     }
-    assert.equal(tab.disabled, false);
+    assert.equal(tab.getAttribute('aria-disabled'), 'false');
     assert.equal(element('#develop-workspace').hidden, false);
     tab.listeners.click();
     await flush();
@@ -2574,6 +2576,10 @@ const regression = `
     assert.equal(element('#develop-temperature_k').value, '5600', "white balance parks on this frame's own neutral");
     assert.equal(field('temperature_k').value, '', 'parking a handle is not an edit');
     assert.equal(element('#develop-contrast-reset').disabled, true, 'nothing to reset until a field is set');
+    assert.equal(element('#develop-contrast').getAttribute('aria-valuetext'), 'not set', 'a parked handle is announced as unset, not as its midpoint');
+    assert.equal(element('#develop-contrast').getAttribute('data-unset'), '');
+    assert.equal(element('#develop-exposure_ev').getAttribute('aria-valuetext'), '0.50 EV');
+    assert.equal(element('#develop-exposure_ev').getAttribute('data-unset'), undefined);
 
     const contrast = element('#develop-contrast');
     contrast.value = '0.3';
@@ -2581,11 +2587,14 @@ const regression = `
     await flush();
     assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5, contrast: 0.3 }, 'only the fields the photographer touched are sent');
     assert.equal(field('contrast').value, '0.30');
+    assert.equal(element('#develop-contrast').getAttribute('aria-valuetext'), '0.30');
+    assert.equal(element('#develop-contrast').getAttribute('data-unset'), undefined, 'a set control is no longer marked unset');
     assert.equal(element('#announcer').textContent, 'Contrast 0.30');
     await element('#develop-contrast-reset').listeners.click();
     await flush();
     assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5 }, 'Reset deletes the field rather than setting it to zero');
     assert.equal(field('contrast').value, '');
+    assert.equal(element('#develop-contrast').getAttribute('aria-valuetext'), 'not set', 'Reset puts the control back to unset');
     assert.ok(element('#announcer').textContent.includes("own value"));
     field('tint').value = '-40';
     await field('tint').listeners.change();
@@ -2595,6 +2604,17 @@ const regression = `
     await field('tint').listeners.change();
     await flush();
     assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5 }, 'emptying the numeric field clears the key');
+
+    element('#develop-sharpness').value = '0.4';
+    element('#develop-sharpness').listeners.change();  // left in flight on purpose
+    element('#develop-sharpness').value = '0.6';
+    element('#develop-sharpness').listeners.change();
+    await flush();
+    assert.equal(developPosts.at(-2).signal.aborted, true, 'the older preview request is aborted when a newer one starts');
+    assert.equal(developPosts.at(-1).signal.aborted, false);
+    assert.equal(developPosts.at(-1).body.settings.sharpness, 0.6);
+    await element('#develop-sharpness-reset').listeners.click();
+    await flush();
 
     const svg = Object.assign(element('#develop-curve'), { box: { left: 0, top: 0, width: 200, height: 120 } });
     const pointer = (type, x, y) => svg.listeners[type]({ button: 0, pointerId: 1, clientX: x, clientY: y, preventDefault() {} });
@@ -2621,6 +2641,24 @@ const regression = `
     await flush();
     assert.ok(Math.abs(developPosts.at(-1).body.settings.curve[1][1] - 0.26) < 1e-9, 'an arrow key nudges by one percent');
     assert.ok(element('#announcer').textContent.startsWith('Tone curve point 2'), element('#announcer').textContent);
+
+    await element('#develop-curve-reset').listeners.click();
+    await flush();
+    assert.equal(state.develop.fields.curve, undefined, 'the curve resets on its own, without discarding the sliders');
+    assert.equal(developPosts.at(-1).body.settings.exposure_ev, 0.5, 'the sliders keep their values');
+    assert.ok(!('curve' in developPosts.at(-1).body.settings));
+    assert.equal(element('#develop-point-2').getAttribute('cy'), '30.00', 'the widget is drawn straight again');
+    point.listeners.keydown({ key: 'ArrowUp', preventDefault() {}, stopPropagation() {} });
+    await flush();
+
+    // 7. the frame dialog's copy of the export checkbox governs what its own export buttons do
+    const mirror = element('#loupe-keep-original');
+    mirror.checked = true;
+    mirror.listeners.change();
+    assert.equal(element('#export-keep-original').checked, true, 'the two checkboxes stay in step');
+    element('#export-keep-original').checked = false;
+    element('#export-keep-original').listeners.change();
+    assert.equal(mirror.checked, false);
 
     await element('#develop-apply-group').listeners.click();
     assert.equal(developPosts.at(-2).url, '/api/photos/1/develop', 'the settings are stored before the job copies them');
@@ -4120,7 +4158,12 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         summaries = [" ".join(node["text"].split()) for node in parser.nodes if node["tag"] == "summary" and panel in node["parents"]]
         self.assertEqual(["Brightness", "White Balance", "Contrast", "Sharpness", "Noise Reduction"], summaries, "IEDT's order")
         self.assertIn(by_id["export-controls"], by_id["export-keep-original"]["parents"])
-        self.assertEqual("checkbox", by_id["export-keep-original"]["attrs"]["type"])
+        self.assertIn(by_id["loupe"], by_id["loupe-keep-original"]["parents"])
+        self.assertNotIn(by_id["develop-panel"], by_id["loupe-keep-original"]["parents"])  # both frame-view exports honour it, so both tabs show it
+        for name in ("export-keep-original", "loupe-keep-original"):
+            self.assertEqual("checkbox", by_id[name]["attrs"]["type"])
+            label = next(node for node in parser.nodes if node["tag"] == "label" and node["attrs"].get("for") == name)
+            self.assertEqual("Also export the untouched version", " ".join(label["text"].split()))
 
     def test_javascript_develop_tab_sends_only_touched_fields(self):
         self.run_javascript_cleanup_regression("develop")
@@ -4147,7 +4190,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for tab, panel, selected, contents in (
             ("frame-tab", "frame-panel", "true", ["inspection"]),
             ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai", "loupe-export"]),
-            ("develop-tab", "develop-panel", "false", ["develop-curve", "develop-exposure_ev", "develop-exposure_ev-value",
+            ("develop-tab", "develop-panel", "false", ["develop-curve", "develop-curve-reset", "develop-exposure_ev", "develop-exposure_ev-value",
                                                        "develop-exposure_ev-reset", "develop-reset-all", "develop-apply-group", "develop-export"]),
         ):
             self.assertIn(tablist, by_id[tab]["parents"])

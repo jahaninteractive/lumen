@@ -132,6 +132,7 @@ main { min-width: 0; }
 .tab-rail { display: flex; gap: 1rem; padding: 0 1.25rem; border-bottom: 1px solid var(--line); }
 .tab-rail button { color: var(--muted); background: transparent; border: 0; border-bottom: 3px solid transparent; border-radius: 0; }
 .tab-rail [aria-selected="true"] { color: var(--amber); border-bottom-color: var(--amber); }
+.tab-rail [aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
 [role="tabpanel"] { padding: 1.25rem; }
 [hidden] { display: none !important; }
 .workflow h2 { margin: 0; font-size: 1.25rem; }
@@ -186,9 +187,10 @@ legend { padding: 0; font-weight: 700; }
 #develop-histogram { fill: var(--cyan); fill-opacity: .4; }
 #develop-curve-line { fill: none; stroke: var(--amber); stroke-width: .8; }
 .curve-point { fill: var(--amber); stroke: var(--charcoal); stroke-width: .5; cursor: grab; }
-.curve-point:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
+.curve-point:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; stroke: var(--cyan); stroke-width: 1.2; }
 .develop-row { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr) 5.5rem auto; align-items: center; gap: .5rem; margin: .35rem 0; }
 .develop-row input[type="range"] { min-height: 32px; border: 0; accent-color: var(--amber); }
+.develop-row input[type="range"][data-unset] { accent-color: var(--muted); }
 .develop-row input[type="number"] { padding: .35rem; color: var(--paper); background: var(--graphite); font-variant-numeric: tabular-nums; }
 .develop-row button { padding: .35rem .6rem; }
 .cleanup-group { border-top: 1px solid var(--line); margin-top: 1.25rem; padding-top: 1rem; }
@@ -272,6 +274,7 @@ dialog h2 { margin-top: 0; font-size: 1.1rem; }
 #shortcuts dt, #shortcuts dd { margin: 0; }
 kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px solid var(--line); border-radius: 3px; color: var(--amber); background: var(--graphite); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; }
 .toggle { display: flex; align-items: center; gap: .5rem; min-height: 44px; margin-left: auto; }
+#export-controls .toggle, #loupe .toggle { margin-left: 0; }
 .toggle input { width: 1.2rem; accent-color: var(--amber); }
 .decision-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
 #loupe .frame-panel select { padding: .5rem; color: var(--paper); background: var(--graphite); }
