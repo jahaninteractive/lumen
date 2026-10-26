@@ -2034,7 +2034,8 @@ function updateWorkflow() {
 }
 
 // One [role=tablist]: click, Arrow keys, Home, and End select a tab, show its panel, and remember it under storageKey.
-function wireTablist(selector, storageKey, onSelect = () => {}) {
+// A click on the tab that is already selected calls onReselect instead, when given.
+function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = null) {
   const tabs = Array.from(document.querySelectorAll(`${selector} [role="tab"]`));
   const select = tab => {
     tabs.forEach(item => {
@@ -2047,7 +2048,7 @@ function wireTablist(selector, storageKey, onSelect = () => {}) {
     onSelect(tab);
   };
   tabs.forEach((tab, index) => {
-    tab.addEventListener('click', () => select(tab));
+    tab.addEventListener('click', () => (onReselect && tab.getAttribute('aria-selected') === 'true' ? onReselect(tab) : select(tab)));
     tab.addEventListener('keydown', event => {
       const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
       if (next === undefined) return;
@@ -2071,7 +2072,7 @@ const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
   if (tab.id === 'review-tab') { loadRejectSuggestions(); loadVocabulary(); }
   if (tab.id === 'clear-tab') loadCleared();
-});
+}, () => togglePanel());  // clicking the open tab again folds the panel away, and back
 
 function collapsePanel(collapsed) {
   document.querySelector('#workflow-panels').hidden = collapsed;
@@ -2081,11 +2082,12 @@ function collapsePanel(collapsed) {
     else localStorage.removeItem('lumen-panel-collapsed');
   } catch { /* per-visit only */ }
 }
-document.querySelector('#collapse-panel').addEventListener('click', () => {
+function togglePanel() {
   const collapsed = document.querySelector('#collapse-panel').getAttribute('aria-pressed') !== 'true';
   collapsePanel(collapsed);
   announce(collapsed ? 'Workflow panel collapsed; the contact sheet has the space.' : 'Workflow panel shown.');
-});
+}
+document.querySelector('#collapse-panel').addEventListener('click', togglePanel);
 try {
   selectTab.restore();  // before load(), so the first load fills the right panel; a removed tab stays on Export
   if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
@@ -2100,10 +2102,17 @@ document.querySelector('#back-to-top').addEventListener('click', () => {
   document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });
   announce('Scrolled to the workflow tabs.');
 });
-// Keep scroll-into-view clear of the sticky import bar and tab rail.
+// Keep scroll-into-view clear of the sticky tab row and, where it sticks, the contact sheet's filter bar beneath it.
 if (window.ResizeObserver) {
   const top = document.querySelector('.main-top');
-  new window.ResizeObserver(() => document.documentElement.style.setProperty('--sticky-top', `${top.offsetHeight}px`)).observe(top);
+  const filters = document.querySelector('.contact-top');
+  const observer = new window.ResizeObserver(() => {
+    const pinned = window.getComputedStyle(filters).position === 'sticky' ? filters.offsetHeight : 0;
+    document.documentElement.style.setProperty('--main-top', `${top.offsetHeight}px`);
+    document.documentElement.style.setProperty('--sticky-top', `${top.offsetHeight + pinned}px`);
+  });
+  observer.observe(top);
+  observer.observe(filters);
 }
 function rememberProfile(path) {
   state.profile = path;

@@ -189,7 +189,9 @@ button.danger { color: var(--danger); border-color: var(--danger); background: t
 .recovery { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: .5rem; }
 #photo-count, #keeper-count, #group-cleanup-count, #workspace-cleanup-count { font-variant-numeric: tabular-nums; }
 
-.contact-area { padding: 1.25rem; }
+.contact-area { padding: 0 1.25rem 1.25rem; }
+/* The heading and filter bar stay pinned under the tab row while the sheet scrolls beneath them. */
+.contact-top { position: sticky; top: var(--main-top, 0px); z-index: 1; padding-top: 1.25rem; background: var(--black); }
 .section-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .75rem; }
 .section-heading h1 { margin: 0; font-size: 1.5rem; }
 #photo-count { flex: 1; color: var(--muted); }
@@ -258,7 +260,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .decision-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
 #loupe .frame-panel select { padding: .5rem; color: var(--paper); background: var(--graphite); }
 
-.filter-form { display: grid; gap: .6rem; margin-bottom: 1rem; padding: .75rem; border: 1px solid var(--line); border-radius: 6px; background: var(--charcoal); }
+.filter-form { display: grid; gap: .6rem; margin: 0; margin-bottom: 1rem; padding: .75rem; border: 1px solid var(--line); border-radius: 6px; background: var(--charcoal); }
 .filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; }
 .filter-form p { margin: 0; }
 .filter-form p:empty { display: none; }
@@ -313,6 +315,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   .batch-rail, main { overflow: visible; }
   .batch-rail { border-right: 0; border-bottom: 1px solid var(--line); }
   .input-row { align-items: stretch; flex-direction: column; }
+  .contact-top { position: static; }  /* on a phone the bar is too tall to pin */
   .segmented { gap: .4rem; }
   .segmented label > span, .segmented label:first-of-type > span, .segmented label:last-of-type > span { margin-left: 0; border-radius: 6px; }
   .burst-frames { grid-template-columns: repeat(2, minmax(0, 1fr)); }

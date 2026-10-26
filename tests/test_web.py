@@ -3625,6 +3625,15 @@ const regression = `
     assert.equal(element('#workflow-panels').hidden, false);
     assert.equal(stored['lumen-panel-collapsed'], undefined);
     collapse.listeners.click();
+    const exportTab = element('#export-tab');
+    exportTab.listeners.click();
+    assert.equal(element('#workflow-panels').hidden, false, 'clicking the open tab brings a collapsed panel back');
+    exportTab.listeners.click();
+    assert.equal(element('#workflow-panels').hidden, true, 'and clicking it again folds the panel away');
+    assert.equal(element('#announcer').textContent, 'Workflow panel collapsed; the contact sheet has the space.');
+    element('#review-tab').listeners.click();
+    assert.equal(element('#workflow-panels').hidden, false, 'another tab always shows its panel');
+    assert.equal(element('#review-tab').getAttribute('aria-selected'), 'true');
 
     const headerButtons = sections().flatMap(section => tree(section.children[0]).filter(node => node.tagName === 'BUTTON').map(node => node.textContent));
     assert.deepEqual(headerButtons, [], 'burst headers carry no per-burst action buttons; Clear and Astro tabs own them');

@@ -297,7 +297,10 @@ there is no Apply button. Row one holds tag text with Expand, a status choice
 and Reset. Row two holds the date range, camera, and **Tagged only**. **All**
 hides rejected frames; choose **Rejected** to review them. The heading shows
 "N of M frames" while a filter is on, and carries Tiles, Refine, Compare
-marked, and Shortcuts. Filters live in the page URL, so a reload or
+marked, and Shortcuts. The heading and filter bar stay pinned under the tabs
+while the sheet scrolls; on a phone-width window they scroll with it. Clicking
+the open tab again (Export, Review, …) folds its panel away, and a further
+click brings it back. Filters live in the page URL, so a reload or
 bookmark keeps them. Frames are grouped by capture day and shown 200 at a time;
 the button after the last frame shows the next page. Separate tag-text terms
 with `|` to match any of them (`heron | egret`). **Expand with local AI** asks
