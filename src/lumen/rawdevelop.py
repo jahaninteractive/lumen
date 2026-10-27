@@ -15,6 +15,7 @@ class DevelopError(RuntimeError):
 
 
 HISTOGRAM_CHANNELS = ("y", "r", "g", "b")
+DEVELOP_AMOUNTS = ("contrast", "sharpness", "luminance_nr", "color_nr")
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,9 @@ class DevelopRender:
     # Rec. 709 luma and the three display channels, keyed by HISTOGRAM_CHANNELS.
     # Empty when the helper reported none, or reported a shape this version does not know.
     histogram: dict[str, tuple[float, ...]]
+    # What the decoder itself applies when nothing is asked of it, keyed by DEVELOP_AMOUNTS.
+    # The panel parks each unset handle here; empty when the helper reported none.
+    defaults: dict[str, float]
     neutral_temperature: float
     neutral_tint: float
 
@@ -46,6 +50,23 @@ def _histogram(reported: object) -> dict[str, tuple[float, ...]]:
             return {}
         channels[channel] = tuple(float(bucket) for bucket in buckets)
     return channels
+
+
+def _defaults(reported: object) -> dict[str, float]:
+    """The decoder's own baseline for the four amounts, or nothing.
+
+    Same contract as _histogram: a helper that predates this field, or reports a shape this
+    version does not know, costs the panel its parked positions, not the render.
+    """
+    if not isinstance(reported, dict):
+        return {}
+    amounts: dict[str, float] = {}
+    for amount in DEVELOP_AMOUNTS:
+        value = reported.get(amount)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return {}
+        amounts[amount] = float(value)
+    return amounts
 
 
 def _partial_path(destination: Path) -> Path:
@@ -126,6 +147,7 @@ def render_raw(
             width=int(payload["width"]),
             height=int(payload["height"]),
             histogram=_histogram(payload.get("histogram")),
+            defaults=_defaults(payload.get("defaults")),
             neutral_temperature=float(payload["neutral_temperature"]),
             neutral_tint=float(payload["neutral_tint"]),
         )

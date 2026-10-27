@@ -223,6 +223,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
     static_dir = Path(__file__).parent / "static"
 
     class Handler(BaseHTTPRequestHandler):
+        def handle_one_request(self) -> None:
+            # The browser abandons a render whenever the photographer moves a slider again,
+            # which leaves a dead socket part-way through the reply. Routine, not a fault,
+            # but it reached socketserver as an unhandled error and printed two stack traces
+            # per cancelled render — enough noise to bury a real one. There is nobody left to
+            # answer, so close quietly. Caught here rather than in each route because every
+            # route's own OSError handler would otherwise try to send a 400 down the same
+            # dead socket and fail again.
+            try:
+                super().handle_one_request()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+
         def do_GET(self) -> None:
             if not self._trusted_host():
                 self._send_json({"error": "non-loopback host rejected"}, status=HTTPStatus.FORBIDDEN)
@@ -699,6 +712,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                                               settings=develop.to_dict(), long_edge=edge, image_format="jpeg", histogram=True)
                         image = base64.b64encode(rendered.path.read_bytes()).decode()
                     self._send_json({"image": "data:image/jpeg;base64," + image, "histogram": {channel: list(buckets) for channel, buckets in rendered.histogram.items()},
+                                     "defaults": dict(rendered.defaults),
                                      "neutral_temperature": rendered.neutral_temperature, "neutral_tint": rendered.neutral_tint})
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/composition-review", path)

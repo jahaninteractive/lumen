@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, histogram: {}, controller: null, drag: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, histogram: {}, controller: null, drag: null },
   mergeSelection: new Set(), clearedFrames: 0,
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -2616,7 +2616,12 @@ function drawDevelopWidget() {
   // several times the tallest real bucket, which drew the entire distribution as a flat line
   // along the floor. Scaled to the tallest bucket that is not an end, the shape is readable
   // and the end bars clamp to full height, which is what clipping should look like.
-  const inner = HISTOGRAM_CHANNELS.flatMap(channel => (histogram[channel] || []).slice(1, -1));
+  // The margin is a share of the tonal range, not a bucket count: clipping occupies the top
+  // and bottom couple of percent of display values however finely they are binned, so a fixed
+  // one bucket per end stopped excluding the spike as soon as the resolution rose.
+  const width = Math.max(...HISTOGRAM_CHANNELS.map(channel => (histogram[channel] || []).length), 0);
+  const margin = Math.max(1, Math.round(width * 0.02));
+  const inner = HISTOGRAM_CHANNELS.flatMap(channel => (histogram[channel] || []).slice(margin, -margin));
   const scale = inner.length ? inner : HISTOGRAM_CHANNELS.flatMap(channel => histogram[channel] || []);
   const peak = Math.max(1e-9, ...scale);
   HISTOGRAM_CHANNELS.forEach(channel => {
@@ -2638,7 +2643,12 @@ function drawDevelopWidget() {
 // because the file's baseline for them is not reported and must not be invented.
 function developPark(control) {
   const neutral = { temperature_k: state.develop.neutral?.temperature, tint: state.develop.neutral?.tint }[control.key];
-  return Number.isFinite(neutral) ? neutral : control.park;
+  if (Number.isFinite(neutral)) return neutral;
+  // The decoder's own baseline for this file, which is not the middle of the slider: on a
+  // Sony raw sharpness already decodes at 1.0, so a handle parked at 0.5 invited the
+  // photographer to sharpen further when the only direction available is down.
+  const decoded = state.develop.defaults?.[control.key];
+  return Number.isFinite(decoded) ? developClamp(decoded, control.min, control.max) : control.park;
 }
 
 function syncDevelopControls() {
@@ -2672,7 +2682,7 @@ function fillDevelop(photo) {
   develop.controller?.abort();
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
-    neutral: null, histogram: {}, drag: null, controller: null,
+    neutral: null, defaults: {}, histogram: {}, drag: null, controller: null,
   });
   develop.saved = JSON.stringify(develop.fields);
   const offline = detail.offline === true;
@@ -2715,6 +2725,7 @@ async function renderDevelopPreview() {
   }
   if (controller.signal.aborted || develop.photoId !== photo.id) return;
   develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
+  develop.defaults = result.defaults && typeof result.defaults === 'object' ? result.defaults : {};
   develop.histogram = result.histogram && !Array.isArray(result.histogram) ? result.histogram : {};
   drawDevelopWidget();
   syncDevelopControls();

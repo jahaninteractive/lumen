@@ -12,6 +12,7 @@ RESPONSE = {
     "width": 1100,
     "height": 733,
     "histogram": {"y": [0.5522, 0.0256], "r": [0.4, 0.1], "g": [0.5, 0.2], "b": [0.6, 0.3]},
+    "defaults": {"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.0041, "color_nr": 0.5},
     "neutral_temperature": 3490.1663,
     "neutral_tint": -9.4,
 }
@@ -74,6 +75,20 @@ class RenderRawTests(unittest.TestCase):
         self.assertEqual(render.neutral_temperature, 3490.1663)
         self.assertEqual(render.neutral_tint, -9.4)
         self.assertEqual((1100, 733), (render.width, render.height))
+
+    def test_render_raw_reports_the_decoder_defaults(self):
+        """The panel parks each handle on these, so an invented mid-range would mislead."""
+        render = render_raw(self.source, self.destination, self._responder())
+
+        self.assertEqual({"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.0041, "color_nr": 0.5},
+                         render.defaults)
+
+    def test_render_raw_ignores_defaults_it_cannot_read(self):
+        for shape in ([0.5], {"sharpness": "lots"}, "nonsense", {}):
+            with self.subTest(shape=shape):
+                render = render_raw(self.source, self.destination,
+                                    self._responder({**RESPONSE, "defaults": shape}))
+                self.assertEqual({}, render.defaults)
 
     def test_render_raw_ignores_a_histogram_that_is_not_four_channels(self):
         """An un-rebuilt helper returns a bare list; the render still succeeds."""

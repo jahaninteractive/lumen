@@ -1925,7 +1925,7 @@ class LibraryTests(unittest.TestCase):
                      else Image.new("RGB", (2048, 1536), (118, 118, 118)))
             image.save(destination, format="JPEG", quality=95)
             return DevelopRender(path=Path(destination), width=image.width, height=image.height,
-                                 histogram={}, neutral_temperature=5500.0, neutral_tint=0.0)
+                                 histogram={}, defaults={}, neutral_temperature=5500.0, neutral_tint=0.0)
         return render
 
     def test_save_develop_refuses_empty_settings(self):

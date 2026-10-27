@@ -1,5 +1,8 @@
+import contextlib
 import io
 import json
+import socket
+import struct
 import subprocess
 from io import BytesIO
 import tempfile
@@ -82,6 +85,29 @@ class WebTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=2)
         self.tmp.cleanup()
+
+    def test_a_cancelled_request_does_not_print_a_stack_trace(self):
+        """Moving a slider aborts the render in flight, which leaves a dead socket mid-reply.
+
+        That is routine, not a fault. It used to reach socketserver as an unhandled
+        BrokenPipeError and print two stack traces per cancelled render, which buried real
+        errors in the log.
+        """
+        captured = io.StringIO()
+        with contextlib.redirect_stderr(captured):
+            client = socket.create_connection(("127.0.0.1", self.server.server_port), timeout=3)
+            # app.js is far larger than the socket buffer, so closing without reading a byte
+            # guarantees the server's write fails rather than racing it.
+            client.sendall(b"GET /app.js HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            # SO_LINGER with a zero timeout makes close() send RST rather than FIN, so the
+            # server's write fails outright instead of filling a buffer nobody drains.
+            client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            client.close()
+            # The next request proves the server survived, and gives the failing thread time
+            # to have printed anything it was going to print.
+            self.assertEqual(200, self.get_json("/api/status")[0])
+        self.assertNotIn("Traceback", captured.getvalue())
+        self.assertNotIn("BrokenPipe", captured.getvalue())
 
     def post_json(self, path, payload, headers=None, raw=None):
         request = urllib.request.Request(
@@ -823,7 +849,7 @@ class WebTests(unittest.TestCase):
         def render(source, destination, executable, *, settings=None, long_edge=0,
                    image_format="tiff16", histogram=False, runner=None):
             Image.effect_noise((2048, 1536), 64).convert("RGB").save(destination, format="JPEG", quality=95)
-            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram={},
+            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram={}, defaults={},
                                  neutral_temperature=5500.0, neutral_tint=0.0)
 
         seen = []
@@ -1542,7 +1568,7 @@ const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export
 const developPosts = [];
 let developPolls = 0;
 let developSaveError = null;
-const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.2, 0.4, 0.1], r: [0.1, 0.2, 0.2, 0.1], g: [0.1, 0.1, 0.2, 0.1], b: [0.8, 0.05, 0.1, 0.05] }, neutral_temperature: 5600, neutral_tint: 7 });
+const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.2, 0.4, 0.1], r: [0.1, 0.2, 0.2, 0.1], g: [0.1, 0.1, 0.2, 0.1], b: [0.8, 0.05, 0.1, 0.05] }, defaults: { contrast: 0, sharpness: 1, luminance_nr: 0.004, color_nr: 0.5 }, neutral_temperature: 5600, neutral_tint: 7 });
 const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const refinePosts = [];
 let refinePolls = 0;
@@ -2604,6 +2630,11 @@ const regression = `
     assert.equal(field('exposure_ev').value, '0.50');
     assert.equal(field('contrast').value, '', 'an untouched field shows nothing, because the file sets it');
     assert.equal(element('#develop-temperature_k').value, '5600', "white balance parks on this frame's own neutral");
+    // The decoder already applies full sharpening to a Sony raw. Parked at the slider's
+    // midpoint the handle invited sharpening that cannot happen; it parks on the real value.
+    assert.equal(element('#develop-sharpness').value, '1', 'the handle parks on what the decoder actually applies');
+    assert.equal(element('#develop-contrast').value, '0', 'not the middle of the slider');
+    assert.equal(element('#develop-sharpness').getAttribute('aria-valuetext'), 'not set', 'parking is still not a value this frame sets');
     assert.equal(field('temperature_k').value, '', 'parking a handle is not an edit');
     assert.equal(element('#develop-contrast-reset').disabled, true, 'nothing to reset until a field is set');
     assert.equal(element('#develop-status').textContent, '1 setting applied to this render. Nothing is saved until you leave the frame or export.');
@@ -5239,6 +5270,7 @@ class DevelopWebTests(unittest.TestCase):
             raise DevelopError(f"The raw developer could not develop {Path(source).name}.")
         Image.new("RGB", (64, 48), (200, 100, 50)).save(destination, format="JPEG")
         return DevelopRender(path=Path(destination), width=64, height=48, histogram={"y": (0.1, 0.2), "r": (0.3, 0.4), "g": (0.5, 0.6), "b": (0.7, 0.8)},
+                              defaults={"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.004, "color_nr": 0.5},
                              neutral_temperature=5500.0, neutral_tint=3.0)
 
     post_json = WebTests.post_json

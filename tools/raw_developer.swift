@@ -53,9 +53,9 @@ func curvePoints(_ container: [String: Any]) -> [CGPoint]? {
     return points
 }
 
-/// 64 buckets for each of Rec. 709 luma and the three display channels, from the same render.
+/// 256 buckets for each of Rec. 709 luma and the three display channels, from the same render.
 func channelHistograms(_ image: CIImage, _ context: CIContext, _ displaySpace: CGColorSpace) -> [String: [Double]] {
-    let buckets = 64
+    let buckets = 256  // one per 8-bit display value
     // Bin the pixels actually seen: the histogram is drawn under the tone curve, so it
     // must describe sRGB display values, not Core Image's linear working-space ones.
     let converted = image.matchedFromWorkingSpace(to: displaySpace) ?? image
@@ -174,13 +174,25 @@ guard let rawFilter = CIRAWFilter(imageURL: sourceURL) else {
 let neutralTemperature = rawFilter.neutralTemperature
 let neutralTint = rawFilter.neutralTint
 let nativeSize = rawFilter.nativeSize
+// What this file decodes to with nothing asked of it. These are not mid-range: on a Sony ARW
+// sharpness already sits at 1.0, so a panel that parks its handle at 0.5 tells the
+// photographer they can sharpen further when the only direction available is down.
+let decodedDefaults: [String: Double] = [
+    "contrast": Double(rawFilter.contrastAmount),
+    "sharpness": Double(rawFilter.sharpnessAmount),
+    "luminance_nr": Double(rawFilter.luminanceNoiseReductionAmount),
+    "color_nr": Double(rawFilter.colorNoiseReductionAmount),
+]
 
-if longEdge > 0 {
-    let native = max(nativeSize.width, nativeSize.height)
-    if native > 0 {
-        rawFilter.scaleFactor = Float(min(1.0, longEdge / native))
-    }
-}
+// Decode at native scale and resample afterwards, rather than asking the raw filter for a
+// small image. Core Image skips raw sharpening entirely at scaleFactor <= 0.5 and applies
+// noise reduction in proportion to the scale, so a preview decoded small showed none of the
+// sharpening and about 1/500th of the noise reduction that the full-size export would bake
+// in — the photographer judged those two sliders on a render that did not use them.
+// Measured on a 3504x2336 raw: decoding native costs 0.41s against 0.35s for a 700px decode,
+// because the decode dominates and the resample is nearly free.
+let native = max(nativeSize.width, nativeSize.height)
+let previewScale = longEdge > 0 && native > 0 ? min(1.0, longEdge / native) : 1.0
 
 if let value = optionalNumber(settings, "exposure_ev") { rawFilter.exposure = Float(value) }
 if let value = optionalNumber(settings, "temperature_k") { rawFilter.neutralTemperature = Float(value) }
@@ -192,6 +204,17 @@ if let value = optionalNumber(settings, "color_nr") { rawFilter.colorNoiseReduct
 
 guard var image = rawFilter.outputImage else {
     fail("unable to develop \(sourceURL.lastPathComponent)", 4)
+}
+
+if previewScale < 1.0 {
+    let resample = CIFilter.lanczosScaleTransform()
+    resample.inputImage = image
+    resample.scale = Float(previewScale)
+    resample.aspectRatio = 1
+    guard let scaled = resample.outputImage else {
+        fail("unable to resize \(sourceURL.lastPathComponent)", 4)
+    }
+    image = scaled
 }
 
 if let points = curve {
@@ -252,6 +275,7 @@ var response: [String: Any] = [
     "height": Int(image.extent.height.rounded()),
     "neutral_temperature": Double(neutralTemperature),
     "neutral_tint": Double(neutralTint),
+    "defaults": decodedDefaults,
 ]
 if wantsHistogram {
     response["histogram"] = channelHistograms(image, context, colorSpace)
