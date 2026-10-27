@@ -542,6 +542,8 @@ class ExportCleanupCliTests(unittest.TestCase):
     def render(self, command, **kwargs):
         if command[1:] == ["--version"]:
             return subprocess.CompletedProcess(command, 0, "darktable test", "")
+        if command[0].endswith("exiftool"):
+            return subprocess.CompletedProcess(command, 0, "", "")
         Image.new("RGB", (40, 30), "red").save(
             command[-8], format="TIFF",
             icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),

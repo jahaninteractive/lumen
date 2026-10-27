@@ -942,6 +942,8 @@ class LibraryTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return self.export_runner(command, **kwargs)
+                if command[0].endswith("exiftool"):
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 packet = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">Rendered caption</rdf:li></rdf:Alt></dc:description><dc:subject><rdf:Bag><rdf:li>bird</rdf:li></rdf:Bag></dc:subject></rdf:Description></rdf:RDF>'
                 Image.new("RGB", (30, 20), "blue").save(command[-8], format="TIFF", tiffinfo={700: packet}, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
@@ -985,11 +987,15 @@ class LibraryTests(unittest.TestCase):
     def export_runner(self, command, **kwargs):
         if command[1:] == ["--version"]:
             return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+        if command[0].endswith("exiftool"):
+            return subprocess.CompletedProcess(command, 0, "", "")
         Image.new("RGB", (320, 240), "red").save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
         return subprocess.CompletedProcess(command, 0, "", "")
 
     def os_version_runner(self, command, **kwargs):
-        """The raw-developer route probes the OS version and runs nothing else."""
+        """The raw-developer route probes the OS version and transplants the MakerNote and IPTC; nothing else."""
+        if command[0].endswith("exiftool"):
+            return subprocess.CompletedProcess(command, 0, "", "")
         self.assertTrue(command[0].endswith("sw_vers"), f"nothing but the OS probe may run: {command}")
         return subprocess.CompletedProcess(command, 0, "26.5.1", "")
 

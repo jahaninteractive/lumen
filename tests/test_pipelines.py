@@ -32,8 +32,11 @@ def render_raw_stub(calls, *, size=(80, 60), xmp=None, icc=True):
     return render
 
 
-def os_version_only(test, command, **kwargs):
-    """Runner for the raw-developer route: the OS probe is the only subprocess it may make."""
+def os_probe_and_exiftool(test, command, **kwargs):
+    """Runner for the raw-developer route: the OS probe and the MakerNote/IPTC transplant are the only
+    subprocesses it may make."""
+    if command[0].endswith("exiftool"):
+        return subprocess.CompletedProcess(command, 0, "", "")
     test.assertTrue(command[0].endswith("sw_vers"), f"nothing but the OS probe may run: {command}")
     return subprocess.CompletedProcess(command, 0, "26.5.1\n", "")
 
@@ -54,7 +57,7 @@ class PipelineTests(unittest.TestCase):
             calls = []
             with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub(calls)):
                 result = self.raw_pipeline(root).export_jpeg(
-                    source, runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+                    source, runner=lambda command, **kwargs: os_probe_and_exiftool(self, command, **kwargs))
             self.assertTrue(result.success, result.message)
             self.assertEqual("coreimage", result.settings["decoder"])
             self.assertEqual("macOS 26.5.1 Core Image", result.settings["tool_version"])
@@ -80,7 +83,7 @@ class PipelineTests(unittest.TestCase):
                     with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([], size=(2400, 1600))):
                         result = pipeline.export_jpeg(
                             source, preset=preset, develop={"exposure_ev": 0.5},
-                            runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+                            runner=lambda command, **kwargs: os_probe_and_exiftool(self, command, **kwargs))
                     self.assertTrue(result.success, result.message)
                     with Image.open(result.output) as image:
                         exif = image.getexif()
@@ -100,7 +103,7 @@ class PipelineTests(unittest.TestCase):
             source.write_bytes(b"raw")
             with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([], icc=False)):
                 result = self.raw_pipeline(root).export_jpeg(
-                    source, runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+                    source, runner=lambda command, **kwargs: os_probe_and_exiftool(self, command, **kwargs))
             self.assertFalse(result.success)
             self.assertIn("ICC profile", result.message)
             self.assertIn("coreimage", result.message)
@@ -126,7 +129,7 @@ class PipelineTests(unittest.TestCase):
             calls = []
             with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub(calls)):
                 result = self.raw_pipeline(root).export_jpeg(
-                    source, develop=develop, runner=lambda command, **kwargs: os_version_only(self, command, **kwargs))
+                    source, develop=develop, runner=lambda command, **kwargs: os_probe_and_exiftool(self, command, **kwargs))
             self.assertTrue(result.success, result.message)
             self.assertEqual(develop, calls[0]["settings"])
             self.assertEqual(develop, result.settings["develop"])
@@ -141,6 +144,8 @@ class PipelineTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0].endswith("exiftool"):
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF",
                                                        icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
@@ -166,6 +171,8 @@ class PipelineTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0].endswith("exiftool"):
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 self.assertIn(str(profile.resolve()), command)
                 Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF",
                                                        icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
@@ -208,7 +215,7 @@ class PipelineTests(unittest.TestCase):
             source = root / "DSC1.ARW"
             source.write_bytes(b"raw")
             pipeline = self.raw_pipeline(root)
-            runner = lambda command, **kwargs: os_version_only(self, command, **kwargs)
+            runner = lambda command, **kwargs: os_probe_and_exiftool(self, command, **kwargs)
             with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])):
                 developed = pipeline.export_jpeg(source, develop={"exposure_ev": 0.5}, runner=runner)
                 companion = pipeline.export_jpeg(source, develop=None, stem_suffix="original", runner=runner)
@@ -241,6 +248,8 @@ class PipelineTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0].endswith("exiftool"):
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF", tiffinfo={700: xmp_packet}, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
@@ -271,7 +280,7 @@ class PipelineTests(unittest.TestCase):
             root = Path(directory)
             source = root / "DSC00713.ARW"
             source.write_bytes(b"raw")
-            render = lambda command, **kwargs: os_version_only(self, command, **kwargs)
+            render = lambda command, **kwargs: os_probe_and_exiftool(self, command, **kwargs)
             pipeline = self.raw_pipeline(root)
             with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])):
                 with_alt = pipeline.export_jpeg(source, runner=render, alt_text="Red square")
@@ -286,7 +295,7 @@ class PipelineTests(unittest.TestCase):
             root = Path(directory)
             source = root / "DSC00713.ARW"
             source.write_bytes(b"raw")
-            render = lambda command, **kwargs: os_version_only(self, command, **kwargs)
+            render = lambda command, **kwargs: os_probe_and_exiftool(self, command, **kwargs)
             pipeline = self.raw_pipeline(root)
             with patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])):
                 full = pipeline.export_jpeg(source, runner=render, place="Madikwe Game Reserve", country="South Africa")
@@ -318,7 +327,11 @@ class PipelineTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
                 if command[0] == "/usr/bin/exiftool":
                     work = Path(command[-1]).parent
-                    self.assertEqual(["/usr/bin/exiftool", "-q", "-overwrite_original", "-TagsFromFile", str(work / "render.tif"), "-MakerNotes", str(work / "finished.jpg")], command)
+                    # The second export passes no caption or keywords, so only the prefix is common; the
+                    # IPTC arguments have their own test.
+                    self.assertEqual(["/usr/bin/exiftool", "-q", "-overwrite_original",
+                                      "-TagsFromFile", str(work / "source" / "source.jpg"), "-MakerNotes"], command[:6])
+                    self.assertEqual(str(work / "finished.jpg"), command[-1])
                     self.assertTrue(Path(command[-1]).is_file())
                     return subprocess.CompletedProcess(command, 0, "", "")
                 staged_source = Path(command[1])
@@ -386,6 +399,65 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual("3", xmp.find(".//{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Description").attrib["{http://ns.adobe.com/xap/1.0/}Rating"])
             self.assertEqual(2, len(list((root / "outputs" / "jpeg").iterdir())))
 
+    def test_iptc_and_makernote_are_read_from_the_original_not_the_render(self):
+        """Core Image's TIFF carries no MakerNote, so the transplant has to read the staged original, and
+        Pillow cannot write IPTC IIM at all, so the caption and keywords ride along on the same call."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jpg"
+            source.write_bytes(b"raw")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            commands = []
+
+            def render(command, **kwargs):
+                commands.append(command)
+                if command[1:] == ["--version"]:
+                    return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0] == "/usr/bin/exiftool":
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                Image.new("RGB", (8, 6), "red").save(  # No EXIF at all: the render knows nothing.
+                    command[-8], format="TIFF",
+                    icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("lumen.pipelines.find_tool", return_value="/usr/bin/exiftool"):
+                result = pipeline.export_jpeg(source, description="A red bird \u2014 overcast",
+                                              keywords=["bird", "sky"], runner=render)
+            self.assertTrue(result.success, result.message)
+            copy = next(command for command in commands if command[0] == "/usr/bin/exiftool")
+            work = Path(copy[-1]).parent
+            self.assertEqual([
+                "/usr/bin/exiftool", "-q", "-overwrite_original",
+                "-TagsFromFile", str(work / "source" / "source.jpg"), "-MakerNotes",
+                "-IPTC:CodedCharacterSet=UTF8", "-IPTC:Caption-Abstract=A red bird \u2014 overcast",
+                "-IPTC:Keywords=bird", "-IPTC:Keywords=sky", str(work / "finished.jpg"),
+            ], copy)
+
+    def test_export_without_caption_or_keywords_writes_no_iptc_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jpg"
+            source.write_bytes(b"raw")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            commands = []
+
+            def render(command, **kwargs):
+                commands.append(command)
+                if command[1:] == ["--version"]:
+                    return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0] == "/usr/bin/exiftool":
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                Image.new("RGB", (8, 6), "red").save(
+                    command[-8], format="TIFF",
+                    icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("lumen.pipelines.find_tool", return_value="/usr/bin/exiftool"):
+                result = pipeline.export_jpeg(source, runner=render)
+            self.assertTrue(result.success, result.message)
+            copy = next(command for command in commands if command[0] == "/usr/bin/exiftool")
+            self.assertEqual([], [argument for argument in copy if argument.startswith("-IPTC:")])
+
     def test_makernote_transplant_failure_or_missing_exiftool_fails_export(self):
         for exiftool, outcome in (("/usr/bin/exiftool", 1), (None, None)):
             with self.subTest(exiftool=exiftool), tempfile.TemporaryDirectory() as directory:
@@ -417,6 +489,8 @@ class PipelineTests(unittest.TestCase):
             def fail(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0].endswith("exiftool"):
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 Path(command[-8]).write_bytes(b"partial")
                 raise OSError("runner unavailable")
             result = pipeline.export_jpeg(source, runner=fail)
@@ -432,6 +506,8 @@ class PipelineTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0].endswith("exiftool"):
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(source, crop={"left": .25, "top": 0, "width": .5, "height": 1}, runner=render)
@@ -448,6 +524,8 @@ class PipelineTests(unittest.TestCase):
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
                     return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                if command[0].endswith("exiftool"):
+                    return subprocess.CompletedProcess(command, 0, "", "")
                 image = Image.new("RGB", (80, 60), "red")
                 for x in range(20, 60):
                     for y in range(0, 60):
@@ -471,6 +549,8 @@ class PipelineTests(unittest.TestCase):
         def render(command, **kwargs):
             if command[1:] == ["--version"]:
                 return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+            if command[0].endswith("exiftool"):
+                return subprocess.CompletedProcess(command, 0, "", "")
             exif = Image.Exif()
             exif[271] = "Sony"
             exif[270] = "Rendered caption"
@@ -629,6 +709,8 @@ class PipelineTests(unittest.TestCase):
                 def render(command, **kwargs):
                     if command[1:] == ["--version"]:
                         return subprocess.CompletedProcess(command, 0, "darktable 5.2", "")
+                    if command[0].endswith("exiftool"):
+                        return subprocess.CompletedProcess(command, 0, "", "")
                     Image.new("RGB", (80, 60), "red").save(command[-8], format="TIFF", icc_profile=icc)
                     return subprocess.CompletedProcess(command, 0, "", "")
                 result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(source, runner=render)

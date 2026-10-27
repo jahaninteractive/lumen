@@ -250,15 +250,21 @@ class DarktablePipeline:
                                    develop=develop, alt_text=alt_text,
                                    place=place, country=country,  # A place name travels with every preset; GPS does not.
                                ).encode("utf-8"))
-                if 37500 in capture:
-                    # Pillow copies MakerNote bytes but not their absolute offsets; exiftool rebases them.
-                    exiftool = find_tool("exiftool")
-                    if not exiftool:
-                        raise RuntimeError("exiftool is required to preserve the camera MakerNote")
-                    copied = runner([exiftool, "-q", "-overwrite_original", "-TagsFromFile", str(rendered.output), "-MakerNotes", str(temporary)],
-                                    capture_output=True, text=True, timeout=120, check=False)
-                    if copied.returncode != 0:
-                        raise RuntimeError(f"MakerNote copy failed: {(copied.stderr or copied.stdout).strip()[:200]}")
+                # Both of these need exiftool: Core Image's render carries no MakerNote at all, so the
+                # transplant reads the original (exiftool rebases its absolute offsets), and Pillow cannot
+                # write IPTC IIM, which Photo Mechanic and agency ingests still read instead of XMP.
+                exiftool = find_tool("exiftool")
+                if not exiftool:
+                    raise RuntimeError("exiftool is required to preserve the camera MakerNote and write IPTC")
+                iptc = ([f"-IPTC:Caption-Abstract={effective_description}"] if effective_description else [])
+                iptc += [f"-IPTC:Keywords={keyword}" for keyword in effective_keywords]
+                if iptc:  # Declares the values above as UTF-8; IIM defaults to Latin-1 without it.
+                    iptc.insert(0, "-IPTC:CodedCharacterSet=UTF8")
+                copied = runner([exiftool, "-q", "-overwrite_original", "-TagsFromFile", str(staged_source), "-MakerNotes",
+                                 *iptc, str(temporary)],
+                                capture_output=True, text=True, timeout=120, check=False)
+                if copied.returncode != 0:
+                    raise RuntimeError(f"MakerNote and IPTC copy failed: {(copied.stderr or copied.stdout).strip()[:200]}")
                 fingerprint = fingerprint_file(temporary)
                 # A hard link publishes the complete file atomically and fails if
                 # another export claimed this name in the meantime.
