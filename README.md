@@ -74,16 +74,21 @@ It is a personal tool built for one photographer's workflow and shared as is.
   scores, place, keywords, caption, and crops in one dialog with Frame, Crop, and Develop tabs.
 - Non-destructive crop suggestions with optional local oMLX composition advice,
   plus your own drawn crop with an aspect lock.
-- Typed keywords that survive re-tagging, and per-frame or per-burst place
-  correction that can be remembered for nearby frames.
+- Typed keywords that survive re-tagging, and place correction for one frame,
+  a whole burst, or every frame within a radius you choose, optionally
+  remembered for nearby frames.
 - Non-destructive develop controls (brightness, white balance, contrast,
-  sharpness, noise reduction, tone curve) that show on the sheet and are baked
-  into exported JPEGs.
+  sharpness, clarity, lens correction, noise reduction, tone curve) that show
+  on the sheet and are baked into exported JPEGs.
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
 - sRGB JPEG export for the current photo, all keepers, or the frames the contact sheet filters show, with Full (quality 92,
   full resolution), Share (2048 px), and Web (1600 px) presets, optional
   watermark and darktable XMP profile; the keepers export runs as a cancellable
-  background job with a progress dialog.
+  background job with a progress dialog. Each frame lands in a subfolder named
+  for the date it was taken, and every export carries the camera's MakerNote
+  plus IPTC caption and keywords alongside the EXIF and XMP.
+- A status bar that says when the running server is older than the files on
+  disk, so a stale `lumen serve` cannot look current.
 - Guided, reproducible Siril stacking of a confirmed night-sky batch with
   optional darks/flats/biases, progress, cancellation, and retained job logs.
 - Recoverable batch removal and workspace clearing that retain completed exports.
@@ -174,6 +179,14 @@ The server listens only on `127.0.0.1:8765`. To use another library:
 ```sh
 uv run lumen --library "/Volumes/Photo Catalog/Lumen" serve --open
 ```
+
+The line under the header reports the local tools, and reports first when the
+running server is older than the files on disk: the browser is served fresh
+from disk on every request while the Python stays as it was imported, so an
+edit after startup otherwise leaves a stale server looking current and failing
+as whatever validation error fires first. Restart `lumen serve` and reload when
+you see it. Checking out a different revision without changing content does not
+trip it.
 
 ## Ingest or import?
 
@@ -286,16 +299,22 @@ The right column has three remembered tabs:
 At the top, a histogram of the current render shares one box with a tone curve;
 drag any of its five points, or focus one and nudge it with the arrow keys
 (each nudge is announced). Below are sections for Brightness (exposure in
-stops), White Balance (temperature and tint), Contrast, Sharpness, and Noise
-Reduction (luminance and colour). Every control has a slider, a number box, and
+stops), White Balance (temperature and tint), Contrast, Sharpness (sharpness
+and clarity, a wide unsharp mask for mid-tone structure), Lens Correction (one
+box, disabled when the file carries no profile), and Noise Reduction, which
+offers **Auto** (the decoder's own judgement), **Off**, and **Manual** with
+luminance and colour amounts. Every slider has a number box and
 its own Reset; **Reset all** and **Reset the curve** undo more at once. A box
 that reads "not set" means Lumen is leaving that setting to the camera's own
 look, which is different from setting it to its middle value. Your changes
 save when you leave the tab or step to another frame, and the frame's tile on
 the sheet is re-rendered to match (the Best badge in a burst does not move).
-Full size shows the developed picture too. **Apply to every frame in this
-burst** copies the settings to each raw in the burst, rejected ones included,
-as a background job; frames that are not raw or whose original is offline are
+Full size re-renders the raw at its own size rather than swapping in the
+camera's embedded JPEG, because sharpness, clarity, and noise reduction act on
+single pixels and a render scaled to the window averages them away. Leaving the
+tab hands the viewer back whatever it was showing before. **Apply to every
+frame in this burst** copies the settings to each raw in the burst, rejected
+ones included, as a background job; frames that are not raw or whose original is offline are
 skipped and counted. **Export this frame** bakes the settings into the JPEG;
 tick **Also export the untouched version** (here or in the Export tab) to get
 a second file named `-lumen-original.jpg` beside it. **Reset all**, then leaving the frame, clears the saved settings and returns
@@ -355,8 +374,26 @@ South Africa" or "Neko Harbour, Antarctica". Protected areas, parks, islands,
 bays, and other landmarks within 25 km win over towns; past that the frame view
 says "near <town>" (populated places within 200 km, then any feature within
 500 km for open sea). The place shows in the frame view beside the coordinates,
-the tag-text filter searches it, you can correct it in the frame view (for the frame or its whole burst, optionally remembered for nearby frames), and tag and caption prompts, keywords (a
+the tag-text filter searches it, and tag and caption prompts, keywords (a
 `places` vocabulary category), and day digests use it.
+
+**Edit place** in the frame view corrects a name the index got wrong, or
+supplies one it could not find at all: open sea, a drifting boat, or anywhere
+the nearest named feature is hundreds of kilometres off. Type the name and
+country, then choose how far the correction reaches:
+
+- the frame alone;
+- **Apply to whole burst** (on by default), every frame in the burst;
+- **Apply to every frame within a radius**, every frame in the catalog whose
+  GPS fix is within the distance set by the 1-20 km slider beside it (5 km by
+  default), across bursts and imports. Use it when a whole anchorage or a
+  morning's drifting shares one name.
+
+Both the radius and **Remember for nearby frames** need a GPS fix on the frame
+you are editing and are disabled without one; the name itself can still be set
+by hand. Remembering adds the name to the local index at this frame's fix,
+where it outranks every looked-up name and survives an index rebuild, so later
+imports from the same spot resolve to it offline.
 
 Names come from a local GeoNames index built from the `.txt` files in
 `vendor/data/geonames/` (or `LUMEN_GEONAMES_DIR`) into
@@ -504,7 +541,12 @@ local AI). Pick a preset: **Full resolution** exports at full available
 resolution, quality 92, sRGB; **Share** resizes to a 2048 px long edge at
 quality 85; **Web** resizes to a 1600 px long edge at quality 82. Capture
 time, camera/lens details, copyright, ratings, descriptions, and keywords are
-retained when available. Full keeps GPS location; Share and Web drop it.
+retained when available. Full keeps GPS location; Share and Web drop it. One
+`exiftool` pass over the finished JPEG copies the camera's MakerNote from the
+original (the renderers write none of their own) and writes the description and
+keywords as IPTC IIM `Caption-Abstract` and `Keywords` in UTF-8, which agency
+ingests and Photo Mechanic read in preference to XMP. `exiftool` is therefore
+required for every export, raw or not.
 **Watermark text** (optional, up to 80 characters) is drawn bottom-right. The
 browser remembers the preset and the watermark.
 
@@ -513,6 +555,12 @@ profile. The browser remembers your explicit selection for the next export.
 **Use camera defaults** clears it. Lumen never automatically selects an XMP
 beside an original. If a remembered file has moved, choose it again or use
 camera defaults.
+
+**Put each frame in a subfolder named for the date it was taken** is on by
+default: the JPEG lands in `<library>/outputs/jpeg/<Mon-DD-YYYY>/`, dated from
+the capture time stored for the frame, so one export spanning several days
+splits into one folder per day. A frame the camera dated nowhere goes to
+`Unknown-Date/`. Untick it to write straight into `jpeg/`.
 
 The panel shows the managed destination and every successful output's exact
 path. **Show outputs in Finder** opens only `<library>/outputs/jpeg/`, whose
