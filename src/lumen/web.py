@@ -790,13 +790,15 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/place", path)
                 if match:
-                    if payload.keys() != {"name", "country", "scope", "remember"} or not (
+                    if payload.keys() != {"name", "country", "scope", "remember", "radius_km"} or not (
                             isinstance(payload["name"], str) and isinstance(payload["country"], str)
-                            and isinstance(payload["scope"], str) and isinstance(payload["remember"], bool)):
-                        raise ValueError("place requires name, country and scope strings and a remember boolean")
+                            and isinstance(payload["scope"], str) and isinstance(payload["remember"], bool)
+                            and isinstance(payload["radius_km"], (int, float)) and not isinstance(payload["radius_km"], bool)):
+                        raise ValueError("place requires name, country and scope strings, a remember boolean and a radius_km number")
                     with Library(settings) as library:
                         self._send_json(library.set_place(int(match.group(1)), payload["name"], payload["country"],
-                                                          scope=payload["scope"], remember=payload["remember"]))
+                                                          scope=payload["scope"], remember=payload["remember"],
+                                                          radius_km=float(payload["radius_km"])))
                     return
                 match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
                 if match:

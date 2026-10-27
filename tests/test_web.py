@@ -1740,7 +1740,7 @@ async function fetch(url, options = {}) {
     const body = JSON.parse(options.body);
     placePosts.push(body);
     if (!body.name.trim()) { ok = false; payload = { error: 'place name must be 1-80 characters and country at most 60' }; }
-    else payload = { photo_ids: body.scope === 'burst' ? [1, 2] : [Number(url.split('/')[3])], name: body.name, country: body.country || null, remembered: body.remember };
+    else payload = { photo_ids: body.scope === 'frame' ? [Number(url.split('/')[3])] : [1, 2], name: body.name, country: body.country || null, remembered: body.remember };  // radius_km rides along; the server decides who is near
   }
   else if (url === '/api/digests') {
     assert.equal(options.method, 'POST');
@@ -3967,6 +3967,12 @@ const regression = `
     assert.equal(tree(element('#inspection')).find(node => node.tagName === 'LABEL' && node.htmlFor === 'place-name').textContent, 'Place name');
     assert.equal(byId('place-burst').checked, true, 'the whole burst by default');
     assert.equal(byId('place-burst').parent.children[1], ' Apply to whole burst');
+    assert.equal(byId('place-nearby').checked, false, 'the wider radius is opt-in');
+    assert.equal(byId('place-nearby').parent.children[1], ' Apply to every frame within a radius');
+    assert.ok(!byId('place-nearby').disabled, 'a GPS fix allows the radius');
+    assert.deepEqual([byId('place-radius').value, byId('place-radius').min, byId('place-radius').max], [5, 1, 20]);
+    assert.equal(byId('place-radius').disabled, true, 'the slider waits for the checkbox');
+    assert.equal(byId('place-radius-km').textContent, '5 km');
     assert.equal(byId('place-remember').checked, true);
     assert.ok(!byId('place-remember').disabled, 'a GPS fix allows remembering');
     byId('place-cancel').listeners.click();
@@ -3980,23 +3986,36 @@ const regression = `
     byId('place-name').value = 'Our camp';
     byId('place-country').value = 'Botswana';
     await submit();
-    assert.deepEqual(placePosts.at(-1), { name: 'Our camp', country: 'Botswana', scope: 'burst', remember: true });
+    assert.deepEqual(placePosts.at(-1), { name: 'Our camp', country: 'Botswana', scope: 'burst', remember: true, radius_km: 5 });
     assert.equal(element('#announcer').textContent, 'Place set to Our camp on 2 frames, remembered');
     assert.deepEqual(state.groups[0].photos.map(item => [item.place, item.place_country]), [['Our camp', 'Botswana'], ['Our camp', 'Botswana']]);
     assert.ok(byId('location').textContent.startsWith('Place: Our camp, Botswana'), byId('location').textContent);
     assert.equal(byId('place-form').hidden, true);
     assert.equal(focused, byId('edit-place'), 'focus returns to Edit place after saving');
+    byId('edit-place').listeners.click();
+    byId('place-nearby').checked = true;
+    byId('place-nearby').listeners.change();
+    assert.equal(byId('place-radius').disabled, false, 'checking the box frees the slider');
+    byId('place-radius').value = 12;
+    byId('place-radius').listeners.input();
+    assert.equal(byId('place-radius-km').textContent, '12 km');
+    await submit();
+    assert.deepEqual(placePosts.at(-1), { name: 'Our camp', country: 'Botswana', scope: 'nearby', remember: true, radius_km: 12 }, 'the radius outranks the burst');
     await inspect(state.groups[0].photos[1]);
     const remember = byId('place-remember');
     assert.ok(byId('edit-place'), 'a frame without a GPS fix still takes a place by hand');
     assert.equal(remember.disabled, true);
     assert.equal(remember.checked, false);
     assert.equal(byId(remember.getAttribute('aria-describedby')).textContent, 'no GPS fix');
+    assert.equal(byId('place-nearby').disabled, true, 'no fix, no radius');
+    assert.equal(byId('place-nearby').checked, false);
+    assert.equal(byId(byId('place-nearby').getAttribute('aria-describedby')).textContent, 'no GPS fix');
+    assert.equal(byId('place-radius').disabled, true, 'and the slider with it');
     byId('edit-place').listeners.click();
     byId('place-burst').checked = false;
     byId('place-name').value = 'Hide';
     await submit();
-    assert.deepEqual(placePosts.at(-1), { name: 'Hide', country: '', scope: 'frame', remember: false });
+    assert.deepEqual(placePosts.at(-1), { name: 'Hide', country: '', scope: 'frame', remember: false, radius_km: 5 });
     assert.equal(element('#announcer').textContent, 'Place set to Hide on 1 frame');
     assert.equal(byId('location').textContent, 'Place: Hide');
     return;
@@ -4890,10 +4909,12 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(("Madikwe Game Reserve", "South Africa"), (photo["place"], photo["place_country"]))
 
     def test_place_route_validates_and_sets_place(self):
-        valid = {"name": "Our camp", "country": "South Africa", "scope": "frame", "remember": False}
-        for payload in ({}, {k: v for k, v in valid.items() if k != "remember"}, valid | {"scope": "all"},
+        valid = {"name": "Our camp", "country": "South Africa", "scope": "frame", "remember": False, "radius_km": 5}
+        for payload in ({}, {k: v for k, v in valid.items() if k != "remember"},
+                        {k: v for k, v in valid.items() if k != "radius_km"}, valid | {"scope": "all"},
                         valid | {"name": ""}, valid | {"name": "x" * 81}, valid | {"remember": "yes"},
-                        valid | {"extra": 1}, valid | {"country": None}):
+                        valid | {"extra": 1}, valid | {"country": None}, valid | {"radius_km": "5"},
+                        valid | {"radius_km": True}, valid | {"radius_km": 0.9}, valid | {"radius_km": 21}):
             with self.subTest(payload=payload):
                 self.assertEqual(400, self.post_json("/api/photos/1/place", payload)[0])
         self.assertEqual(400, self.post_json("/api/photos/999/place", valid)[0])

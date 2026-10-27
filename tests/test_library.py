@@ -583,6 +583,38 @@ class LibraryTests(unittest.TestCase):
                 with self.assertRaises(ValueError, msg=bad):
                     library.set_place(args.pop("photo_id"), args.pop("name"), args.pop("country"), remember=False, **args)
 
+    def test_set_place_nearby_covers_every_burst_within_the_radius(self):
+        geonames = self.library_dir.parent / "geonames"
+        write_geonames_fixture(geonames)
+        self.image_path.unlink()
+        for name, stamp in (("c0", "20:00:00"), ("c1", "20:00:01"), ("c2", "21:00:00"), ("c3", "22:00:00"), ("c4", "23:00:00")):
+            exif = Image.Exif(); exif[36867] = f"2026:10:22 {stamp}"
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg", exif=exif)
+        with Library(Settings(library_dir=self.library_dir, geonames_dir=geonames)) as library:
+            library.import_path(self.source_dir)
+            photos = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+            fixes = {"c0": (-62.0, -58.0), "c1": (-62.0, -58.0), "c2": (-62.03, -58.02), "c3": (-62.1, -58.0)}
+            for name, (lat, lon) in fixes.items():
+                library.catalog.update_location(photos[name], latitude=lat, longitude=lon, altitude=None)
+            result = library.set_place(photos["c2"], "Deception Island", "Antarctica", scope="nearby", remember=False)
+            self.assertEqual(sorted(photos[name] for name in ("c0", "c1", "c2")), sorted(result["photo_ids"]),
+                             "the default 5 km, across bursts; the 8 km fix and the frame without one stay out")
+            for name in ("c0", "c1", "c2"):
+                photo = library.catalog.get_photo(photos[name])
+                self.assertEqual(("Deception Island", "Antarctica"), (photo.place, photo.place_country))
+                self.assertEqual([{"name": "Deception Island", "country": "Antarctica", "scope": "nearby",
+                                   "remember": False, "radius_km": 5.0}],
+                                 [event.details for event in library.catalog.events_for(photos[name]) if event.kind == "place_edited"])
+            self.assertIsNone(library.catalog.get_photo(photos["c3"]).place, "8 km away keeps its own place")
+            wider = library.set_place(photos["c2"], "Deception Island", "Antarctica", scope="nearby", remember=False, radius_km=12.0)
+            self.assertEqual(sorted(photos[name] for name in ("c0", "c1", "c2", "c3")), sorted(wider["photo_ids"]),
+                             "a wider radius reaches the next anchorage")
+            with self.assertRaises(ValueError, msg="no fix on this frame"):
+                library.set_place(photos["c4"], "Nowhere", "", scope="nearby", remember=False)
+            for bad in (0.9, 21.0):
+                with self.assertRaises(ValueError, msg=bad):
+                    library.set_place(photos["c2"], "Nowhere", "", scope="nearby", remember=False, radius_km=bad)
+
     def test_online_place_lookup_is_opt_in_and_cached_into_the_index(self):
         geonames = self.library_dir.parent / "geonames"
         write_geonames_fixture(geonames)

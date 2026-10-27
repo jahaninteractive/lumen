@@ -25,7 +25,7 @@ from .composition import CropCandidate, generate_candidates
 from .digest import day_facts, render_facts_table
 from .domain import (MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, DevelopSettings, Job,
                      Photo, PhotoEdit)
-from .geonames import Place, PlaceIndex, online_lookup
+from .geonames import Place, PlaceIndex, distance_km, online_lookup
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
@@ -40,6 +40,9 @@ from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
 from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywords, load_blocked, load_vocabulary, match_keywords
 
+
+NEARBY_PLACE_KM = 5.0  # fixes this close share one name: a drifting boat's bursts are all the same spot
+NEARBY_PLACE_RANGE = (1.0, 20.0)  # the photographer's radius; the slider's own bounds
 
 _MUTATION_LOCKS = {}
 _MUTATION_GUARD = threading.Lock()
@@ -205,13 +208,17 @@ class Library:
         return place
 
     @_coordinated
-    def set_place(self, photo_id: int, name: str, country: str, *, scope: str, remember: bool) -> dict:
-        """Photographer's place for a frame or its whole burst; remember adds it to the index at this frame's GPS fix."""
+    def set_place(self, photo_id: int, name: str, country: str, *, scope: str, remember: bool,
+                  radius_km: float = NEARBY_PLACE_KM) -> dict:
+        """Photographer's place for a frame, its burst, or every frame within radius_km; remember adds it to the index."""
         name, country = name.strip(), country.strip() or None
-        if scope not in ("frame", "burst"):
-            raise ValueError("scope must be frame or burst")
+        if scope not in ("frame", "burst", "nearby"):
+            raise ValueError("scope must be frame, burst or nearby")
         if not 1 <= len(name) <= 80 or len(country or "") > 60:
             raise ValueError("place name must be 1-80 characters and country at most 60")
+        low, high = NEARBY_PLACE_RANGE
+        if not low <= radius_km <= high:
+            raise ValueError(f"radius must be {low:g}-{high:g} km")
         photo = self.catalog.get_photo(photo_id)
         if not photo:
             raise ValueError(f"unknown photo ID: {photo_id}")
@@ -219,10 +226,18 @@ class Library:
         if scope == "burst" and photo.group_id is not None:
             targets = next(([int(p["id"]) for p in group["photos"]] for group in self.catalog.list_groups()
                             if group["id"] == photo.group_id), targets)
+        elif scope == "nearby":
+            if photo.latitude is None or photo.longitude is None:
+                raise ValueError("scope nearby needs a GPS fix on this frame")
+            # ponytail: linear scan of the catalog; add an rtree over photos if a six-figure library drags
+            targets = [other.id for other in self.catalog.list_photos()
+                       if other.latitude is not None and other.longitude is not None
+                       and distance_km(photo.latitude, photo.longitude, other.latitude, other.longitude) <= radius_km]
         for target in targets:
             self._drop_place_keywords(target, {name.casefold(), (country or "").casefold()})
             self.catalog.update_place(target, place=name, country=country)
-            self.catalog.append_event(target, "place_edited", {"name": name, "country": country, "scope": scope, "remember": remember})
+            self.catalog.append_event(target, "place_edited", {"name": name, "country": country, "scope": scope, "remember": remember}
+                                      | ({"radius_km": radius_km} if scope == "nearby" else {}))
             self._write_sidecar(target)
         remembered = remember and self.places is not None and photo.latitude is not None and photo.longitude is not None
         if remembered:

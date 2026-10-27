@@ -632,7 +632,7 @@ function locationLine(photo, record) {
   return [line, link, ...placeEditor(photo, record)];
 }
 
-// The photographer names the place for this frame or its burst; remembering adds it to the local index at this GPS fix.
+// The photographer names the place for this frame, its burst, or every frame inside a radius they set; remembering adds it to the local index at this GPS fix.
 function placeEditor(photo, record) {
   const edit = document.createElement('button');
   edit.type = 'button';
@@ -658,27 +658,57 @@ function placeEditor(photo, record) {
   };
   const name = field('place-name', 'Place name', record?.place, 80);
   const country = field('place-country', 'Country', record?.place_country, 60);
-  const check = (id, text) => {
+  const check = (id, text, checked = true) => {
     const label = document.createElement('label');
     label.className = 'check';
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.id = id;
-    input.checked = true;
+    input.checked = checked;
     label.append(input, ` ${text}`);
     form.append(label);
     return input;
   };
   const burst = check('place-burst', 'Apply to whole burst');
+  const nearby = check('place-nearby', 'Apply to every frame within a radius', false);
+  const radiusRow = document.createElement('div');
+  radiusRow.className = 'place-radius';
+  const radiusLabel = document.createElement('label');
+  radiusLabel.htmlFor = 'place-radius';
+  radiusLabel.textContent = 'Radius';
+  const radius = document.createElement('input');
+  radius.type = 'range';
+  radius.id = 'place-radius';
+  radius.min = 1;
+  radius.max = 20;
+  radius.step = 1;
+  radius.value = 5;
+  const reading = document.createElement('output');
+  reading.id = 'place-radius-km';
+  reading.htmlFor = 'place-radius';
+  const showRadius = () => {
+    reading.textContent = `${radius.value} km`;
+    radius.setAttribute('aria-valuetext', `${radius.value} kilometres`);
+  };
+  showRadius();
+  radius.addEventListener('input', showRadius);
+  radiusRow.append(radiusLabel, radius, reading);
+  form.append(radiusRow);
+  const followNearby = () => { radius.disabled = !nearby.checked; };  // the radius only means something for that scope
+  followNearby();
+  nearby.addEventListener('change', followNearby);
   const remember = check('place-remember', 'Remember for nearby frames');
   if (record?.latitude == null || record?.longitude == null) {
-    remember.checked = false;
-    remember.disabled = true;
     const reason = document.createElement('span');
     reason.id = 'place-no-fix';
     reason.className = 'quiet';
     reason.textContent = 'no GPS fix';
-    remember.setAttribute('aria-describedby', reason.id);
+    for (const input of [nearby, remember]) {  // both need this frame's fix
+      input.checked = false;
+      input.disabled = true;
+      input.setAttribute('aria-describedby', reason.id);
+    }
+    followNearby();
     form.append(reason);
   }
   const actions = document.createElement('div');
@@ -702,7 +732,8 @@ function placeEditor(photo, record) {
   cancel.addEventListener('click', () => show(false));
   form.addEventListener('submit', event => {
     event.preventDefault();
-    return savePlace(photo, { name: name.value, country: country.value, scope: burst.checked ? 'burst' : 'frame', remember: remember.checked });
+    const scope = nearby.checked ? 'nearby' : burst.checked ? 'burst' : 'frame';  // the wider choice wins
+    return savePlace(photo, { name: name.value, country: country.value, scope, remember: remember.checked, radius_km: Number(radius.value) });
   });
   if (state.placeFocus) { state.placeFocus = false; window.setTimeout(() => edit.focus(), 0); }
   return [edit, form];

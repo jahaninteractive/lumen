@@ -1,8 +1,10 @@
 # Lumen implementation handoff
 
-Last updated: 2026-10-27 (Africa/Johannesburg) — IPTC and MakerNote on every export, on `main`
+Last updated: 2026-10-27 (Africa/Johannesburg) — place by GPS radius, on `main`
 
 ## Resume here
+
+**Place by GPS radius (2026-10-27, on `main`; full suite 674 warning-strict OK; needs a `lumen serve` restart).** Frames shot on a drifting boat carry GPS but no place within the GeoNames radius, so the photographer names it by hand — and had to repeat that burst by burst. `Library.set_place` now takes a third scope, `nearby`: every catalogued frame whose fix is within `library.NEARBY_PLACE_KM` (5 km) of this frame's, across bursts and imports. It needs a fix on this frame (`ValueError` otherwise), and the Edit place form grows an opt-in "Apply to every frame within a radius" box that outranks "Apply to whole burst", plus a 1-20 km slider (default 5, `#place-radius`, with a `km` readout) that the box enables. Both are disabled, like Remember, when the frame has no fix. `radius_km` is now a **required** key on `POST /api/photos/<id>/place` for every scope, validated as a non-boolean number inside `NEARBY_PLACE_RANGE`, and it is recorded in the `place_edited` event only for scope `nearby`. The scan is linear over `catalog.list_photos()` — marked `ponytail:`, since the radius is not worth an rtree at this catalog size. Verified by tests only; no browser screenshot was taken of the new slider row (`.place-radius`, a 3-column grid like `.develop-row`).
 
 **IPTC and MakerNote on every export (2026-10-27, on `main`; full suite 673 warning-strict OK; verified against real ARW exports, not only tests; needs a `lumen serve` restart).** Reported as "no EXIF in the exported JPEG"; the EXIF, GPS, description, keywords and XMP were all landing correctly (Finder's Get Info simply shows none of it). Two things genuinely were not:
 - **MakerNote.** `export_jpeg` copied `-MakerNotes` from `rendered.output` and only when tag 37500 was found there. Core Image's `writeTIFFRepresentation` writes no MakerNote, so on the raw route the branch never fired: 23 of 524 exports in the live library had one, all old darktable renders. The transplant now reads `staged_source`, the original, which is right for both decoders.
