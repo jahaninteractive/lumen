@@ -1542,7 +1542,7 @@ const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export
 const developPosts = [];
 let developPolls = 0;
 let developSaveError = null;
-const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.5, 1, 0.2], r: [0.2, 0.2, 0.2, 0.2], g: [0.3, 0.1, 0.2, 0.4], b: [0.05, 0.6, 0.1, 0.25] }, neutral_temperature: 5600, neutral_tint: 7 });
+const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.2, 0.4, 0.1], r: [0.1, 0.2, 0.2, 0.1], g: [0.1, 0.1, 0.2, 0.1], b: [0.8, 0.05, 0.1, 0.05] }, neutral_temperature: 5600, neutral_tint: 7 });
 const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const refinePosts = [];
 let refinePolls = 0;
@@ -1583,6 +1583,7 @@ const cropId = 'crop-1111111111111111';
 let activeCrop = null;
 let reviewMode = 'success';
 let networkDown = false;  // the browser's fetch itself fails, as when lumen serve restarts mid-request
+let routeMissing = false;  // the route is absent, so the stdlib answers with an HTML error page, not JSON
 let cropLoads = 0;
 const cropRequests = [];
 let deferCropLoads = false;
@@ -1601,6 +1602,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   if (holdUrls.delete(url)) return new Promise(resolve => heldReplies.push(() => resolve(fetch(url, options))));
   if (networkDown) throw new TypeError('NetworkError when attempting to fetch resource.');
+  if (routeMissing) return { ok: false, status: 404, json: async () => { throw new SyntaxError("Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON"); } };
   if (url.startsWith('/full/')) return { ok: false, status: fullStatus, json: async () => ({}) };
   let payload;
   let ok = true;
@@ -2582,6 +2584,11 @@ const regression = `
     assert.equal(viewport.children[0].className, 'fit');
     assert.equal(element('#develop-histogram-y').getAttribute('d').startsWith('M0.00,60'), true, 'the luma band is drawn behind the curve');
     assert.ok(['y', 'r', 'g', 'b'].every(channel => element('#develop-histogram-' + channel).getAttribute('d')), 'every channel starts shown');
+    // B holds 0.8 in its first bucket, above every other bucket in the fixture. Scaled to it,
+    // the rest of the distribution would draw flat along the floor; the end buckets are left
+    // out of the scale, so Y's 0.4 is the tallest bar and B's clipped bucket clamps to it.
+    assert.ok(element('#develop-histogram-y').getAttribute('d').includes(',0.00'), "the tallest bucket that is not clipping reaches the top");
+    assert.ok(element('#develop-histogram-b').getAttribute('d').startsWith('M0.00,60L0.00,0.00'), 'a clipped end bucket clamps to full height');
     // Y holds the tallest bucket in this fixture, so hiding it is what would rescale the rest
     // if the scale were taken over the shown channels instead of all four.
     const beforeHiding = element('#develop-histogram-r').getAttribute('d');
@@ -3777,6 +3784,13 @@ const regression = `
     assert.equal(element('#ai-status').dataset.phase, 'failed');
     assert.equal(element('#ai-status').textContent, 'Composition review failed: Lumen server unreachable. If you just restarted lumen serve, reload this page.');
     networkDown = false;
+    // A route the server does not have answers with the stdlib's HTML error page, not JSON.
+    // Reading the body before the status turned a plain 404 into "Unexpected token '<'",
+    // which is what a lumen serve older than the page it is serving looked like.
+    routeMissing = true;
+    await askCompositionAI();
+    assert.equal(element('#ai-status').textContent, 'Composition review failed: Request failed (404). Lumen may be older than this page: restart lumen serve and reload.');
+    routeMissing = false;
     return;
   }
   if (scenario === 'place-line') {

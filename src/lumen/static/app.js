@@ -25,12 +25,23 @@ async function request(url, options = {}) {
   } catch {  // fetch itself failed: the server went away, as when lumen serve restarts mid-request
     throw new Error('Lumen server unreachable. If you just restarted lumen serve, reload this page.');
   }
-  const payload = await response.json();
+  // A route this server does not have answers with the stdlib's HTML error page, not JSON.
+  // Reading the body before the status reported that page as "Unexpected token '<'", which
+  // named neither the status nor the likely cause.
+  let payload = {};
+  let unreadable = false;
+  try {
+    payload = await response.json();
+  } catch {
+    unreadable = true;
+  }
   if (!response.ok) {
-    const error = new Error(payload.error || `Request failed (${response.status})`);
+    const stale = unreadable ? ' Lumen may be older than this page: restart lumen serve and reload.' : '';
+    const error = new Error((payload.error || `Request failed (${response.status}).`) + stale);
     error.payload = payload;
     throw error;
   }
+  if (unreadable) throw new Error('Lumen sent a reply this page could not read.');
   return payload;
 }
 
@@ -2599,7 +2610,15 @@ function drawDevelopWidget() {
   // One scale for all four, taken over every channel whether shown or not: the bands are
   // counts of the same pixels, so a shared scale is what makes their heights comparable, and
   // a fixed one means toggling a channel does not silently rescale the three left behind.
-  const peak = Math.max(1e-9, ...HISTOGRAM_CHANNELS.flatMap(channel => histogram[channel] || []));
+  //
+  // The end buckets are left out of it. Clipped pixels all land in the first or last bucket,
+  // and on a frame that clips — a sunset against a black silhouette — that one bucket ran
+  // several times the tallest real bucket, which drew the entire distribution as a flat line
+  // along the floor. Scaled to the tallest bucket that is not an end, the shape is readable
+  // and the end bars clamp to full height, which is what clipping should look like.
+  const inner = HISTOGRAM_CHANNELS.flatMap(channel => (histogram[channel] || []).slice(1, -1));
+  const scale = inner.length ? inner : HISTOGRAM_CHANNELS.flatMap(channel => histogram[channel] || []);
+  const peak = Math.max(1e-9, ...scale);
   HISTOGRAM_CHANNELS.forEach(channel => {
     const buckets = shownChannels[channel] ? histogram[channel] || [] : [];
     developNode(`develop-histogram-${channel}`).setAttribute('d', histogramPath(buckets, peak));
