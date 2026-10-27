@@ -18,7 +18,7 @@ from .astro import RECIPES
 from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups, preview_version
 from .config import Settings
-from .diagnostics import doctor_report
+from .diagnostics import doctor_report, stale_sources
 from .digest import parse_day
 from .domain import MANUAL_CROP_ID, DevelopSettings
 from .jobs import LocalJobRunner
@@ -247,6 +247,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 return
             if path == "/api/status":
                 self._send_json(doctor_report(settings) | {
+                    "stale": stale_sources(settings),
                     "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
                     "astro_output_dir": str((settings.output_dir / "astro").resolve()),
                     "ingest_output_dir": str((settings.output_dir / "ingest").resolve()),

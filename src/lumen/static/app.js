@@ -1330,9 +1330,18 @@ async function load() {
   }
   // A server older than this page answers without omlx_roles; the sheet must still render, so the status line only reports it.
   const roleText = role => `${role} ${status.omlx_roles[role].model} ${status.omlx_roles[role].loaded ? 'loaded' : 'not loaded'}`;
-  document.querySelector('#system-status').textContent = status.omlx_roles
+  const systemStatus = document.querySelector('#system-status');
+  const tools = status.omlx_roles
     ? `${status.omlx_live.summary} · ${roleText('fast')} · ${roleText('review')}`
     : `${status.omlx_live?.summary || 'Status unavailable'} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
+  // Static files are read from disk on every request while the Python stays as it was
+  // imported, so a stale server looks current and fails as whatever validation error comes
+  // first. It goes ahead of the tool summary because nothing else here is actionable until
+  // it is dealt with.
+  const stale = Array.isArray(status.stale) ? status.stale : [];
+  systemStatus.textContent = [...stale, tools].join(' · ');
+  if (stale.length) systemStatus.setAttribute('data-stale', '');
+  else systemStatus.removeAttribute('data-stale');
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
   if (!resumed && state.selectedId === null) {  // only a fresh page resumes the frame inspected before the reload

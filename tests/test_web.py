@@ -1635,6 +1635,7 @@ async function fetch(url, options = {}) {
   let payload;
   let ok = true;
   if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
+  else if (url === '/api/status' && scenario === 'stale-server') payload = { omlx_live: { summary: 'Ready' }, stale: ['This server is running code older than the files on disk. Restart it with lumen serve, then reload this page.'], omlx_roles: { fast: { model: 'm', loaded: true }, review: { model: 'm', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
   else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
@@ -1994,6 +1995,7 @@ const regression = `
     assert.equal(element('#tag-keepers').textContent, 'Tag keepers with local AI (2 keepers)');
     const state_ = loaded ? 'loaded' : 'not loaded';
     assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + state_ + ' · review Qwen3.8-27B-4bit ' + state_);
+    assert.equal(element('#system-status').getAttribute('data-stale'), undefined, 'a current server carries no warning');
     const aiTree = node => [node, ...(node.children || []).flatMap(aiTree)];
     if (!loaded) {
       assert.equal(element('#assist-keepers').disabled, true, 'the combined run waits for both models');
@@ -3798,6 +3800,17 @@ const regression = `
     assert.equal(state.selectedGroupId, 2);
     return;
   }
+  if (scenario === 'stale-server') {
+    await load();
+    const line = element('#system-status');
+    // Ahead of the tool summary: nothing else on this line can be acted on until the server
+    // is restarted, and the failure it causes looks like anything but a stale server.
+    assert.ok(line.textContent.startsWith('This server is running code older than the files on disk.'), line.textContent);
+    assert.ok(line.textContent.includes('Ready'), 'the tool summary is still there');
+    assert.equal(line.getAttribute('data-stale'), '', 'and it is marked so it reads as a warning');
+    assert.equal(document.querySelectorAll('.frame').length, 2, 'the sheet still renders');
+    return;
+  }
   if (scenario === 'status-skew') {
     await load();
     assert.equal(document.querySelectorAll('.frame').length, 2, 'the sheet renders even when the status payload lacks the AI role block');
@@ -4781,6 +4794,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_page_still_renders_when_server_status_predates_the_page(self):
         self.run_javascript_cleanup_regression("status-skew")
+
+    def test_javascript_status_bar_leads_with_a_stale_server(self):
+        self.run_javascript_cleanup_regression("stale-server")
 
     def test_javascript_ai_status_bar_reports_running_done_and_failed(self):
         self.run_javascript_cleanup_regression("ai-status")

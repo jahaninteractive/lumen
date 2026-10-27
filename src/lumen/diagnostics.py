@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,48 @@ from .geonames import PlaceIndex
 from .omlx import ROLES, OmlxError, get_server_status
 from .astro import probe_siril
 from .tools import tool_status
+
+
+_PACKAGE_DIR = Path(__file__).resolve().parent
+_HELPER_SOURCE = _PACKAGE_DIR.parents[1] / "tools" / "raw_developer.swift"
+
+
+def source_digest() -> str:
+    """A fingerprint of the Python this package is made of."""
+    digest = hashlib.sha256()
+    for path in sorted(_PACKAGE_DIR.glob("*.py")):
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+# Taken as the process loads. The server serves static files from disk on every request but
+# keeps the Python it imported at startup, so the page always looks current even when the
+# routes behind it are not. Comparing this later is how it notices.
+LOADED_DIGEST = source_digest()
+
+
+def stale_sources(settings: Settings, loaded_digest: str | None = None) -> list[str]:
+    """Why a restart or a rebuild is needed, in words the photographer can act on.
+
+    Reaches the browser, so it names no paths: the contract forbids them in responses.
+    """
+    reasons: list[str] = []
+    try:
+        if source_digest() != (LOADED_DIGEST if loaded_digest is None else loaded_digest):
+            reasons.append("This server is running code older than the files on disk. "
+                           "Restart it with lumen serve, then reload this page.")
+    except OSError:  # an unreadable source tree is not something to report as staleness
+        pass
+    helper = settings.raw_developer_path
+    try:
+        if _HELPER_SOURCE.is_file() and helper.is_file() \
+                and _HELPER_SOURCE.stat().st_mtime > helper.stat().st_mtime:
+            reasons.append("The raw developer was changed but not rebuilt. "
+                           "Run scripts/bootstrap.sh, then reload this page.")
+    except OSError:
+        pass
+    return reasons
 
 
 def doctor_report(settings: Settings) -> dict[str, Any]:
