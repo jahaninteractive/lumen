@@ -2667,6 +2667,44 @@ const regression = `
     lens.listeners.change();
     await settled();
     assert.ok(!('lens_correction' in state.develop.fields), 'unchecking removes it rather than sending false');
+
+    // Full size on the Develop tab renders the raw again rather than swapping in the
+    // camera's embedded JPEG, which shows none of the photographer's settings.
+    const full = element('#loupe-full');
+    developPosts.length = 0;
+    full.listeners.click();
+    await settled();
+    assert.deepEqual(developPosts.map(post => post.body.long_edge), [0], "zoomed, the panel asks for the raw's own size");
+    assert.equal(full.getAttribute('aria-pressed'), 'true');
+    assert.notEqual(viewport.children[0].className, 'fit', 'at 1:1 the image is not scaled to the viewport');
+    assert.equal(viewport.children[0].src, 'data:image/jpeg;base64,RENDER', 'it is the develop render, not /full/');
+    // A setting changed while zoomed stays zoomed, or sharpening cannot be judged at all.
+    developPosts.length = 0;
+    const sharp = element('#develop-sharpness');
+    sharp.value = '0.2';
+    sharp.listeners.change();
+    await settled();
+    assert.deepEqual(developPosts.map(post => post.body.long_edge), [0], 'still at full size after a change');
+    developPosts.length = 0;
+    full.listeners.click();
+    await settled();
+    assert.deepEqual(developPosts.map(post => post.body.long_edge), [800], 'toggling off returns to the viewport size');
+    assert.equal(viewport.children[0].className, 'fit');
+    element('#develop-sharpness-reset').listeners.click();  // leave the frame as this scenario's later checks expect it
+    await settled();
+    developPosts.length = 0;
+    // Leaving the tab while zoomed hands the viewport back: the other tabs' full-size button
+    // means the camera's embedded JPEG, and cannot toggle a develop render back out.
+    full.listeners.click();
+    await settled();
+    assert.equal(full.getAttribute('aria-pressed'), 'true');
+    element('#crop-tab').listeners.click();
+    await settled();
+    assert.equal(full.getAttribute('aria-pressed'), 'false', 'the develop zoom is handed back');
+    assert.equal(viewport.children[0].className, 'fit');
+    element('#develop-tab').listeners.click();
+    await settled();
+    developPosts.length = 0;
     assert.equal(field('temperature_k').value, '', 'parking a handle is not an edit');
     assert.equal(element('#develop-contrast-reset').disabled, true, 'nothing to reset until a field is set');
     assert.equal(element('#develop-status').textContent, '1 setting applied to this render. Nothing is saved until you leave the frame or export.');
@@ -5364,8 +5402,18 @@ class DevelopWebTests(unittest.TestCase):
         self.assertEqual(200, self.preview(long_edge=10**9)[0])
         self.assertEqual(2048, self.calls[0]["long_edge"])
 
+    def test_develop_preview_renders_native_for_a_zero_long_edge(self):
+        """Zoomed to 1:1, the panel asks for the raw's own size.
+
+        Sharpening and noise reduction act on single pixels, so a preview scaled down to the
+        viewport cannot show them however it was decoded. The viewport clamp does not apply:
+        the raw's own dimensions already bound the request.
+        """
+        self.assertEqual(200, self.preview(long_edge=0)[0])
+        self.assertEqual(0, self.calls[0]["long_edge"])
+
     def test_develop_preview_rejects_a_bad_long_edge(self):
-        for value in (-1, 0, 1.5, "512", True, None):
+        for value in (-1, 1.5, "512", True, None):
             self.assertEqual(400, self.preview(long_edge=value)[0], value)
         self.assertEqual([], self.calls)
 

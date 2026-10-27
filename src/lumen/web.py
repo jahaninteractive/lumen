@@ -700,13 +700,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json(self._develop_reply(photo_id, develop))
                         return
                     edge = payload["long_edge"]
-                    if type(edge) is not int or edge < 1:
-                        raise ValueError("long_edge must be a positive integer")
+                    # Zero means the raw's own size: zoomed to 1:1 the panel needs the pixels
+                    # sharpening and noise reduction act on, which no scaled render can show.
+                    if type(edge) is not int or edge < 0:
+                        raise ValueError("long_edge must be zero or a positive integer")
                     with Library(settings) as library:
                         photo = library.catalog.get_photo(photo_id)
                         if not photo:
                             raise ValueError("unknown photo")
-                        edge = min(edge, library.previews.max_size)
+                        # The viewport clamp bounds an arbitrary number; a native request is
+                        # already bounded by the file's own dimensions.
+                        edge = edge if edge == 0 else min(edge, library.previews.max_size)
                     with tempfile.TemporaryDirectory(prefix=".develop-preview-", dir=settings.cache_dir) as directory:
                         rendered = render_raw(Path(photo.path), Path(directory) / "preview.jpg", settings.raw_developer_path,
                                               settings=develop.to_dict(), long_edge=edge, image_format="jpeg", histogram=True)

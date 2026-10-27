@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, histogram: {}, controller: null, drag: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, controller: null, drag: null },
   mergeSelection: new Set(), clearedFrames: 0,
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -2387,6 +2387,12 @@ function toggleFullSize() {
   if (!photo || fullButton.disabled) return;
   cropDrag = null;
   const redrawCrop = () => drawCropOverlay(shownCropRect());
+  if (developOwnsFullSize()) {
+    const zoom = fullButton.getAttribute('aria-pressed') !== 'true';
+    fullButton.setAttribute('aria-pressed', String(zoom));
+    announce(zoom ? 'Full size, rendering from the raw' : 'Preview size');
+    return renderDevelopPreview();
+  }
   if (fullButton.getAttribute('aria-pressed') === 'true') {
     showPreview(loupeViewport, photo, undefined, redrawCrop, true);
     fullButton.textContent = 'Full size';
@@ -2394,6 +2400,7 @@ function toggleFullSize() {
     return announce('Preview size');
   }
   fullButton.setAttribute('aria-pressed', 'true');  // a second z while it loads returns to the preview
+  state.develop.zoomShown = false;  // this branch shows the camera's JPEG, not a develop render
   const image = showPreview(loupeViewport, photo, `/full/${photo.id}?${photo.preview_url.split('?')[1] || ''}`, loaded => {
     if (loupeViewport.children[0] !== image) return;  // stepped on or toggled off while it loaded
     redrawCrop();
@@ -2483,7 +2490,16 @@ const cropOverlay = document.querySelector('#crop-overlay');
 const cropOutline = document.querySelector('#crop-outline');
 const cropLock = document.querySelector('#crop-lock');
 const selectFrameTab = wireTablist('#frame-tabs', 'lumen-frame-tab', tab => {
-  if (tab.id === 'develop-tab') renderDevelopPreview();  // the panel's render is also the histogram's source
+  if (tab.id === 'develop-tab') return renderDevelopPreview();  // the panel's render is also the histogram's source
+  // Only a develop render needs handing back. The embedded JPEG at full size belongs to the
+  // Frame and Crop tabs, and resetting that would throw away a zoom the photographer set.
+  if (!state.develop.zoomShown) return;
+  const photo = photoById(state.selectedId);
+  if (!photo) return;
+  fullButton.setAttribute('aria-pressed', 'false');
+  fullButton.textContent = 'Full size';
+  state.develop.zoomShown = false;
+  showPreview(loupeViewport, photo, undefined, () => drawCropOverlay(shownCropRect()), true);
 });
 loupeViewport.addEventListener('keydown', event => {
   if (event.key === 'Escape' && cropDrag) {  // cancel the drag; the dialog never sees this Escape
@@ -2642,6 +2658,16 @@ function drawDevelopWidget() {
 
 // White balance parks on this frame's own neutral, which the last render reported; the amounts park mid-range,
 // because the file's baseline for them is not reported and must not be invented.
+// The Develop tab renders its own full size, so the button means something different there:
+// the camera's embedded JPEG shows none of the photographer's settings.
+function developOwnsFullSize() {
+  return state.develop.ready && developNode('develop-tab').getAttribute('aria-selected') === 'true';
+}
+
+function developZoomed() {
+  return developOwnsFullSize() && fullButton.getAttribute('aria-pressed') === 'true';
+}
+
 function developPark(control) {
   const neutral = { temperature_k: state.develop.neutral?.temperature, tint: state.develop.neutral?.tint }[control.key];
   if (Number.isFinite(neutral)) return neutral;
@@ -2693,7 +2719,7 @@ function fillDevelop(photo) {
   develop.controller?.abort();
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
-    neutral: null, defaults: {}, lensCorrection: true, histogram: {}, drag: null, controller: null,
+    neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, drag: null, controller: null,
   });
   develop.saved = JSON.stringify(develop.fields);
   const offline = detail.offline === true;
@@ -2720,9 +2746,12 @@ async function renderDevelopPreview() {
   develop.controller?.abort();
   const controller = new AbortController();
   develop.controller = controller;
-  const edge = Math.max(640, Math.round(Math.max(loupeViewport.clientWidth || 0, loupeViewport.clientHeight || 0)));
+  // Zoomed, ask for the raw's own size: sharpening and noise reduction act on single pixels,
+  // so a render scaled to the viewport cannot show them however carefully it was decoded.
+  const zoomed = developZoomed();
+  const edge = zoomed ? 0 : Math.max(640, Math.round(Math.max(loupeViewport.clientWidth || 0, loupeViewport.clientHeight || 0)));
   const status = developNode('develop-status');
-  status.textContent = 'Rendering this frame from the raw…';
+  status.textContent = zoomed ? 'Rendering this frame from the raw at full size…' : 'Rendering this frame from the raw…';
   let result;
   try {  // only the render is a render failure; a bug in the drawing below must not be reported as one
     result = await request(`/api/photos/${photo.id}/develop/preview`, {
@@ -2741,9 +2770,20 @@ async function renderDevelopPreview() {
   develop.histogram = result.histogram && !Array.isArray(result.histogram) ? result.histogram : {};
   drawDevelopWidget();
   syncDevelopControls();
-  showPreview(loupeViewport, photo, result.image, () => drawCropOverlay(shownCropRect()), true);
-  fullButton.textContent = 'Full size';  // the viewport now holds the develop render, not the full-size JPEG
-  fullButton.setAttribute('aria-pressed', 'false');
+  showPreview(loupeViewport, photo, result.image, loaded => {
+    drawCropOverlay(shownCropRect());
+    if (!zoomed) return;
+    fullButton.textContent = `Full size, ${loaded.naturalWidth} by ${loaded.naturalHeight}`;
+    // Hold the middle of the frame rather than the corner, as the embedded-JPEG path does.
+    loupeViewport.scrollLeft = (loupeViewport.scrollWidth - loupeViewport.clientWidth) / 2;
+    loupeViewport.scrollTop = (loupeViewport.scrollHeight - loupeViewport.clientHeight) / 2;
+  }, !zoomed);
+  develop.zoomShown = zoomed;
+  fullButton.disabled = false;  // this tab renders its own full size, so an unreadable embedded JPEG is no bar
+  if (!zoomed) {
+    fullButton.textContent = 'Full size';  // the viewport now holds the develop render, not the full-size JPEG
+    fullButton.setAttribute('aria-pressed', 'false');
+  }
   const touched = Object.keys(develop.fields).length;
   status.textContent = touched ? `${touched} setting${touched === 1 ? '' : 's'} applied to this render. Nothing is saved until you leave the frame or export.` : 'The frame as the camera recorded it.';
 }
