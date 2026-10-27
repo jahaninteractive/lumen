@@ -29,6 +29,9 @@ class DevelopRender:
     # What the decoder itself applies when nothing is asked of it, keyed by DEVELOP_AMOUNTS.
     # The panel parks each unset handle here; empty when the helper reported none.
     defaults: dict[str, float]
+    # Whether this file carries a profile Core Image can correct against; the panel only
+    # offers the checkbox when it does, because not every body and lens pair has one.
+    lens_correction_supported: bool
     neutral_temperature: float
     neutral_tint: float
 
@@ -148,6 +151,7 @@ def render_raw(
             height=int(payload["height"]),
             histogram=_histogram(payload.get("histogram")),
             defaults=_defaults(payload.get("defaults")),
+            lens_correction_supported=payload.get("lens_correction_supported") is True,
             neutral_temperature=float(payload["neutral_temperature"]),
             neutral_tint=float(payload["neutral_tint"]),
         )

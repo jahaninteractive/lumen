@@ -48,7 +48,10 @@ class CropRect:
 DEVELOP_RANGES = {
     "exposure_ev": (-3.0, 3.0), "temperature_k": (2000, 12000), "tint": (-150, 150),
     "contrast": (0.0, 1.0), "sharpness": (0.0, 1.0), "luminance_nr": (0.0, 1.0), "color_nr": (0.0, 1.0),
+    "clarity": (0.0, 1.0),
 }
+# Applied after the decode rather than being an amount the decoder already has a value for.
+DEVELOP_FLAGS = ("lens_correction",)
 CURVE_POINTS = 5
 
 
@@ -79,6 +82,10 @@ class DevelopSettings:
                                     float(_develop_number(y, 0, 1, "curve y"))) for x, y in value)
                 if any(a[0] >= b[0] for a, b in zip(clean[key], clean[key][1:])):
                     raise ValueError("develop curve x values must strictly ascend")
+            elif key in DEVELOP_FLAGS:
+                if not isinstance(value, bool):
+                    raise ValueError(f"develop {key} must be true or false")
+                clean[key] = value
             elif key in DEVELOP_RANGES:
                 clean[key] = _develop_number(value, *DEVELOP_RANGES[key], key)
             else:

@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, histogram: {}, controller: null, drag: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, histogram: {}, controller: null, drag: null },
   mergeSelection: new Set(), clearedFrames: 0,
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -2566,6 +2566,7 @@ const DEVELOP_CONTROLS = [
   { key: 'sharpness', label: 'Sharpness', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
   { key: 'luminance_nr', label: 'Luminance noise reduction', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
   { key: 'color_nr', label: 'Colour noise reduction', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
+  { key: 'clarity', label: 'Clarity', unit: '', min: 0, max: 1, park: 0, decimals: 2 },
 ];
 const CURVE_IDENTITY = [[0, 0], [0.25, 0.25], [0.5, 0.5], [0.75, 0.75], [1, 1]];
 const CURVE_GAP = 0.01;  // the server rejects equal x values, so a dragged point stops short of its neighbour
@@ -2669,6 +2670,16 @@ function syncDevelopControls() {
     developNode(`develop-${control.key}-reset`).disabled = !ready || !set;
   });
   CURVE_IDENTITY.forEach((_point, index) => developNode(`develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
+  const lens = developNode('develop-lens_correction');
+  lens.checked = fields.lens_correction === true;
+  // A frame whose file carries no profile gets the box disabled rather than hidden, so the
+  // panel's shape does not change from frame to frame.
+  const supported = state.develop.lensCorrection !== false;
+  lens.disabled = !ready || !supported;
+  developNode('develop-lens-note').textContent = ready && !supported
+    ? 'This file carries no lens profile Core Image can correct against.'
+    : 'Uses the profile the camera recorded with the frame.';
+  syncNoiseMode();
   developNode('develop-reset-all').disabled = !ready || (!touched && state.develop.saved === '{}');
   developNode('develop-apply-group').disabled = state.busy || !ready || !touched;
   developNode('develop-export').disabled = developNode('loupe-export').disabled;
@@ -2682,7 +2693,7 @@ function fillDevelop(photo) {
   develop.controller?.abort();
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
-    neutral: null, defaults: {}, histogram: {}, drag: null, controller: null,
+    neutral: null, defaults: {}, lensCorrection: true, histogram: {}, drag: null, controller: null,
   });
   develop.saved = JSON.stringify(develop.fields);
   const offline = detail.offline === true;
@@ -2726,6 +2737,7 @@ async function renderDevelopPreview() {
   if (controller.signal.aborted || develop.photoId !== photo.id) return;
   develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
   develop.defaults = result.defaults && typeof result.defaults === 'object' ? result.defaults : {};
+  develop.lensCorrection = result.lens_correction !== false;
   develop.histogram = result.histogram && !Array.isArray(result.histogram) ? result.histogram : {};
   drawDevelopWidget();
   syncDevelopControls();
@@ -2769,6 +2781,54 @@ function setDevelopField(control, value) {
   announce(value === null ? `${control.label} reset to this file's own value` : `${control.label} ${value.toFixed(control.decimals)}${control.unit}`);
   renderDevelopPreview();
 }
+
+const NR_KEYS = ['luminance_nr', 'color_nr'];
+
+// Auto leaves both amounts unset, so the decoder keeps its own baseline. Off pins both to
+// zero. Manual is any other combination. Derived rather than stored: the mode is a view of
+// the two amounts, and storing it as well would let the two disagree.
+function developNoiseMode() {
+  const fields = state.develop.fields;
+  if (NR_KEYS.every(key => !(key in fields))) return 'auto';
+  if (NR_KEYS.every(key => fields[key] === 0)) return 'off';
+  return 'manual';
+}
+
+function syncNoiseMode() {
+  const mode = developNoiseMode();
+  document.querySelectorAll('input[name="develop-nr-mode"]').forEach(radio => {
+    radio.checked = radio.value === mode;
+    radio.disabled = !state.develop.ready;
+  });
+  developNode('develop-nr-manual').hidden = mode !== 'manual';
+}
+
+function setNoiseMode(mode) {
+  const fields = state.develop.fields;
+  if (mode === 'auto') NR_KEYS.forEach(key => delete fields[key]);
+  else if (mode === 'off') NR_KEYS.forEach(key => { fields[key] = 0; });
+  // Manual starts from whatever the decoder reported for this file, so the first render
+  // after switching looks like the one before it.
+  else NR_KEYS.forEach(key => { fields[key] = developClamp(state.develop.defaults?.[key] ?? 0.5, 0, 1); });
+  syncDevelopControls();
+  announce(`Noise reduction ${mode}`);
+  renderDevelopPreview();
+}
+
+document.querySelectorAll('input[name="develop-nr-mode"]').forEach(radio => {
+  radio.addEventListener('change', () => { if (radio.checked) setNoiseMode(radio.value); });
+});
+
+// Lens correction is a flag, not an amount: present means on, absent means the file's own
+// default, which Core Image leaves off.
+const lensBox = developNode('develop-lens_correction');
+lensBox.addEventListener('change', () => {
+  if (lensBox.checked) state.develop.fields.lens_correction = true;
+  else delete state.develop.fields.lens_correction;
+  syncDevelopControls();
+  announce(`Lens correction ${lensBox.checked ? 'on' : 'off'}`);
+  renderDevelopPreview();
+});
 
 DEVELOP_CONTROLS.forEach(control => {
   const range = developNode(`develop-${control.key}`);

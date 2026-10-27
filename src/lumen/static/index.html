@@ -559,9 +559,30 @@
               <input type="number" id="develop-sharpness-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Sharpness">
               <button type="button" class="secondary" id="develop-sharpness-reset">Reset</button>
             </div>
+            <div class="develop-row">
+              <label for="develop-clarity">Clarity</label>
+              <input type="range" id="develop-clarity" min="0" max="1" step="0.01" value="0">
+              <input type="number" id="develop-clarity-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Clarity">
+              <button type="button" class="secondary" id="develop-clarity-reset">Reset</button>
+            </div>
+            <p class="quiet">Sharpness is the decoder's own, and arrives at full strength, so it only goes down. Clarity is separate: a wide, gentle local contrast that lifts texture.</p>
+          </details>
+          <details>
+            <summary>Lens Correction</summary>
+            <label class="toggle" for="develop-lens_correction"><input type="checkbox" id="develop-lens_correction"> Correct distortion and vignetting</label>
+            <p id="develop-lens-note" class="quiet"></p>
           </details>
           <details>
             <summary>Noise Reduction</summary>
+            <fieldset id="develop-nr-mode">
+              <legend class="sr-only">Noise reduction mode</legend>
+              <div class="scope-options">
+                <label><input type="radio" name="develop-nr-mode" value="auto" checked> Auto &mdash; the decoder's own judgement</label>
+                <label><input type="radio" name="develop-nr-mode" value="off"> Off</label>
+                <label><input type="radio" name="develop-nr-mode" value="manual"> Manual</label>
+              </div>
+            </fieldset>
+            <div id="develop-nr-manual">
             <div class="develop-row">
               <label for="develop-luminance_nr">Luminance</label>
               <input type="range" id="develop-luminance_nr" min="0" max="1" step="0.01" value="0.5">
@@ -574,7 +595,8 @@
               <input type="number" id="develop-color_nr-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Colour noise reduction">
               <button type="button" class="secondary" id="develop-color_nr-reset">Reset</button>
             </div>
-            <p class="quiet">Every raw file arrives with its own baseline noise reduction. A Reset gives that baseline back; it does not set the amount to zero.</p>
+            </div>
+            <p class="quiet">Auto leaves the file's own baseline alone. Off asks for none at all. Manual sets both amounts by hand.</p>
           </details>
           <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own. Your RAW files never change.</p>
           <div class="button-row">

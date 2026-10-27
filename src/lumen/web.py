@@ -712,7 +712,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                                               settings=develop.to_dict(), long_edge=edge, image_format="jpeg", histogram=True)
                         image = base64.b64encode(rendered.path.read_bytes()).decode()
                     self._send_json({"image": "data:image/jpeg;base64," + image, "histogram": {channel: list(buckets) for channel, buckets in rendered.histogram.items()},
-                                     "defaults": dict(rendered.defaults),
+                                     "defaults": dict(rendered.defaults), "lens_correction": rendered.lens_correction_supported,
                                      "neutral_temperature": rendered.neutral_temperature, "neutral_tint": rendered.neutral_tint})
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/composition-review", path)

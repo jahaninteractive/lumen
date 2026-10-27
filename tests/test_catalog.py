@@ -10,7 +10,7 @@ from pathlib import Path
 from lumen.catalog import Catalog, GroupFilters
 from lumen.config import Settings
 from lumen.library import Library
-from lumen.domain import Artifact, DEVELOP_RANGES, DevelopSettings, Job, Photo, PhotoEdit, PhotoMetrics
+from lumen.domain import Artifact, DEVELOP_FLAGS, DEVELOP_RANGES, DevelopSettings, Job, Photo, PhotoEdit, PhotoMetrics
 from lumen.composition import CropRect
 
 
@@ -872,7 +872,8 @@ class DevelopSettingsTests(unittest.TestCase):
         source = (Path(__file__).resolve().parent.parent / "tools" / "raw_developer.swift").read_text()
         block = source.split("let knownSettings = [", 1)[1].split("]", 1)[0]
         known = set(re.findall(r'"([a-z_]+)"', block))
-        self.assertEqual(known, set(DEVELOP_RANGES) | {"curve"})
+        self.assertEqual(known, set(DEVELOP_RANGES) | set(DEVELOP_FLAGS) | {"curve"},
+                         "a setting one side accepts and the other does not is a 400 nobody can explain")
 
 
 class CatalogDevelopTests(unittest.TestCase):

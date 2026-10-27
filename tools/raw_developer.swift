@@ -27,6 +27,16 @@ func optionalNumber(_ container: [String: Any], _ key: String) -> Double? {
     return candidate
 }
 
+/// A key that is present but not a boolean is a hard error, for the same reason as
+/// optionalNumber: a validation gap must not reach the photographer as a dead checkbox.
+func optionalFlag(_ container: [String: Any], _ key: String) -> Bool? {
+    guard let value = container[key] else { return nil }
+    guard isBoolean(value), let flag = value as? Bool else {
+        fail("\(key) must be true or false", invalidRequest)
+    }
+    return flag
+}
+
 func unitCoordinate(_ entry: Any) -> Double? {
     guard !isBoolean(entry), let value = (entry as? NSNumber)?.doubleValue else { return nil }
     guard value.isFinite, value >= 0, value <= 1 else { return nil }
@@ -157,8 +167,13 @@ if let value = request["settings"] {
     }
     settings = dictionary
 }
+// detailAmount is deliberately absent. Core Image exposes it, but measured on this camera's
+// reduced-size lossless raws it is inert: 0.0 and 1.0 differ by 0.0001 mean on the noisiest
+// frame in the library. A slider whose position changes nothing is the fault this panel just
+// finished fixing, so it stays out until a file is found where it bites.
 let knownSettings = ["exposure_ev", "temperature_k", "tint", "contrast",
-                     "sharpness", "luminance_nr", "color_nr", "curve"]
+                     "sharpness", "luminance_nr", "color_nr",
+                     "clarity", "lens_correction", "curve"]
 for key in settings.keys where !knownSettings.contains(key) {
     fail("unknown develop setting \(key)", invalidRequest)
 }
@@ -183,6 +198,9 @@ let decodedDefaults: [String: Double] = [
     "luminance_nr": Double(rawFilter.luminanceNoiseReductionAmount),
     "color_nr": Double(rawFilter.colorNoiseReductionAmount),
 ]
+// Whether this particular file carries a profile Core Image can correct against. Not every
+// body and lens pair does, and a checkbox that silently does nothing is worse than none.
+let lensCorrectionSupported = rawFilter.isLensCorrectionSupported
 
 // Decode at native scale and resample afterwards, rather than asking the raw filter for a
 // small image. Core Image skips raw sharpening entirely at scaleFactor <= 0.5 and applies
@@ -201,20 +219,37 @@ if let value = optionalNumber(settings, "contrast") { rawFilter.contrastAmount =
 if let value = optionalNumber(settings, "sharpness") { rawFilter.sharpnessAmount = Float(value) }
 if let value = optionalNumber(settings, "luminance_nr") { rawFilter.luminanceNoiseReductionAmount = Float(value) }
 if let value = optionalNumber(settings, "color_nr") { rawFilter.colorNoiseReductionAmount = Float(value) }
+if let wanted = optionalFlag(settings, "lens_correction") {
+    // Asking for it on a file that does not support it is the request's mistake, not a
+    // silent no-op: the panel only offers the box when the render says it is supported.
+    guard !wanted || lensCorrectionSupported else {
+        fail("this file has no lens correction profile", invalidRequest)
+    }
+    rawFilter.isLensCorrectionEnabled = wanted
+}
 
 guard var image = rawFilter.outputImage else {
     fail("unable to develop \(sourceURL.lastPathComponent)", 4)
 }
 
-if previewScale < 1.0 {
-    let resample = CIFilter.lanczosScaleTransform()
-    resample.inputImage = image
-    resample.scale = Float(previewScale)
-    resample.aspectRatio = 1
-    guard let scaled = resample.outputImage else {
-        fail("unable to resize \(sourceURL.lastPathComponent)", 4)
+// Clarity is a wide, gentle unsharp mask, the way most editors build it. Its radius is in
+// pixels, so it runs here at native scale and the resample comes last: applied after a
+// preview had been shrunk, the same setting would mean a quarter of the radius and the
+// photographer would be judging an effect the export does not produce.
+if let value = optionalNumber(settings, "clarity"), value > 0 {
+    let clarity = CIFilter.unsharpMask()
+    clarity.inputImage = image
+    // A share of the frame rather than a fixed count, so clarity means the same thing on a
+    // 24MP body and a 61MP one.
+    clarity.radius = Float(native * 0.008)
+    // The slider's full travel maps to 0.5 intensity, not 1.0. Past about 0.5 an unsharp
+    // mask this wide rings visibly around a blown highlight — on a sunset it drew a green
+    // halo around the sun — and a control whose top third is unusable is mis-scaled.
+    clarity.intensity = Float(value * 0.5)
+    guard let clarified = clarity.outputImage else {
+        fail("unable to apply clarity", 5)
     }
-    image = scaled
+    image = clarified.cropped(to: image.extent)  // unsharpMask grows the extent by its radius
 }
 
 if let points = curve {
@@ -229,6 +264,17 @@ if let points = curve {
         fail("unable to apply the tone curve", 5)
     }
     image = curved
+}
+
+if previewScale < 1.0 {
+    let resample = CIFilter.lanczosScaleTransform()
+    resample.inputImage = image
+    resample.scale = Float(previewScale)
+    resample.aspectRatio = 1
+    guard let scaled = resample.outputImage else {
+        fail("unable to resize \(sourceURL.lastPathComponent)", 4)
+    }
+    image = scaled
 }
 
 // MARK: - Write
@@ -276,6 +322,7 @@ var response: [String: Any] = [
     "neutral_temperature": Double(neutralTemperature),
     "neutral_tint": Double(neutralTint),
     "defaults": decodedDefaults,
+    "lens_correction_supported": lensCorrectionSupported,
 ]
 if wantsHistogram {
     response["histogram"] = channelHistograms(image, context, colorSpace)

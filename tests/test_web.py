@@ -18,7 +18,7 @@ from unittest.mock import patch
 from PIL import Image, ImageCms
 
 from lumen.config import Settings
-from lumen.domain import DEVELOP_RANGES, DevelopSettings
+from lumen.domain import DEVELOP_FLAGS, DEVELOP_RANGES, DevelopSettings
 from lumen.library import Library
 from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionReview, OmlxError
@@ -849,7 +849,7 @@ class WebTests(unittest.TestCase):
         def render(source, destination, executable, *, settings=None, long_edge=0,
                    image_format="tiff16", histogram=False, runner=None):
             Image.effect_noise((2048, 1536), 64).convert("RGB").save(destination, format="JPEG", quality=95)
-            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram={}, defaults={},
+            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram={}, defaults={}, lens_correction_supported=False,
                                  neutral_temperature=5500.0, neutral_tint=0.0)
 
         seen = []
@@ -1483,6 +1483,7 @@ const scope = new Element(); scope.value = 'current';
 const presetRadios = ['full', 'share', 'web'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const webRadio = presetRadios[2];
 const recipes = ['tracked', 'untracked'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
+const nrModes = ['auto', 'off', 'manual'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const document = {
   get activeElement() { return focused; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
@@ -1495,6 +1496,7 @@ const document = {
     if (selector === '#frame-tabs [role="tab"]') return frameTabElements;
     if (selector === 'input[name="astro-recipe"]') return recipes;
     if (selector === 'input[name="export-preset"]') return presetRadios;
+    if (selector === 'input[name="develop-nr-mode"]') return nrModes;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
     return byData(selector) || [];
@@ -2635,6 +2637,36 @@ const regression = `
     assert.equal(element('#develop-sharpness').value, '1', 'the handle parks on what the decoder actually applies');
     assert.equal(element('#develop-contrast').value, '0', 'not the middle of the slider');
     assert.equal(element('#develop-sharpness').getAttribute('aria-valuetext'), 'not set', 'parking is still not a value this frame sets');
+
+    // Noise reduction mode is derived from the two amounts, never stored beside them.
+    const nrMode = () => nrModes.find(radio => radio.checked).value;
+    const pick = value => { const radio = nrModes.find(r => r.value === value); nrModes.forEach(r => { r.checked = r === radio; }); radio.listeners.change(); };
+    assert.equal(nrMode(), 'auto', 'an untouched frame leaves the decoder its own baseline');
+    assert.equal(element('#develop-nr-manual').hidden, true, 'the amounts are hidden until they apply');
+    pick('off');
+    await settled();
+    assert.deepEqual([state.develop.fields.luminance_nr, state.develop.fields.color_nr], [0, 0], 'Off asks for none at all');
+    assert.equal(element('#develop-nr-manual').hidden, true);
+    pick('manual');
+    await settled();
+    assert.deepEqual([state.develop.fields.luminance_nr, state.develop.fields.color_nr], [0.004, 0.5],
+      "Manual starts from what the decoder reported, so the first render matches the one before it");
+    assert.equal(element('#develop-nr-manual').hidden, false, 'the amounts appear once they apply');
+    pick('auto');
+    await settled();
+    assert.ok(!('luminance_nr' in state.develop.fields) && !('color_nr' in state.develop.fields), 'Auto leaves both unset');
+
+    // Lens correction is a flag, and the panel only offers it when the file carries a profile.
+    const lens = element('#develop-lens_correction');
+    assert.equal(lens.disabled, false, 'this render reported a profile');
+    lens.checked = true;
+    lens.listeners.change();
+    await settled();
+    assert.equal(state.develop.fields.lens_correction, true);
+    lens.checked = false;
+    lens.listeners.change();
+    await settled();
+    assert.ok(!('lens_correction' in state.develop.fields), 'unchecking removes it rather than sending false');
     assert.equal(field('temperature_k').value, '', 'parking a handle is not an edit');
     assert.equal(element('#develop-contrast-reset').disabled, true, 'nothing to reset until a field is set');
     assert.equal(element('#develop-status').textContent, '1 setting applied to this render. Nothing is saved until you leave the frame or export.');
@@ -4243,7 +4275,17 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for node in (node for node in parser.nodes if node["attrs"].get("class") == "curve-point"):
             self.assertEqual(("slider", "0"), (node["attrs"].get("role"), node["attrs"].get("tabindex")))
         summaries = [" ".join(node["text"].split()) for node in parser.nodes if node["tag"] == "summary" and panel in node["parents"]]
-        self.assertEqual(["Brightness", "White Balance", "Contrast", "Sharpness", "Noise Reduction"], summaries, "IEDT's order")
+        self.assertEqual(["Brightness", "White Balance", "Contrast", "Sharpness", "Lens Correction", "Noise Reduction"],
+                         summaries, "IEDT's order")
+        # Every flag in DEVELOP_FLAGS needs a control, or the server accepts a setting the
+        # panel cannot reach.
+        for flag in DEVELOP_FLAGS:
+            node = by_id[f"develop-{flag}"]
+            self.assertIn(panel, node["parents"], f"{flag} lives in the Develop panel")
+            self.assertEqual("checkbox", node["attrs"]["type"], flag)
+        modes = [node["attrs"]["value"] for node in parser.nodes
+                 if node["attrs"].get("name") == "develop-nr-mode"]
+        self.assertEqual(["auto", "off", "manual"], modes, "auto first: it is what an untouched frame is")
         self.assertIn(by_id["export-controls"], by_id["export-keep-original"]["parents"])
         self.assertIn(by_id["loupe"], by_id["loupe-keep-original"]["parents"])
         self.assertNotIn(by_id["develop-panel"], by_id["loupe-keep-original"]["parents"])  # both frame-view exports honour it, so both tabs show it
@@ -5271,6 +5313,7 @@ class DevelopWebTests(unittest.TestCase):
         Image.new("RGB", (64, 48), (200, 100, 50)).save(destination, format="JPEG")
         return DevelopRender(path=Path(destination), width=64, height=48, histogram={"y": (0.1, 0.2), "r": (0.3, 0.4), "g": (0.5, 0.6), "b": (0.7, 0.8)},
                               defaults={"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.004, "color_nr": 0.5},
+                              lens_correction_supported=True,
                              neutral_temperature=5500.0, neutral_tint=3.0)
 
     post_json = WebTests.post_json

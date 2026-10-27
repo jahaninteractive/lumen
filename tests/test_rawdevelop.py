@@ -13,6 +13,7 @@ RESPONSE = {
     "height": 733,
     "histogram": {"y": [0.5522, 0.0256], "r": [0.4, 0.1], "g": [0.5, 0.2], "b": [0.6, 0.3]},
     "defaults": {"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.0041, "color_nr": 0.5},
+    "lens_correction_supported": True,
     "neutral_temperature": 3490.1663,
     "neutral_tint": -9.4,
 }
