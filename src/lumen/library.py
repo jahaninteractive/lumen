@@ -108,6 +108,15 @@ class ExportRequest:
     preset: str = "full"
     watermark: str | None = None
     keep_original: bool = False  # Also export the undeveloped version of every developed frame.
+    dated_folder: bool = True  # File each frame under <library>/outputs/jpeg/Oct-18-2026/, its capture date.
+
+
+def _export_folder(photo: Photo, request: ExportRequest) -> str | None:
+    """The subfolder for one frame, named for the day it was taken (the stored camera-local date, as
+    the digests read it). A frame the camera dated nowhere still needs a folder."""
+    if not request.dated_folder:
+        return None
+    return photo.captured_at.strftime("%b-%d-%Y") if photo.captured_at else "Unknown-Date"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1425,6 +1434,8 @@ class Library:
         validate_watermark(request.watermark)
         if type(request.keep_original) is not bool:
             raise ValueError("keep_original must be true or false")
+        if type(request.dated_folder) is not bool:
+            raise ValueError("dated_folder must be true or false")
         if not self.settings.jpeg_output_dir.resolve().is_relative_to(self.settings.library_dir.resolve()):
             raise ValueError("JPEG output must stay inside the managed library")
         # Raws render through the native raw developer, so a library bootstrapped before it existed refuses the
@@ -1443,7 +1454,8 @@ class Library:
         """Export in the background with progress and cancel; failures are counted and logged by basename."""
         self._prepare_export(request)
         manifest = {"kind": "export", "preset": request.preset, "profile": str(request.profile) if request.profile else None,
-                    "keep_original": request.keep_original, "photo_ids": list(request.photo_ids)}
+                    "keep_original": request.keep_original, "dated_folder": request.dated_folder,
+                    "photo_ids": list(request.photo_ids)}
         runner = self.job_runner
         job = self.catalog.create_prepared_job("export", lambda job_id: self._write_job_files(job_id, manifest))
 
@@ -1564,7 +1576,7 @@ class Library:
                     rating=-1 if photo.decision == "reject" else photo.rating,
                     reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
                     preset=request.preset, develop=settings, stem_suffix=stem_suffix, watermark=request.watermark,
-                    place=photo.place, country=photo.place_country)
+                    place=photo.place, country=photo.place_country, subfolder=_export_folder(photo, request))
                 if not rendered.success:
                     if done:  # The developed JPEG published; the companion did not, so neither stands.
                         raise RuntimeError(f"the untouched version failed, so the developed JPEG was withdrawn "

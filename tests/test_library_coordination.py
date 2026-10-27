@@ -97,7 +97,7 @@ class LibraryCoordinationTests(unittest.TestCase):
             moved = self.root / "moved.jpg"
             first.output.rename(moved)
             before = (moved.read_bytes(), moved.stat().st_mtime_ns)
-            archived_path = (self.settings.jpeg_output_dir / "photo-lumen-1.jpg").resolve()
+            archived_path = first.output.with_name("photo-lumen-1.jpg")  # beside the first export, wherever that landed
             archived = library.catalog.save_artifact(None, "old photo.jpg", "old-source", "jpeg", str(archived_path), {}, "old-output")
             archived_event = library.catalog.append_event(None, "exported", {"artifact_id": archived.id})
             second = self.export(library)
@@ -167,7 +167,7 @@ class LibraryCoordinationTests(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertEqual([], exporting.catalog.list_photos())
             self.assertEqual([], list(self.settings.sidecar_dir.iterdir()))
-            self.assertEqual([], list(self.settings.jpeg_output_dir.iterdir()))
+            self.assertEqual([], list(self.settings.jpeg_output_dir.rglob("*.jpg")))
 
     def test_threads_serialize_export_failure_with_export_remove_and_clear(self):
         for action in ("export", "remove", "clear"):

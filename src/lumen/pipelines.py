@@ -125,6 +125,7 @@ class DarktablePipeline:
         caption_used: bool = False, reserved_paths: set[Path] | None = None, preset: str = "full",
         develop: dict[str, object] | None = None, stem_suffix: str | None = None,
         watermark: str | None = None, place: str | None = None, country: str | None = None,
+        subfolder: str | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
         if preset not in EXPORT_PRESETS:
@@ -133,8 +134,9 @@ class DarktablePipeline:
         watermark = validate_watermark(watermark)
         runner = runner or subprocess.run
         source = source.resolve()
-        directory = (self.output_root / "jpeg").resolve()
-        if not directory.is_relative_to(self.output_root):
+        # The caller names the batch's folder; the containment check below still has the last word.
+        directory = (self.output_root / "jpeg" / (subfolder or "")).resolve()
+        if not directory.is_relative_to(self.output_root) or not directory.is_relative_to(self.output_root / "jpeg"):
             raise ValueError("JPEG output must stay inside the managed output directory")
         directory.mkdir(parents=True, exist_ok=True)
         stem = (f"{source.stem}-lumen" + ("" if preset == "full" else f"-{preset}")

@@ -976,7 +976,7 @@ class LibraryTests(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertIn("injected workspace cleanup failure", result.message)
             self.assertEqual(b"existing export", existing.read_bytes())
-            self.assertEqual([existing], list(library.settings.jpeg_output_dir.iterdir()))
+            self.assertEqual([existing], list(library.settings.jpeg_output_dir.rglob("*.jpg")))
             self.assertTrue(workspaces)
             self.assertTrue(all(not Path(work.name).exists() for work in workspaces))
             self.assertEqual([], library.catalog.list_artifacts())
@@ -1042,7 +1042,7 @@ class LibraryTests(unittest.TestCase):
             result = self.raw_export(library, library_module.ExportRequest((photo_id,), None, keep_original=True))[0]
             self.assertTrue(result.success, result.message)
             self.assertEqual({"DSC0001-lumen.jpg", "DSC0001-lumen-original.jpg"},
-                             {path.name for path in library.settings.jpeg_output_dir.iterdir()})
+                             {path.name for path in library.settings.jpeg_output_dir.rglob("*.jpg")})
             self.assertEqual("DSC0001-lumen.jpg", Path(result.output).name)
             artifacts = library.catalog.list_artifacts()
             self.assertEqual([{"exposure_ev": 0.5}, None], [artifact.settings["develop"] for artifact in artifacts])
@@ -1057,7 +1057,7 @@ class LibraryTests(unittest.TestCase):
             request = library_module.ExportRequest((photo_id,), None, "web", keep_original=True)
             result = self.raw_export(library, request)[0]
             self.assertTrue(result.success, result.message)
-            names = {path.name for path in library.settings.jpeg_output_dir.iterdir()}
+            names = {path.name for path in library.settings.jpeg_output_dir.rglob("*.jpg")}
             self.assertIn("DSC0001-lumen-web-original.jpg", names)
             self.assertEqual({"DSC0001-lumen-web.jpg", "DSC0001-lumen-web-original.jpg"}, names)
 
@@ -1073,7 +1073,7 @@ class LibraryTests(unittest.TestCase):
                     request = library_module.ExportRequest((photo_id,), None, keep_original=True)
                     result = self.raw_export(library, request)[0]
                     self.assertTrue(result.success, result.message)
-                    self.assertEqual({"DSC0001-lumen.jpg"}, {path.name for path in library.settings.jpeg_output_dir.iterdir()})
+                    self.assertEqual({"DSC0001-lumen.jpg"}, {path.name for path in library.settings.jpeg_output_dir.rglob("*.jpg")})
                     self.assertEqual([None], [artifact.settings["develop"] for artifact in library.catalog.list_artifacts()])
                     Path(result.output).unlink()  # The next pass must land on the same name, not a collision suffix.
                     library.catalog.discard_export(result.artifact.id)
@@ -1137,6 +1137,33 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(expected, {key: sidecar["artifacts"][0]["settings"][key] for key in expected})
             event = next(event for event in sidecar["provenance"] if event["kind"] == "exported")
             self.assertEqual(expected, {key: event["details"][key] for key in expected})
+
+    def test_export_lands_in_a_folder_named_for_the_capture_date_unless_the_photographer_opts_out(self):
+        self.assertTrue(library_module.ExportRequest((1,)).dated_folder)
+        metadata = {"captured_at": "2026-10-18T19:04:11", "camera_id": "ILCE-7CM2:1", "exposure_seconds": None,
+                    "raw_warning": None, "latitude": None, "longitude": None, "altitude": None}
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            with patch("lumen.library.read_metadata", return_value=metadata):
+                library.import_path(self.image_path)
+            undated = self.source_dir / "DSC0002.jpg"
+            Image.new("RGB", (320, 240), (90, 90, 90)).save(undated, quality=95)
+            with patch("lumen.library.read_metadata", return_value=metadata | {"captured_at": None}):
+                library.import_path(undated)
+            taken, nowhere = sorted(library.catalog.list_photos(), key=lambda photo: photo.path)
+            jpeg = library.settings.jpeg_output_dir.resolve()
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
+                dated, unknown = library.export_jpegs(library_module.ExportRequest((taken.id, nowhere.id), None))
+                loose = library.export_jpegs(library_module.ExportRequest((taken.id,), None, dated_folder=False))[0]
+            self.assertTrue(all(result.success for result in (dated, unknown, loose)),
+                            f"{dated.message}; {unknown.message}; {loose.message}")
+            self.assertEqual(jpeg / "Oct-18-2026" / "DSC0001-lumen.jpg", dated.output, "the day it was taken, not today")
+            self.assertEqual(jpeg / "Unknown-Date" / "DSC0002-lumen.jpg", unknown.output)
+            self.assertEqual(jpeg / "DSC0001-lumen.jpg", loose.output)
+            self.assertEqual(str(dated.output), library.catalog.list_artifacts()[0].path)
+            with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")), \
+                    self.assertRaisesRegex(ValueError, "dated_folder must be true or false"):
+                library.export_jpegs(library_module.ExportRequest((taken.id,), None, dated_folder="yes"))
 
     def test_export_validates_watermark_before_any_job_and_passes_it_to_the_pipeline(self):
         self.assertIsNone(library_module.ExportRequest((1,)).watermark)
@@ -1292,7 +1319,7 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual([False, True], [result.success for result in results])
             self.assertEqual(1, len(library.catalog.list_artifacts()))
             self.assertFalse(any(event.kind == "exported" for event in library.catalog.events_for(ids[0])))
-            self.assertEqual(1, len(list(library.settings.jpeg_output_dir.iterdir())))
+            self.assertEqual(1, len(list(library.settings.jpeg_output_dir.rglob("*.jpg"))))
 
     def test_export_job_counts_outcomes_logs_failures_by_name_and_reports_progress(self):
         second = self.source_dir / "second.jpg"
@@ -1345,7 +1372,7 @@ class LibraryTests(unittest.TestCase):
             self.assertIn("the raw developer could not develop it", result.message)
             self.assertEqual([], library.catalog.list_artifacts())
             self.assertEqual([], [event for event in library.catalog.events_for(photo_id) if event.kind == "exported"])
-            self.assertEqual([], list(library.settings.jpeg_output_dir.iterdir()))
+            self.assertEqual([], list(library.settings.jpeg_output_dir.rglob("*.jpg")))
             sidecar = json.loads(next(library.settings.sidecar_dir.glob("*.lumen.json")).read_text())
             self.assertEqual([], sidecar["artifacts"])
 
@@ -1374,7 +1401,7 @@ class LibraryTests(unittest.TestCase):
                     self.assertIn(f"injected {failure} failure", results[0].message)
                     self.assertEqual([ids[1]], [artifact.photo_id for artifact in library.catalog.list_artifacts()])
                     self.assertFalse(any(event.kind == "exported" for event in library.catalog.events_for(ids[0])))
-                    self.assertEqual(1, len(list(library.settings.jpeg_output_dir.iterdir())))
+                    self.assertEqual(1, len(list(library.settings.jpeg_output_dir.rglob("*.jpg"))))
                     self.assertEqual(before, {path: path.read_bytes() for path in before})
 
     def test_export_reports_compensation_failure_without_reporting_success(self):
@@ -1387,7 +1414,7 @@ class LibraryTests(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertIn("sidecar unavailable", result.message)
             self.assertIn("catalog unavailable", result.message)
-            self.assertEqual([], list(library.settings.jpeg_output_dir.iterdir()))
+            self.assertEqual([], list(library.settings.jpeg_output_dir.rglob("*.jpg")))
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

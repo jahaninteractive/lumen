@@ -88,6 +88,7 @@
               <label><input type="radio" name="export-scope" value="filtered"> Frames the contact sheet filters show <span id="filtered-export-count">0 frames</span></label>
             </div>
             <label class="toggle" for="export-keep-original"><input type="checkbox" id="export-keep-original"> Also export the untouched version</label>
+            <label class="toggle" for="export-dated-folder"><input type="checkbox" id="export-dated-folder" checked> Put each frame in a subfolder named for the date it was taken</label>
             <fieldset id="export-preset">
               <legend>Size</legend>
               <div class="scope-options">
@@ -609,6 +610,7 @@
       </section>
       <div class="button-row">
         <label class="toggle" for="loupe-keep-original"><input type="checkbox" id="loupe-keep-original"> Also export the untouched version</label>
+        <label class="toggle" for="loupe-dated-folder"><input type="checkbox" id="loupe-dated-folder" checked> Subfolder named for the capture date</label>
         <button type="button" id="close-loupe" class="secondary">Close</button>
       </div>
     </div>

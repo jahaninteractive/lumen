@@ -3028,6 +3028,7 @@ async function runExport(scope) {
   const preset = document.querySelector('input[name="export-preset"]:checked').value;
   const payload = { scope, profile: state.profile, preset };
   if (keepOriginal.checked) payload.keep_original = true;
+  if (!datedFolder.checked) payload.dated_folder = false;
   const watermark = document.querySelector('#export-watermark').value.trim();
   if (watermark) payload.watermark = watermark;
   if (scope === 'current') payload.photo_id = state.selectedId;
@@ -3059,10 +3060,18 @@ const exportCurrentFrame = () => runExport('current');
 // The frame dialog carries its own copy, because its export buttons honour it and the export panel is not on screen.
 const keepOriginal = document.querySelector('#export-keep-original');
 const loupeKeepOriginal = document.querySelector('#loupe-keep-original');
+const datedFolder = document.querySelector('#export-dated-folder');
+const loupeDatedFolder = document.querySelector('#loupe-dated-folder');
 for (const [box, other] of [[keepOriginal, loupeKeepOriginal], [loupeKeepOriginal, keepOriginal]]) {
   box.addEventListener('change', () => {
     other.checked = box.checked;
     announce(box.checked ? 'Developed frames will also export their untouched version.' : 'Only the developed version will be exported.');
+  });
+}
+for (const [box, other] of [[datedFolder, loupeDatedFolder], [loupeDatedFolder, datedFolder]]) {
+  box.addEventListener('change', () => {
+    other.checked = box.checked;
+    announce(box.checked ? 'Exports go to a subfolder named for the date each frame was taken.' : 'Exports go straight into the JPEG folder.');
   });
 }
 document.querySelector('#export-jpegs').addEventListener('click', () => runExport(document.querySelector('input[name="export-scope"]:checked').value));

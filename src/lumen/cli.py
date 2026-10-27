@@ -122,6 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--preset", choices=("full", "share", "web"), default="full",
                         help="full: quality 92, keeps GPS; share: 2048 px long edge, quality 85, no GPS; web: 1600 px, quality 82, no GPS")
     export.add_argument("--watermark", metavar="TEXT", help="optional text drawn bottom-right, up to 80 printable characters")
+    export.add_argument("--no-dated-folder", action="store_true",
+                        help="write loose into outputs/jpeg instead of a subfolder named for each frame's capture date")
     export.add_argument("--json", action="store_true")
 
     remove = commands.add_parser("remove", help="remove a group from Lumen with recoverable working files")
@@ -368,7 +370,8 @@ def main(argv: list[str] | None = None) -> int:
                     code = 0
                 elif args.command == "export":
                     photo_ids = (args.photo,) if args.photo is not None else tuple(library.keeper_ids())
-                    results = library.export_jpegs(ExportRequest(photo_ids, args.profile, args.preset, args.watermark))
+                    results = library.export_jpegs(ExportRequest(photo_ids, args.profile, args.preset, args.watermark,
+                                                                dated_folder=not args.no_dated_folder))
                     payload = {"results": [asdict(result) for result in results]}
                     code = 0 if all(result.success for result in results) else 2
                 else:

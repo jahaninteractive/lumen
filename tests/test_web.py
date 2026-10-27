@@ -459,6 +459,23 @@ class WebTests(unittest.TestCase):
                     self.assertEqual(200, code)
         self.assertEqual([True, False], [request.keep_original for request in requests])
 
+    def test_export_defaults_to_a_dated_folder_and_refuses_a_non_boolean(self):
+        with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
+            for value in ("yes", 1, None, []):
+                with self.subTest(value=value):
+                    code, result = self.post_json("/api/export", {"scope": "current", "photo_id": 1, "dated_folder": value})
+                    self.assertEqual((400, "dated_folder must be true or false"), (code, result.get("error")))
+        requests = []
+        with patch("lumen.library.Library.export_jpegs", new=lambda _self, request: requests.append(request) or []):
+            for payload in ({"scope": "current", "photo_id": 1}, {"scope": "current", "photo_id": 1, "dated_folder": False}):
+                with self.subTest(payload=payload):
+                    code, _ = self.post_json("/api/export", payload)
+                    self.assertEqual(200, code)
+        self.assertEqual([True, False], [request.dated_folder for request in requests])
+        markup = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('id="export-dated-folder" checked', markup)
+        self.assertIn('id="loupe-dated-folder" checked', markup)
+
     def test_export_accepts_known_presets_only_and_ui_has_labeled_preset_radios(self):
         with patch("lumen.library.PipelineRegistry.darktable", side_effect=AssertionError("render attempted")):
             for payload in ({"scope": "current", "photo_id": 1, "preset": "x"}, {"scope": "keepers", "preset": 2},
@@ -1837,6 +1854,9 @@ async function fetch(url, options = {}) {
   if (deferGroups && url.startsWith('/api/groups')) { const reply = { ok, json: async () => payload }; return new Promise(resolve => pendingGroups.push(() => resolve(reply))); }
   return { ok, json: async () => payload };
 }
+// Boxes the markup ships checked; the fake elements start unchecked.
+element('#export-dated-folder').checked = true;
+element('#loupe-dated-folder').checked = true;
 `;
 const regression = `
 (async () => {
@@ -2793,6 +2813,15 @@ const regression = `
     element('#export-keep-original').checked = false;
     element('#export-keep-original').listeners.change();
     assert.equal(mirror.checked, false);
+    const dated = element('#loupe-dated-folder');
+    dated.checked = false;
+    dated.listeners.change();
+    assert.equal(element('#export-dated-folder').checked, false, 'the dated-folder boxes stay in step');
+    await element('#develop-export').listeners.click();
+    await flush();
+    assert.equal(exportPosts.at(-1).dated_folder, false, 'unchecking it exports loose into the JPEG folder');
+    dated.checked = true;
+    dated.listeners.change();
 
     await element('#develop-apply-group').listeners.click();
     assert.equal(developPosts.at(-2).url, '/api/photos/1/develop', 'the settings are stored before the job copies them');

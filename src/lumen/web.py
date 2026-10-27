@@ -559,7 +559,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     scope = payload.get("scope")
                     if scope not in ("current", "keepers", "filtered"):
                         raise ValueError("scope must be current, keepers, or filtered")
-                    common = {"scope", "profile", "preset", "watermark", "keep_original"}
+                    common = {"scope", "profile", "preset", "watermark", "keep_original", "dated_folder"}
                     filters = None
                     if scope == "filtered":  # The rest of the body is the contact sheet's filter fields, validated like /api/groups.
                         fields = {key: value for key, value in payload.items() if key not in common}
@@ -580,17 +580,20 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     keep_original = payload.get("keep_original", False)
                     if type(keep_original) is not bool:
                         raise ValueError("keep_original must be true or false")
+                    dated_folder = payload.get("dated_folder", True)
+                    if type(dated_folder) is not bool:
+                        raise ValueError("dated_folder must be true or false")
                     profile_path = Path(profile) if profile is not None else None
                     if scope != "current":  # Many renders: a background job with progress and cancel.
                         with Library(settings, job_runner=self.server.job_runner()) as library:
                             ids = library.keeper_ids() if scope == "keepers" else library.catalog.photos_for_filters(filters)
                             if not ids and scope == "filtered":
                                 raise ValueError("no frames match these filters")
-                            job = library.start_export_job(ExportRequest(tuple(ids), profile_path, preset, watermark, keep_original))
+                            job = library.start_export_job(ExportRequest(tuple(ids), profile_path, preset, watermark, keep_original, dated_folder))
                             self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                         return
                     with Library(settings) as library:
-                        results = library.export_jpegs(ExportRequest((payload["photo_id"],), profile_path, preset, watermark, keep_original))
+                        results = library.export_jpegs(ExportRequest((payload["photo_id"],), profile_path, preset, watermark, keep_original, dated_folder))
                     status = HTTPStatus.OK if all(result.success for result in results) else HTTPStatus.BAD_REQUEST
                     self._send_json({"results": [asdict(result) for result in results]}, status=status)
                     return
