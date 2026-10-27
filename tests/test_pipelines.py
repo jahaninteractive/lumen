@@ -28,7 +28,7 @@ def render_raw_stub(calls, *, size=(80, 60), xmp=None, icc=True):
             destination, format="TIFF", exif=exif.tobytes(), **({"tiffinfo": {700: xmp}} if xmp else {}),
             **({"icc_profile": ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()} if icc else {}))
         return DevelopRender(path=Path(destination), width=size[0], height=size[1],
-                             histogram=(), neutral_temperature=5500.0, neutral_tint=0.0)
+                             histogram={}, neutral_temperature=5500.0, neutral_tint=0.0)
     return render
 
 

@@ -53,15 +53,53 @@ func curvePoints(_ container: [String: Any]) -> [CGPoint]? {
     return points
 }
 
-/// 64 luminance buckets from the same render the photographer is looking at.
-func luminanceHistogram(_ image: CIImage, _ context: CIContext, _ displaySpace: CGColorSpace) -> [Double] {
+/// 64 buckets for each of Rec. 709 luma and the three display channels, from the same render.
+func channelHistograms(_ image: CIImage, _ context: CIContext, _ displaySpace: CGColorSpace) -> [String: [Double]] {
     let buckets = 64
     // Bin the pixels actually seen: the histogram is drawn under the tone curve, so it
     // must describe sRGB display values, not Core Image's linear working-space ones.
-    let display = image.matchedFromWorkingSpace(to: displaySpace) ?? image
-    // Flatten to Rec. 709 luma per pixel *before* binning. Binning each channel and then
-    // weighting the three counts averages three distributions, which is a different curve
-    // once a subject is saturated — and a sunset is exactly that.
+    let converted = image.matchedFromWorkingSpace(to: displaySpace) ?? image
+    // areaHistogram silently drops samples outside 0...1, and converting to sRGB pushes
+    // out-of-gamut channels past 1. Unclamped, a frame with blown reds lost a fifth of its
+    // red pixels from the chart. Clamping piles them into the end buckets, which is where a
+    // photographer expects clipping to show.
+    let clamp = CIFilter.colorClamp()
+    clamp.inputImage = converted
+    clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+    clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+    let display = clamp.outputImage ?? converted
+
+    // One areaHistogram pass, returned as the raw RGBAf samples: buckets * 4 floats.
+    func bins(_ source: CIImage) -> [Float] {
+        let filter = CIFilter.areaHistogram()
+        filter.inputImage = source
+        filter.extent = display.extent
+        filter.count = buckets
+        filter.scale = 1
+        guard let histogram = filter.outputImage else { return [] }
+        var pixels = [Float](repeating: 0, count: buckets * 4)
+        pixels.withUnsafeMutableBytes { raw in
+            // colorSpace nil: these samples are bucket counts, not colours. Converting them
+            // would apply a transfer function to the counts and flatten the shadow buckets.
+            context.render(
+                histogram,
+                toBitmap: raw.baseAddress!,
+                rowBytes: buckets * 4 * 4,
+                bounds: CGRect(x: 0, y: 0, width: buckets, height: 1),
+                format: .RGBAf,
+                colorSpace: nil
+            )
+        }
+        return pixels
+    }
+
+    // areaHistogram bins every channel independently, so one pass over the colour image
+    // already holds R, G and B in sample offsets 0, 1 and 2.
+    let colour = bins(display)
+
+    // Luma needs its own pass. Flatten to Rec. 709 per pixel *before* binning: binning each
+    // channel and then weighting the three counts averages three distributions, which is a
+    // different curve once a subject is saturated — and a sunset is exactly that.
     let weights = CIVector(x: 0.2126, y: 0.7152, z: 0.0722, w: 0)
     let greyscale = CIFilter.colorMatrix()
     greyscale.inputImage = display
@@ -70,28 +108,16 @@ func luminanceHistogram(_ image: CIImage, _ context: CIContext, _ displaySpace: 
     greyscale.bVector = weights
     greyscale.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
     greyscale.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-    guard let luma = greyscale.outputImage else { return [] }
-    let filter = CIFilter.areaHistogram()
-    filter.inputImage = luma
-    filter.extent = display.extent
-    filter.count = buckets
-    filter.scale = 1
-    guard let histogram = filter.outputImage else { return [] }
-    var pixels = [Float](repeating: 0, count: buckets * 4)
-    pixels.withUnsafeMutableBytes { raw in
-        // colorSpace nil: these samples are bucket counts, not colours. Converting them
-        // would apply a transfer function to the counts and flatten the shadow buckets.
-        context.render(
-            histogram,
-            toBitmap: raw.baseAddress!,
-            rowBytes: buckets * 4 * 4,
-            bounds: CGRect(x: 0, y: 0, width: buckets, height: 1),
-            format: .RGBAf,
-            colorSpace: nil
-        )
+    guard let luma = greyscale.outputImage else { return [:] }
+    let grey = bins(luma)
+
+    guard colour.count == buckets * 4, grey.count == buckets * 4 else { return [:] }
+    func channel(_ pixels: [Float], _ offset: Int) -> [Double] {
+        (0..<buckets).map { (index: Int) -> Double in Double(pixels[index * 4 + offset]) }
     }
-    // Every channel now holds the same luma distribution, so one of them is the histogram.
-    return (0..<buckets).map { (index: Int) -> Double in Double(pixels[index * 4]) }
+    // Every channel of the greyscale pass holds the same luma distribution, so offset 0 is it.
+    return ["y": channel(grey, 0), "r": channel(colour, 0),
+            "g": channel(colour, 1), "b": channel(colour, 2)]
 }
 
 // MARK: - Request
@@ -228,7 +254,7 @@ var response: [String: Any] = [
     "neutral_tint": Double(neutralTint),
 ]
 if wantsHistogram {
-    response["histogram"] = luminanceHistogram(image, context, colorSpace)
+    response["histogram"] = channelHistograms(image, context, colorSpace)
 }
 guard let responseData = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]) else {
     discardPartial()

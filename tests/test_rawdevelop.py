@@ -11,7 +11,7 @@ from lumen.rawdevelop import DevelopError, DevelopRender, _partial_path, render_
 RESPONSE = {
     "width": 1100,
     "height": 733,
-    "histogram": [0.5522, 0.0256],
+    "histogram": {"y": [0.5522, 0.0256], "r": [0.4, 0.1], "g": [0.5, 0.2], "b": [0.6, 0.3]},
     "neutral_temperature": 3490.1663,
     "neutral_tint": -9.4,
 }
@@ -69,10 +69,21 @@ class RenderRawTests(unittest.TestCase):
     def test_render_raw_returns_the_histogram_and_neutral_white_balance(self):
         render = render_raw(self.source, self.destination, self._responder(), histogram=True)
 
-        self.assertEqual(render.histogram, (0.5522, 0.0256))
+        self.assertEqual(render.histogram, {"y": (0.5522, 0.0256), "r": (0.4, 0.1),
+                                            "g": (0.5, 0.2), "b": (0.6, 0.3)})
         self.assertEqual(render.neutral_temperature, 3490.1663)
         self.assertEqual(render.neutral_tint, -9.4)
         self.assertEqual((1100, 733), (render.width, render.height))
+
+    def test_render_raw_ignores_a_histogram_that_is_not_four_channels(self):
+        """An un-rebuilt helper returns a bare list; the render still succeeds."""
+        for shape in ([0.1, 0.2], {"y": "not buckets"}, "nonsense", {}):
+            with self.subTest(shape=shape):
+                render = render_raw(self.source, self.destination,
+                                    self._responder({**RESPONSE, "histogram": shape}),
+                                    histogram=True)
+                self.assertEqual({}, render.histogram)
+                self.assertEqual((1100, 733), (render.width, render.height))
 
     def test_render_raw_omits_unset_settings_entirely(self):
         render_raw(self.source, self.destination, self._responder(), settings={})

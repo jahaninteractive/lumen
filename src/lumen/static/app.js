@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, histogram: [], controller: null, drag: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, histogram: {}, controller: null, drag: null },
   mergeSelection: new Set(), clearedFrames: 0,
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -2578,16 +2578,32 @@ function curveText(index) {
   return `point ${index + 1}: input ${Math.round(x * 100)}%, output ${Math.round(y * 100)}%`;
 }
 
-// One widget: the histogram as a stepped path behind the curve, both in the viewBox's own units.
-function drawDevelopWidget() {
-  const buckets = state.develop.histogram;
-  const peak = Math.max(1e-9, ...buckets);
+// Y is Rec. 709 luma, R, G and B the display channels. Shown channels are a preference that
+// outlives the frame, so it is not reset with the per-frame develop state.
+const HISTOGRAM_CHANNELS = ['y', 'r', 'g', 'b'];
+const shownChannels = { y: true, r: true, g: true, b: true };
+
+// One stepped path per channel, in the viewBox's own units.
+function histogramPath(buckets, peak) {
   const step = CURVE_W / Math.max(1, buckets.length);
-  developNode('develop-histogram').setAttribute('d', buckets.map((value, index) => {
+  return buckets.map((value, index) => {
     const [left, right] = [index * step, (index + 1) * step];
     const top = CURVE_H * (1 - developClamp(value / peak, 0, 1));
     return `M${left.toFixed(2)},${CURVE_H}L${left.toFixed(2)},${top.toFixed(2)}L${right.toFixed(2)},${top.toFixed(2)}L${right.toFixed(2)},${CURVE_H}Z`;
-  }).join(''));
+  }).join('');
+}
+
+// One widget: the channel bands as stepped paths behind the curve, both in the viewBox's own units.
+function drawDevelopWidget() {
+  const histogram = state.develop.histogram || {};
+  // One scale for all four, taken over every channel whether shown or not: the bands are
+  // counts of the same pixels, so a shared scale is what makes their heights comparable, and
+  // a fixed one means toggling a channel does not silently rescale the three left behind.
+  const peak = Math.max(1e-9, ...HISTOGRAM_CHANNELS.flatMap(channel => histogram[channel] || []));
+  HISTOGRAM_CHANNELS.forEach(channel => {
+    const buckets = shownChannels[channel] ? histogram[channel] || [] : [];
+    developNode(`develop-histogram-${channel}`).setAttribute('d', histogramPath(buckets, peak));
+  });
   const place = ([x, y]) => `${(x * CURVE_W).toFixed(2)},${((1 - y) * CURVE_H).toFixed(2)}`;
   developNode('develop-curve-line').setAttribute('d', developCurve().map((point, index) => `${index ? 'L' : 'M'}${place(point)}`).join(''));
   developCurve().forEach((point, index) => {
@@ -2637,7 +2653,7 @@ function fillDevelop(photo) {
   develop.controller?.abort();
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
-    neutral: null, histogram: [], drag: null, controller: null,
+    neutral: null, histogram: {}, drag: null, controller: null,
   });
   develop.saved = JSON.stringify(develop.fields);
   const offline = detail.offline === true;
@@ -2680,7 +2696,7 @@ async function renderDevelopPreview() {
   }
   if (controller.signal.aborted || develop.photoId !== photo.id) return;
   develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
-  develop.histogram = Array.isArray(result.histogram) ? result.histogram : [];
+  develop.histogram = result.histogram && !Array.isArray(result.histogram) ? result.histogram : {};
   drawDevelopWidget();
   syncDevelopControls();
   showPreview(loupeViewport, photo, result.image, () => drawCropOverlay(shownCropRect()), true);
@@ -2788,6 +2804,16 @@ CURVE_IDENTITY.forEach((_point, index) => {
     moveCurvePoint(index, x + delta[0], y + delta[1]);
     announce(`Tone curve ${curveText(index)}`);
     renderDevelopPreview();
+  });
+});
+
+// Toggling a channel only redraws: the render it describes is unchanged.
+HISTOGRAM_CHANNELS.forEach(channel => {
+  const box = developNode(`develop-channel-${channel}`);
+  box.addEventListener('change', () => {
+    shownChannels[channel] = box.checked;
+    drawDevelopWidget();
+    announce(`${channel.toUpperCase()} ${box.checked ? 'shown' : 'hidden'}`);
   });
 });
 

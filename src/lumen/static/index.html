@@ -494,8 +494,18 @@
       <section id="develop-panel" role="tabpanel" aria-labelledby="develop-tab" hidden>
         <p id="develop-unavailable" hidden></p>
         <div id="develop-workspace" hidden>
+          <fieldset id="develop-channels">
+            <legend class="sr-only">Histogram channels</legend>
+            <label class="toggle channel-y" for="develop-channel-y"><input type="checkbox" id="develop-channel-y" checked> Y</label>
+            <label class="toggle channel-r" for="develop-channel-r"><input type="checkbox" id="develop-channel-r" checked> R</label>
+            <label class="toggle channel-g" for="develop-channel-g"><input type="checkbox" id="develop-channel-g" checked> G</label>
+            <label class="toggle channel-b" for="develop-channel-b"><input type="checkbox" id="develop-channel-b" checked> B</label>
+          </fieldset>
           <svg id="develop-curve" viewBox="0 0 100 60" role="group" aria-label="Histogram and tone curve">
-            <path id="develop-histogram" aria-hidden="true"></path>
+            <path id="develop-histogram-y" class="histogram-band" aria-hidden="true"></path>
+            <path id="develop-histogram-r" class="histogram-band" aria-hidden="true"></path>
+            <path id="develop-histogram-g" class="histogram-band" aria-hidden="true"></path>
+            <path id="develop-histogram-b" class="histogram-band" aria-hidden="true"></path>
             <path id="develop-curve-line" aria-hidden="true"></path>
             <circle id="develop-point-0" class="curve-point" r="2" cx="0" cy="60" tabindex="0" role="slider" aria-label="Tone curve point 1 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></circle>
             <circle id="develop-point-1" class="curve-point" r="2" cx="25" cy="45" tabindex="0" role="slider" aria-label="Tone curve point 2 of 5" aria-valuemin="0" aria-valuemax="100" aria-valuenow="25"></circle>
@@ -506,7 +516,7 @@
           <div class="button-row">
             <button type="button" id="develop-curve-reset" class="secondary">Reset the curve</button>
           </div>
-          <p class="quiet">The histogram is this render's. Drag a curve point, or focus one and nudge it with the arrow keys.</p>
+          <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping. Drag a curve point, or focus one and nudge it with the arrow keys.</p>
           <details open>
             <summary>Brightness</summary>
             <div class="develop-row">

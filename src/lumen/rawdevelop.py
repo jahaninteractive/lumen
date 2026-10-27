@@ -14,14 +14,38 @@ class DevelopError(RuntimeError):
     """A render failed. The message is safe to show the photographer."""
 
 
+HISTOGRAM_CHANNELS = ("y", "r", "g", "b")
+
+
 @dataclass(frozen=True)
 class DevelopRender:
     path: Path
     width: int
     height: int
-    histogram: tuple[float, ...]
+    # Rec. 709 luma and the three display channels, keyed by HISTOGRAM_CHANNELS.
+    # Empty when the helper reported none, or reported a shape this version does not know.
+    histogram: dict[str, tuple[float, ...]]
     neutral_temperature: float
     neutral_tint: float
+
+
+def _histogram(reported: object) -> dict[str, tuple[float, ...]]:
+    """The four channels, or nothing.
+
+    A helper binary built before the four-channel change reports a bare list. Rather than
+    fail the whole render over a drawing aid, drop the histogram and keep the image: the
+    photographer sees an empty chart and a correct preview, and `scripts/bootstrap.sh`
+    rebuilds the helper.
+    """
+    if not isinstance(reported, dict):
+        return {}
+    channels: dict[str, tuple[float, ...]] = {}
+    for channel in HISTOGRAM_CHANNELS:
+        buckets = reported.get(channel)
+        if not isinstance(buckets, list):
+            return {}
+        channels[channel] = tuple(float(bucket) for bucket in buckets)
+    return channels
 
 
 def _partial_path(destination: Path) -> Path:
@@ -101,7 +125,7 @@ def render_raw(
             path=destination,
             width=int(payload["width"]),
             height=int(payload["height"]),
-            histogram=tuple(float(bucket) for bucket in payload.get("histogram") or ()),
+            histogram=_histogram(payload.get("histogram")),
             neutral_temperature=float(payload["neutral_temperature"]),
             neutral_tint=float(payload["neutral_tint"]),
         )

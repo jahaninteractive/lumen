@@ -823,7 +823,7 @@ class WebTests(unittest.TestCase):
         def render(source, destination, executable, *, settings=None, long_edge=0,
                    image_format="tiff16", histogram=False, runner=None):
             Image.effect_noise((2048, 1536), 64).convert("RGB").save(destination, format="JPEG", quality=95)
-            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram=(),
+            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram={},
                                  neutral_temperature=5500.0, neutral_tint=0.0)
 
         seen = []
@@ -1542,7 +1542,7 @@ const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export
 const developPosts = [];
 let developPolls = 0;
 let developSaveError = null;
-const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: [0.1, 0.5, 1, 0.2], neutral_temperature: 5600, neutral_tint: 7 });
+const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.5, 1, 0.2], r: [0.2, 0.2, 0.2, 0.2], g: [0.3, 0.1, 0.2, 0.4], b: [0.05, 0.6, 0.1, 0.25] }, neutral_temperature: 5600, neutral_tint: 7 });
 const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const refinePosts = [];
 let refinePolls = 0;
@@ -2580,7 +2580,20 @@ const regression = `
       'the saved settings render as they are, at the viewport long edge');
     assert.equal(viewport.children[0].src, 'data:image/jpeg;base64,RENDER', 'the viewport shows the render, whole and uncropped');
     assert.equal(viewport.children[0].className, 'fit');
-    assert.equal(element('#develop-histogram').getAttribute('d').startsWith('M0.00,60'), true, 'the histogram is drawn behind the curve');
+    assert.equal(element('#develop-histogram-y').getAttribute('d').startsWith('M0.00,60'), true, 'the luma band is drawn behind the curve');
+    assert.ok(['y', 'r', 'g', 'b'].every(channel => element('#develop-histogram-' + channel).getAttribute('d')), 'every channel starts shown');
+    // Y holds the tallest bucket in this fixture, so hiding it is what would rescale the rest
+    // if the scale were taken over the shown channels instead of all four.
+    const beforeHiding = element('#develop-histogram-r').getAttribute('d');
+    const luma = element('#develop-channel-y');
+    luma.checked = false;
+    luma.listeners.change();
+    assert.equal(element('#develop-histogram-y').getAttribute('d'), '', 'unchecking a channel removes its band');
+    assert.equal(element('#develop-histogram-r').getAttribute('d'), beforeHiding, 'the other bands keep their scale');
+    assert.equal(element('#announcer').textContent, 'Y hidden', 'the toggle is announced');
+    luma.checked = true;
+    luma.listeners.change();
+    assert.ok(element('#develop-histogram-y').getAttribute('d'), 'checking it back redraws the band');
     assert.equal(field('exposure_ev').value, '0.50');
     assert.equal(field('contrast').value, '', 'an untouched field shows nothing, because the file sets it');
     assert.equal(element('#develop-temperature_k').value, '5600', "white balance parks on this frame's own neutral");
@@ -5211,7 +5224,7 @@ class DevelopWebTests(unittest.TestCase):
             from lumen.rawdevelop import DevelopError
             raise DevelopError(f"The raw developer could not develop {Path(source).name}.")
         Image.new("RGB", (64, 48), (200, 100, 50)).save(destination, format="JPEG")
-        return DevelopRender(path=Path(destination), width=64, height=48, histogram=(0.1, 0.2),
+        return DevelopRender(path=Path(destination), width=64, height=48, histogram={"y": (0.1, 0.2), "r": (0.3, 0.4), "g": (0.5, 0.6), "b": (0.7, 0.8)},
                              neutral_temperature=5500.0, neutral_tint=3.0)
 
     post_json = WebTests.post_json
@@ -5251,7 +5264,7 @@ class DevelopWebTests(unittest.TestCase):
         code, body = self.preview()
         self.assertEqual(200, code)
         self.assertTrue(body["image"].startswith("data:image/jpeg;base64,"))
-        self.assertEqual([0.1, 0.2], body["histogram"])
+        self.assertEqual({"y": [0.1, 0.2], "r": [0.3, 0.4], "g": [0.5, 0.6], "b": [0.7, 0.8]}, body["histogram"])
         self.assertEqual((5500.0, 3.0), (body["neutral_temperature"], body["neutral_tint"]))
         self.assertEqual({"contrast": 0.5}, self.calls[0]["settings"])
         self.assertTrue(self.calls[0]["histogram"])
