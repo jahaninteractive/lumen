@@ -710,4 +710,15 @@ user-session access to Apple's Vision model service.
   pretend-complete stubs.
 - The web server is local-only and has no authentication; do not modify it to
   bind to a LAN address without adding authentication and transport security.
+- Some API responses assume that loopback-only binding. `POST /api/export`
+  serialises its whole provenance record, which carries the source file's
+  SHA-256 fingerprint, the render command line, and absolute paths inside the
+  library and the configured profile. The browser never reads those fields, and
+  `_public_provenance` in `src/lumen/pipelines.py` already strips them from the
+  copy embedded in exported JPEGs, but the HTTP reply is unscrubbed. On
+  `127.0.0.1` that is disclosure to software the photographer already runs; on
+  a LAN or public address it hands library internals to anyone who can reach
+  the port. Treat `AGENTS.md`'s "do not expose source paths, fingerprints, API
+  keys, or raw model output in browser responses" as the rule to restore before
+  any change to where the server binds. Tracked in `docs/BACKLOG.md`.
 

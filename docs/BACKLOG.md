@@ -73,3 +73,25 @@ for every decoder.
 
 Trigger: wanting Sony-specific capture data (lens corrections, creative look,
 focus point) to survive into the JPEG.
+
+## Scrub the provenance record out of the export reply
+
+`POST /api/export` replies with `asdict(ExportResult)` (`src/lumen/web.py`),
+which serialises the nested `Artifact`: `source_fingerprint`,
+`output_fingerprint`, the absolute artifact `path`, and a `settings` dict
+holding the source fingerprint again, the absolute profile path, and the full
+render `command`. `AGENTS.md` forbids exposing source paths and fingerprints in
+browser responses, and `_public_provenance` (`src/lumen/pipelines.py`) is
+exactly the right scrubber — it is applied only to the record embedded in the
+exported JPEG, never to the HTTP reply.
+
+The front end reads only `success`, `output`, `photo_id` and `message`
+(`src/lumen/static/app.js`), so the fix is to stop serialising `artifact` at
+all, or to pass it through `_public_provenance` first. Predates the develop
+controls work, which changed what `command` contains but added no new field.
+Deferred from the `develop-controls` branch to keep an unrelated change out of
+that diff.
+
+Trigger: before the next change to this reply's shape, and mandatory before
+anyone binds the server anywhere but `127.0.0.1`. See the last bullet of
+"Safety and current limits" in `README.md`.
