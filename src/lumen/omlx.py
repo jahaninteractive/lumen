@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .domain import DEVELOP_RANGES, DevelopSettings
+
 
 ROLES = {"fast": "omlx_fast_model", "review": "review_model"}  # role -> Settings attribute naming its model
 PROBLEMS = ("eyes_closed", "motion_blur", "out_of_focus", "subject_cut_off", "obstructed", "misfire",
@@ -19,6 +21,7 @@ SKY_ISSUES = ("haze", "light_pollution", "trailing", "cloud_band")
 CAPTION_MAX = 200
 ALT_TEXT_MAX = 125
 NARRATIVE_MAX = 1500
+DEVELOP_RATIONALE_MAX = 600  # two or three sentences: the explanation is the product, not the numbers
 
 
 class OmlxError(RuntimeError):
@@ -26,6 +29,12 @@ class OmlxError(RuntimeError):
 
 
 class TagResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class DevelopAdviceError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
@@ -124,6 +133,13 @@ class AstroTriage:
 @dataclass(frozen=True, slots=True)
 class DigestNarrative:
     narrative: str
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopAdvice:
+    settings: dict  # a DevelopSettings-valid subset of the renderer's controls; empty means "needs nothing"
+    rationale: str
     raw_response: str
 
 
@@ -231,6 +247,27 @@ def parse_caption_response(raw: str) -> Caption:
         raise CaptionResponseError("oMLX caption must contain no hashtags", raw)
     alt_text = _clip_text(alt_text, ALT_TEXT_MAX, CaptionResponseError, raw, "alt_text")
     return Caption(caption, alt_text, raw)
+
+
+def parse_develop_response(raw: str) -> DevelopAdvice:
+    """Proposed develop settings, validated by the same DevelopSettings the panel and the renderer use.
+
+    Reusing that validator is the point: a value the model invents outside a slider's range, or a
+    control the renderer does not have, fails here rather than at the save the photographer makes
+    after they have already looked at a preview.
+    """
+    payload = _json_object(raw, DevelopAdviceError)
+    if not {"settings", "rationale"} <= set(payload):  # extra keys are ignored
+        raise DevelopAdviceError("oMLX develop response must contain settings and rationale", raw)
+    proposed = payload["settings"]
+    if not isinstance(proposed, dict):
+        raise DevelopAdviceError("oMLX develop settings must be an object", raw)
+    try:
+        settings = DevelopSettings.from_dict(proposed)
+    except (ValueError, TypeError) as error:
+        raise DevelopAdviceError(f"oMLX proposed develop settings Lumen cannot apply: {error}", raw) from error
+    rationale = _clip_text(payload["rationale"], DEVELOP_RATIONALE_MAX, DevelopAdviceError, raw)
+    return DevelopAdvice(settings.to_dict(), rationale, raw)
 
 
 def parse_digest_response(raw: str) -> str:
@@ -438,6 +475,30 @@ class OmlxTagger:
                   + _place_sentence(place))
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=400)
         return parse_caption_response(content)
+
+    def suggest_develop(self, preview: Path, *, settings: dict, histogram_note: str = "",
+                        feedback: str | None = None, timeout: float = 240) -> DevelopAdvice:
+        """Propose develop settings for one frame, with the rationale that teaches the histogram.
+
+        The frame comes in rendered with `settings` already applied, so the model critiques what the
+        photographer is looking at and answers with absolute values, not deltas.
+        """
+        controls = "; ".join(f"{key} {low} through {high}" for key, (low, high) in DEVELOP_RANGES.items())
+        current = (f"The photographer's current settings are {json.dumps(settings, sort_keys=True)}."
+                   if settings else "No control has been changed yet; each one sits at this file's own default.")
+        prompt = (
+            "You are helping a photographer develop one raw frame. Propose develop settings and explain them so "
+            "that they learn to read the histogram. Every control is optional: omit one to leave this file's own "
+            f"default alone. Controls: {controls}; lens_correction true or false; curve as five [x, y] pairs in 0 "
+            f"to 1 ascending in x. {current} {histogram_note} Return JSON only with settings (an object of the "
+            "controls above, absolute values, empty when the frame needs nothing) and rationale (at most "
+            f"{DEVELOP_RATIONALE_MAX} characters, two or three plain sentences naming what you read in the frame "
+            "and in the histogram and what each change does about it). Do not identify a person."
+        )
+        if feedback:
+            prompt += f" The photographer says of your previous attempt: {feedback}"
+        content = [{"type": "text", "text": prompt}, self._image_content(preview)]
+        return parse_develop_response(self._complete(content, timeout, max_tokens=600))
 
     def write_digest(self, facts_markdown: str, timeout: float = 240) -> DigestNarrative:
         """Text only: the facts table goes to the model, never an image."""

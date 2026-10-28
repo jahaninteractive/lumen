@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, controller: null, drag: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null },
   mergeSelection: new Set(), clearedFrames: 0,
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -2746,6 +2746,10 @@ function syncDevelopControls() {
     ? 'This file carries no lens profile Core Image can correct against.'
     : 'Uses the profile the camera recorded with the frame.';
   syncNoiseMode();
+  developNode('develop-ask').disabled = state.busy || !ready || !roleReady('review');
+  developNode('develop-feedback').disabled = !ready;
+  developNode('develop-discard-advice').disabled = state.busy || state.develop.beforeAdvice === null;
+  developNode('develop-suggest-availability').textContent = ready ? roleUnavailable('review') : '';
   developNode('develop-reset-all').disabled = !ready || (!touched && state.develop.saved === '{}');
   developNode('develop-apply-group').disabled = state.busy || !ready || !touched;
   developNode('develop-export').disabled = developNode('loupe-export').disabled;
@@ -2760,7 +2764,10 @@ function fillDevelop(photo) {
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
     neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, drag: null, controller: null,
+    beforeAdvice: null,
   });
+  developNode('develop-advice').textContent = '';
+  developNode('develop-feedback').value = '';
   develop.saved = JSON.stringify(develop.fields);
   const offline = detail.offline === true;
   const raw = String(detail.format || '').toUpperCase() === 'ARW';
@@ -2997,11 +3004,61 @@ developNode('develop-curve-reset').addEventListener('click', () => {
 });
 developNode('develop-reset-all').addEventListener('click', async () => {
   state.develop.fields = {};
+  state.develop.beforeAdvice = null;  // there is nothing left to go back to, and the advice no longer describes the handles
+  developNode('develop-advice').textContent = '';
   syncDevelopControls();
   announce('Every develop setting reset; this frame goes back to its own rendering.');
   await saveDevelop();  // the clear also re-renders the contact-sheet preview
   renderDevelopPreview();
 });
+// Advisory, like every other local AI control: the sliders move so the change is visible in the
+// preview, but nothing is stored until the photographer leaves the tab, and Discard undoes the lot.
+async function askDevelopAdvice() {
+  const develop = state.develop;
+  const photoId = develop.photoId;
+  if (!develop.ready || photoId === null || !roleReady('review')) return;
+  const before = JSON.stringify(develop.fields);
+  const feedback = developNode('develop-feedback').value.trim();
+  state.busy = true;
+  updateWorkflow();
+  developNode('develop-status').textContent = 'Asking the loaded local vision model where to start…';
+  try {
+    const advice = await aiCall('Develop suggestion', () => post(`/api/photos/${photoId}/develop/suggest`,
+      { settings: develop.fields, feedback: feedback || null }));
+    if (develop.photoId !== photoId) return;  // the panel moved on while the model was reading
+    if (develop.beforeAdvice === null) develop.beforeAdvice = before;  // the first attempt is what Discard goes back to
+    develop.fields = advice.settings;
+    developNode('develop-advice').textContent = advice.rationale;
+    developNode('develop-feedback').value = '';
+    developNode('develop-status').textContent = 'The handles are where the model would start. Nothing is saved yet.';
+    syncDevelopControls();
+    announce(advice.rationale);
+    renderDevelopPreview();
+  } catch (error) {
+    if (develop.photoId !== photoId) return;
+    developNode('develop-status').textContent = `Local AI advice is unavailable: ${error.message}. The handles are untouched.`;
+    announce(developNode('develop-status').textContent);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
+function discardDevelopAdvice() {
+  const develop = state.develop;
+  if (develop.beforeAdvice === null) return;
+  develop.fields = JSON.parse(develop.beforeAdvice);
+  develop.beforeAdvice = null;
+  developNode('develop-advice').textContent = '';
+  developNode('develop-feedback').value = '';
+  developNode('develop-status').textContent = 'Suggestion discarded; every handle is back where you left it.';
+  syncDevelopControls();
+  announce(developNode('develop-status').textContent);
+  renderDevelopPreview();
+}
+
+developNode('develop-ask').addEventListener('click', () => askDevelopAdvice());
+developNode('develop-discard-advice').addEventListener('click', () => discardDevelopAdvice());
 developNode('develop-export').addEventListener('click', () => exportCurrentFrame());
 developNode('develop-apply-group').addEventListener('click', async () => {
   const photoId = state.develop.photoId;

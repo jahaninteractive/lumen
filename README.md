@@ -296,6 +296,16 @@ The right column has three remembered tabs:
 - **Develop**: adjust the picture itself, described below.
 
 **Develop.** The Develop tab adjusts a raw frame without touching the file.
+**Where to start** is for the frame you can see needs help without knowing
+which slider: **Suggest settings** sends the current render and its histogram
+to the loaded local review model, which parks the handles where it would start
+and writes two or three sentences naming what it read in the frame and in the
+chart and what each change does about it. Nothing is saved; **Discard the
+suggestion** puts every handle back where you left it, and you can keep or
+adjust any part of it by hand. If it got something wrong, say so in the box
+("too warm", "lost the shadows") and ask again: the next attempt reads the
+render it just produced, so it is correcting itself rather than starting over.
+The button says so when the review model is not loaded in oMLX.
 At the top, a histogram of the current render shares one box with a tone curve;
 drag any of its five points, or focus one and nudge it with the arrow keys
 (each nudge is announced). Below are sections for Brightness (exposure in

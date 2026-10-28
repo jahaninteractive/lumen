@@ -17,6 +17,7 @@ from lumen.omlx import (
     DigestResponseError,
     ExpandResponseError,
     CompositionResponseError,
+    DevelopAdviceError,
     NoRedirectHandler,
     OmlxError,
     OmlxTagger,
@@ -27,6 +28,7 @@ from lumen.omlx import (
     parse_burst_response,
     parse_caption_response,
     parse_composition_response,
+    parse_develop_response,
     parse_digest_response,
     parse_expand_response,
     parse_reject_response,
@@ -466,3 +468,67 @@ class OmlxTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DevelopAdviceTests(unittest.TestCase):
+    """The review model proposes develop settings; the panel parks the sliders and the photographer decides."""
+
+    def test_develop_response_validates_against_the_real_develop_settings(self):
+        reply = json.dumps({"settings": {"exposure_ev": 0.45, "clarity": 0.2},
+                            "rationale": "Nothing in the frame reaches white.", "confidence": 0.8})
+        advice = parse_develop_response(reply)
+        self.assertEqual({"exposure_ev": 0.45, "clarity": 0.2}, advice.settings)
+        self.assertEqual("Nothing in the frame reaches white.", advice.rationale)
+        self.assertEqual(reply, advice.raw_response)
+        # An empty object is a legitimate answer: the frame needs nothing.
+        self.assertEqual({}, parse_develop_response(json.dumps({"settings": {}, "rationale": "Already there."})).settings)
+
+    def test_develop_response_refuses_unknown_keys_bad_ranges_and_missing_text(self):
+        for bad in ({"settings": {"vibrance": 0.5}, "rationale": "r"},      # not a knob the renderer has
+                    {"settings": {"exposure_ev": 9}, "rationale": "r"},      # outside the slider's range
+                    {"settings": {"exposure_ev": "0.5"}, "rationale": "r"},  # a string, not a number
+                    {"settings": {"curve": [[0, 0], [1, 1]]}, "rationale": "r"},  # wrong point count
+                    {"settings": {"exposure_ev": 0.5}, "rationale": "  "},   # the teaching text is the product
+                    {"settings": [], "rationale": "r"},
+                    {"rationale": "r"},
+                    {"settings": {}}):
+            with self.subTest(bad=bad), self.assertRaises(DevelopAdviceError):
+                parse_develop_response(json.dumps(bad))
+
+    def test_develop_rationale_is_clipped_rather_than_discarded(self):
+        long = parse_develop_response(json.dumps({"settings": {}, "rationale": "The right third is empty " * 60}))
+        self.assertLessEqual(len(long.rationale), 600)
+        self.assertTrue(long.rationale.endswith("…"))
+
+    def test_suggest_develop_prompt_carries_the_knobs_the_histogram_and_the_feedback(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        reply = json.dumps({"settings": {"exposure_ev": 0.3}, "rationale": "Lift it."})
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"
+            Image.new("RGB", (8, 8)).save(preview)
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content, kw=kw), reply)[1]):
+                advice = tagger.suggest_develop(preview, settings={"contrast": 0.7},
+                                                histogram_note="5.0% are blown at white.", feedback="too warm")
+        self.assertEqual({"exposure_ev": 0.3}, advice.settings)
+        prompt = captured["content"][0]["text"]
+        self.assertIn("exposure_ev", prompt)
+        self.assertIn("-3.0 through 3.0", prompt)  # the range, so the model cannot propose a value the panel rejects
+        self.assertIn('"contrast": 0.7', prompt)
+        self.assertIn("5.0% are blown at white.", prompt)
+        self.assertIn("too warm", prompt)
+        self.assertIn("Do not identify a person.", prompt)
+        self.assertEqual("image_url", captured["content"][-1]["type"])
+
+    def test_suggest_develop_prompt_omits_the_feedback_line_on_the_first_attempt(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        reply = json.dumps({"settings": {}, "rationale": "Nothing needed."})
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"
+            Image.new("RGB", (8, 8)).save(preview)
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), reply)[1]):
+                tagger.suggest_develop(preview, settings={}, histogram_note="", feedback=None)
+        prompt = captured["content"][0]["text"]
+        self.assertNotIn("The photographer says", prompt)
+        self.assertIn("No control has been changed", prompt)

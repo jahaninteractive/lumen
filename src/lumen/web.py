@@ -35,6 +35,8 @@ STATIC_FILES = {
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
 
+DEVELOP_FEEDBACK_MAX = 200  # one short correction ("too warm"), matching the field's maxlength
+
 _FLAG_FILTERS = {"keepers_only", "tagged_only", "show_rejected"}
 
 
@@ -689,6 +691,24 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         job = library.start_develop_group_job(int(match.group(1)))
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/develop/suggest", path)
+                if match:
+                    if payload.keys() != {"settings", "feedback"}:
+                        raise ValueError("develop suggest requires exactly settings and feedback")
+                    feedback = payload["feedback"]
+                    if feedback is not None and (not isinstance(feedback, str) or len(feedback) > DEVELOP_FEEDBACK_MAX):
+                        raise ValueError(f"feedback must be null or at most {DEVELOP_FEEDBACK_MAX} characters")
+                    try:
+                        develop = DevelopSettings.from_dict(payload["settings"])
+                    except ValueError as error:
+                        raise ValueError(f"develop settings are invalid: {error}") from error
+                    with Library(settings) as library:
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
+                        # Only the settings and the rationale go back: the raw model output stays in provenance.
+                        advice = library.suggest_develop(int(match.group(1)), tagger, settings=develop,
+                                                         feedback=(feedback or "").strip() or None)
+                    self._send_json({"settings": advice.settings, "rationale": advice.rationale})
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/develop(/preview)?", path)
                 if match:

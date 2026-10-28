@@ -20,6 +20,7 @@ from PIL import Image, ImageCms
 from lumen.config import Settings
 from lumen.domain import DEVELOP_FLAGS, DEVELOP_RANGES, DevelopSettings
 from lumen.library import Library
+from lumen.omlx import DevelopAdvice
 from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionReview, OmlxError
 from lumen.pipelines import DarktablePipeline
@@ -744,6 +745,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
+            "/api/photos/1/develop/suggest",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -764,6 +766,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
+            "/api/photos/1/develop/suggest",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -1036,6 +1039,59 @@ class WebTests(unittest.TestCase):
         self.assertNotIn("raw_response", payload)
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual(candidate["id"], library.catalog.get_crop(1).candidate_id)
+
+    def test_develop_suggest_is_advisory_and_validates_its_payload(self):
+        class Tagger:
+            model, role = "local-vision", "review"
+
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                self.feedback = feedback
+                return DevelopAdvice({"exposure_ev": 0.4}, "Nothing in the frame reaches white.", '{"secret": 1}')
+
+        tagger = Tagger()
+        render = lambda source, destination, executable, **kwargs: (
+            Image.new("RGB", (64, 48), (90, 90, 90)).save(destination, format="JPEG"),
+            DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={},
+                          lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0))[1]
+        with patch("lumen.library.render_raw", side_effect=render), patch(
+                "lumen.library.OmlxTagger", return_value=tagger), patch(
+                "lumen.library.get_server_status", return_value=REVIEW_LOADED):
+            code, payload = self.post_json("/api/photos/1/develop/suggest",
+                                           {"settings": {"contrast": 0.6}, "feedback": "too warm"})
+            self.assertEqual(200, code, payload)
+            self.assertEqual({"settings", "rationale"}, set(payload), "no raw model output reaches the browser")
+            self.assertEqual({"exposure_ev": 0.4}, payload["settings"])
+            self.assertEqual("too warm", tagger.feedback)
+
+            for bad in ({"settings": {}}, {"feedback": None}, {"settings": {}, "feedback": 3},
+                        {"settings": {}, "feedback": "x" * 201}, {"settings": {"vibrance": 1}, "feedback": None},
+                        {"settings": [], "feedback": None}, {"settings": {}, "feedback": None, "long_edge": 512}):
+                with self.subTest(bad=bad):
+                    code, result = self.post_json("/api/photos/1/develop/suggest", bad)
+                    self.assertEqual(400, code, result)
+                    self.assertIn("error", result)
+
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertIsNone(library.develop_for(1), "a suggestion saves nothing")
+
+    def test_develop_suggest_failure_is_json_without_the_model_text(self):
+        class BrokenTagger:
+            model, role = "local-vision", "review"
+
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                raise OmlxError("oMLX did not return valid JSON: Expecting value")
+
+        render = lambda source, destination, executable, **kwargs: (
+            Image.new("RGB", (64, 48), (90, 90, 90)).save(destination, format="JPEG"),
+            DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={},
+                          lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0))[1]
+        with patch("lumen.library.render_raw", side_effect=render), patch(
+                "lumen.library.OmlxTagger", return_value=BrokenTagger()), patch(
+                "lumen.library.get_server_status", return_value=REVIEW_LOADED):
+            code, payload = self.post_json("/api/photos/1/develop/suggest", {"settings": {}, "feedback": None})
+        self.assertEqual(400, code, payload)
+        self.assertNotIn("raw_response", payload)
+        self.assertNotIn(str(self.root), payload["error"])
 
     def test_crop_routes_report_unknown_photos_as_json(self):
         for method, path, payload in (
@@ -1587,6 +1643,8 @@ let exportPolls = 0;
 let exportCancels = 0;
 const exportJob = (status, progress, extra = {}) => ({ job_id: 17, kind: 'export', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const developPosts = [];
+const suggestPosts = [];
+let suggestCount = 0;
 let developPolls = 0;
 let developSaveError = null;
 const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.2, 0.4, 0.1], r: [0.1, 0.2, 0.2, 0.1], g: [0.1, 0.1, 0.2, 0.1], b: [0.8, 0.05, 0.1, 0.05] }, defaults: { contrast: 0, sharpness: 1, luminance_nr: 0.004, color_nr: 0.5 }, neutral_temperature: 5600, neutral_tint: 7 });
@@ -1759,6 +1817,13 @@ async function fetch(url, options = {}) {
     const body = JSON.parse(options.body);
     captionPosts.push({ url, body });
     payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
+  }
+  else if (/^\/api\/photos\/\d+\/develop\/suggest$/.test(url)) {
+    suggestPosts.push(JSON.parse(options.body));
+    suggestCount += 1;
+    payload = suggestCount === 1
+      ? { settings: { exposure_ev: 0.8, clarity: 0.2 }, rationale: 'The top of the histogram is empty, so nothing reaches white; +0.8 EV fills it.' }
+      : { settings: { exposure_ev: 0.6 }, rationale: 'Pulled back and the warmth left alone.' };
   }
   else if (/^\/api\/photos\/\d+\/develop(\/preview|\/apply-to-group)?$/.test(url)) {
     assert.equal(options.method, 'POST');
@@ -2806,6 +2871,39 @@ const regression = `
     assert.equal(element('#develop-point-2').getAttribute('cy'), '30.00', 'the widget is drawn straight again');
     point.listeners.keydown({ key: 'ArrowUp', preventDefault() {}, stopPropagation() {} });
     await flush();
+
+    // 6b. the suggestion: the model parks the handles and says why, and Discard puts them back.
+    const ask = element('#develop-ask');
+    const discard = element('#develop-discard-advice');
+    assert.equal(ask.disabled, false, 'the review model is loaded in this scenario');
+    assert.equal(discard.disabled, true, 'nothing to discard until a suggestion arrives');
+    const held = { ...state.develop.fields };
+    element('#develop-feedback').value = '  too warm  ';
+    await ask.listeners.click();
+    await flush();
+    assert.deepEqual(suggestPosts.at(-1), { settings: held, feedback: 'too warm' },
+      'the model reads the handles as they stand, and the typed words are trimmed');
+    assert.deepEqual(state.develop.fields, { exposure_ev: 0.8, clarity: 0.2 }, 'the handles park on the answer');
+    assert.equal(field('exposure_ev').value, '0.80');
+    assert.ok(element('#develop-advice').textContent.includes('nothing reaches white'), 'the rationale is the product');
+    assert.equal(element('#develop-feedback').value, '', 'the box empties, ready for the next correction');
+    assert.equal(discard.disabled, false);
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.8, clarity: 0.2 }, 'the preview re-renders on the advice');
+    assert.ok(!developPosts.some(post => post.url.endsWith('/develop')), 'nothing is saved by a suggestion');
+
+    await ask.listeners.click();  // a second attempt, with no new words
+    await flush();
+    assert.deepEqual(suggestPosts.at(-1), { settings: { exposure_ev: 0.8, clarity: 0.2 }, feedback: null },
+      'attempt two critiques its own first answer');
+    assert.deepEqual(state.develop.fields, { exposure_ev: 0.6 }, 'the latest attempt replaces the one before it');
+    assert.ok(element('#develop-advice').textContent.includes('Pulled back'));
+
+    await discard.listeners.click();
+    await flush();
+    assert.deepEqual(state.develop.fields, held, 'Discard goes back past every attempt, not just the last');
+    assert.equal(element('#develop-advice').textContent, '');
+    assert.equal(discard.disabled, true);
+    assert.deepEqual(developPosts.at(-1).body.settings, held, 'the preview goes back too');
 
     // 7. the frame dialog's copy of the export checkbox governs what its own export buttons do
     const mirror = element('#loupe-keep-original');
@@ -4376,8 +4474,10 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for node in (node for node in parser.nodes if node["attrs"].get("class") == "curve-point"):
             self.assertEqual(("slider", "0"), (node["attrs"].get("role"), node["attrs"].get("tabindex")))
         summaries = [" ".join(node["text"].split()) for node in parser.nodes if node["tag"] == "summary" and panel in node["parents"]]
-        self.assertEqual(["Brightness", "White Balance", "Contrast", "Sharpness", "Lens Correction", "Noise Reduction"],
-                         summaries, "IEDT's order")
+        # The suggestion panel is not a develop control, so it sits above them all rather than in
+        # their order: it is where a photographer who cannot read the histogram yet starts.
+        self.assertEqual(["Where to start", "Brightness", "White Balance", "Contrast", "Sharpness",
+                          "Lens Correction", "Noise Reduction"], summaries, "IEDT's order, after the suggestion")
         # Every flag in DEVELOP_FLAGS needs a control, or the server accepts a setting the
         # panel cannot reach.
         for flag in DEVELOP_FLAGS:

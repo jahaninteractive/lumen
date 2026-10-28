@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lumen.rawdevelop import DevelopError, DevelopRender, _partial_path, render_raw
+from lumen.rawdevelop import DevelopError, DevelopRender, _partial_path, describe_histogram, render_raw
 
 RESPONSE = {
     "width": 1100,
@@ -292,3 +292,32 @@ class NativeHelperRequestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DescribeHistogramTests(unittest.TestCase):
+    """The sentence the vision model reads instead of 1024 bucket counts."""
+
+    @staticmethod
+    def _channel(pairs: dict[int, float]) -> list[float]:
+        buckets = [0.0] * 256
+        for index, share in pairs.items():
+            buckets[index] = share
+        return buckets
+
+    def test_describe_histogram_reports_clipping_spread_and_channel_means(self):
+        # A quarter crushed at black, a tenth blown at white, the rest in the low midtones.
+        histogram = {
+            "y": self._channel({0: 0.25, 64: 0.65, 255: 0.10}),
+            "r": self._channel({128: 1.0}),
+            "g": self._channel({64: 1.0}),
+            "b": self._channel({32: 1.0}),
+        }
+        note = describe_histogram(histogram)
+        self.assertIn("25.0% of pixels are crushed at black", note)
+        self.assertIn("10.0% are blown at white", note)
+        self.assertIn("median at 25", note)  # bucket 64 of 255
+        self.assertIn("R 50, G 25, B 13", note)
+
+    def test_describe_histogram_says_nothing_without_a_luma_channel(self):
+        self.assertEqual("", describe_histogram({}))
+        self.assertEqual("", describe_histogram({"r": [1.0]}))

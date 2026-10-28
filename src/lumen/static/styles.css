@@ -212,6 +212,8 @@ legend { padding: 0; font-weight: 700; }
 .develop-row input[type="range"][data-unset] { accent-color: var(--muted); }
 .develop-row input[type="number"] { padding: .35rem; color: var(--paper); background: var(--graphite); font-variant-numeric: tabular-nums; }
 .develop-row button { padding: .35rem .6rem; }
+/* The feedback box has no number or Reset beside it, so it takes the rest of the row. */
+.develop-row input[type="text"] { grid-column: 2 / -1; padding: .35rem .5rem; color: var(--paper); background: var(--graphite); }
 .cleanup-group { border-top: 1px solid var(--line); margin-top: 1.25rem; padding-top: 1rem; }
 .cleanup-group label { display: block; margin-top: 1rem; font-weight: 700; }
 button.danger { color: var(--danger); border-color: var(--danger); background: transparent; }

@@ -72,6 +72,42 @@ def _defaults(reported: object) -> dict[str, float]:
     return amounts
 
 
+def describe_histogram(histogram: dict[str, tuple[float, ...]]) -> str:
+    """One sentence a vision model can read, in place of 1024 bucket counts.
+
+    The model cannot judge clipping from a JPEG, and a photographer learning to read the chart
+    needs the numbers named rather than shown. Buckets are area shares of the frame, so each
+    figure below is a percentage of the pixels; they are divided by their own sum anyway, so a
+    helper that ever reports counts instead describes the same frame.
+    """
+    luma = histogram.get("y")
+    if not luma or len(luma) < 3:
+        return ""
+    last = len(luma) - 1
+    total = sum(luma)
+    if total <= 0:
+        return ""
+    reached, marks = 0.0, {}
+    for index, share in enumerate(luma):
+        reached += share
+        for name, point in (("darkest", 0.01), ("median", 0.5), ("brightest", 0.99)):
+            if name not in marks and reached >= point * total:
+                marks[name] = round(index * 100 / last)
+    note = (f"This render's histogram, in display values 0 to 100: {luma[0] / total:.1%} of pixels are crushed at "
+            f"black and {luma[last] / total:.1%} are blown at white; the darkest 1% sit at {marks['darkest']}, the "
+            f"median at {marks['median']}, the brightest 1% at {marks['brightest']}.")
+    means = []
+    for channel in ("r", "g", "b"):
+        buckets = histogram.get(channel)
+        weight = sum(buckets) if buckets else 0
+        if not buckets or weight <= 0:
+            return note
+        mean = sum(index * share for index, share in enumerate(buckets)) / weight
+        means.append(f"{channel.upper()} {round(mean * 100 / max(1, len(buckets) - 1))}")
+    # The three means together are the cast: a photographer reads "R 50, G 25, B 13" as warm.
+    return f"{note} Channel means: {', '.join(means)}."
+
+
 def _partial_path(destination: Path) -> Path:
     """The sibling the helper renders into before renaming. Must match raw_developer.swift."""
     return destination.with_name(f".{destination.name}.partial")

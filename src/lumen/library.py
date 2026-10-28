@@ -29,11 +29,12 @@ from .geonames import Place, PlaceIndex, distance_km, online_lookup
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
-from .omlx import ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, OmlxError, OmlxTagger, get_server_status
+from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, DevelopAdvice, OmlxError,
+                   OmlxTagger, get_server_status)
 from .pipelines import EXPORT_PRESETS, RAW_EXTENSIONS, PipelineRegistry, validate_watermark
 from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
-from .rawdevelop import DevelopError, render_raw
+from .rawdevelop import DevelopError, describe_histogram, render_raw
 from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_cache, prune_thumbnails, read_image_dimensions,
                        read_metadata)
 from .scoring import RankedPhoto, rank_group
@@ -41,6 +42,7 @@ from .sidecars import SidecarWriter
 from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywords, load_blocked, load_vocabulary, match_keywords
 
 
+DEVELOP_ADVICE_LONG_EDGE = 1024  # all the vision model needs; it is not judging single pixels
 NEARBY_PLACE_KM = 5.0  # fixes this close share one name: a drifting boat's bursts are all the same spot
 NEARBY_PLACE_RANGE = (1.0, 20.0)  # the photographer's radius; the slider's own bounds
 
@@ -965,6 +967,38 @@ class Library:
         return settings
 
     @_coordinated
+    def suggest_develop(self, photo_id: int, tagger, *, settings: DevelopSettings,
+                        feedback: str | None = None) -> DevelopAdvice:
+        """Advisory: the review model proposes develop settings for one frame and says why.
+
+        Nothing is written to `photo_develop` and the frame's own preview is untouched; the panel
+        parks its sliders on the answer and the photographer keeps or discards it. The model reads a
+        render of what the sliders say right now, so a second attempt critiques its own first one.
+        """
+        photo = self.catalog.get_photo(photo_id)
+        if not photo:
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        source = Path(photo.path)
+        if not source.is_file():
+            raise DevelopError(f"{source.name} is unavailable; reimport it before developing.")
+        model, role = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None)
+        fields = settings.to_dict()
+        with tempfile.TemporaryDirectory(prefix=".advise-", dir=self.settings.cache_dir) as directory:
+            render = render_raw(source, Path(directory) / "advice.jpg", self.settings.raw_developer_path,
+                                settings=fields, long_edge=DEVELOP_ADVICE_LONG_EDGE, image_format="jpeg",
+                                histogram=True)
+            try:
+                advice = tagger.suggest_develop(render.path, settings=fields, feedback=feedback,
+                                                histogram_note=describe_histogram(render.histogram))
+            except Exception as error:
+                self.catalog.append_event(photo_id, "develop_advice_failed", {
+                    "model": model, "role": role, "error": str(error),
+                    "raw_response": getattr(error, "raw_response", None)})
+                raise
+        self.catalog.append_event(photo_id, "develop_advised", {
+            "model": model, "role": role, "settings": advice.settings, "feedback": feedback})
+        return advice
+
     def clear_develop(self, photo_id: int) -> None:
         """Drop the saved settings and re-render from the raw with none. The embedded preview is long gone, so
         the frame becomes `refined` rather than `embedded`: rendered from the raw, with nothing added."""

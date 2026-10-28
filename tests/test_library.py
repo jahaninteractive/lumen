@@ -28,6 +28,7 @@ from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
 from lumen.domain import DevelopSettings, PhotoEdit
+from lumen.omlx import DevelopAdvice
 from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, RejectReview, TagResult
 from lumen.omlx import AstroResponseError, TagResponseError, parse_composition_response, parse_tag_response
@@ -3379,6 +3380,66 @@ class LibraryTests(unittest.TestCase):
                 kept = [p["id"] for p in library.list_groups()[0]["photos"] if p["decision"] != "reject"]
                 self.assertEqual(kept, [int(fid) for fid, _ in recording.frames])  # never padded with rejected frames
                 self.assertEqual(6, len(kept))
+
+    def test_suggest_develop_advises_without_saving_anything(self):
+        calls = []
+        histogram = {"y": [0.75] + [0.0] * 254 + [0.25], "r": [1.0], "g": [1.0], "b": [1.0]}
+
+        class AdvisingTagger:
+            model, role = "review-model", "review"
+
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                self.seen = {"preview": Path(preview), "settings": settings,
+                             "note": histogram_note, "feedback": feedback}
+                return DevelopAdvice({"exposure_ev": -0.4}, "A quarter of the frame is blown.", "{}")
+
+        tagger = AdvisingTagger()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            render = self.develop_render(calls)
+
+            def with_histogram(*args, **kwargs):
+                return replace(render(*args, **kwargs), histogram=histogram)
+
+            with patch("lumen.library.render_raw", side_effect=with_histogram):
+                advice = library.suggest_develop(photo_id, tagger,
+                                                 settings=DevelopSettings({"contrast": 0.6}),
+                                                 feedback="too warm")
+            saved = library.develop_for(photo_id)
+            photo = library.catalog.get_photo(photo_id)
+
+        self.assertEqual({"exposure_ev": -0.4}, advice.settings)
+        self.assertEqual("A quarter of the frame is blown.", advice.rationale)
+        self.assertIsNone(saved, "advice is advisory: nothing reaches photo_develop")
+        self.assertEqual("embedded", photo.preview_kind, "the frame's own preview is untouched")
+        # The model reads the render of what the sliders say now, not the frame as imported.
+        self.assertEqual({"contrast": 0.6}, calls[0]["settings"])
+        self.assertEqual({"contrast": 0.6}, tagger.seen["settings"])
+        self.assertEqual("too warm", tagger.seen["feedback"])
+        self.assertIn("25.0% are blown at white", tagger.seen["note"])
+        self.assertTrue(tagger.seen["preview"].is_relative_to(self.library_dir), "every render stays in the library")
+
+    def test_suggest_develop_records_a_failure_and_refuses_an_offline_original(self):
+        class FailingTagger:
+            model, role = "review-model", "review"
+
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                raise CaptionResponseError("oMLX did not return valid JSON", "not json")
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                with self.assertRaises(CaptionResponseError):
+                    library.suggest_develop(photo_id, FailingTagger(), settings=DevelopSettings({}))
+            failed = [event for event in library.catalog.events_for(photo_id) if event.kind == "develop_advice_failed"]
+            self.assertEqual(1, len(failed))
+            self.assertEqual("not json", failed[0].details["raw_response"])
+
+            self.image_path.unlink()
+            with self.assertRaises(library_module.DevelopError):
+                library.suggest_develop(photo_id, FailingTagger(), settings=DevelopSettings({}))
 
 
 if __name__ == "__main__":
