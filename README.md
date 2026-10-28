@@ -71,12 +71,13 @@ It is a personal tool built for one photographer's workflow and shared as is.
 - Near-duplicate clusters inside a burst from a perceptual difference hash.
 - 480 px thumbnail tier for the contact sheet, with Small/Medium/Large tiles.
 - A frame view (Enter on any frame) that gathers the full-size image, decisions,
-  scores, place, keywords, caption, and crops in one dialog with Frame, Crop, and Develop tabs.
+  scores, place, keywords, caption, and crops in one dialog with Frame, Crop, Develop, and EXIF tabs.
 - Non-destructive crop suggestions with optional local oMLX composition advice,
-  plus your own drawn crop with an aspect lock.
+  plus your own drawn crop with an aspect lock; the contact-sheet tile shows the
+  chosen crop, as export will.
 - Typed keywords that survive re-tagging, and place correction for one frame,
-  a whole burst, or every frame within a radius you choose, optionally
-  remembered for nearby frames.
+  a whole burst, every frame within a radius you choose, or every frame from the
+  same day that has no GPS, optionally remembered for nearby frames.
 - Non-destructive develop controls (brightness, white balance, contrast,
   sharpness, clarity, lens correction, noise reduction, tone curve) that show
   on the sheet and are baked into exported JPEGs.
@@ -259,8 +260,9 @@ In the contact sheet, with a frame focused (**Shortcuts** lists these):
   both at 100 percent with panes that pan together.
 - `Enter` opens the frame view (see below); `Esc` closes compare or the frame
   view.
-- In the frame view, `[` and `]` step to the previous or next frame along the
-  filmstrip, `Z` toggles full size, and the culling keys above keep working.
+- In the frame view, `[` and `]` (or the Left and Right arrows) step to the
+  previous or next frame along the filmstrip, `Z` toggles full size, and the
+  culling keys above keep working.
 
 The **Tile size** select (Small/Medium/Large) is remembered by the browser, as
 is the chosen tab. The left rail opens only the selected burst's day; days you
@@ -281,19 +283,32 @@ preview refinement, or a stack runs.
 Press `Enter` on a focused frame to open it in a dialog over the sheet. The
 image fills two thirds of the dialog, fitted so the whole frame shows; **Full
 size** (`Z`) swaps in the largest JPEG the camera embedded in the raw at 1:1
-pixels for a sharpness check, and the button names the real pixel size. Arrow
-keys pan the full-size image. `[` and `]` step through the sheet without
-closing; `Esc` returns to the frame you started on.
+pixels for a sharpness check, and the button names the real pixel size. `[`
+and `]`, or the Left and Right arrows, step through the sheet without closing;
+at full size, when the image is wider than the view, the arrows pan it instead
+and `[` `]` still step. Up and Down pan. `Esc` returns to the frame you started
+on.
 
-The right column has three remembered tabs:
+The right column has four remembered tabs:
 
 - **Frame**: why the frame ranked where it did, its scores, the decision
   buttons, the location line with **Edit place**, keywords with a box to type
   your own (with vocabulary autocomplete), the caption and alt-text fields,
-  and the local AI buttons.
+  and the local AI buttons. **Ask local AI which frame is best** shows a spinner
+  on the button while the model works; **Use this pick** makes its choice the
+  burst's best frame and moves the frame view to it, with a brief amber ring
+  round the image to show the photo changed.
 - **Crop**: your own crop, the suggested crops, **Ask local AI**, and
   **Export this frame**, which uses the Export tab's size and watermark.
 - **Develop**: adjust the picture itself, described below.
+- **EXIF**: camera, lens, focal length, aperture, shutter speed, ISO, exposure
+  program, metering, focus mode, flash, white balance, capture time and zone,
+  image size, shutter count, firmware, and artist, read from the original each
+  time the tab opens (nothing is stored; an offline original says so).
+
+**Also export the untouched version** and **Subfolder named for the capture
+date** sit in the bottom row on the Crop and Develop tabs, beside the **Export
+this frame** buttons they steer.
 
 **Develop.** The Develop tab adjusts a raw frame without touching the file.
 **Where to start** is for the frame you can see needs help without knowing
@@ -337,7 +352,8 @@ the view switches to the Crop tab, where a **Your crop** card shows the
 megapixels it keeps. Drag inside the outline to move it; hold Shift to draw a
 new one over it; `Esc` during a drag cancels only the drag. The **Crop lock**
 menu (Free, 3:2, 2:3, 1:1, 4:5) is remembered. **Use this crop** saves it like
-any crop and the JPEG export honours it. A small crop shows the resolution
+any crop; the JPEG export honours it and the frame's contact-sheet tile shows
+it cropped. A small crop shows the resolution
 warning but is yours to keep; only the AI suggestions have an 8 MP floor.
 
 **Keywords.** Type a word and press Enter or **Add**. Your words and the
@@ -350,7 +366,9 @@ frame.
 to whole burst** (on by default), and **Remember for nearby frames**, which
 adds your name to the local place index so later imports within 25 km resolve
 to it without any online lookup. A later correction at the same spot replaces
-the remembered name. Remember is disabled on a frame with no GPS fix.
+the remembered name. Remember is disabled on a frame with no GPS fix; **Fill
+this day's frames that have no GPS and no place** covers a day shot with the
+phone off (see [Places](#places)).
 
 ## Filters and paging
 
@@ -398,6 +416,11 @@ country, then choose how far the correction reaches:
   GPS fix is within the distance set by the 1-20 km slider beside it (5 km by
   default), across bursts and imports. Use it when a whole anchorage or a
   morning's drifting shares one name.
+- **Fill this day's frames that have no GPS and no place**, this frame plus
+  every frame with the same capture date that has neither a GPS fix nor a
+  place name. It never overwrites a name you typed, and works whether or not
+  this frame has a fix. Use it for a day shot with the phone's location link
+  off. It outranks the burst; the radius outranks it.
 
 Both the radius and **Remember for nearby frames** need a GPS fix on the frame
 you are editing and are disabled without one; the name itself can still be set
@@ -538,7 +561,8 @@ local AI** lets the configured oMLX vision model recommend one of the existing
 safe choices and explain why. That advice is optional and never selects a crop
 for you, so manual choices still work when oMLX is unavailable. Lumen applies
 an approved crop to the full-resolution developed image only during JPEG
-export.
+export; the contact-sheet tile shows the same crop, so the sheet matches what
+export will write.
 
 Next use the **Export** tab. Choose **Current photo**, **All keepers**, or
 **Frames the contact sheet filters show**, which exports exactly what the
