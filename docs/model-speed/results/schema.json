@@ -1,0 +1,253 @@
+[
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "schema": false,
+  "file": "92d1dc4b6e",
+  "seconds": 9.1,
+  "description": "A close-up profile of a zebra standing in a grassy field, illuminated by warm, low-angle sunlight that highlights its stripes and mane.",
+  "subjects": [
+   "zebra"
+  ],
+  "species": [
+   {
+    "name": "zebra",
+    "confidence": 0.98
+   }
+  ],
+  "raw_len": 406
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "schema": false,
+  "file": "932014a355",
+  "seconds": 9.8,
+  "description": "Two dung beetles rolling a ball of dung across dry, cracked earth.",
+  "subjects": [
+   "dung beetle",
+   "dung ball",
+   "dry ground"
+  ],
+  "species": [
+   {
+    "name": "dung beetle",
+    "confidence": 0.98
+   }
+  ],
+  "raw_len": 350
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "schema": false,
+  "file": "9561ce583b",
+  "seconds": 10.5,
+  "description": "A group of impalas grazing in a grassy, shrub-filled environment during the day.",
+  "subjects": [
+   "Impala",
+   "grass",
+   "shrub"
+  ],
+  "species": [
+   {
+    "name": "Impala",
+    "confidence": 0.98
+   }
+  ],
+  "raw_len": 373
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "schema": true,
+  "file": "95973074e0",
+  "seconds": 13.7,
+  "description": "A safari guide in a khaki uniform and hat sits in the back of an open vehicle, looking out over a grassy savanna landscape where a giraffe stands in the distance among low bushes and trees under a clear blue sky.",
+  "subjects": [
+   "safari vehicle",
+   "guide",
+   "giraffe",
+   "savanna",
+   "bush",
+   "grass"
+  ],
+  "species": [
+   {
+    "name": "giraffe",
+    "confidence": 0.9
+   }
+  ],
+  "raw_len": 537
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "schema": true,
+  "file": "95abcd309c",
+  "seconds": 13.2,
+  "description": "A warthog stands in a grassy clearing surrounded by dense, leafy bushes and thin branches, looking directly at the camera.",
+  "subjects": [
+   "warthog",
+   "grass",
+   "bush",
+   "branch"
+  ],
+  "species": [
+   {
+    "name": "warthog",
+    "confidence": 0.98
+   }
+  ],
+  "raw_len": 420
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "schema": true,
+  "file": "9704a40ec4",
+  "seconds": 13.0,
+  "description": "A group of African elephants, including a calf, walking through a rocky, vegetated area with green bushes and trees in the foreground and background.",
+  "subjects": [
+   "elephant",
+   "elephant calf",
+   "rock",
+   "shrub",
+   "grass"
+  ],
+  "species": [
+   {
+    "name": "African elephant",
+    "confidence": 0.98
+   },
+   {
+    "name": "elephant calf",
+    "confidence": 0.95
+   }
+  ],
+  "raw_len": 507
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "schema": false,
+  "file": "98161a13ea",
+  "seconds": 3.3,
+  "description": "A foggy landscape with a gradient from light gray to dark green, suggesting a hazy, overcast day.",
+  "subjects": [],
+  "species": [],
+  "raw_len": 259
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "schema": false,
+  "file": "98343bed8a",
+  "seconds": 2.7,
+  "description": "A young African lion cub illuminated by artificial light at night, partially obscured by tall grass.",
+  "subjects": [
+   "African lion cub"
+  ],
+  "species": [
+   {
+    "name": "African lion cub",
+    "confidence": 0.98
+   }
+  ],
+  "raw_len": 343
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "schema": false,
+  "file": "986886d244",
+  "seconds": 3.7,
+  "description": "A savanna landscape at dusk with scattered shrubs and distant hills under a clear sky.",
+  "subjects": [
+   "African wild dog",
+   "African lion",
+   "African elephant",
+   "giraffe",
+   "African golden jackal",
+   "spotted hyena"
+  ],
+  "species": [
+   {
+    "name": "African wild dog",
+    "confidence": 0.1
+   },
+   {
+    "name": "African lion",
+    "confidence": 0.1
+   },
+   {
+    "name": "African elephant",
+    "confidence": 0.1
+   },
+   {
+    "name": "giraffe",
+    "confidence": 0.1
+   },
+   {
+    "name": "African golden jackal",
+    "confidence": 0.1
+   },
+   {
+    "name": "spotted hyena",
+    "confidence": 0.1
+   }
+  ],
+  "raw_len": 609
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "schema": true,
+  "file": "9890c4d281",
+  "seconds": 3.1,
+  "description": "Zebras in a savanna woodland with sparse trees and dry ground.",
+  "subjects": [
+   "zebra"
+  ],
+  "species": [
+   {
+    "name": "zebra",
+    "confidence": 0.99
+   }
+  ],
+  "raw_len": 306
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "schema": true,
+  "file": "992159392c",
+  "seconds": 3.4,
+  "description": "A person in safari gear sits in an open safari vehicle overlooking a vast savanna at dusk, with a distant hill and a small animal visible in the field.",
+  "subjects": [
+   "person",
+   "vehicle"
+  ],
+  "species": [
+   {
+    "name": "African lion",
+    "confidence": 0.15
+   },
+   {
+    "name": "African golden jackal",
+    "confidence": 0.1
+   },
+   {
+    "name": "African elephant",
+    "confidence": 0.05
+   }
+  ],
+  "raw_len": 509
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "schema": true,
+  "file": "9b244f2e61",
+  "seconds": 2.8,
+  "description": "A partially obscured antelope grazing in dense vegetation under dappled sunlight.",
+  "subjects": [
+   "Impala"
+  ],
+  "species": [
+   {
+    "name": "Impala",
+    "confidence": 0.95
+   }
+  ],
+  "raw_len": 295
+ }
+]

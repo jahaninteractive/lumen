@@ -1439,24 +1439,28 @@ async function applyFilters(query = filterQuery()) {
   announceShowing();
 }
 
-// The review role runs on the full or the fast model; the switch is the server's, so a reload shows what it uses now.
-const reviewModel = document.querySelector('#review-model');
-function syncReviewModel(status) {
+// Each model role (review, fast) runs on the full or the fast model; the switch is the server's, so a reload shows what it uses now.
+const roleSelects = [...document.querySelectorAll('#role-model-pair select')];
+function syncRoleModels(status) {
   const models = Array.isArray(status.review_models) ? status.review_models : [];
-  document.querySelector('#review-model-pair').hidden = models.length < 2;
+  document.querySelector('#role-model-pair').hidden = models.length < 2;
   const loaded = status.omlx_live?.loaded_models || [];
-  reviewModel.replaceChildren(...models.map(model => new Option(loaded.includes(model) ? model : `${model} (not loaded)`, model)));
-  reviewModel.value = status.omlx_roles?.review?.model ?? '';
-}
-reviewModel.addEventListener('change', async () => {
-  try {
-    const { model } = await post('/api/review-model', { model: reviewModel.value });
-    announce(`Review model is now ${model}.`);
-  } catch (error) {
-    announce(error.message);
+  for (const select of roleSelects) {
+    select.replaceChildren(...models.map(model => new Option(loaded.includes(model) ? model : `${model} (not loaded)`, model)));
+    select.value = status.omlx_roles?.[select.dataset.role]?.model ?? '';
   }
-  await load();
-});
+}
+for (const select of roleSelects) {
+  select.addEventListener('change', async () => {
+    try {
+      const { role, model } = await post('/api/role-model', { role: select.dataset.role, model: select.value });
+      announce(`${role === 'fast' ? 'Fast' : 'Review'} model is now ${model}.`);
+    } catch (error) {
+      announce(error.message);
+    }
+    await load();
+  });
+}
 
 let resumed = false;
 async function load() {
@@ -1489,7 +1493,7 @@ async function load() {
   systemStatus.textContent = [...stale, tools].join(' · ');
   if (stale.length) systemStatus.setAttribute('data-stale', '');
   else systemStatus.removeAttribute('data-stale');
-  syncReviewModel(status);
+  syncRoleModels(status);
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
   if (!resumed && state.selectedId === null) {  // only a fresh page resumes the frame inspected before the reload

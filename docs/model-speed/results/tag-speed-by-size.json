@@ -1,0 +1,572 @@
+[
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "0912d97e51",
+  "seconds": 15.9,
+  "description": "A single seabird in flight, low over a vast expanse of dark, choppy open ocean water.",
+  "subjects": [
+   "seabird"
+  ],
+  "species": [
+   {
+    "name": "cape petrel",
+    "confidence": 0.6
+   }
+  ],
+  "technical": [
+   "sharp focus on the bird",
+   "slight motion blur on the wings",
+   "even exposure"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "0ef2678c45",
+  "seconds": 19.6,
+  "description": "A medium shot of a seabird in flight, gliding low over a choppy, grey ocean surface. The bird, featuring a white body and dark wingtips, is positioned in the right-center of the frame against a backdrop of rolling waves and a hazy horizon line.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "sharp focus on the bird",
+   "slight motion blur on the distant waves",
+   "flat lighting",
+   "low contrast"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "1d1f85874f",
+  "seconds": 18.0,
+  "description": "A seabird with a white body and dark wings glides low over the surface of a deep blue, choppy ocean, with white foam visible on the wave crests.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "sharp focus on the bird",
+   "balanced exposure",
+   "no motion blur"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "39d850ec51",
+  "seconds": 7.3,
+  "description": "A seabird with long, dark wings and a white body glides low over the surface of a deep blue, choppy ocean, with white foam visible on the wave crests.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "sharp focus on the bird",
+   "bright daylight exposure",
+   "no motion blur on the subject"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "3b6699d97f",
+  "seconds": 12.2,
+  "description": "A single seabird with long, dark-tipped wings glides low over a choppy, grey ocean surface under an overcast sky.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   },
+   {
+    "name": "black-browed albatross",
+    "confidence": 0.6
+   }
+  ],
+  "technical": [
+   "sharp focus on bird",
+   "balanced exposure",
+   "no motion blur"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "3d3c4cdefa",
+  "seconds": 12.2,
+  "description": "A single seabird glides low over a choppy, deep blue ocean surface, its wings spread wide against the textured water.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "sharp focus on bird",
+   "balanced exposure",
+   "no motion blur"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "451e72beff",
+  "seconds": 11.9,
+  "description": "A single seabird with long, dark-tipped wings glides low over a choppy, grey ocean surface.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "sharp focus on bird",
+   "motion blur in water",
+   "balanced exposure"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "4f3f60ece9",
+  "seconds": 13.3,
+  "description": "A large seabird with long, dark wings and a white body glides low over a vast expanse of dark, rippling ocean water.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "sharp focus on bird",
+   "even exposure",
+   "no motion blur"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "5c87ff5ac4",
+  "seconds": 12.1,
+  "description": "A large seabird, likely an albatross, glides low over a choppy, deep blue ocean surface with whitecaps, accompanied by two smaller birds flying lower in the distance.",
+  "subjects": [
+   "albatross",
+   "seabirds",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   },
+   {
+    "name": "black-browed albatross",
+    "confidence": 0.6
+   }
+  ],
+  "technical": [
+   "sharp focus on the main bird",
+   "natural daylight exposure",
+   "no motion blur on the gliding bird"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "6a19e7c147",
+  "seconds": 10.5,
+  "description": "A single seabird with long, dark wings and a white body glides low over a choppy, deep blue ocean surface.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.8
+   },
+   {
+    "name": "black-browed albatross",
+    "confidence": 0.6
+   }
+  ],
+  "technical": [
+   "sharp focus on bird",
+   "natural daylight",
+   "no motion blur"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "8eb1c0a59f",
+  "seconds": 12.0,
+  "description": "A large seabird, likely an albatross, glides low over a choppy, deep blue ocean surface, accompanied by two smaller dark birds skimming the water.",
+  "subjects": [
+   "albatross",
+   "seabirds",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.8
+   },
+   {
+    "name": "southern giant petrel",
+    "confidence": 0.4
+   }
+  ],
+  "technical": [
+   "sharp focus on the main bird",
+   "balanced exposure",
+   "no motion blur"
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "9260753383",
+  "seconds": 11.9,
+  "description": "A seabird with long, dark wings and a white body glides low over a dark, choppy ocean surface.",
+  "subjects": [
+   "seabird",
+   "ocean"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   },
+   {
+    "name": "black-browed albatross",
+    "confidence": 0.6
+   }
+  ],
+  "technical": [
+   "sharp focus on bird",
+   "slight motion blur on wings",
+   "underexposed background"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "0912d97e51",
+  "seconds": 7.1,
+  "description": "A seabird glides over a vast, dark blue ocean with visible waves and ripples.",
+  "subjects": [
+   "bird"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "motion blur on bird",
+   "shallow depth of field",
+   "overcast lighting"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "0ef2678c45",
+  "seconds": 6.7,
+  "description": "A seabird glides over a turbulent, wind-swept ocean under an overcast sky.",
+  "subjects": [
+   "wandering albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.95
+   }
+  ],
+  "technical": [
+   "motion blur on bird",
+   "shallow depth of field",
+   "overcast lighting"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "1d1f85874f",
+  "seconds": 6.8,
+  "description": "A seabird glides over choppy blue ocean waters under bright daylight.",
+  "subjects": [
+   "wandering albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.95
+   }
+  ],
+  "technical": [
+   "motion blur on water",
+   "shallow depth of field",
+   "bright daylight"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1616,
+  "compact": false,
+  "file": "39d850ec51",
+  "seconds": 6.9,
+  "description": "A seabird glides gracefully over a vast, rippling ocean under bright daylight.",
+  "subjects": [
+   "bird"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "motion blur on bird",
+   "shallow depth of field",
+   "bright daylight"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "3b6699d97f",
+  "seconds": 3.3,
+  "description": "A seabird glides over a turbulent ocean under an overcast sky.",
+  "subjects": [
+   "wandering albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.98
+   }
+  ],
+  "technical": [
+   "motion blur on water",
+   "shallow depth of field",
+   "overcast lighting"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "3d3c4cdefa",
+  "seconds": 3.0,
+  "description": "A seabird glides over a vast, rippling ocean under an overcast sky.",
+  "subjects": [
+   "wandering albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.95
+   }
+  ],
+  "technical": [
+   "motion blur on bird",
+   "shallow depth of field",
+   "overcast lighting"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "451e72beff",
+  "seconds": 2.9,
+  "description": "A seabird glides over rough ocean waters.",
+  "subjects": [
+   "wandering albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.95
+   }
+  ],
+  "technical": [
+   "motion blur",
+   "overcast"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 1024,
+  "compact": true,
+  "file": "4f3f60ece9",
+  "seconds": 3.1,
+  "description": "A wandering albatross glides over a vast, choppy ocean under an overcast sky.",
+  "subjects": [
+   "wandering albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.98
+   }
+  ],
+  "technical": [
+   "motion blur on water",
+   "shallow depth of field",
+   "overcast lighting"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "5c87ff5ac4",
+  "seconds": 2.6,
+  "description": "Seabirds soar over a choppy ocean under a clear sky.",
+  "subjects": [
+   "wandering albatross",
+   "black-browed albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   },
+   {
+    "name": "black-browed albatross",
+    "confidence": 0.7
+   }
+  ],
+  "technical": [
+   "motion blur on birds",
+   "wind-blown water",
+   "overcast"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "6a19e7c147",
+  "seconds": 2.3,
+  "description": "A seabird glides over choppy ocean waters under bright daylight.",
+  "subjects": [
+   "bird"
+  ],
+  "species": [
+   {
+    "name": "black-browed albatross",
+    "confidence": 0.85
+   }
+  ],
+  "technical": [
+   "motion blur on water",
+   "bird in focus"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "8eb1c0a59f",
+  "seconds": 2.6,
+  "description": "Seabirds soar over a choppy ocean under a clear sky.",
+  "subjects": [
+   "wandering albatross",
+   "southern giant petrel"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.85
+   },
+   {
+    "name": "southern giant petrel",
+    "confidence": 0.75
+   }
+  ],
+  "technical": [
+   "motion blur on birds",
+   "wind-blown water",
+   "overcast"
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "edge": 768,
+  "compact": true,
+  "file": "9260753383",
+  "seconds": 2.5,
+  "description": "A large seabird glides over a vast, choppy ocean under an overcast sky.",
+  "subjects": [
+   "wandering albatross"
+  ],
+  "species": [
+   {
+    "name": "wandering albatross",
+    "confidence": 0.95
+   }
+  ],
+  "technical": [
+   "motion blur on bird",
+   "overcast lighting",
+   "shallow depth of field"
+  ]
+ }
+]

@@ -1,0 +1,323 @@
+[
+ {
+  "file": "DSC03879.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 11, the median at 33, the brightest 1% at 70. Channel means: R 27, G 36, B 43.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.3,
+    "sharpness": 0.5,
+    "lens_correction": true
+   },
+   "rationale": "The histogram is heavily skewed to the left with a median of 33, indicating a dark, underexposed frame. I've bumped exposure by 0.5 EV to lift the shadows and bring the median closer to a balanced 50. The channel means (R 27, G 36, B 43) show a strong blue cast typical of deep ocean water; I've warmed the temperature to 5500K and added a slight tint to neutralize the color balance. A moderate contrast and clarity boost will help the birds and wave crests stand out against the dark water.",
+   "seconds": 15.6
+  },
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": -0.5,
+    "temperature_k": 5000,
+    "tint": 0,
+    "contrast": 0.3,
+    "sharpness": 0.4,
+    "luminance_nr": 0.2,
+    "color_nr": 0.1,
+    "clarity": 0.2,
+    "curve": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.1
+     ],
+     [
+      0.4,
+      0.4
+     ],
+     [
+      0.6,
+      0.6
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "rationale": "Frame is underexposed; histogram shows low contrast with midtones clustered. Slight exposure lift + contrast + clarity enhances detail in sea and bird. Neutral temperature preserves natural ocean tone. Gentle curve boosts shadows without crushing blacks. Noise reduction preserves texture.",
+   "seconds": 2.8
+  }
+ },
+ {
+  "file": "DSC03942.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 13, the median at 30, the brightest 1% at 50. Channel means: R 24, G 31, B 35.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 1.0,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.3,
+    "curve": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.25,
+      0.32
+     ],
+     [
+      0.5,
+      0.58
+     ],
+     [
+      0.75,
+      0.82
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "rationale": "The histogram is heavily skewed to the left with a median of 30 and a top of 50, indicating a very dark, underexposed frame. The channel means (R 24, G 31, B 35) show a strong blue cast typical of deep water. I've increased exposure and applied a curve to lift the shadows and midtones, revealing the texture of the waves and the bird. Warming the temperature and adding slight contrast and clarity helps separate the subject from the dark background.",
+   "seconds": 15.5
+  },
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": -0.5,
+    "contrast": 0.3,
+    "sharpness": 0.4,
+    "luminance_nr": 0.6,
+    "curve": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.1
+     ],
+     [
+      0.4,
+      0.3
+     ],
+     [
+      0.6,
+      0.5
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "rationale": "Frame is underexposed; histogram shows low peak density. Slight +0.5 EV brightens ocean and bird. Contrast 0.3 adds depth without crushing shadows. Sharpness 0.4 enhances detail in waves. Luminance NR 0.6 reduces noise in dark water. Curve gently lifts shadows to reveal texture while preserving highlights.",
+   "seconds": 2.7
+  }
+ },
+ {
+  "file": "DSC04118.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 21, the median at 38, the brightest 1% at 87. Channel means: R 40, G 47, B 49.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.3,
+    "luminance_nr": 0.2,
+    "color_nr": 0.2,
+    "lens_correction": true
+   },
+   "rationale": "The histogram shows a median of 38, indicating the frame is underexposed and muddy, so I am lifting the exposure by 0.5 EV to bring the midtones up to a healthy level. The channel means (R 40, G 47, B 49) reveal a strong blue cast; I am shifting the temperature to 5500K and adding a slight tint to neutralize the cold cast and restore natural skin and water tones. Finally, I am increasing contrast and clarity to add punch to the subject and texture to the water.",
+   "seconds": 13.5
+  },
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": -0.5,
+    "temperature_k": 5000,
+    "tint": 0,
+    "contrast": 0.3,
+    "sharpness": 0.4,
+    "luminance_nr": 0.2,
+    "color_nr": 0.1,
+    "clarity": 0.2,
+    "curve": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.1
+     ],
+     [
+      0.4,
+      0.4
+     ],
+     [
+      0.6,
+      0.6
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "rationale": "Frame is underexposed; histogram shows low contrast with midtones clustered. Slight exposure lift + contrast + clarity enhances detail in sea and bird. Neutral temperature preserves natural ocean tone. Gentle curve boosts shadows without crushing blacks. Noise reduction preserves texture.",
+   "seconds": 3.0
+  }
+ },
+ {
+  "file": "DSC03895.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 11, the median at 30, the brightest 1% at 57. Channel means: R 22, G 32, B 38.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 1.0,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.3,
+    "sharpness": 0.5,
+    "lens_correction": true
+   },
+   "rationale": "The histogram is heavily skewed to the left with a median of 30 and a maximum of 57, indicating a very dark, underexposed frame. The channel means (R 22, G 32, B 38) confirm a strong blue color cast. I am increasing exposure by 1.0 EV to lift the shadows and bring the median closer to the middle of the histogram. I am raising the temperature to 5500K and adding a slight tint to neutralize the blue cast and warm up the water. Increasing contrast and clarity will help define the texture of the waves and the bird against the dark background.",
+   "seconds": 15.1
+  },
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": -0.5,
+    "contrast": 0.3,
+    "sharpness": 0.4,
+    "luminance_nr": 0.6,
+    "curve": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.1
+     ],
+     [
+      0.4,
+      0.4
+     ],
+     [
+      0.6,
+      0.6
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "rationale": "Frame is underexposed; histogram shows low contrast with midtones clustered. Slight exposure boost + contrast + sharpness enhance detail. Luminance NR reduces noise in dark sea textures. Curve gently lifts shadows without crushing blacks or blowing highlights.",
+   "seconds": 4.1
+  }
+ },
+ {
+  "file": "DSC03960.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 12, the median at 34, the brightest 1% at 57. Channel means: R 30, G 35, B 37.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2,
+    "sharpness": 0.3,
+    "lens_correction": true
+   },
+   "rationale": "The histogram is heavily skewed to the left with a median of 34, indicating a dark, underexposed frame. I've applied a +0.5 EV lift to bring the midtones up to a more standard level without risking clipping, as the brightest pixels are only at 57. The channel means (R30, G35, B37) show a strong blue cast typical of open water; I've warmed the temperature to 5500K and added a slight tint to neutralize the color balance. Finally, I've increased contrast and clarity to help the birds and wave textures stand out against the dark background.",
+   "seconds": 14.8
+  },
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": false,
+   "error": "oMLX develop response must contain settings and rationale",
+   "raw": "{\n  \"exposure_ev\": -0.5,\n  \"rationale\": \"Frame is underexposed; histogram shows low contrast with shadows clustered near 12. Slight +0.5 EV lifts shadows and midtones to reveal detail without blowing out highlights at 57. No other changes needed as colors (R30, G35, B37) are balanced and contrast is adequate.\"\n}",
+   "seconds": 3.2
+  }
+ },
+ {
+  "file": "DSC04116.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 18, the median at 37, the brightest 1% at 68. Channel means: R 32, G 39, B 43.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2,
+    "lens_correction": true
+   },
+   "rationale": "The histogram is heavily skewed to the left with a median of 37, indicating a dark, underexposed frame. I've bumped exposure by 0.5 EV to lift the midtones and bring the bird's white plumage into a readable range. The channel means (R32, G39, B43) show a strong blue cast; I've warmed the temperature to 5500K to neutralize the cold water and add a touch of life to the scene. A slight increase in contrast and clarity helps the bird pop against the busy, repetitive texture of the waves.",
+   "seconds": 14.0
+  },
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": -0.5,
+    "temperature_k": 5000,
+    "tint": 0,
+    "contrast": 0.3,
+    "sharpness": 0.4,
+    "luminance_nr": 0.2,
+    "color_nr": 0.1,
+    "clarity": 0.2,
+    "curve": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.1
+     ],
+     [
+      0.5,
+      0.5
+     ],
+     [
+      0.8,
+      0.7
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "rationale": "Frame is underexposed; histogram shows low contrast with midtones clustered. Slight exposure lift + contrast + clarity enhances sea texture and bird. Cool temperature preserves oceanic mood. Curves gently boost shadows and highlights without clipping. Noise reduction preserves detail.",
+   "seconds": 4.4
+  }
+ }
+]

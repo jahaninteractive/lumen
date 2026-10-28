@@ -1,0 +1,99 @@
+[
+ {
+  "file": "DSC03879.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 11, the median at 33, the brightest 1% at 70. Channel means: R 27, G 36, B 43.",
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.3,
+    "temperature_k": 5500,
+    "tint": 0,
+    "contrast": 0.7,
+    "sharpness": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2,
+    "clarity": 0.3
+   },
+   "rationale": "The histogram shows a median at 33, indicating underexposure; +0.3 EV brightens it. The cool color balance (R 27, G 36, B 43) suggests a blue ocean; 5500K neutralizes coolness. Contrast 0.7 adds depth without crushing shadows. Sharpness 0.4 enhances detail in waves and birds. Luminance NR 0.3 and Color NR 0.2 reduce noise while preserving texture. Clarity 0.3 boosts midtones for better definition.",
+   "seconds": 2.7
+  }
+ },
+ {
+  "file": "DSC03942.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 13, the median at 30, the brightest 1% at 50. Channel means: R 24, G 31, B 35.",
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.3,
+    "contrast": 0.2,
+    "sharpness": 0.3
+   },
+   "rationale": "The histogram shows a median at 30, indicating underexposure; +0.3 EV brightens it toward balance. Low contrast (median 30) suggests flat tones; +0.2 contrast adds separation. Low sharpness (default) hides detail; +0.3 sharpens the sea texture and bird without over-sharpening.",
+   "seconds": 1.7
+  }
+ },
+ {
+  "file": "DSC04118.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 21, the median at 38, the brightest 1% at 87. Channel means: R 40, G 47, B 49.",
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.3,
+    "temperature_k": 5000,
+    "tint": 0,
+    "contrast": 0.7,
+    "sharpness": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2,
+    "clarity": 0.3
+   },
+   "rationale": "The histogram shows a median at 38, indicating a slightly underexposed scene. A +0.3 EV boost brightens midtones. The cool channel means suggest a neutral temperature (5000K) to preserve the ocean\u2019s mood. Contrast 0.7 adds depth without crushing shadows. Sharpness 0.4 enhances detail in the bird and waves. Luminance noise reduction 0.3 and color noise reduction 0.2 smooth grain while preserving texture. Clarity 0.3 boosts midtone contrast for better definition in the sea and bird.",
+   "seconds": 2.7
+  }
+ },
+ {
+  "file": "DSC03895.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 11, the median at 30, the brightest 1% at 57. Channel means: R 22, G 32, B 38.",
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": -0.5,
+    "contrast": 0.3,
+    "sharpness": 0.4
+   },
+   "rationale": "The histogram shows a median at 30, indicating underexposure; -0.5 EV brightens it. Contrast 0.3 adds depth without crushing shadows. Sharpness 0.4 enhances detail in the sea and bird without noise. All adjustments preserve the scene\u2019s natural tones.",
+   "seconds": 1.6
+  }
+ },
+ {
+  "file": "DSC03960.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 12, the median at 34, the brightest 1% at 57. Channel means: R 30, G 35, B 37.",
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5
+   },
+   "rationale": "The histogram median at 34 is dark, and the scene\u2019s ocean tones are low in brightness. A +0.5 EV brightens it to lift shadows without blowing out highlights, balancing the exposure toward the mid-50s range for better detail in the water and birds.",
+   "seconds": 1.4
+  }
+ },
+ {
+  "file": "DSC04116.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 18, the median at 37, the brightest 1% at 68. Channel means: R 32, G 39, B 43.",
+  "Qwen3-VL-8B-Instruct-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.3,
+    "temperature_k": 5000,
+    "tint": 0,
+    "contrast": 0.7,
+    "sharpness": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2,
+    "clarity": 0.3
+   },
+   "rationale": "The histogram shows a median at 37, indicating a slightly underexposed scene; +0.3 EV brightens it. The cool color cast (R 32, G 39, B 43) suggests a blue ocean; setting temperature to 5000 neutralizes it. Contrast 0.7 adds depth without crushing shadows. Sharpness 0.4 enhances the sea texture. Luminance NR 0.3 and Color NR 0.2 reduce noise while preserving detail. Clarity 0.3 boosts midtones for better definition in the water and bird.",
+   "seconds": 2.9
+  }
+ }
+]

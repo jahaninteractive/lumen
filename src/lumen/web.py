@@ -183,12 +183,13 @@ class LumenServer(ThreadingHTTPServer):
     """Loopback server that owns the single heavy-job runner shared by every per-request Library."""
 
     def __init__(self, address, handler, settings: Settings):
-        super().__init__(address, handler)
         self.settings = settings
-        self._runner_lock = threading.Lock()
+        self._runner_lock = threading.Lock()  # before bind: a failed bind calls server_close, which takes this lock
+        self._runner: LocalJobRunner | None = None
+        super().__init__(address, handler)
         # Eager: takes the catalog's runner lock for the server's lifetime and recovers stale running jobs now.
         try:
-            self._runner: LocalJobRunner | None = LocalJobRunner(settings.database_path)
+            self._runner = LocalJobRunner(settings.database_path)
         except BaseException:
             super().server_close()
             raise
@@ -230,8 +231,9 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
         raise ValueError("Lumen only binds to a loopback address")
     static_dir = Path(__file__).parent / "static"
 
-    def review_models() -> list[str]:  # the switch offers the full and fast models only, never a typed name
-        return list(dict.fromkeys((settings.omlx_model, settings.omlx_fast_model)))
+    # The switches offer the full and fast models only, never a typed name; fixed at startup so a switch cannot shrink the choice.
+    role_models = list(dict.fromkeys((settings.omlx_model, settings.omlx_fast_model)))
+    role_fields = {"fast": "omlx_fast_model", "review": "omlx_review_model"}  # role -> Settings field a switch rebinds
 
     class Handler(BaseHTTPRequestHandler):
         def handle_one_request(self) -> None:
@@ -258,7 +260,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 return
             if path == "/api/status":
                 self._send_json(doctor_report(settings) | {
-                    "review_models": review_models(),
+                    "review_models": role_models,
                     "stale": stale_sources(settings),
                     "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
                     "astro_output_dir": str((settings.output_dir / "astro").resolve()),
@@ -483,7 +485,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
 
         def do_POST(self) -> None:
-            nonlocal settings  # the review-model switch rebinds it; every later request builds its Library from it
+            nonlocal settings  # the role-model switch rebinds it; every later request builds its Library from it
             path = urlparse(self.path).path
             if not self._trusted_mutation():
                 self._send_json({"error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
@@ -494,11 +496,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     selected = choose_macos_folder()
                     self._send_json({"path": selected, "cancelled": selected is None})
                     return
-                if path == "/api/review-model":
-                    if payload.keys() != {"model"} or payload["model"] not in review_models():
-                        raise ValueError(f"model must be one of {', '.join(review_models())}")
-                    settings = replace(settings, omlx_review_model=payload["model"])
-                    self._send_json({"model": settings.review_model})
+                if path == "/api/role-model":
+                    if payload.keys() != {"role", "model"} or payload["role"] not in role_fields:
+                        raise ValueError("role must be fast or review, with a model")
+                    if payload["model"] not in role_models:
+                        raise ValueError(f"model must be one of {', '.join(role_models)}")
+                    settings = replace(settings, **{role_fields[payload["role"]]: payload["model"]})
+                    self._send_json({"role": payload["role"], "model": payload["model"]})
                     return
                 if path in {"/api/browse-xmp", "/api/outputs/reveal"}:
                     if payload:

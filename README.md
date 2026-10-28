@@ -503,6 +503,10 @@ Lumen lets you switch between them instead of fixing one:
   between the two. An unloaded model is marked "(not loaded)". The choice is
   not saved: a restart picks again by the rule above. Run the same caption or
   **Where to start** on a frame, flip the dropdown, and run it again to compare.
+- The **Fast model** dropdown beside it does the same for tagging, the reject
+  scan and astro triage. It starts on the 8B every time; pick the 27B before a
+  tag run when you want its fuller descriptions and can wait about three times
+  as long per frame.
 - Setting `LUMEN_OMLX_REVIEW_MODEL` on the server process pins the review role
   and skips the startup check. Leave it unset if you want the dropdown's
   default to follow what oMLX has loaded.

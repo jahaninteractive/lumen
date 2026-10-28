@@ -1,0 +1,113 @@
+[
+ {
+  "file": "DSC03879.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 11, the median at 33, the brightest 1% at 70. Channel means: R 27, G 36, B 43.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 1.0,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.3,
+    "sharpness": 0.5,
+    "lens_correction": true
+   },
+   "rationale": "The histogram median at 33 indicates the frame is underexposed, so I am adding +1.0 EV to lift the midtones and reveal detail in the dark water. The channel means (R 27, G 36, B 43) show a strong blue cast, so I am raising the temperature to 5500K to neutralize the color. I am also increasing contrast and clarity to add punch to the waves and applying noise reduction to clean up the shadows.",
+   "seconds": 12.8
+  }
+ },
+ {
+  "file": "DSC03942.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 13, the median at 30, the brightest 1% at 50. Channel means: R 24, G 31, B 35.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 1.0,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2
+   },
+   "rationale": "The histogram median at 30 indicates the frame is underexposed, so I am adding +1.0 EV to lift the midtones and reveal detail in the dark water. The channel means (R 24, G 31, B 35) show a strong blue cast, so I am raising the temperature to 5500K to warm the image and balance the color. I am also increasing contrast and clarity to add definition to the waves and bird, while applying light noise reduction to clean up the shadows.",
+   "seconds": 12.9
+  }
+ },
+ {
+  "file": "DSC04118.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 21, the median at 38, the brightest 1% at 87. Channel means: R 40, G 47, B 49.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.3,
+    "lens_correction": true
+   },
+   "rationale": "The histogram median at 38 indicates the frame is underexposed, so a +0.5 EV shift lifts the midtones to a balanced level without clipping the highlights. The channel means (R 40, G 47, B 49) show a strong blue cast; warming the temperature to 5500K and adding a slight tint neutralizes this to match the overcast sky. Increasing contrast and clarity adds definition to the bird and the textured sea surface, while noise reduction cleans up the shadows.",
+   "seconds": 13.3
+  }
+ },
+ {
+  "file": "DSC03895.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 11, the median at 30, the brightest 1% at 57. Channel means: R 22, G 32, B 38.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 1.0,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2
+   },
+   "rationale": "The histogram median at 30 indicates the frame is underexposed, and the channel means (R 22, G 32, B 38) reveal a strong blue cast. I am applying +1.0 EV to lift the median toward a balanced 50, and shifting the temperature to 5500K with a slight warm tint to neutralize the cold cast. A moderate increase in contrast and clarity helps the bird and wave texture stand out against the dark water, while light noise reduction cleans up the shadows.",
+   "seconds": 13.8
+  }
+ },
+ {
+  "file": "DSC03960.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 12, the median at 34, the brightest 1% at 57. Channel means: R 30, G 35, B 37.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 1.0,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2
+   },
+   "rationale": "The histogram median at 34 indicates the frame is underexposed, so +1.0 EV lifts the midtones to a balanced level. The channel means (R 30, G 35, B 37) show a strong blue cast typical of open water; warming the temperature to 5500K and adding a slight tint neutralizes this. Increasing contrast and clarity brings out the texture in the waves, while light noise reduction cleans up the shadows.",
+   "seconds": 13.0
+  }
+ },
+ {
+  "file": "DSC04116.ARW",
+  "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 18, the median at 37, the brightest 1% at 68. Channel means: R 32, G 39, B 43.",
+  "Qwen3.8-27B-4bit": {
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.8,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.6,
+    "clarity": 0.4,
+    "luminance_nr": 0.3,
+    "color_nr": 0.2
+   },
+   "rationale": "The histogram median at 37 indicates the frame is underexposed, so I am adding 0.8 EV to lift the midtones and bring the median closer to a balanced 50. The channel means (R 32, G 39, B 43) show a strong blue cast, so I am raising the temperature to 5500K to warm the water and neutralize the color. Finally, I am increasing contrast and clarity to add definition to the water's texture and the bird, while applying light noise reduction to clean up the shadows.",
+   "seconds": 14.0
+  }
+ }
+]

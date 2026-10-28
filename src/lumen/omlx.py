@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import math
 import os
@@ -9,6 +10,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
+
+from PIL import Image
 
 from .domain import DEVELOP_RANGES, DevelopSettings
 
@@ -21,6 +24,7 @@ SKY_ISSUES = ("haze", "light_pollution", "trailing", "cloud_band")
 CAPTION_MAX = 200
 ALT_TEXT_MAX = 125
 NARRATIVE_MAX = 1500
+MODEL_IMAGE_LONG_EDGE = 1024  # measured: the 27B tags as well at 1024 as at 1616 in two-thirds of the time; 768 starts inventing species
 DEVELOP_RATIONALE_MAX = 600  # two or three sentences: the explanation is the product, not the numbers
 
 
@@ -406,7 +410,7 @@ class OmlxTagger:
                 " Also return species (array of {name, confidence 0 to 1} for animals you can name) and "
                 "conditions (string array of light and weather). Do not identify a person."
             )
-        prompt += _place_sentence(place)
+        prompt += _place_sentence(place) + " Write the JSON compact on one line, no code fence."  # measured: 2-3 s less decode on the 27B
         content = self._complete([
             {"type": "text", "text": prompt},
             self._image_content(preview),
@@ -523,15 +527,23 @@ class OmlxTagger:
             f"elements. Select exactly one frame_id from: {', '.join(ids)}. Return JSON only with frame_id, rationale "
             "(at most 300 characters), confidence (0 to 1). Do not identify a person.")}]
         for frame_id, path in frames:
-            content.extend(({"type": "text", "text": f"Frame {frame_id}"}, self._image_content(path)))
+            content.extend(({"type": "text", "text": f"Frame {frame_id}"}, self._image_content(path, long_edge=0)))  # sharpness is compared per pixel
         return parse_burst_response(self._complete(content, timeout, max_tokens=400), set(ids))
 
     @staticmethod
-    def _image_content(path: Path) -> dict:
+    def _image_content(path: Path, *, long_edge: int = MODEL_IMAGE_LONG_EDGE) -> dict:
         if not isinstance(path, Path) or not path.is_file():
             raise ValueError(f"composition preview is unavailable: {path}")
         mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-        image = base64.b64encode(path.read_bytes()).decode("ascii")
+        data = path.read_bytes()
+        if long_edge:
+            with Image.open(io.BytesIO(data)) as image:
+                if max(image.size) > long_edge:
+                    image.thumbnail((long_edge, long_edge))
+                    buffer = io.BytesIO()
+                    image.convert("RGB").save(buffer, "JPEG", quality=90)
+                    data, mime = buffer.getvalue(), "image/jpeg"
+        image = base64.b64encode(data).decode("ascii")
         return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}}
 
     def _complete(self, content: list[dict], timeout: float, *, max_tokens: int = 500, system: str | None = None) -> str:

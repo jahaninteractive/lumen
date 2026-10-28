@@ -1,0 +1,103 @@
+[
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "file": "65267a0b4f",
+  "seconds": 8.7,
+  "description": "A woman in profile wearing sunglasses and a pearl earring, seated in a vehicle with a grassy landscape and distant hills in the background, bathed in warm evening light.",
+  "subjects": [
+   "person",
+   "safari vehicle",
+   "savanna",
+   "hills"
+  ],
+  "species": []
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "file": "6647e69f45",
+  "seconds": 11.0,
+  "description": "A person in a hat and mask bends over to examine a large animal skull on the ground in a dry, grassy area.",
+  "subjects": [
+   "person",
+   "skull",
+   "shrub",
+   "grass"
+  ],
+  "species": [
+   {
+    "name": "African elephant",
+    "confidence": 0.8
+   }
+  ]
+ },
+ {
+  "model": "Qwen3.8-27B-4bit",
+  "file": "664f532b2d",
+  "seconds": 11.1,
+  "description": "A male African lion with a full mane walks forward on a dirt path at night, illuminated by a spotlight, with low green shrubbery on either side.",
+  "subjects": [
+   "African lion"
+  ],
+  "species": [
+   {
+    "name": "African lion",
+    "confidence": 0.98
+   }
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "file": "669231956b",
+  "seconds": 3.3,
+  "description": "A young African lion cub stands alert on a fallen log at night, illuminated by artificial light against a dark background.",
+  "subjects": [
+   "African lion cub"
+  ],
+  "species": [
+   {
+    "name": "African lion cub",
+    "confidence": 0.99
+   }
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "file": "66ef058bb0",
+  "seconds": 3.2,
+  "description": "A sunlit hillside with green shrubs and trees, viewed from a moving vehicle.",
+  "subjects": [
+   "vegetation",
+   "hill",
+   "tree"
+  ],
+  "species": [
+   {
+    "name": "African glossy starling",
+    "confidence": 0.1
+   },
+   {
+    "name": "African golden jackal",
+    "confidence": 0.1
+   },
+   {
+    "name": "African elephant",
+    "confidence": 0.1
+   }
+  ]
+ },
+ {
+  "model": "Qwen3-VL-8B-Instruct-4bit",
+  "file": "6753159155",
+  "seconds": 3.1,
+  "description": "A wild warthog partially obscured by dense green shrubbery in a savanna-like environment, captured in dappled sunlight.",
+  "subjects": [
+   "warthog"
+  ],
+  "species": [
+   {
+    "name": "warthog",
+    "confidence": 0.99
+   }
+  ]
+ }
+]

@@ -1,0 +1,176 @@
+{
+ "caption": [
+  {
+   "photo": 3,
+   "file": "DSC03892.ARW",
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "caption": "A seabird soars gracefully over the deep blue ocean waves, its wings spread wide against the dynamic sea.",
+    "alt_text": "A bird flying over the ocean with its wings extended.",
+    "seconds": 3.7
+   }
+  },
+  {
+   "photo": 7,
+   "file": "DSC03902.ARW",
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "caption": "A seabird soars gracefully over the deep blue ocean waves, its wings spread wide against the dynamic backdrop of the sea.",
+    "alt_text": "A bird with dark wings and a white body is flying above the ocean waves.",
+    "seconds": 3.9
+   }
+  },
+  {
+   "photo": 10,
+   "file": "DSC03945.ARW",
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "caption": "A seabird glides gracefully over the deep blue ocean waves, its wings spread wide against the vast, textured water.",
+    "alt_text": "A bird flying low over the ocean with its wings extended.",
+    "seconds": 4.0
+   }
+  },
+  {
+   "photo": 16,
+   "file": "DSC04115.ARW",
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "caption": "A solitary bird soars gracefully over the vast, textured ocean waves, embodying freedom and the wild beauty of nature.",
+    "alt_text": "A bird with white and black wings flying over a choppy sea.",
+    "seconds": 4.3
+   }
+  },
+  {
+   "photo": 20,
+   "file": "DSC04119.ARW",
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "caption": "A seabird soars gracefully over the vast, choppy ocean waves under a cloudy sky.",
+    "alt_text": "A bird with outstretched wings flying above the ocean surface.",
+    "seconds": 3.0
+   }
+  }
+ ],
+ "burst": [
+  {
+   "group": [
+    3,
+    4
+   ],
+   "frames": [
+    "DSC03892.ARW",
+    "DSC03893.ARW"
+   ],
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "frame": "DSC03892.ARW",
+    "rationale": "Frame 3 is sharper, with a more dynamic pose of the bird in flight and better timing capturing the action. The framing is tighter on the bird, making it the clear focal point, while Frame 4 is blurrier and has a less impactful pose.",
+    "confidence": 0.95,
+    "seconds": 6.7
+   }
+  },
+  {
+   "group": [
+    7,
+    8
+   ],
+   "frames": [
+    "DSC03902.ARW",
+    "DSC03903.ARW"
+   ],
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "frame": "DSC03903.ARW",
+    "rationale": "Frame 8 shows the bird in a more dynamic, extended-wing pose, suggesting active flight. The composition is slightly less cluttered with wave details, making the subject stand out more clearly against the sea.",
+    "confidence": 0.9,
+    "seconds": 6.5
+   }
+  },
+  {
+   "group": [
+    5,
+    6
+   ],
+   "frames": [
+    "DSC03895.ARW",
+    "DSC03901.ARW"
+   ],
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "frame": "DSC03901.ARW",
+    "rationale": "Frame 6 is sharper, with better lighting and contrast on the bird and water. The bird's pose is more dynamic and centered, and the framing captures the motion well without distracting elements.",
+    "confidence": 0.95,
+    "seconds": 6.8
+   }
+  },
+  {
+   "group": [
+    9,
+    10
+   ],
+   "frames": [
+    "DSC03942.ARW",
+    "DSC03945.ARW"
+   ],
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "frame": "DSC03945.ARW",
+    "rationale": "Frame 10 is sharper, with better lighting and contrast, making the bird's pose and details clearer. The framing is also slightly better, focusing more on the bird against the water.",
+    "confidence": 0.9,
+    "seconds": 5.4
+   }
+  },
+  {
+   "group": [
+    16,
+    17
+   ],
+   "frames": [
+    "DSC04115.ARW",
+    "DSC04116.ARW"
+   ],
+   "Qwen3.5-9B-4bit": {
+    "ok": true,
+    "frame": "DSC04115.ARW",
+    "rationale": "Frame 16 is sharper, with better detail on the bird and more natural wave texture. Frame 17 appears slightly blurrier and has a less dynamic wave pattern.",
+    "confidence": 0.9,
+    "seconds": 5.5
+   }
+  }
+ ],
+ "develop": [
+  {
+   "photo": 5,
+   "file": "DSC03895.ARW",
+   "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 11, the median at 30, the brightest 1% at 57. Channel means: R 22, G 32, B 38.",
+   "Qwen3.5-9B-4bit": {
+    "ok": false,
+    "error": "oMLX did not return valid JSON: Extra data",
+    "raw": "{\n  \"exposure_ev\": -0.3,\n  \"temperature_k\": 4500,\n  \"tint\": 0,\n  \"contrast\": 0.2,\n  \"sharpness\": 0.4,\n  \"luminance_nr\": 0.1,\n  \"color_nr\": 0.0,\n  \"clarity\": 0.3,\n  \"lens_correction\": true,\n  \"curve\": [\n    [0.0, 0.0],\n    [0.2, 0.25],\n    [0.4, 0.5],\n    [0.6, 0.65],\n    [0.8, 0.8],\n    [1.0, 1.0]\n  ]\n}\n\nRationale: The image is underexposed and cool-toned, with a histogram skewed left\u2014darkening it further would crush blacks. Slight exposure lift (-0.3) brightens the scene without clipping. Warmer temperature (4500K) counteracts the blue cast, while mild contrast and clarity enhance texture wit",
+    "seconds": 5.2
+   }
+  },
+  {
+   "photo": 12,
+   "file": "DSC03960.ARW",
+   "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 12, the median at 34, the brightest 1% at 57. Channel means: R 30, G 35, B 37.",
+   "Qwen3.5-9B-4bit": {
+    "ok": false,
+    "error": "oMLX did not return valid JSON: Extra data",
+    "raw": "{\n  \"exposure_ev\": -0.3,\n  \"temperature_k\": 4500,\n  \"tint\": 0,\n  \"contrast\": 0.2,\n  \"sharpness\": 0.4,\n  \"luminance_nr\": 0.1,\n  \"color_nr\": 0.0,\n  \"clarity\": 0.3,\n  \"lens_correction\": true,\n  \"curve\": [\n    [0.0, 0.0],\n    [0.2, 0.25],\n    [0.4, 0.5],\n    [0.6, 0.65],\n    [0.8, 0.8],\n    [1.0, 1.0]\n  ]\n}\n\nRationale: The image is underexposed and cool-toned, with a histogram skewed left (median at 34), suggesting low light and blue cast. Exposure +0.3 brightens overall tones without blowing highlights. Temperature raised to 4500K warms the scene for natural water and bird tones. Contrast and cla",
+    "seconds": 5.8
+   }
+  },
+  {
+   "photo": 17,
+   "file": "DSC04116.ARW",
+   "histogram": "This render's histogram, in display values 0 to 100: 0.0% of pixels are crushed at black and 0.0% are blown at white; the darkest 1% sit at 18, the median at 37, the brightest 1% at 68. Channel means: R 32, G 39, B 43.",
+   "Qwen3.5-9B-4bit": {
+    "ok": false,
+    "error": "oMLX did not return valid JSON: Extra data",
+    "raw": "{\n  \"exposure_ev\": -0.5,\n  \"temperature_k\": 5500,\n  \"tint\": 0,\n  \"contrast\": 0.3,\n  \"sharpness\": 0.4,\n  \"luminance_nr\": 0.2,\n  \"color_nr\": 0.1,\n  \"clarity\": 0.2,\n  \"lens_correction\": true,\n  \"curve\": [\n    [0.0, 0.0],\n    [0.2, 0.25],\n    [0.4, 0.5],\n    [0.6, 0.65],\n    [0.8, 0.8],\n    [1.0, 1.0]\n  ]\n}\n\nRationale: The image is underexposed and cool-toned, with a histogram skewed left\u2014darkening it further would crush blacks. Slight exposure lift (+0.5) brightens the scene without clipping. Warmer temperature (5500K) neutralizes the blue cast. Mild contrast, sharpness, and noise reduction enhan",
+    "seconds": 5.6
+   }
+  }
+ ]
+}

@@ -1,3 +1,4 @@
+import base64
 import io
 import unittest
 import urllib.error
@@ -309,6 +310,7 @@ class OmlxTests(unittest.TestCase):
         self.assertNotIn("wildlife", text)  # the stable vocabulary goes first, as a system prefix oMLX can cache
         self.assertIn("wildlife: gentoo penguin", captured["kwargs"]["system"])
         self.assertIn("Do not identify a person.", text)
+        self.assertTrue(text.endswith(" Write the JSON compact on one line, no code fence."))
         self.assertEqual("fast", tagger.role)
 
     def test_complete_sends_system_prefix_before_the_user_turn(self):
@@ -449,6 +451,34 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual(["Frame 1", "Frame 2", "Frame 3"], texts[1:])
         self.assertEqual(3, sum(part["type"] == "image_url" for part in captured["content"]))
         self.assertEqual(400, captured["kw"]["max_tokens"])
+
+    def test_image_content_resizes_to_the_model_long_edge_except_for_bursts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            big = Path(directory) / "big.jpg"; Image.new("RGB", (3000, 2000), "gray").save(big)
+            small = Path(directory) / "small.png"; Image.new("RGB", (600, 400), "gray").save(small)
+            sent = OmlxTagger._image_content(big)["image_url"]["url"]
+            kept = OmlxTagger._image_content(small)["image_url"]["url"]
+            full = OmlxTagger._image_content(big, long_edge=0)["image_url"]["url"]
+        def size(url):
+            return Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).size
+        self.assertEqual(1024, omlx.MODEL_IMAGE_LONG_EDGE)
+        self.assertEqual((1024, 683), size(sent))
+        self.assertTrue(kept.startswith("data:image/png;base64,"))
+        self.assertEqual((600, 400), size(kept))
+        self.assertEqual((3000, 2000), size(full))
+
+    def test_critique_burst_sends_frames_at_full_size(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "m", api_key="k")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            frames = []
+            for index in range(2):
+                path = Path(directory) / f"{index}.jpg"; Image.new("RGB", (1600, 1000)).save(path); frames.append((str(index + 1), path))
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), json.dumps({"frame_id": "1", "rationale": "ok", "confidence": 0.6}))[1]):
+                tagger.critique_burst(frames)
+        urls = [part["image_url"]["url"] for part in captured["content"] if part["type"] == "image_url"]
+        sizes = {Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).size for url in urls}
+        self.assertEqual({(1600, 1000)}, sizes)
 
     def test_triage_astro_sends_one_image_with_classes_and_short_budget(self):
         tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k", role="fast")

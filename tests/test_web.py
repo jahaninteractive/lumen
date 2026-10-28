@@ -1350,20 +1350,32 @@ class WebTests(unittest.TestCase):
     def test_javascript_review_panel_decides_rows_by_button_and_key_and_confirms_count(self):
         self.run_javascript_cleanup_regression("review-rejects")
 
-    def test_review_model_switch_changes_the_review_role_between_the_two_models_only(self):
+    def test_busy_port_reports_the_bind_error(self):
+        with self.assertRaises(OSError):  # not an AttributeError from server_close running before __init__ finished
+            make_server(Settings(library_dir=self.root / "other"), port=self.server.server_address[1])
+
+    def test_role_model_switch_moves_either_role_between_the_two_models_only(self):
         both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
         with patch("lumen.diagnostics.get_server_status", return_value=both):
             status = self.get_json("/api/status")[1]
             self.assertEqual(["Qwen3.8-27B-4bit", "Qwen3-VL-8B-Instruct-4bit"], status["review_models"])
             self.assertEqual("Qwen3.8-27B-4bit", status["omlx_roles"]["review"]["model"])
-            for payload in ({}, {"model": "Other-Model"}, {"model": "Qwen3-VL-8B-Instruct-4bit", "extra": 1}, {"model": 1}):
+            self.assertEqual("Qwen3-VL-8B-Instruct-4bit", status["omlx_roles"]["fast"]["model"])
+            for payload in ({}, {"model": "Qwen3-VL-8B-Instruct-4bit"}, {"role": "review", "model": "Other-Model"},
+                            {"role": "other", "model": "Qwen3-VL-8B-Instruct-4bit"},
+                            {"role": "review", "model": "Qwen3-VL-8B-Instruct-4bit", "extra": 1}, {"role": "review", "model": 1}):
                 with self.subTest(payload=payload):
-                    self.assertEqual(400, self.post_json("/api/review-model", payload)[0])
-            self.assertEqual(403, self.post_json("/api/review-model", {"model": "Qwen3-VL-8B-Instruct-4bit"},
+                    self.assertEqual(400, self.post_json("/api/role-model", payload)[0])
+            self.assertEqual(403, self.post_json("/api/role-model", {"role": "review", "model": "Qwen3-VL-8B-Instruct-4bit"},
                                                  headers={"Origin": "https://attacker.example"})[0])
-            self.assertEqual((200, {"model": "Qwen3-VL-8B-Instruct-4bit"}),
-                             self.post_json("/api/review-model", {"model": "Qwen3-VL-8B-Instruct-4bit"}))
-            self.assertEqual("Qwen3-VL-8B-Instruct-4bit", self.get_json("/api/status")[1]["omlx_roles"]["review"]["model"])
+            self.assertEqual((200, {"role": "review", "model": "Qwen3-VL-8B-Instruct-4bit"}),
+                             self.post_json("/api/role-model", {"role": "review", "model": "Qwen3-VL-8B-Instruct-4bit"}))
+            self.assertEqual((200, {"role": "fast", "model": "Qwen3.8-27B-4bit"}),
+                             self.post_json("/api/role-model", {"role": "fast", "model": "Qwen3.8-27B-4bit"}))
+            status = self.get_json("/api/status")[1]
+            self.assertEqual("Qwen3-VL-8B-Instruct-4bit", status["omlx_roles"]["review"]["model"])
+            self.assertEqual("Qwen3.8-27B-4bit", status["omlx_roles"]["fast"]["model"])
+            self.assertEqual(["Qwen3.8-27B-4bit", "Qwen3-VL-8B-Instruct-4bit"], status["review_models"])  # the choice survives a switch
         with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.Library.caption_photo",
                                                                                   lambda self, photo_id, tagger: {"model": tagger.model}):
             self.assertEqual((200, {"model": "Qwen3-VL-8B-Instruct-4bit"}), self.post_json("/api/photos/1/caption", {}))
