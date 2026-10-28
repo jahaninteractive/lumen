@@ -364,8 +364,18 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   .loupe-viewport { height: 40vh; }
 }
 
+#ask-burst-ai[aria-busy="true"]::after {
+  content: ""; display: inline-block; width: .9em; height: .9em; margin-left: .5rem; vertical-align: -.1em;
+  border: 2px solid var(--cyan); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loupe-viewport.pick-flash { outline: 4px solid transparent; outline-offset: -4px; animation: pick-flash 5s ease-out forwards; }
+@keyframes pick-flash { from { outline-color: var(--amber); } to { outline-color: transparent; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  #ask-burst-ai[aria-busy="true"]::after { animation: none; }
+  .loupe-viewport.pick-flash { animation: none; outline-color: var(--amber); }
 }
 #ingest-verdict { font-weight: 700; color: var(--amber); }
 #keywords, #suggested-keywords, #vocabulary-list { margin: .25rem 0 1rem; padding: 0; list-style: none; }

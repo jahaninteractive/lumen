@@ -970,8 +970,9 @@ class Catalog:
             rows = self.connection.execute(
                 f"""
                 SELECT p.*, m.sharpness, m.exposure, m.clipping, m.face_quality,
-                       m.eye_quality, m.astro_json, m.total_score
+                       m.eye_quality, m.astro_json, m.total_score, e.selected_at AS crop_selected_at
                 FROM photos p JOIN photo_groups g ON g.id = p.group_id LEFT JOIN metrics m ON m.photo_id = p.id
+                LEFT JOIN photo_edits e ON e.photo_id = p.id
                 WHERE p.group_id = ? AND {where}
                 ORDER BY COALESCE(m.total_score, -1) DESC, p.path
                 """,

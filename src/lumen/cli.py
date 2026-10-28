@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -429,14 +430,16 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-def preview_version(fingerprint: str, preview_kind: str, preview_path: str | None) -> str:
+def preview_version(fingerprint: str, preview_kind: str, preview_path: str | None, crop_selected_at: str | None = None) -> str:
     """Cache key for a preview URL. The file's mtime is in it because a develop save rewrites the same
-    content-addressed path under the same fingerprint and kind, so nothing else would change."""
+    content-addressed path under the same fingerprint and kind, so nothing else would change; the crop's
+    selection time is in it because the thumb tier is cropped while the preview file is not."""
     try:
         stamp = Path(preview_path).stat().st_mtime_ns if preview_path else 0
     except OSError:
         stamp = 0
-    return f"{fingerprint[:16]}-{preview_kind}-{stamp}"
+    crop = f"-{hashlib.sha1(crop_selected_at.encode()).hexdigest()[:8]}" if crop_selected_at else ""
+    return f"{fingerprint[:16]}-{preview_kind}-{stamp}{crop}"
 
 
 def _serializable_groups(groups: list[dict]) -> list[dict]:
@@ -447,9 +450,9 @@ def _serializable_groups(groups: list[dict]) -> list[dict]:
         for photo in group["photos"]:
             item = dict(photo)
             item["name"] = Path(item["path"]).name
-            version = preview_version(item["fingerprint"], item["preview_kind"], item.get("preview_path"))
+            version = preview_version(item["fingerprint"], item["preview_kind"], item.get("preview_path"), item.get("crop_selected_at"))
             item["preview_url"] = f"/preview/{item['id']}?v={version}"
-            for key in ("path", "fingerprint", "preview_path", "mirror_path"):
+            for key in ("path", "fingerprint", "preview_path", "mirror_path", "crop_selected_at"):
                 item.pop(key, None)
             item.pop("astro_json", None)
             serialized["photos"].append(item)

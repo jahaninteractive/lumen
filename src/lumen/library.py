@@ -590,8 +590,8 @@ class Library:
         """Advisory reject suggestions still awaiting the photographer; web turns fingerprint16 into preview_url."""
         rows = self.catalog.connection.execute("""
             SELECT photos.id, photos.path, photos.group_id, photos.fingerprint, photos.preview_kind,
-                   photos.preview_path, tags.data_json
-            FROM tags JOIN photos ON photos.id = tags.photo_id
+                   photos.preview_path, tags.data_json, photo_edits.selected_at
+            FROM tags JOIN photos ON photos.id = tags.photo_id LEFT JOIN photo_edits ON photo_edits.photo_id = photos.id
             WHERE json_extract(tags.data_json, '$.problems.suggest_reject') = 1
               AND json_extract(tags.data_json, '$.problems.dismissed_at') IS NULL
               AND photos.decision != 'reject'
@@ -603,7 +603,7 @@ class Library:
             result.append({"photo_id": row["id"], "name": Path(row["path"]).name, "group_id": row["group_id"],
                            "problems": problems["items"], "confidence": problems["confidence"],
                            "fingerprint16": row["fingerprint"][:16], "preview_kind": row["preview_kind"],
-                           "preview_path": row["preview_path"]})
+                           "preview_path": row["preview_path"], "crop_selected_at": row["selected_at"]})
         return result
 
     @_coordinated

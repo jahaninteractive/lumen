@@ -240,6 +240,20 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(sorted(live), sorted(cache.iterdir()))
             self.assertEqual(0, prune_thumbnails(root / "missing", previews))
 
+    def test_thumbnail_for_applies_the_selected_crop_and_prune_keeps_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, preview = root / "thumbs", root / "a.jpg"
+            Image.new("RGB", (800, 600), "red").save(preview)
+            whole = thumbnail_for(preview, cache)
+            cropped = thumbnail_for(preview, cache, (0.25, 0.0, 0.5, 1.0))
+            self.assertNotEqual(whole, cropped)
+            with Image.open(whole) as image:
+                self.assertEqual((480, 360), image.size)
+            with Image.open(cropped) as image:
+                self.assertEqual((320, 480), image.size)
+            self.assertEqual(0, prune_thumbnails(cache, [preview]))
+
     def test_full_size_for_extracts_jpg_from_raw_first_and_caches_by_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

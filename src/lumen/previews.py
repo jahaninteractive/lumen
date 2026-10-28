@@ -219,15 +219,23 @@ def _normalize_exif_date(value: str | None) -> str | None:
 THUMB_EDGE = 480  # contact-sheet tiles are ~224 CSS px; 480 covers 2× displays
 
 
-def thumbnail_for(preview: Path, cache_dir: Path) -> Path:
-    """Small JPEG for a managed preview, written once below the library cache; the name carries the preview's mtime."""
-    target = cache_dir / f"{preview.stem}-{preview.stat().st_mtime_ns}.jpg"
+def thumbnail_for(preview: Path, cache_dir: Path, crop: tuple[float, float, float, float] | None = None) -> Path:
+    """Small JPEG for a managed preview, written once below the library cache; the name carries the preview's mtime.
+
+    `crop` is the selected normalized (left, top, width, height), so the contact sheet shows what export bakes in.
+    """
+    suffix = f"-{hashlib.sha1(repr(crop).encode()).hexdigest()[:8]}" if crop else ""
+    target = cache_dir / f"{preview.stem}-{preview.stat().st_mtime_ns}{suffix}.jpg"
     if target.is_file():
         return target
     cache_dir.mkdir(parents=True, exist_ok=True)
     with Image.open(preview) as image:
         image.draft("RGB", (THUMB_EDGE * 2, THUMB_EDGE * 2))  # cheap JPEG decode at reduced scale
         image = ImageOps.exif_transpose(image).convert("RGB")
+        if crop:
+            left, top, width, height = crop
+            image = image.crop((round(left * image.width), round(top * image.height),
+                                round((left + width) * image.width), round((top + height) * image.height)))
         image.thumbnail((THUMB_EDGE, THUMB_EDGE), Image.Resampling.LANCZOS)
         with tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
             image.save(temporary, "JPEG", quality=82)
@@ -273,5 +281,10 @@ def prune_cache(cache_dir: Path, live: set[str]) -> int:
 
 
 def prune_thumbnails(cache_dir: Path, previews: Iterable[Path]) -> int:
-    """Remove every cached thumbnail that no existing preview would name; returns the count removed."""
-    return prune_cache(cache_dir, {f"{preview.stem}-{preview.stat().st_mtime_ns}.jpg" for preview in previews if preview.is_file()})
+    """Remove every cached thumbnail, cropped or not, that no existing preview would name; returns the count removed."""
+    if not cache_dir.is_dir():
+        return 0
+    live = {f"{preview.stem}-{preview.stat().st_mtime_ns}" for preview in previews if preview.is_file()}
+    # ponytail: a superseded crop's thumb lives until its preview changes; a few KB each.
+    return prune_cache(cache_dir, {cached.name for cached in cache_dir.glob("*.jpg")
+                                   if cached.stem in live or cached.stem.rsplit("-", 1)[0] in live})

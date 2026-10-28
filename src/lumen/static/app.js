@@ -222,10 +222,16 @@ async function applyCrop(photoId, candidate) {
   state.busy = true;
   updateWorkflow();
   try {
-    if (candidate.kind === 'original') await post(`/api/photos/${photoId}/crop/clear`);
-    else await post(`/api/photos/${photoId}/crop`, candidate.kind === 'manual'
-      ? { candidate_id: candidate.id, rect: candidate.rect, aspect: candidate.aspect }
-      : { candidate_id: candidate.id });
+    const result = candidate.kind === 'original'
+      ? await post(`/api/photos/${photoId}/crop/clear`)
+      : await post(`/api/photos/${photoId}/crop`, candidate.kind === 'manual'
+        ? { candidate_id: candidate.id, rect: candidate.rect, aspect: candidate.aspect }
+        : { candidate_id: candidate.id });
+    const photo = photoById(photoId);
+    if (photo && result.preview_url) {
+      photo.preview_url = result.preview_url;  // the contact-sheet thumb now shows the crop export will bake in
+      refreshFrame(photoId);
+    }
     if (candidate.kind === 'manual' && state.manualCrop?.rect === candidate.rect) state.manualCrop = null;  // saved: the card and outline now come from active_crop; a newer drawing stays
     announce(candidate.kind === 'original' ? 'Original frame kept.' : `${cropLabel(candidate.kind)} selected.`);
     if (state.selectedId === photoId) await loadComposition();
@@ -566,6 +572,8 @@ function burstCritique(photo, group) {
   ask.disabled = !roleReady('review');
   ask.addEventListener('click', async () => {
     ask.disabled = true;
+    ask.setAttribute('aria-busy', 'true');  // the status bar is under the frame view, so the button shows the wait itself
+    ask.textContent = 'Asking local AI…';
     state.busy = true;  // The server holds the library lock for the whole model call, so culling waits visibly.
     updateWorkflow();
     announce('Asking local AI to compare this burst');
@@ -578,6 +586,8 @@ function burstCritique(photo, group) {
       announce(error.message);
       ask.disabled = !roleReady('review');
     } finally {
+      ask.removeAttribute('aria-busy');
+      ask.textContent = 'Ask local AI which frame is best';
       state.busy = false;
       updateWorkflow();
     }
@@ -606,7 +616,15 @@ function burstCritique(photo, group) {
     use.className = 'secondary';
     use.id = 'use-burst-pick';
     use.textContent = 'Use this pick';
-    use.addEventListener('click', () => decide(suggested, 'pick', null, `.frame[data-id="${suggested.id}"]`));
+    use.addEventListener('click', async () => {
+      await decide(suggested, 'pick', null, `.frame[data-id="${suggested.id}"]`);
+      if (openView?.id !== 'loupe' || group.automatic_pick_id !== suggested.id || state.selectedId === suggested.id) return;
+      focusFrame(suggested.id, false);  // the frame view follows the pick, as a ] step would
+      showFrame(suggested);
+      viewOrigin = suggested.id;
+      flashFrameView();
+      announce(`${suggested.name} is now your best frame.`);
+    });
     block.append(use);
   }
   return block;
@@ -1137,7 +1155,9 @@ function handleCullingKey(event) {
   if (key === 'Enter' && openView) return;  // no culling meaning in an open view: buttons, links, and summaries keep native activation
   // Only frame cards cull on the sheet; in the frame view its own buttons cull too.
   if (target?.tagName === 'BUTTON' && target.className !== 'frame' && openView?.id !== 'loupe') return;
-  if ((key === '[' || key === ']') && openView?.id === 'loupe') { event.preventDefault(); return stepLoupe(key === ']' ? 1 : -1); }
+  // Left and Right step too, unless a tab list or the curve editor already used the arrow.
+  const step = { '[': -1, ']': 1, ...(event.defaultPrevented ? {} : { ArrowLeft: -1, ArrowRight: 1 }) }[key];
+  if (step && openView?.id === 'loupe') { event.preventDefault(); return stepLoupe(step); }
   const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
   const index = ids.indexOf(state.focusedId);
   const row = sheetColumns();
@@ -2506,6 +2526,16 @@ function drawCropOverlay(rect) {
   Object.assign(cropOutline.style, { left: `${rect.left * 100}%`, top: `${rect.top * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` });
 }
 
+// A 5 s amber ring says the frame view now shows a different photo; removed by timer so reduced motion gets it too.
+let flashTimer = null;
+function flashFrameView() {
+  loupeViewport.classList.remove('pick-flash');
+  void loupeViewport.offsetWidth;  // restart the animation on a second switch
+  loupeViewport.classList.add('pick-flash');
+  window.clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => loupeViewport.classList.remove('pick-flash'), 5000);
+}
+
 // Filmstrip: step the loupe through the rendered frames in sheet order.
 function stepLoupe(delta) {
   const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
@@ -2549,6 +2579,8 @@ loupeViewport.addEventListener('keydown', event => {
     drawCropOverlay(shownCropRect());
     return announce('Crop cancelled');
   }
+  // An image that fits has nothing to pan sideways, so Left and Right go on to step the frame view.
+  if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !(loupeViewport.scrollWidth > loupeViewport.clientWidth)) return;
   panKey(event, loupeViewport);
 }, { capture: true });
 loupeViewport.addEventListener('pointerdown', event => {

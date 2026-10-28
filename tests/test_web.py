@@ -915,7 +915,7 @@ class WebTests(unittest.TestCase):
                 refreshed = json.load(response)
             self.assertEqual(candidate["id"], refreshed["active_crop"]["candidate_id"])
             code, cleared = self.post_json("/api/photos/1/crop/clear", {})
-            self.assertEqual((200, {"photo_id": 1, "active_crop": None}), (code, cleared))
+            self.assertEqual((200, {"photo_id": 1, "active_crop": None, "preview_url": payload["preview_url"]}), (code, cleared))
 
     def test_manual_crop_route_accepts_rect_and_rejects_bad_shapes(self):
         with patch("lumen.library.read_image_dimensions", return_value=(6000, 4000)), patch(
@@ -951,6 +951,31 @@ class WebTests(unittest.TestCase):
             generated = next(item for item in payload["candidates"] if item["kind"] != "original")
             code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": generated["id"]})
             self.assertEqual((200, generated["id"]), (code, chosen["candidate_id"]))
+
+    def test_a_selected_crop_versions_the_preview_url_and_crops_the_thumbnail(self):
+        """The contact sheet shows what export will bake in: the thumb follows the crop and its URL busts the cache."""
+        def thumb_size(url):
+            with urllib.request.urlopen(self.base + url.replace("/preview/", "/thumb/"), timeout=3) as response:
+                with Image.open(BytesIO(response.read())) as image:
+                    return image.size
+
+        before = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]["preview_url"]
+        whole = thumb_size(before)
+        with patch("lumen.library.read_image_dimensions", return_value=(6000, 4000)), patch(
+            "lumen.library.analyze_subject_regions", return_value=None
+        ):
+            code, chosen = self.post_json("/api/photos/1/crop", {"candidate_id": "crop-manual", "aspect": "free",
+                                                                 "rect": {"left": .25, "top": 0, "width": .5, "height": 1}})
+        self.assertEqual(200, code, chosen)
+        after = self.get_json("/api/groups")[1]["groups"][0]["photos"][0]["preview_url"]
+        self.assertNotEqual(before, after)
+        self.assertEqual(after, chosen["preview_url"])
+        self.assertEqual(after, self.get_json("/api/photos/1")[1]["photo"]["preview_url"])
+        width, height = thumb_size(after)
+        self.assertAlmostEqual(whole[0] / 2 / whole[1], width / height, places=1)
+        code, cleared = self.post_json("/api/photos/1/crop/clear", {})
+        self.assertEqual((200, before), (code, cleared["preview_url"]))
+        self.assertEqual(whole, thumb_size(before))
 
     def test_manual_crop_route_snaps_edge_overshoot_rounds_halves_up_and_rejects_nan(self):
         with patch("lumen.library.read_image_dimensions", return_value=(4096, 3999)), patch(
@@ -1492,6 +1517,7 @@ class Element {
     this.classList = {
       add: name => { if (!this.className.split(' ').includes(name)) this.className = (this.className + ' ' + name).trim(); },
       contains: name => this.className.split(' ').includes(name),
+      remove: name => { this.className = this.className.split(' ').filter(item => item !== name).join(' '); },
     };
   }
   append(...children) { children.forEach(child => { if (child && typeof child === 'object') child.parent = this; }); this.children.push(...children); }
@@ -2245,15 +2271,29 @@ const regression = `
     const asking = byId('ask-burst-ai').listeners.click();
     await new Promise(setImmediate);
     assert.equal(control('reject').disabled, true, 'culling waits while the review model holds the library');
+    assert.deepEqual([byId('ask-burst-ai').getAttribute('aria-busy'), byId('ask-burst-ai').textContent], ['true', 'Asking local AI…'], 'the button shows the wait where the status bar is hidden');
     pendingCritiques.shift()();
     await asking;
     assert.equal(control('reject').disabled, false);
     assert.deepEqual(critiqueRequests.at(-1), ['/api/groups/1/critique', 'POST']);
     assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Fresh look. (confidence 72%)');
     assert.deepEqual(picks, [], 'asking for advice never changes the pick');
+    Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    Object.assign(element('#loupe-viewport'), { tagName: 'DIV' });
+    openLoupe(2);
+    await new Promise(setImmediate);
+    assert.equal(element('#loupe-heading').textContent, state.groups[0].photos[1].name);
+    const flashed = [];
+    const viewportClasses = element('#loupe-viewport').classList;
+    const addClass = viewportClasses.add;
+    viewportClasses.add = name => { flashed.push(name); addClass(name); };  // the fake timer clears it at once
     await byId('use-burst-pick').listeners.click();
     assert.deepEqual(picks, ['/api/photos/3/pick']);
     assert.equal(state.groups[0].automatic_pick_id, 3);
+    assert.deepEqual([element('#loupe-heading').textContent, state.selectedId, state.focusedId], ['photo-3.jpg', 3, 3], 'the frame view moves to the new pick');
+    assert.equal(element('#announcer').textContent, 'photo-3.jpg is now your best frame.');
+    assert.deepEqual(flashed, ['pick-flash'], 'the frame view flashes when it changes photo');
+    await new Promise(setImmediate);
     state.groups[0].photos[2].decision = 'reject';
     renderInspector(state.groups[0].photos[1]);
     assert.ok(byId('burst-advice').textContent.endsWith('(frame is rejected)'));
@@ -2447,7 +2487,7 @@ const regression = `
       image.listeners.load();
       assert.deepEqual([image.className, image.width, image.height], ['fit', undefined, undefined], 'the frame view fits the stored preview to its viewport; CSS sizes it');
       assert.equal(focused, viewport);
-      Object.assign(viewport, { scrollTop: 0, scrollLeft: 0, tagName: 'DIV' });
+      Object.assign(viewport, { scrollTop: 0, scrollLeft: 0, scrollWidth: 3200, clientWidth: 1200, tagName: 'DIV' });  // full size: wider than the view
       await key('ArrowDown', viewport, viewport);
       await key('ArrowRight', viewport, viewport);
       assert.deepEqual([viewport.scrollTop, viewport.scrollLeft], [40, 40]);
@@ -3224,6 +3264,20 @@ const regression = `
     assert.equal(announced(), 'photo-2.jpg, 2 of 3');
     assert.equal(state.focusedId, 2);
     assert.equal(card(2).getAttribute('tabindex'), '0');
+    await key('ArrowRight', viewport, loupe);
+    assert.equal(element('#loupe-heading').textContent, 'photo-3.jpg', 'arrows step the frame view like brackets');
+    await key('ArrowLeft', viewport, loupe);
+    assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg');
+    await loupe.listeners.keydown({ key: 'ArrowRight', defaultPrevented: true, metaKey: false, ctrlKey: false, altKey: false, target: viewport, preventDefault() {}, stopPropagation() {} });
+    assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg', 'an arrow a tab list already used never steps');
+    let stopped = 0;
+    const viewportKey = () => viewport.listeners.keydown({ key: 'ArrowRight', metaKey: false, ctrlKey: false, altKey: false, target: viewport, preventDefault() {}, stopPropagation() { stopped += 1; } });
+    viewportKey();
+    assert.equal(stopped, 0, 'an image that fits lets the arrow reach the frame view');
+    Object.assign(viewport, { scrollWidth: 2000, clientWidth: 500, scrollLeft: 0 });
+    viewportKey();
+    assert.deepEqual([stopped, viewport.scrollLeft], [1, 40], 'a full-size image still pans with the arrows');
+    Object.assign(viewport, { scrollWidth: 0, clientWidth: 0 });
     await key('x', viewport, loupe);
     assert.deepEqual(decisionPosts.at(-1), { url: '/api/photos/2/decision', body: { decision: 'reject' } }, 'culling keys act on the frame shown');
     await key('Escape', viewport, loupe);
@@ -4587,9 +4641,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         terms = [node for node in legend if node["tag"] == "dt"]
         keys = [node["text"].strip() for node in legend if node["tag"] == "kbd"]
         self.assertGreaterEqual(len(terms), 8)
-        for key in ("P", "X", "F", "U", "C", "0", "5", "Home", "End", "[", "]"):
+        for key in ("P", "X", "F", "U", "C", "0", "5", "Home", "End", "[", "]", "←", "→"):
             self.assertIn(key, keys)
-        for text in ("Previous or next frame in the frame view", "Open the frame view", "Close compare or the frame view", "Full size on or off in the frame view"):
+        for text in ("Previous or next frame in the frame view; at full size the arrows pan instead", "Open the frame view", "Close compare or the frame view", "Full size on or off in the frame view"):
             self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() == text for node in legend), text)
         self.assertIn("Z", keys)
         for key in keys:

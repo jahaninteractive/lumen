@@ -40,6 +40,12 @@ DEVELOP_FEEDBACK_MAX = 200  # one short correction ("too warm"), matching the fi
 _FLAG_FILTERS = {"keepers_only", "tagged_only", "show_rejected"}
 
 
+def _preview_url(photo, crop) -> str:
+    """The frame's versioned preview URL; the thumb tier is cropped, so the selected crop versions it too."""
+    stamp = crop.selected_at.isoformat() if crop else None
+    return f"/preview/{photo.id}?v={preview_version(photo.fingerprint, photo.preview_kind, photo.preview_path, stamp)}"
+
+
 def parse_group_filters(query: str) -> GroupFilters:
     """Strict `/api/groups` query parser: unknown, repeated, or malformed keys raise ValueError("invalid filter: <name>")."""
     values = {}
@@ -302,7 +308,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     suggestions = library.reject_suggestions()
                 for item in suggestions:  # The fingerprint only versions the preview URL; it never reaches the browser.
                     version = preview_version(item.pop("fingerprint16"), item.pop("preview_kind"),
-                                              item.pop("preview_path"))
+                                              item.pop("preview_path"), item.pop("crop_selected_at"))
                     item["preview_url"] = f"/preview/{item['photo_id']}?v={version}"
                 self._send_json({"suggestions": suggestions, "count": len(suggestions)})
                 return
@@ -343,8 +349,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError(f"unknown photo ID: {photo_id}")
                     self._send_json({
                         "photo_id": photo_id,
-                        "preview_url": f"/preview/{photo_id}?v="
-                                       f"{preview_version(photo.fingerprint, photo.preview_kind, photo.preview_path)}",
+                        "preview_url": _preview_url(photo, active),
                         "candidates": [asdict(candidate) for candidate in candidates],
                         "active_crop": active.to_dict() if active else None,
                         "source_width": candidates[0].pixel_box[2],
@@ -358,16 +363,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 with Library(settings) as library:
                     item = library.get_photo(int(match.group(1)))
                     develop = library.develop_for(item["photo"].id) if item else None
+                    crop = library.catalog.get_crop(item["photo"].id) if item else None
                 if not item:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
+                preview_url = _preview_url(item["photo"], crop)
                 photo = asdict(item["photo"])
-                version = preview_version(photo["fingerprint"], photo["preview_kind"], photo.get("preview_path"))
                 # The Develop tab needs both before it offers a control: every render reads the original.
                 photo["offline"] = not Path(photo["path"]).is_file()
                 for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                     photo.pop(key, None)
-                photo["preview_url"] = f"/preview/{photo['id']}?v={version}"
+                photo["preview_url"] = preview_url
                 self._send_json({"photo": photo, "develop": develop and develop.to_dict(),
                                  "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
                 return
@@ -401,6 +407,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             if match:
                 with Library(settings) as library:
                     photo = library.catalog.get_photo(int(match.group(2)))
+                    edit = library.catalog.get_crop(photo.id) if photo else None
                 if not photo or not photo.preview_path:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
@@ -415,7 +422,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 if match.group(1) == "thumb":
                     try:
-                        preview = thumbnail_for(preview, settings.cache_dir / "thumbs")
+                        preview = thumbnail_for(preview, settings.cache_dir / "thumbs", edit and (
+                            edit.rect.left, edit.rect.top, edit.rect.width, edit.rect.height))
                     except (OSError, ValueError):
                         self.send_error(HTTPStatus.NOT_FOUND)
                         return
@@ -432,9 +440,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 else:
                     develop = library.save_develop(photo_id, develop)
                 photo = library.catalog.get_photo(photo_id)
-            version = preview_version(photo.fingerprint, photo.preview_kind, photo.preview_path)
-            return {"photo_id": photo_id, "develop": develop and develop.to_dict(),
-                    "preview_url": f"/preview/{photo_id}?v={version}"}
+                crop = library.catalog.get_crop(photo_id)
+            return {"photo_id": photo_id, "develop": develop and develop.to_dict(), "preview_url": _preview_url(photo, crop)}
 
         def do_DELETE(self) -> None:
             path = urlparse(self.path).path
@@ -669,9 +676,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     try:
                         with Library(settings) as library:
                             edit = library.choose_crop(int(match.group(1)), payload["candidate_id"], **extra)
+                            photo = library.catalog.get_photo(edit.photo_id)
                     except (ValueError, OverflowError, OSError, RuntimeError) as error:
                         raise ValueError("crop could not be selected for this photo") from error
-                    self._send_json(edit.to_dict())
+                    self._send_json({**edit.to_dict(), "preview_url": _preview_url(photo, edit)})
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/crop/clear", path)
                 if match:
@@ -681,9 +689,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     try:
                         with Library(settings) as library:
                             library.clear_crop(photo_id)
+                            photo = library.catalog.get_photo(photo_id)
                     except (ValueError, OverflowError, OSError, RuntimeError) as error:
                         raise ValueError("crop could not be cleared for this photo") from error
-                    self._send_json({"photo_id": photo_id, "active_crop": None})
+                    self._send_json({"photo_id": photo_id, "active_crop": None, "preview_url": _preview_url(photo, None)})
                     return
                 if match := re.fullmatch(r"/api/photos/(\d+)/develop/apply-to-group", path):
                     if payload:
