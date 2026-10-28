@@ -67,6 +67,8 @@ It is a personal tool built for one photographer's workflow and shared as is.
   triage from the local models; none of them pick, reject, or exclude for you.
 - GPS location read from the original and kept in the catalog and Full exports,
   resolved offline to a place name and country from a local GeoNames index.
+  Frames without GPS take a position you type (a ship's display, a map), and a
+  typed position stays editable; the camera's own fix is never changed.
 - Verified card ingest (SHA-256 on every copy, optional mirror) before import.
 - Near-duplicate clusters inside a burst from a perceptual difference hash.
 - 480 px thumbnail tier for the contact sheet, with Small/Medium/Large tiles.
@@ -87,7 +89,9 @@ It is a personal tool built for one photographer's workflow and shared as is.
   watermark and darktable XMP profile; the keepers export runs as a cancellable
   background job with a progress dialog. Each frame lands in a subfolder named
   for the date it was taken, and every export carries the camera's MakerNote
-  plus IPTC caption and keywords alongside the EXIF and XMP.
+  plus IPTC caption and keywords alongside the EXIF and XMP. A failed frame's
+  reason (a full disk is named as one) goes in the job log, and the **Export
+  failed** filter lists those frames so you can retry just them.
 - A status bar that says when the running server is older than the files on
   disk, so a stale `lumen serve` cannot look current.
 - Guided, reproducible Siril stacking of a confirmed night-sky batch with
@@ -368,7 +372,10 @@ adds your name to the local place index so later imports within 25 km resolve
 to it without any online lookup. A later correction at the same spot replaces
 the remembered name. Remember is disabled on a frame with no GPS fix; **Fill
 this day's frames that have no GPS and no place** covers a day shot with the
-phone off (see [Places](#places)).
+phone off (see [Places](#places)). On a frame with no GPS, **Add GPS position**
+takes coordinates such as `33°55.2'S 18°25.2'E` for the frame, its burst, or
+the day; once typed, the button reads **Edit GPS position** so a mistake can be
+corrected.
 
 ## Filters and paging
 
