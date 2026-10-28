@@ -746,7 +746,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
-            "/api/photos/1/develop/suggest",
+            "/api/photos/1/develop/suggest", "/api/photos/1/location",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -767,7 +767,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
-            "/api/photos/1/develop/suggest",
+            "/api/photos/1/develop/suggest", "/api/photos/1/location",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -1700,6 +1700,7 @@ let rejectRows = suggestionRows();
 const rejectPosts = [];
 const keywordPosts = [];
 const placePosts = [];
+const locationPosts = [];
 const keywordData = { subjects: ['ice'], suggested: ['krill', 'gentoo penguin'] };
 const untaggedKeywords = { subjects: [], suggested: [] };
 const vocabState = { categories: { wildlife: ['gentoo penguin'], learned: ['spindrift', 'krill'] }, counts: { spindrift: 3, krill: 1 }, blocked: [] };
@@ -1827,6 +1828,12 @@ async function fetch(url, options = {}) {
     placePosts.push(body);
     if (!body.name.trim()) { ok = false; payload = { error: 'place name must be 1-80 characters and country at most 60' }; }
     else payload = { photo_ids: body.scope === 'frame' ? [Number(url.split('/')[3])] : [1, 2], name: body.name, country: body.country || null, remembered: body.remember };  // radius_km rides along; the server decides who is near
+  }
+  else if (/^\/api\/photos\/[12]\/location$/.test(url)) {
+    assert.equal(options.method, 'POST');
+    const body = JSON.parse(options.body);
+    locationPosts.push(body);
+    payload = { photo_ids: [Number(url.split('/')[3])], latitude: -33.92, longitude: 18.42, place: 'Hide', country: null, location_typed: true };
   }
   else if (url === '/api/digests') {
     assert.equal(options.method, 'POST');
@@ -3459,10 +3466,11 @@ const regression = `
     pickStatus('flag');
     element('#filter-rating').value = '2';
     element('#filter-tagged').checked = true;
+    element('#filter-export-failed').checked = true;
     element('#filter-text').value = ' red fox ';
     groups = groups.slice(0, 3);
     await element('#filter-form').listeners.submit({ preventDefault() {} });
-    const query = 'date_from=2026-10-21&date_to=2026-10-22&camera=ILCE-7M4%3A1&min_rating=2&tagged_only=1&text=red+fox&decision=flag';
+    const query = 'date_from=2026-10-21&date_to=2026-10-22&camera=ILCE-7M4%3A1&min_rating=2&tagged_only=1&export_failed_only=1&text=red+fox&decision=flag';
     assert.equal(location.search, '?' + query);
     assert.equal(lastGroupsUrl, '/api/groups?' + query);
     assert.equal(element('#announcer').textContent, 'Showing 200 of 390 frames');
@@ -3867,11 +3875,11 @@ const regression = `
     await settle();
     assert.equal(state.job.status, 'succeeded');
     assert.equal(state.busy, false);
-    assert.equal(element('#export-dialog-status').textContent, 'Export finished. 1 saved, 1 failed.');
-    assert.equal(element('#export-status').textContent, 'Export finished. 1 saved, 1 failed.');
+    assert.equal(element('#export-dialog-status').textContent, 'Export finished. 1 saved, 1 failed. Tick Export failed in the filters to see them.');
+    assert.equal(element('#export-status').textContent, 'Export finished. 1 saved, 1 failed. Tick Export failed in the filters to see them.');
     assert.deepEqual(element('#export-results').children.map(item => item.textContent), ['photo-2.jpg: bad render'], 'failures are listed by basename');
     assert.equal(element('#ai-status').dataset.phase, 'done');
-    assert.equal(element('#ai-status').textContent, 'Export finished. 1 saved, 1 failed.');
+    assert.equal(element('#ai-status').textContent, 'Export finished. 1 saved, 1 failed. Tick Export failed in the filters to see them.');
     assert.equal(element('#export-dialog-cancel').hidden, true);
     assert.equal(element('#export-dialog-close').hidden, false);
     assert.equal(dialog.hidden, false, 'the outcome stays visible until closed');
@@ -4195,6 +4203,26 @@ const regression = `
     byId('place-name').value = 'Hide';
     await submit();
     assert.deepEqual(placePosts.at(-1), { name: 'Hide', country: '', scope: 'day', remember: false, radius_km: 5 }, 'the day outranks the burst');
+    const add = byId('add-position');
+    assert.equal(add.textContent, 'Add GPS position');
+    assert.equal(byId('position-form').hidden, true);
+    add.listeners.click();
+    assert.equal(byId('position-form').hidden, false);
+    assert.equal(focused, byId('position-text'));
+    assert.equal(tree(element('#inspection')).find(node => node.tagName === 'LABEL' && node.htmlFor === 'position-text').textContent, 'Position');
+    assert.deepEqual([byId('position-burst').checked, byId('position-day').checked], [true, false]);
+    byId('position-day').checked = true;
+    byId('position-text').value = " 33°55.2'S 18°25.2'E ";
+    await byId('position-form').listeners.submit({ preventDefault() {} });
+    assert.deepEqual(locationPosts.at(-1), { position: " 33°55.2'S 18°25.2'E ", scope: 'day' }, 'the day outranks the burst');
+    assert.equal(element('#announcer').textContent, 'GPS position added to 1 frame');
+    assert.equal(byId('location').textContent, 'Place: Hide · 33.9200° S, 18.4200° E');
+    assert.equal(byId('add-position').textContent, 'Edit GPS position', 'a typed position stays editable');
+    assert.equal(focused, byId('edit-place'));
+    byId('add-position').listeners.click();
+    assert.equal(byId('position-text').value, '-33.92, 18.42', 'prefilled with the typed position');
+    await inspect(state.groups[0].photos[0]);
+    assert.ok(!byId('add-position'), "the camera's fix is not editable");
     return;
   }
   if (scenario === 'location') {
@@ -4781,7 +4809,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             "?date_from=2026-10-22&date_to=2026-10-21": "date_to", "?date_from=2026-13-01": "date_from",
             "?date_to=20261021": "date_to", "?min_rating=two": "min_rating", "?min_rating=6": "min_rating",
             "?min_rating=2.0": "min_rating", "?decision=maybe": "decision", "?decision=FLAG": "decision",
-            "?keepers_only=true": "keepers_only", "?tagged_only=2": "tagged_only", "?show_rejected=yes": "show_rejected",
+            "?keepers_only=true": "keepers_only", "?tagged_only=2": "tagged_only", "?export_failed_only=yes": "export_failed_only", "?show_rejected=yes": "show_rejected",
             "?bogus=1": "bogus", f"?{self.root}=1": "unknown",
         }
         for query, name in invalid.items():
@@ -5116,6 +5144,23 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                          self.post_json("/api/photos/1/place", valid))
         photo = self.get_json("/api/photos/1")[1]["photo"]
         self.assertEqual(("Our camp", "South Africa"), (photo["place"], photo["place_country"]))
+
+    def test_location_route_validates_and_fills_a_frame_without_a_fix(self):
+        valid = {"position": "33°55.2'S 18°25.2'E", "scope": "frame"}
+        for payload in ({}, {"position": "-33.9, 18.4"}, valid | {"scope": "nearby"}, valid | {"position": 5},
+                        valid | {"position": "nowhere"}, valid | {"position": "x" * 81}, valid | {"extra": 1}):
+            with self.subTest(payload=payload):
+                self.assertEqual(400, self.post_json("/api/photos/1/location", payload)[0])
+        self.assertEqual(400, self.post_json("/api/photos/999/location", valid)[0])
+        code, body = self.post_json("/api/photos/1/location", valid)
+        self.assertEqual(200, code, body)
+        self.assertEqual({"photo_ids", "latitude", "longitude", "place", "country", "location_typed"}, set(body))
+        self.assertEqual([1], body["photo_ids"])
+        photo = self.get_json("/api/photos/1")[1]["photo"]
+        self.assertAlmostEqual(-33.92, photo["latitude"])
+        self.assertTrue(photo["location_typed"])
+        code, body = self.post_json("/api/photos/1/location", valid | {"position": "-1, 1"})
+        self.assertEqual((200, -1.0), (code, body["latitude"]), "a typed position can be corrected")
 
     def test_javascript_contact_sheet_groups_frames_into_burst_sections(self):
         self.run_javascript_cleanup_regression("bursts")

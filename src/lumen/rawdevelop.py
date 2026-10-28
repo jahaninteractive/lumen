@@ -178,7 +178,9 @@ def render_raw(
     except (OSError, subprocess.SubprocessError, ValueError):
         raise failed(f"The raw developer could not be run for {name}.") from None
     if completed.returncode != 0:
-        raise failed(f"The raw developer could not develop {name}.")
+        # The helper's messages name no paths, only the file's basename, so its last line is safe to pass on.
+        reason = completed.stderr.strip().splitlines()[-1:] if isinstance(completed.stderr, str) else []
+        raise failed(f"The raw developer could not develop {name}" + (f": {reason[0]}." if reason else "."))
     try:
         payload = json.loads(completed.stdout)
         render = DevelopRender(

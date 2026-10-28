@@ -25,7 +25,7 @@ from .composition import CropCandidate, generate_candidates
 from .digest import day_facts, render_facts_table
 from .domain import (MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, DevelopSettings, Job,
                      Photo, PhotoEdit)
-from .geonames import Place, PlaceIndex, distance_km, online_lookup
+from .geonames import Place, PlaceIndex, distance_km, online_lookup, parse_position
 from . import ingest
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
@@ -253,6 +253,51 @@ class Library:
         if remembered:
             self.places.add(name, country or "", photo.latitude, photo.longitude, source="manual", feature_code="MANUAL")
         return {"photo_ids": targets, "name": name, "country": country, "remembered": remembered}
+
+    @_coordinated
+    def set_location(self, photo_id: int, position: str, *, scope: str) -> dict:
+        """A position the photographer typed (a ship's display, a map) for a frame without a camera fix, its burst, or
+        (`day`) every frame shot the same day. In scope it fills frames with no fix and replaces this frame's own typed
+        position wherever that was typed; a camera fix, another typed spot and a typed place name are kept."""
+        if scope not in ("frame", "burst", "day"):
+            raise ValueError("scope must be frame, burst or day")
+        latitude, longitude = parse_position(position)
+        photo = self.catalog.get_photo(photo_id)
+        if not photo:
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        typed = self.location_typed(photo)
+        if photo.latitude is not None and not typed:
+            raise ValueError("this frame already has a GPS fix from the camera")
+        old = (photo.latitude, photo.longitude) if typed else None
+        candidates = [photo]
+        if scope == "burst" and photo.group_id is not None:
+            ids = set(self.catalog.group_photo_ids(photo.group_id))
+            candidates = [other for other in self.catalog.list_photos() if other.id in ids]
+        elif scope == "day" and photo.captured_at is not None:
+            day = photo.captured_at.date()
+            candidates = [other for other in self.catalog.list_photos() if other.captured_at and other.captured_at.date() == day]
+        targets = [other for other in candidates if other.latitude is None
+                   or (old is not None and (other.latitude, other.longitude) == old and self.location_typed(other))]
+        for target in targets:
+            self.catalog.update_location(target.id, latitude=latitude, longitude=longitude, altitude=None)
+            self.catalog.append_event(target.id, "location_set", {"latitude": latitude, "longitude": longitude, "scope": scope})
+            if not target.place or self._last_event(target.id, ("place_resolved", "place_edited")) == "place_resolved":
+                self._resolve_place(target.id, latitude, longitude)
+            self._write_sidecar(target.id)
+        named = self.catalog.get_photo(photo_id)
+        return {"photo_ids": [target.id for target in targets], "latitude": latitude, "longitude": longitude,
+                "place": named.place, "country": named.place_country, "location_typed": True}
+
+    def location_typed(self, photo: Photo) -> bool:
+        """The frame's fix is the last position the photographer typed, not the camera's (a re-import that changed
+        the file's fix leaves the old event behind, which no longer matches)."""
+        if photo.latitude is None:
+            return False
+        last = next((event for event in reversed(self.catalog.events_for(photo.id)) if event.kind == "location_set"), None)
+        return last is not None and (last.details["latitude"], last.details["longitude"]) == (photo.latitude, photo.longitude)
+
+    def _last_event(self, photo_id: int, kinds: tuple[str, ...]) -> str | None:
+        return next((event.kind for event in reversed(self.catalog.events_for(photo_id)) if event.kind in kinds), None)
 
     def _drop_place_keywords(self, photo_id: int, keep: set[str]) -> None:
         """Tagging applied the old place as keywords; drop them unless the photographer added them or they still hold."""
@@ -1633,12 +1678,13 @@ class Library:
                     rating=-1 if photo.decision == "reject" else photo.rating,
                     reserved_paths={Path(artifact.path) for artifact in self.catalog.list_artifacts()},
                     preset=request.preset, develop=settings, stem_suffix=stem_suffix, watermark=request.watermark,
-                    place=photo.place, country=photo.place_country, subfolder=_export_folder(photo, request))
+                    place=photo.place, country=photo.place_country, subfolder=_export_folder(photo, request),
+                    gps=(photo.latitude, photo.longitude) if photo.latitude is not None and photo.longitude is not None else None)
                 if not rendered.success:
                     if done:  # The developed JPEG published; the companion did not, so neither stands.
                         raise RuntimeError(f"the untouched version failed, so the developed JPEG was withdrawn "
                                            f"as well and nothing was exported: {rendered.message}")
-                    return ExportResult(photo.id, False, None, rendered.message)
+                    return self._export_failed(photo.id, rendered.message)
                 published = [rendered, None]
                 done.append(published)
                 published[1] = self.catalog.save_artifact(photo.id, Path(photo.path).name,
@@ -1676,7 +1722,16 @@ class Library:
                         self._write_sidecar(photo.id)
                 except Exception as compensation_error:
                     errors.append(f"sidecar compensation failed: {compensation_error}")
-            return ExportResult(photo.id, False, None, "; ".join(errors))
+            return self._export_failed(photo.id, "; ".join(errors))
+
+    def _export_failed(self, photo_id: int, message: str) -> ExportResult:
+        """Record the failure so the contact sheet's Export failed filter can find the frame until it exports."""
+        try:
+            if self.catalog.get_photo(photo_id) is not None:
+                self.catalog.append_event(photo_id, "export_failed", {})
+        except Exception as error:  # The failure itself is what the photographer needs to hear about.
+            message += f"; recording the failure failed: {error}"
+        return ExportResult(photo_id, False, None, message)
 
     @_coordinated
     def prepare_astro_job(self, group_id: int, *, confirmed: bool, excluded_photo_ids: Sequence[int] = (),

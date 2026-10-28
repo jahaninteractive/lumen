@@ -38,6 +38,7 @@ class GroupFilters:
     min_rating: int = 0
     keepers_only: bool = False
     tagged_only: bool = False
+    export_failed_only: bool = False
     text: str | None = None
     show_rejected: bool = False
 
@@ -57,7 +58,7 @@ class GroupFilters:
             raise ValueError("invalid filter: decision")
         if type(self.min_rating) is not int or not 0 <= self.min_rating <= 5:
             raise ValueError("invalid filter: min_rating")
-        for name in ("keepers_only", "tagged_only", "show_rejected"):
+        for name in ("keepers_only", "tagged_only", "export_failed_only", "show_rejected"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"invalid filter: {name}")
 
@@ -83,6 +84,9 @@ class GroupFilters:
             params.append(self.min_rating)
         if self.keepers_only:  # Same rule as Library.keeper_ids.
             conditions.append("p.decision != 'reject' AND (p.decision = 'flag' OR p.id = g.automatic_pick_id)")
+        if self.export_failed_only:  # The frame's latest export attempt failed.
+            conditions.append("(SELECT v.kind FROM provenance v WHERE v.photo_id = p.id AND v.kind IN ('exported', 'export_failed')"
+                              " ORDER BY v.id DESC LIMIT 1) = 'export_failed'")
         if self.tagged_only or self.text:
             # String arrays are searched as their JSON text; species by name only (not its "confidence" key);
             # problem kinds also match their human form, so "motion blur" finds motion_blur.

@@ -375,7 +375,9 @@ phone off (see [Places](#places)).
 The filter bar has two rows and every control applies as soon as it changes;
 there is no Apply button. Row one holds tag text with Expand, a status choice
 (**All**, **Keepers**, **Flagged**, **Unsorted**, **Rejected**), minimum rating,
-and Reset. Row two holds the date range, camera, and **Tagged only**. **All**
+and Reset. Row two holds the date range, camera, **Tagged only**, and **Export
+failed** (frames whose last export failed; one that later exports drops out).
+**All**
 hides rejected frames; choose **Rejected** to review them. The heading shows
 "N of M frames" while a filter is on, and carries Tiles, Refine, Compare
 marked, and Shortcuts. The heading and filter bar stay pinned under the tabs
@@ -427,6 +429,18 @@ you are editing and are disabled without one; the name itself can still be set
 by hand. Remembering adds the name to the local index at this frame's fix,
 where it outranks every looked-up name and survives an index rebuild, so later
 imports from the same spot resolve to it offline.
+
+**Add GPS position** appears on frames with no GPS fix. Type a position the way
+a map or a ship's display shows it, as decimal degrees (`-33.92, 18.42`) or
+degrees and minutes with hemispheres (`33°55.2'S 18°25.2'E`; seconds work too).
+It applies to the frame, the whole burst (on by default), or this day's frames
+that have no GPS. Frames with a camera fix are never changed. A frame without a
+place name is named from the new position; a name you typed is kept. A typed
+position stays editable: **Edit GPS position** opens it prefilled, and saving
+replaces that same position wherever the chosen scope reaches (and fills frames
+with none), leaving other typed spots alone; a looked-up place name follows it. The
+position lives in the catalog, never in the original, and Full resolution
+exports write it into the JPEG's GPS; Share and Web leave it out as usual.
 
 Names come from a local GeoNames index built from the `.txt` files in
 `vendor/data/geonames/` (or `LUMEN_GEONAMES_DIR`) into
@@ -567,7 +581,11 @@ export will write.
 Next use the **Export** tab. Choose **Current photo**, **All keepers**, or
 **Frames the contact sheet filters show**, which exports exactly what the
 filter bar matches (all of it, not only the page on screen) as a cancellable
-job. A keeper is any frame that is not rejected and is either
+job. When frames fail, tick **Export failed** and export the filtered frames to
+retry just those. Each job's reasons are in
+`<library>/outputs/jobs/<id>/job.log`; a failure with under 1 GB free on the
+library's disk says the disk is full, since each raw needs a full-size working
+render there. A keeper is any frame that is not rejected and is either
 flagged or the best frame in its burst, so a single frame stays a keeper unless
 you reject it. The tab also explains **Flagged** (marked to keep with F),
 **Unsorted** (no decision yet), and **Tagged** (described with keywords by the

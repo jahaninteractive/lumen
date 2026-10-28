@@ -119,6 +119,7 @@ class RenderRawTests(unittest.TestCase):
 
         message = str(caught.exception)
         self.assertIn("DSC02733.ARW", message)
+        self.assertIn("unable to decode", message, "the helper's own reason reaches the job log")
         self.assertNotIn(str(self.root), message)
         self.assertNotIn("Traceback", message)
 

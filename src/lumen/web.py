@@ -37,7 +37,7 @@ STATIC_FILES = {
 
 DEVELOP_FEEDBACK_MAX = 200  # one short correction ("too warm"), matching the field's maxlength
 
-_FLAG_FILTERS = {"keepers_only", "tagged_only", "show_rejected"}
+_FLAG_FILTERS = {"keepers_only", "tagged_only", "export_failed_only", "show_rejected"}
 
 
 def _preview_url(photo, crop) -> str:
@@ -381,6 +381,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     item = library.get_photo(int(match.group(1)))
                     develop = library.develop_for(item["photo"].id) if item else None
                     crop = library.catalog.get_crop(item["photo"].id) if item else None
+                    location_typed = library.location_typed(item["photo"]) if item else False
                 if not item:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
@@ -391,6 +392,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                     photo.pop(key, None)
                 photo["preview_url"] = preview_url
+                photo["location_typed"] = location_typed  # only a position typed in Lumen can be edited
                 self._send_json({"photo": photo, "develop": develop and develop.to_dict(),
                                  "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
                 return
@@ -845,6 +847,15 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json(library.set_place(int(match.group(1)), payload["name"], payload["country"],
                                                           scope=payload["scope"], remember=payload["remember"],
                                                           radius_km=float(payload["radius_km"])))
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/location", path)
+                if match:
+                    if payload.keys() != {"position", "scope"} or not (
+                            isinstance(payload["position"], str) and len(payload["position"]) <= 80
+                            and isinstance(payload["scope"], str)):
+                        raise ValueError("location requires a position string of at most 80 characters and a scope string")
+                    with Library(settings) as library:
+                        self._send_json(library.set_location(int(match.group(1)), payload["position"], scope=payload["scope"]))
                     return
                 match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
                 if match:

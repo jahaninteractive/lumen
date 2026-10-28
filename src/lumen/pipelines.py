@@ -110,6 +110,24 @@ DECODERS = frozenset({"darktable", "coreimage"})
 # A full-size export render keeps the budget the macOS decoder had; the interactive preview keeps the shorter
 # default in `rawdevelop`, so a slow export never makes the Develop tab feel hung.
 EXPORT_RENDER_TIMEOUT_SECONDS = 600
+# A full-size 16-bit working render of a 61 MP raw is about 490 MB, staged beside its copied original, so a failure
+# with less than this free is reported as the full disk it almost certainly is.
+EXPORT_MIN_FREE_BYTES = 2**30
+
+
+def _gps_ifd(latitude: float, longitude: float) -> dict:
+    def dms(value: float) -> tuple[float, float, float]:
+        minutes, seconds = divmod(round(abs(value) * 3600, 2), 60)
+        degrees, minutes = divmod(minutes, 60)
+        return float(degrees), float(minutes), float(seconds)
+    return {0: b"\x02\x03\x00\x00", 1: "S" if latitude < 0 else "N", 2: dms(latitude),
+            3: "W" if longitude < 0 else "E", 4: dms(longitude)}
+
+
+def _disk_full(directory: Path) -> list[str]:
+    free = shutil.disk_usage(directory).free
+    return [f"the disk holding the Lumen library is full ({free // 2**20} MB free); free at least 1 GB and export again"
+            ] if free < EXPORT_MIN_FREE_BYTES else []
 
 
 class DarktablePipeline:
@@ -125,7 +143,7 @@ class DarktablePipeline:
         caption_used: bool = False, reserved_paths: set[Path] | None = None, preset: str = "full",
         develop: dict[str, object] | None = None, stem_suffix: str | None = None,
         watermark: str | None = None, place: str | None = None, country: str | None = None,
-        subfolder: str | None = None,
+        subfolder: str | None = None, gps: tuple[float, float] | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> JpegExportResult:
         if preset not in EXPORT_PRESETS:
@@ -203,7 +221,8 @@ class DarktablePipeline:
                 command = rendered.command
                 settings["command"] = list(command)
                 if not rendered.success:
-                    return JpegExportResult(False, rendered.returncode, destination, command, rendered.message, settings, "")
+                    return JpegExportResult(False, rendered.returncode, destination, command,
+                                            "; ".join(_disk_full(directory) + [rendered.message]), settings, "")
                 with Image.open(rendered.output) as opened:
                     source_exif = opened.getexif()
                     descriptive = _descriptive_xmp(source_exif.get(700))
@@ -214,8 +233,10 @@ class DarktablePipeline:
                     capture = dict(source_exif.get_ifd(34665))
                     capture.pop(40965, None)  # Interop IFD offset is meaningless in the new file.
                     capture[40961] = 1  # EXIF sRGB
-                    if options["include_gps"] and (gps := source_exif.get_ifd(34853)):
-                        exif[34853] = dict(gps)
+                    if options["include_gps"] and (camera_gps := source_exif.get_ifd(34853)):
+                        exif[34853] = dict(camera_gps)
+                    elif options["include_gps"] and gps is not None:  # a position the photographer typed in Lumen
+                        exif[34853] = _gps_ifd(*gps)
                     exif[274] = 1  # Pixels are transposed below.
                     effective_description = description if description is not None else descriptive.get("description", source_exif.get(270, ""))
                     raw_keywords = source_exif.get(40094, b"")
@@ -281,7 +302,7 @@ class DarktablePipeline:
                         destination = directory / f"{stem}-{suffix}.jpg"
             return JpegExportResult(True, 0, destination, command, "JPEG exported", settings, fingerprint)
         except Exception as error:
-            errors = [str(error)]
+            errors = _disk_full(directory) + [str(error)]
             if published is not None:
                 try:
                     published.unlink(missing_ok=True)

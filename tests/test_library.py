@@ -18,6 +18,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.vocabulary import load_blocked as load_vocabulary_blocked, load_vocabulary
+from lumen.catalog import GroupFilters
 from lumen.library import Library
 from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
 from lumen import geonames as geonames_module
@@ -637,6 +638,64 @@ class LibraryTests(unittest.TestCase):
                                        if event.kind == "place_edited"])
             again = library.set_place(photos["d0"], "Hide 2", "", scope="day", remember=False)
             self.assertEqual([photos["d0"]], again["photo_ids"], "this frame is always renamed; filled frames are no longer blank")
+
+    def test_set_location_fills_only_frames_without_a_fix_and_names_only_unnamed_ones(self):
+        self.image_path.unlink()
+        for name, stamp in (("d0", "2026:10:22 08:00:00"), ("d1", "2026:10:22 08:00:01"), ("d2", "2026:10:22 08:00:02"),
+                            ("d3", "2026:10:22 17:00:00"), ("d4", "2026:10:23 08:00:00")):
+            exif = Image.Exif(); exif[36867] = stamp
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg", exif=exif)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            photos = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+            library.catalog.update_location(photos["d2"], latitude=-62.0, longitude=-58.0, altitude=None)
+            library.catalog.update_place(photos["d1"], place="Typed earlier", country=None)
+            with patch.object(Library, "_resolve_place") as resolve:
+                result = library.set_location(photos["d0"], "33°55.2'S 18°25.2'E", scope="burst")
+            self.assertEqual(sorted([photos["d0"], photos["d1"]]), sorted(result["photo_ids"]),
+                             "the burst's frames without a fix; the camera's fix stays")
+            self.assertAlmostEqual(-33.92, result["latitude"])
+            self.assertEqual((-62.0, -58.0), (library.catalog.get_photo(photos["d2"]).latitude, library.catalog.get_photo(photos["d2"]).longitude))
+            self.assertAlmostEqual(18.42, library.catalog.get_photo(photos["d1"]).longitude)
+            self.assertEqual([photos["d0"]], [call.args[0] for call in resolve.call_args_list], "a typed place name is kept")
+            self.assertEqual(["burst"], [event.details["scope"] for event in library.catalog.events_for(photos["d1"])
+                                         if event.kind == "location_set"])
+            day = library.set_location(photos["d3"], "-33.9, 18.4", scope="day")
+            self.assertEqual([photos["d3"]], day["photo_ids"], "the rest of the day already has positions")
+            self.assertIsNone(library.catalog.get_photo(photos["d4"]).latitude)
+            for photo_id, position, scope, message in (
+                    (photos["d2"], "-33.9, 18.4", "frame", "already has a GPS fix"),
+                    (photos["d4"], "here", "frame", "^position "),
+                    (photos["d4"], "-33.9, 18.4", "nearby", "^scope must be frame, burst or day"),
+                    (9999, "-33.9, 18.4", "frame", "unknown photo")):
+                with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                    library.set_location(photo_id, position, scope=scope)
+
+    def test_a_typed_position_can_be_corrected_where_it_was_typed_and_a_camera_fix_cannot(self):
+        self.image_path.unlink()
+        for name, stamp in (("d0", "2026:10:22 08:00:00"), ("d1", "2026:10:22 08:00:01"), ("d2", "2026:10:22 08:00:02"),
+                            ("d3", "2026:10:22 17:00:00")):
+            exif = Image.Exif(); exif[36867] = stamp
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg", exif=exif)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            photos = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+            fix = lambda name: (library.catalog.get_photo(photos[name]).latitude, library.catalog.get_photo(photos[name]).longitude)
+            library.catalog.update_location(photos["d2"], latitude=-62.0, longitude=-58.0, altitude=None)
+            with patch.object(Library, "_resolve_place"):
+                library.set_location(photos["d0"], "-1, 1", scope="burst")
+                library.set_location(photos["d3"], "-5, 5", scope="frame")
+                library.catalog.update_place(photos["d1"], place="Typed earlier", country=None)
+                self.assertEqual([True, True, False, True], [library.location_typed(library.catalog.get_photo(photos[name]))
+                                                             for name in ("d0", "d1", "d2", "d3")])
+                with patch.object(Library, "_resolve_place") as resolve:
+                    result = library.set_location(photos["d1"], "-2, 2", scope="day")
+            self.assertEqual(sorted([photos["d0"], photos["d1"]]), sorted(result["photo_ids"]),
+                             "the wrong position is replaced where it was typed; another typed spot and the camera's stay")
+            self.assertEqual([(-2.0, 2.0), (-2.0, 2.0), (-62.0, -58.0), (-5.0, 5.0)], [fix(name) for name in ("d0", "d1", "d2", "d3")])
+            self.assertEqual([photos["d0"]], [call.args[0] for call in resolve.call_args_list], "a typed place name is kept")
+            with self.assertRaisesRegex(ValueError, "already has a GPS fix from the camera"):
+                library.set_location(photos["d2"], "-2, 2", scope="frame")
 
     def test_online_place_lookup_is_opt_in_and_cached_into_the_index(self):
         geonames = self.library_dir.parent / "geonames"
@@ -1381,6 +1440,30 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(1, len(library.catalog.list_artifacts()))
             self.assertFalse(any(event.kind == "exported" for event in library.catalog.events_for(ids[0])))
             self.assertEqual(1, len(list(library.settings.jpeg_output_dir.rglob("*.jpg"))))
+
+    def test_export_names_a_full_disk_and_the_failed_filter_lists_the_frame_until_it_exports(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            ids = tuple(photo.id for photo in library.catalog.list_photos())
+            pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
+            failed = lambda: [photo["id"] for group in library.catalog.list_groups(GroupFilters(export_failed_only=True))
+                              for photo in group["photos"]]
+            full = shutil._ntuple_diskusage(10**12, 10**12 - 200 * 2**20, 200 * 2**20)
+            def no_room(command, **kwargs):
+                if command[1:] == ["--version"]:
+                    return self.export_runner(command, **kwargs)
+                return subprocess.CompletedProcess(command, 3, "", "write failed")
+            with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline):
+                with patch("lumen.pipelines.subprocess.run", side_effect=no_room), \
+                        patch("lumen.pipelines.shutil.disk_usage", return_value=full):
+                    [result] = library.export_jpegs(library_module.ExportRequest(ids, None))
+                self.assertFalse(result.success)
+                self.assertIn("disk holding the Lumen library is full (200 MB free)", result.message)
+                self.assertEqual(list(ids), failed())
+                with patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
+                    [result] = library.export_jpegs(library_module.ExportRequest(ids, None))
+            self.assertTrue(result.success, result.message)
+            self.assertEqual([], failed(), "a successful export takes the frame out of the failed filter")
 
     def test_export_job_counts_outcomes_logs_failures_by_name_and_reports_progress(self):
         second = self.source_dir / "second.jpg"

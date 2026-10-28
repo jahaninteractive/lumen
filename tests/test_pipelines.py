@@ -614,6 +614,35 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pipeline.export_jpeg(source, preset="x", runner=self.preset_render((80, 60)))
 
+    def test_a_typed_position_fills_a_render_without_gps_for_the_full_preset_only(self):
+        def bare(command, **kwargs):
+            completed = self.preset_render((80, 60))(command, **kwargs)
+            if command[1:] != ["--version"] and not command[0].endswith("exiftool"):
+                with Image.open(command[-8]) as image:
+                    exif = image.getexif()
+                    del exif[34853]
+                    image.save(command[-8], format="TIFF", exif=exif.tobytes(), icc_profile=image.info["icc_profile"])
+            return completed
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.jpg"
+            source.write_bytes(b"raw")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            full = pipeline.export_jpeg(source, gps=(-33.92, 18.42), runner=bare)
+            camera = pipeline.export_jpeg(source, gps=(-33.92, 18.42), runner=self.preset_render((80, 60)))
+            web = pipeline.export_jpeg(source, gps=(-33.92, 18.42), preset="web", runner=bare)
+            for result in (full, camera, web):
+                self.assertTrue(result.success, result.message)
+            with Image.open(full.output) as image:
+                gps = image.getexif().get_ifd(34853)
+                self.assertEqual(("S", "E"), (gps[1], gps[3]))
+                self.assertAlmostEqual(33.92, gps[2][0] + gps[2][1] / 60 + gps[2][2] / 3600, places=5)
+                self.assertAlmostEqual(18.42, gps[4][0] + gps[4][1] / 60 + gps[4][2] / 3600, places=5)
+            with Image.open(camera.output) as image:
+                self.assertEqual("N", image.getexif().get_ifd(34853)[1], "the camera's own fix wins")
+            with Image.open(web.output) as image:
+                self.assertEqual({}, dict(image.getexif().get_ifd(34853)))
+
     def test_web_preset_resizes_to_1600_long_edge_at_quality_82_without_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

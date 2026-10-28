@@ -88,7 +88,9 @@ class LibraryCoordinationTests(unittest.TestCase):
                 self.assertFalse(failed.success)
                 self.assertTrue(first.output.exists())
                 self.assertEqual(before_artifacts, library.catalog.list_artifacts())
-                self.assertEqual(before_events, library.catalog.events_for(self.photo_id))
+                after_events = library.catalog.events_for(self.photo_id)
+                self.assertEqual(before_events, after_events[:-1])
+                self.assertEqual("export_failed", after_events[-1].kind, "only the failure is recorded")
                 sidecar = json.loads(library.sidecars.paths(library.catalog.get_photo(self.photo_id))[0].read_text())
                 self.assertEqual([artifact.id for artifact in before_artifacts], [item["id"] for item in sidecar["artifacts"]])
 

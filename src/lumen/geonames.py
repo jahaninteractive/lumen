@@ -57,6 +57,53 @@ def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return math.hypot(x, y) * 6371.0
 
 
+
+# A hemisphere letter standing alone (so the N in "Lon" is not one), or a signed number.
+_POSITION_TOKEN = re.compile(r"(?<![A-Z])[NSEW](?![A-Z])|-?\d+(?:\.\d+)?")
+
+
+def parse_position(text: str) -> tuple[float, float]:
+    """(latitude, longitude) from what a map app or a ship's display shows: decimal degrees ("-33.92, 18.42") or
+    degrees with optional minutes and seconds and hemisphere letters before or after ("33°55.2'S 18°25.2'E")."""
+    invalid = ValueError("position must read like -33.92, 18.42 or 33°55.2'S 18°25.2'E")
+    tokens = _POSITION_TOKEN.findall(text.upper())
+    letters = [token for token in tokens if token.isalpha()]
+    if letters:
+        prefix = tokens[0].isalpha()
+        if len(letters) != 2 or not (prefix or tokens[-1].isalpha()):
+            raise invalid
+        chunks, current = [], []
+        for token in tokens:
+            if token.isalpha() and prefix and current:
+                chunks.append(current)
+                current = []
+            current.append(token)
+            if token.isalpha() and not prefix:
+                chunks.append(current)
+                current = []
+        chunks += [current] if current else []
+        pairs = dict((chunk[0], chunk[1:]) if prefix else (chunk[-1], chunk[:-1]) for chunk in chunks)
+        lat_key, lon_key = next((k for k in pairs if k in "NS"), None), next((k for k in pairs if k in "EW"), None)
+        if lat_key is None or lon_key is None or any(n.startswith("-") for numbers in pairs.values() for n in numbers):
+            raise invalid
+        parts = [(pairs[lat_key], lat_key == "S"), (pairs[lon_key], lon_key == "W")]
+    elif len(tokens) in (2, 4, 6):
+        half = len(tokens) // 2
+        parts = [(tokens[:half], False), (tokens[half:], False)]
+    else:
+        raise invalid
+    values = []
+    for numbers, negate in parts:
+        if not 1 <= len(numbers) <= 3 or any(n.startswith("-") or float(n) >= 60 for n in numbers[1:]):
+            raise invalid
+        degrees = float(numbers[0])
+        value = abs(degrees) + sum(float(n) / 60 ** power for power, n in enumerate(numbers[1:], 1))
+        values.append(-value if negate or numbers[0].startswith("-") else value)
+    latitude, longitude = values
+    if abs(latitude) > 90 or abs(longitude) > 180:
+        raise ValueError("position is out of range: latitude must be within 90° and longitude within 180°")
+    return latitude, longitude
+
 def country_names(source_dir: Path) -> dict[str, str]:
     """ISO code -> country name from countryInfo.txt; AQ is always Antarctica."""
     names: dict[str, str] = {}

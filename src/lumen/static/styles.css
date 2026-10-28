@@ -387,11 +387,11 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 #caption-controls label { margin-top: .5rem; font-weight: 700; }
 label[for="keyword-input"] { display: block; margin-bottom: .35rem; font-weight: 700; }
 #caption-controls input { padding: .5rem .6rem; color: var(--paper); background: var(--graphite); }
-#place-form label, #place-form input:not([type="checkbox"]) { display: block; width: 100%; }
-#place-form label { margin-top: .5rem; }
-#place-form label:not(.check) { font-weight: 700; }
-#place-form input:not([type="checkbox"]) { padding: .5rem .6rem; color: var(--paper); background: var(--graphite); }
-#place-form input[type="checkbox"] { accent-color: var(--amber); }
+#place-form label, #place-form input:not([type="checkbox"]), #position-form label, #position-form input:not([type="checkbox"]) { display: block; width: 100%; }
+#place-form label, #position-form label { margin-top: .5rem; }
+#place-form label:not(.check), #position-form label:not(.check) { font-weight: 700; }
+#place-form input:not([type="checkbox"]), #position-form input:not([type="checkbox"]) { padding: .5rem .6rem; color: var(--paper); background: var(--graphite); }
+#place-form input[type="checkbox"], #position-form input[type="checkbox"] { accent-color: var(--amber); }
 .place-radius { display: grid; grid-template-columns: auto minmax(0, 1fr) 4rem; align-items: center; gap: .5rem; }
 .place-radius label { margin: 0; }
 .place-radius input[type="range"] { min-height: 32px; padding: 0; border: 0; background: none; accent-color: var(--amber); }

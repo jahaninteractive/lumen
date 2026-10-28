@@ -749,7 +749,7 @@ class CatalogTests(unittest.TestCase):
         invalid = [{"date_from": "2026-10-32"}, {"date_from": "20261021"}, {"date_to": "2026-W43-4"}, {"date_from": 20261021},
                    {"date_from": "2026-10-22", "date_to": "2026-10-21"}, {"decision": "maybe"}, {"decision": "FLAG"},
                    {"min_rating": 6}, {"min_rating": -1}, {"min_rating": True}, {"min_rating": "3"}, {"keepers_only": 1},
-                   {"tagged_only": "yes"}, {"show_rejected": None}, {"camera": 5}, {"text": ["fox"]}]
+                   {"tagged_only": "yes"}, {"export_failed_only": 1}, {"show_rejected": None}, {"camera": 5}, {"text": ["fox"]}]
         for fields in invalid:
             with self.subTest(invalid=fields), self.assertRaisesRegex(ValueError, "^invalid filter: "):
                 GroupFilters(**fields)

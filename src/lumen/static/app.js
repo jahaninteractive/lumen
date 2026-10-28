@@ -638,7 +638,7 @@ function locationLine(photo, record) {
   const place = record?.place ? `Place: ${[record.place, record.place_country].filter(Boolean).join(', ')}` : '';
   if (record?.latitude == null || record?.longitude == null) {
     line.textContent = place || 'No location in the file';  // a place set by hand needs no GPS fix
-    return [line, ...placeEditor(photo, record)];
+    return [line, ...placeEditor(photo, record), ...positionEditor(photo, record)];
   }
   const degrees = (value, positive, negative) => `${Math.abs(value).toFixed(4)}° ${value < 0 ? negative : positive}`;
   line.textContent = `${place ? `${place} · ` : 'Location: '}${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
@@ -647,7 +647,7 @@ function locationLine(photo, record) {
   link.target = '_blank';
   link.rel = 'noopener';
   link.textContent = 'Open in Apple Maps';
-  return [line, link, ...placeEditor(photo, record)];
+  return [line, link, ...placeEditor(photo, record), ...(record.location_typed ? positionEditor(photo, record) : [])];
 }
 
 // The photographer names the place for this frame, its burst, or every frame inside a radius they set; remembering adds it to the local index at this GPS fix.
@@ -756,6 +756,81 @@ function placeEditor(photo, record) {
   });
   if (state.placeFocus) { state.placeFocus = false; window.setTimeout(() => edit.focus(), 0); }
   return [edit, form];
+}
+
+// A position typed from a ship's display or a map, for frames the camera left without a fix; a camera fix is never
+// replaced, but a typed one can be corrected.
+function positionEditor(photo, record) {
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.id = 'add-position';
+  add.className = 'secondary';
+  const editing = Boolean(record?.location_typed);  // read now: saving updates the record
+  add.textContent = editing ? 'Edit GPS position' : 'Add GPS position';
+  add.setAttribute('aria-controls', 'position-form');
+  add.setAttribute('aria-expanded', 'false');
+  const form = document.createElement('form');
+  form.id = 'position-form';
+  form.hidden = true;
+  const label = document.createElement('label');
+  label.htmlFor = 'position-text';
+  label.textContent = 'Position';
+  const input = document.createElement('input');
+  input.id = 'position-text';
+  input.autocomplete = 'off';
+  input.maxLength = 80;  // the server's limit
+  input.value = editing ? `${record.latitude}, ${record.longitude}` : '';
+  input.placeholder = "33°55.2'S 18°25.2'E or -33.92, 18.42";
+  form.append(label, input);
+  const check = (id, text, checked) => {
+    const box = document.createElement('label');
+    box.className = 'check';
+    const control = document.createElement('input');
+    control.type = 'checkbox';
+    control.id = id;
+    control.checked = checked;
+    box.append(control, ` ${text}`);
+    form.append(box);
+    return control;
+  };
+  const burst = check('position-burst', 'Apply to the whole burst', true);
+  const day = check('position-day', "Apply to this day's frames that have no GPS", false);
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.textContent = 'Save position';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'secondary';
+  cancel.textContent = 'Cancel';
+  actions.append(save, cancel);
+  form.append(actions);
+  const show = open => {
+    form.hidden = !open;
+    add.setAttribute('aria-expanded', String(open));
+    (open ? input : add).focus();
+  };
+  add.addEventListener('click', () => show(form.hidden));
+  cancel.addEventListener('click', () => show(false));
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      const result = await post(`/api/photos/${photo.id}/location`, { position: input.value, scope: day.checked ? 'day' : burst.checked ? 'burst' : 'frame' });
+      const fix = { latitude: result.latitude, longitude: result.longitude, altitude: null, location_typed: true };
+      for (const item of state.groups.flatMap(group => group.photos)) if (result.photo_ids.includes(item.id)) Object.assign(item, fix);
+      if (state.selectedId === photo.id) {
+        Object.assign(state.details.photo, fix, { place: result.place, place_country: result.country });
+        state.placeFocus = true;
+        renderInspector(photo);
+      }
+      const count = result.photo_ids.length;
+      announce(`GPS position ${editing ? 'changed on' : 'added to'} ${count} frame${count === 1 ? '' : 's'}`);
+    } catch (error) {
+      announce(error.message);  // the form stays open with what was typed
+    }
+  });
+  return [add, form];
 }
 
 async function savePlace(photo, payload) {
@@ -1292,9 +1367,10 @@ function showMore() {
 
 // Filter state lives only in the URL query; the field names match the /api/groups parameters.
 const FILTER_CONTROLS = {
-  date_from: '#filter-from', date_to: '#filter-to', camera: '#filter-camera', min_rating: '#filter-rating', tagged_only: '#filter-tagged', text: '#filter-text',
+  date_from: '#filter-from', date_to: '#filter-to', camera: '#filter-camera', min_rating: '#filter-rating', tagged_only: '#filter-tagged',
+  export_failed_only: '#filter-export-failed', text: '#filter-text',
 };
-const FLAG_FILTERS = ['tagged_only'];
+const FLAG_FILTERS = ['tagged_only', 'export_failed_only'];
 const FILTER_DEFAULTS = { min_rating: '0' };
 // One status choice stands for keepers_only or a decision; "all" hides rejected frames, as the server does by default.
 const STATUSES = { all: {}, keepers: { keepers_only: '1' }, flag: { decision: 'flag' }, none: { decision: 'none' }, reject: { decision: 'reject' } };
@@ -1645,7 +1721,7 @@ function jobText(job) {
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
     : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.`
-    : job.kind === 'export' && job.result ? ` ${result.exported} saved, ${result.failed} failed${result.skipped ? `, ${result.skipped} skipped` : ''}.`
+    : job.kind === 'export' && job.result ? ` ${result.exported} saved, ${result.failed} failed${result.skipped ? `, ${result.skipped} skipped` : ''}.${result.failed ? ' Tick Export failed in the filters to see them.' : ''}`
     : job.kind === 'develop_group' && job.result ? ` ${result.applied} developed, ${result.skipped_non_raw + result.skipped_offline} skipped, ${result.failed} failed.` : '';
   const verdict = job.kind === 'ingest' ? ` ${ingestVerdict(job)}` : '';
   return {

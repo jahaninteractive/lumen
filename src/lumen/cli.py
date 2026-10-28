@@ -178,6 +178,7 @@ def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-rating", type=int, choices=range(6), default=0)
     parser.add_argument("--keepers", dest="keepers_only", action="store_true", help="only keepers (not rejected; flagged or best)")
     parser.add_argument("--tagged", dest="tagged_only", action="store_true", help="only frames with local AI tags")
+    parser.add_argument("--export-failed", dest="export_failed_only", action="store_true", help="only frames whose last export failed")
     parser.add_argument("--text", help="match tag descriptions or subjects")
     parser.add_argument("--show-rejected", action="store_true")
 

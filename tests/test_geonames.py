@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lumen import geonames
-from lumen.geonames import Place, PlaceIndex, distance_km, online_lookup
+from lumen.geonames import Place, PlaceIndex, distance_km, online_lookup, parse_position
 
 
 def row(geonameid, name, lat, lon, feature_class, feature_code, country, population=0, alternates=""):
@@ -130,6 +130,26 @@ class PlaceIndexTests(unittest.TestCase):
         with PlaceIndex(source, Path(self.tmp.name) / "cache" / "inverted.sqlite") as index:
             names = [index.lookup(*point).name for point in ((-64.84, -62.53), (-65.0, -64.0), (-66.0, -66.0), (-77.87, 167.06))]
         self.assertEqual(["Neko Harbour", "Irizar Island", "Straggle Islands", "Williams Field, Antarctic"], names)
+
+    def test_parse_position_reads_decimal_and_degrees_minutes_seconds(self):
+        cases = {
+            "-33.92, 18.42": (-33.92, 18.42),
+            "33.92 S 18.42 E": (-33.92, 18.42),
+            "33°55.2'S 18°25.2'E": (-33.92, 18.42),
+            "S 33° 55.2' W 018° 25.2'": (-33.92, -18.42),
+            "33°55'12\"S, 18°25'12\"E": (-33.92, 18.42),
+            "Lat 33 55.2 N  Lon 018 25.2 E": (33.92, 18.42),
+            "18°25.2'E 33°55.2'S": (-33.92, 18.42),
+            "-33 55.2, 18 25.2": (-33.92, 18.42),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                latitude, longitude = parse_position(text)
+                self.assertAlmostEqual(expected[0], latitude, places=6)
+                self.assertAlmostEqual(expected[1], longitude, places=6)
+        for text in ("", "33.92", "91, 0", "0, 181", "33°61'S 18°E", "33 S 18 S", "-33.92 S, 18 E", "1, 2, 3", "ship"):
+            with self.subTest(invalid=text), self.assertRaisesRegex(ValueError, "^position "):
+                parse_position(text)
 
     def test_distance_is_equirectangular_km(self):
         self.assertAlmostEqual(111.2, distance_km(0, 0, 1, 0), places=1)
