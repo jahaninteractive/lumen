@@ -12,8 +12,9 @@ and hands exports to local tools such as darktable.
 The included defaults target a 48 GB M4 Mac with two oMLX models: a fast
 vision model (`Qwen3-VL-8B-Instruct-4bit`) for tagging, problem scans, and
 astro triage, and a review model (`Qwen3.8-27B-4bit`) for critique, captions,
-digests, and composition advice. Both roles can point at the one 8B model if
-you would rather free the memory (see [Local AI](#local-ai)).
+digests, composition advice, and develop suggestions. A **Review model**
+dropdown in the header switches the review role between the two while Lumen
+runs (see [Local AI](#local-ai)).
 
 ## Why Lumen exists
 
@@ -107,8 +108,8 @@ Prerequisites:
 2. oMLX installed with `Qwen3-VL-8B-Instruct-4bit` (fast, vision) and
    `Qwen3.8-27B-4bit` (review) available. Both must be loaded in oMLX for the
    **Run all local AI** button; `lumen doctor` reports which roles are loaded.
-   With only the 8B model loaded, set `LUMEN_OMLX_REVIEW_MODEL` to it (see
-   [Local AI](#local-ai)) and skip the 27B download.
+   With only the 8B model loaded, Lumen starts the review role on it, so the
+   27B download is optional (see [Local AI](#local-ai)).
 3. `uv`, ExifTool, and the Apple command-line developer tools:
 
    ```sh
@@ -485,23 +486,47 @@ or delete. Two model roles are used:
 | Role | Env var | Default | Used for |
 |------|---------|---------|----------|
 | fast | `LUMEN_OMLX_FAST_MODEL` | `Qwen3-VL-8B-Instruct-4bit` | tags, problem scan, astro triage |
-| review | `LUMEN_OMLX_REVIEW_MODEL` (falls back to `LUMEN_OMLX_MODEL`) | `Qwen3.8-27B-4bit` | burst critique, captions, digests, composition advice |
+| review | `LUMEN_OMLX_REVIEW_MODEL` (optional; see below) | `Qwen3.8-27B-4bit` when loaded, else the fast model | burst critique, captions, digests, composition advice, develop suggestions |
 
 Every action checks oMLX's live status first and refuses with a message naming
 the unloaded model; the UI disables the matching buttons with the same reason.
 Trust `lumen doctor` (`omlx_roles`) over the configured names.
 
-To run everything on the 8B model and free about 16 GB, point the review role
-at it. Captions and critique get plainer, nothing else changes. The variable
-must reach the server process, so set it where you start Lumen:
+### Choosing the review model
 
-```sh
-LUMEN_OMLX_REVIEW_MODEL=Qwen3-VL-8B-Instruct-4bit uv run lumen serve --open
-```
+The 8B is fast; the 27B reads a frame more closely. Neither wins outright, so
+Lumen lets you switch between them instead of fixing one:
 
-`lumen doctor` then reports both roles as that model, and the `omlx_model`
-block still describes the configured 27B default; only `omlx_roles` says what
-the actions will actually use.
+- At startup, `lumen serve` puts the review role on the 27B if oMLX has it
+  loaded, and on the 8B if it does not.
+- The **Review model** dropdown in the header switches the running server
+  between the two. An unloaded model is marked "(not loaded)". The choice is
+  not saved: a restart picks again by the rule above. Run the same caption or
+  **Where to start** on a frame, flip the dropdown, and run it again to compare.
+- Setting `LUMEN_OMLX_REVIEW_MODEL` on the server process pins the review role
+  and skips the startup check. Leave it unset if you want the dropdown's
+  default to follow what oMLX has loaded.
+
+The dropdown exists because of what we measured on real Sony seabird frames
+(October 2026):
+
+| Task | 8B | 27B | `Qwen3.5-9B-4bit` |
+|------|----|-----|-------------------|
+| Captions | about 1-4 s; 4 of 5 parsed | not timed | about 4 s; 5 of 5, slightly richer |
+| Burst pick | about 6 s; agreed with the 9B on 4 of 5 | not timed | about 7 s |
+| Where to start | about 2 s; 6 of 6 parsed, 5 of 6 brightened by a cautious +0.3 EV | about 13 s; 6 of 6 brightened by +0.5 to +1.0 EV | 0 of 6 in the required JSON shape |
+
+With the original **Where to start** prompt, the 8B proposed -0.5 EV on every
+underexposed frame while its rationale called that a lift. The prompt now
+states which way each control moves (positive EV brightens, a curve point above
+the diagonal brightens), that a histogram median near 50 is balanced, and the
+exact JSON shape. That fixed the 8B, and the 27B did as well or better on the
+same prompt, so both models share it. The 9B was slower than the 8B and never
+returned usable develop settings, so it is not offered.
+
+So the 8B is good enough for captions, burst picks, and a starting point you
+will adjust, at a few seconds a frame; the 27B gives bolder, frame-specific
+develop advice at about 13 s. Running only the 8B frees about 16 GB.
 
 Start oMLX, then tag:
 
