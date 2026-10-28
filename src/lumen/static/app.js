@@ -1439,6 +1439,25 @@ async function applyFilters(query = filterQuery()) {
   announceShowing();
 }
 
+// The review role runs on the full or the fast model; the switch is the server's, so a reload shows what it uses now.
+const reviewModel = document.querySelector('#review-model');
+function syncReviewModel(status) {
+  const models = Array.isArray(status.review_models) ? status.review_models : [];
+  document.querySelector('#review-model-pair').hidden = models.length < 2;
+  const loaded = status.omlx_live?.loaded_models || [];
+  reviewModel.replaceChildren(...models.map(model => new Option(loaded.includes(model) ? model : `${model} (not loaded)`, model)));
+  reviewModel.value = status.omlx_roles?.review?.model ?? '';
+}
+reviewModel.addEventListener('change', async () => {
+  try {
+    const { model } = await post('/api/review-model', { model: reviewModel.value });
+    announce(`Review model is now ${model}.`);
+  } catch (error) {
+    announce(error.message);
+  }
+  await load();
+});
+
 let resumed = false;
 async function load() {
   const [status, groups] = await Promise.all([request('/api/status'), request(`/api/groups${location.search}`)]);
@@ -1470,6 +1489,7 @@ async function load() {
   systemStatus.textContent = [...stale, tools].join(' · ');
   if (stale.length) systemStatus.setAttribute('data-stale', '');
   else systemStatus.removeAttribute('data-stale');
+  syncReviewModel(status);
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
   if (!resumed && state.selectedId === null) {  // only a fresh page resumes the frame inspected before the reload

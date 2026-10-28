@@ -230,6 +230,9 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
         raise ValueError("Lumen only binds to a loopback address")
     static_dir = Path(__file__).parent / "static"
 
+    def review_models() -> list[str]:  # the switch offers the full and fast models only, never a typed name
+        return list(dict.fromkeys((settings.omlx_model, settings.omlx_fast_model)))
+
     class Handler(BaseHTTPRequestHandler):
         def handle_one_request(self) -> None:
             # The browser abandons a render whenever the photographer moves a slider again,
@@ -255,6 +258,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 return
             if path == "/api/status":
                 self._send_json(doctor_report(settings) | {
+                    "review_models": review_models(),
                     "stale": stale_sources(settings),
                     "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
                     "astro_output_dir": str((settings.output_dir / "astro").resolve()),
@@ -479,6 +483,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
 
         def do_POST(self) -> None:
+            nonlocal settings  # the review-model switch rebinds it; every later request builds its Library from it
             path = urlparse(self.path).path
             if not self._trusted_mutation():
                 self._send_json({"error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
@@ -488,6 +493,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if path == "/api/browse":
                     selected = choose_macos_folder()
                     self._send_json({"path": selected, "cancelled": selected is None})
+                    return
+                if path == "/api/review-model":
+                    if payload.keys() != {"model"} or payload["model"] not in review_models():
+                        raise ValueError(f"model must be one of {', '.join(review_models())}")
+                    settings = replace(settings, omlx_review_model=payload["model"])
+                    self._send_json({"model": settings.review_model})
                     return
                 if path in {"/api/browse-xmp", "/api/outputs/reveal"}:
                     if payload:

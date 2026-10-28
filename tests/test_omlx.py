@@ -518,6 +518,8 @@ class DevelopAdviceTests(unittest.TestCase):
         self.assertIn("5.0% are blown at white.", prompt)
         self.assertIn("too warm", prompt)
         self.assertIn("Do not identify a person.", prompt)
+        self.assertIn("positive brightens", prompt)  # small models otherwise call -0.5 EV a lift
+        self.assertIn('{"settings": {', prompt)  # the shape, so a flat settings object is not returned
         self.assertEqual("image_url", captured["content"][-1]["type"])
 
     def test_suggest_develop_prompt_omits_the_feedback_line_on_the_first_attempt(self):

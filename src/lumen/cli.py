@@ -183,6 +183,21 @@ def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--show-rejected", action="store_true")
 
 
+def serve_settings(settings: Settings) -> Settings:
+    """Review starts on the full model when oMLX has it loaded, else on the fast one; the web page can switch it."""
+    from . import omlx
+
+    if settings.omlx_review_model:  # an explicit LUMEN_OMLX_REVIEW_MODEL wins
+        return settings
+    try:
+        loaded = omlx.get_server_status(settings.omlx_url)["loaded_models"]
+    except (omlx.OmlxError, ValueError):
+        return settings  # offline: keep the configured model so the refusal names it
+    if settings.omlx_model in loaded or settings.omlx_fast_model not in loaded:
+        return settings
+    return replace(settings, omlx_review_model=settings.omlx_fast_model)
+
+
 def _job_error(error: Exception) -> str:
     """Public CLI error for a job command; a held runner lock means `lumen serve` owns the catalog."""
     if str(error) == "catalog already has a job runner":
@@ -416,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         from .web import make_server
 
-        server = make_server(settings, port=args.port)
+        server = make_server(serve_settings(settings), port=args.port)
         url = f"http://127.0.0.1:{server.server_port}"
         print(f"Lumen is running at {url}")
         if args.open_browser:  # Never wait on the browser: Python's webbrowser blocks in waitpid on a wedged osascript.

@@ -490,7 +490,11 @@ class OmlxTagger:
             "You are helping a photographer develop one raw frame. Propose develop settings and explain them so "
             "that they learn to read the histogram. Every control is optional: omit one to leave this file's own "
             f"default alone. Controls: {controls}; lens_correction true or false; curve as five [x, y] pairs in 0 "
-            f"to 1 ascending in x. {current} {histogram_note} Return JSON only with settings (an object of the "
+            "to 1 ascending in x, where y above x brightens that tone and y below x darkens it. exposure_ev is in "
+            "stops: positive brightens, negative darkens, +1 doubles the light. A histogram median near 50 is a "
+            "balanced exposure; well below 50 is dark and wants positive exposure_ev unless the scene is meant to "
+            f"be dark. {current} {histogram_note} Return JSON only, shaped "
+            '{"settings": {"<control>": <value>}, "rationale": "<text>"}, with settings (an object of the '
             "controls above, absolute values, empty when the frame needs nothing) and rationale (at most "
             f"{DEVELOP_RATIONALE_MAX} characters, two or three plain sentences naming what you read in the frame "
             "and in the histogram and what each change does about it). Do not identify a person."

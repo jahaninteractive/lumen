@@ -404,6 +404,22 @@ class CliTests(unittest.TestCase):
             self.assertEqual(["tag", "review", "caption"] * 2, FakeTagger.calls, "--redo repeats finished work")
             self.assertEqual("succeeded", json.loads(output.getvalue())["status"])
 
+    def test_serve_starts_review_on_the_fast_model_when_the_full_model_is_not_loaded(self):
+        from lumen.cli import serve_settings
+        from lumen.config import Settings
+        from lumen.omlx import OmlxError
+        base = Settings(library_dir=Path("/tmp/unused"))
+        with patch("lumen.omlx.get_server_status", return_value={"loaded_models": [base.omlx_fast_model]}):
+            self.assertEqual(base.omlx_fast_model, serve_settings(base).review_model)
+        with patch("lumen.omlx.get_server_status", return_value={"loaded_models": [base.omlx_fast_model, base.omlx_model]}):
+            self.assertEqual(base.omlx_model, serve_settings(base).review_model)
+        with patch("lumen.omlx.get_server_status", side_effect=OmlxError("offline")):
+            self.assertEqual(base.omlx_model, serve_settings(base).review_model)
+        chosen = Settings(library_dir=Path("/tmp/unused"), omlx_review_model="picked")
+        with patch("lumen.omlx.get_server_status") as status:  # an explicit LUMEN_OMLX_REVIEW_MODEL is never second-guessed
+            self.assertEqual("picked", serve_settings(chosen).review_model)
+            status.assert_not_called()
+
     def test_tag_keepers_runs_job_and_doctor_reports_both_roles(self):
         from lumen.omlx import TagResult
 

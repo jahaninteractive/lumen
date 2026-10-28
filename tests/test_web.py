@@ -1350,6 +1350,24 @@ class WebTests(unittest.TestCase):
     def test_javascript_review_panel_decides_rows_by_button_and_key_and_confirms_count(self):
         self.run_javascript_cleanup_regression("review-rejects")
 
+    def test_review_model_switch_changes_the_review_role_between_the_two_models_only(self):
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
+        with patch("lumen.diagnostics.get_server_status", return_value=both):
+            status = self.get_json("/api/status")[1]
+            self.assertEqual(["Qwen3.8-27B-4bit", "Qwen3-VL-8B-Instruct-4bit"], status["review_models"])
+            self.assertEqual("Qwen3.8-27B-4bit", status["omlx_roles"]["review"]["model"])
+            for payload in ({}, {"model": "Other-Model"}, {"model": "Qwen3-VL-8B-Instruct-4bit", "extra": 1}, {"model": 1}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/review-model", payload)[0])
+            self.assertEqual(403, self.post_json("/api/review-model", {"model": "Qwen3-VL-8B-Instruct-4bit"},
+                                                 headers={"Origin": "https://attacker.example"})[0])
+            self.assertEqual((200, {"model": "Qwen3-VL-8B-Instruct-4bit"}),
+                             self.post_json("/api/review-model", {"model": "Qwen3-VL-8B-Instruct-4bit"}))
+            self.assertEqual("Qwen3-VL-8B-Instruct-4bit", self.get_json("/api/status")[1]["omlx_roles"]["review"]["model"])
+        with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.Library.caption_photo",
+                                                                                  lambda self, photo_id, tagger: {"model": tagger.model}):
+            self.assertEqual((200, {"model": "Qwen3-VL-8B-Instruct-4bit"}), self.post_json("/api/photos/1/caption", {}))
+
     def test_critique_routes_gate_on_review_model_and_never_change_the_pick(self):
         class FakeTagger:
             def __init__(self, *args, **kwargs): self.model, self.role = "review-model", kwargs.get("role", "review")
