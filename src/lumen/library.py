@@ -212,10 +212,11 @@ class Library:
     @_coordinated
     def set_place(self, photo_id: int, name: str, country: str, *, scope: str, remember: bool,
                   radius_km: float = NEARBY_PLACE_KM) -> dict:
-        """Photographer's place for a frame, its burst, or every frame within radius_km; remember adds it to the index."""
+        """Photographer's place for a frame, its burst, every frame within radius_km, or (`day`) every frame shot the
+        same day with neither a GPS fix nor a place; remember adds it to the index."""
         name, country = name.strip(), country.strip() or None
-        if scope not in ("frame", "burst", "nearby"):
-            raise ValueError("scope must be frame, burst or nearby")
+        if scope not in ("frame", "burst", "nearby", "day"):
+            raise ValueError("scope must be frame, burst, nearby or day")
         if not 1 <= len(name) <= 80 or len(country or "") > 60:
             raise ValueError("place name must be 1-80 characters and country at most 60")
         low, high = NEARBY_PLACE_RANGE
@@ -235,6 +236,13 @@ class Library:
             targets = [other.id for other in self.catalog.list_photos()
                        if other.latitude is not None and other.longitude is not None
                        and distance_km(photo.latitude, photo.longitude, other.latitude, other.longitude) <= radius_km]
+        elif scope == "day":
+            if photo.captured_at is None:
+                raise ValueError("scope day needs a capture date on this frame")
+            day = photo.captured_at.date()  # the stored camera-local date, as digests and the rail count days
+            targets = [photo_id] + [other.id for other in self.catalog.list_photos()
+                                    if other.id != photo_id and other.captured_at and other.captured_at.date() == day
+                                    and other.latitude is None and not other.place]
         for target in targets:
             self._drop_place_keywords(target, {name.casefold(), (country or "").casefold()})
             self.catalog.update_place(target, place=name, country=country)

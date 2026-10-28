@@ -715,6 +715,7 @@ function placeEditor(photo, record) {
   const followNearby = () => { radius.disabled = !nearby.checked; };  // the radius only means something for that scope
   followNearby();
   nearby.addEventListener('change', followNearby);
+  const day = check('place-day', "Fill this day's frames that have no GPS and no place", false);  // a phone left off: the fix is missing, the date is not
   const remember = check('place-remember', 'Remember for nearby frames');
   if (record?.latitude == null || record?.longitude == null) {
     const reason = document.createElement('span');
@@ -750,7 +751,7 @@ function placeEditor(photo, record) {
   cancel.addEventListener('click', () => show(false));
   form.addEventListener('submit', event => {
     event.preventDefault();
-    const scope = nearby.checked ? 'nearby' : burst.checked ? 'burst' : 'frame';  // the wider choice wins
+    const scope = nearby.checked ? 'nearby' : day.checked ? 'day' : burst.checked ? 'burst' : 'frame';  // the wider choice wins
     return savePlace(photo, { name: name.value, country: country.value, scope, remember: remember.checked, radius_km: Number(radius.value) });
   });
   if (state.placeFocus) { state.placeFocus = false; window.setTimeout(() => edit.focus(), 0); }

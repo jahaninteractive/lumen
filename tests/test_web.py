@@ -4170,6 +4170,12 @@ const regression = `
     assert.deepEqual(placePosts.at(-1), { name: 'Hide', country: '', scope: 'frame', remember: false, radius_km: 5 });
     assert.equal(element('#announcer').textContent, 'Place set to Hide on 1 frame');
     assert.equal(byId('location').textContent, 'Place: Hide');
+    assert.equal(byId('place-day').parent.children[1], " Fill this day's frames that have no GPS and no place");
+    assert.deepEqual([byId('place-day').checked, Boolean(byId('place-day').disabled)], [false, false], 'opt-in, and needs no fix');
+    byId('place-day').checked = true;
+    byId('place-name').value = 'Hide';
+    await submit();
+    assert.deepEqual(placePosts.at(-1), { name: 'Hide', country: '', scope: 'day', remember: false, radius_km: 5 }, 'the day outranks the burst');
     return;
   }
   if (scenario === 'location') {

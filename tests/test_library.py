@@ -616,6 +616,28 @@ class LibraryTests(unittest.TestCase):
                 with self.assertRaises(ValueError, msg=bad):
                     library.set_place(photos["c2"], "Nowhere", "", scope="nearby", remember=False, radius_km=bad)
 
+    def test_set_place_day_fills_same_day_frames_without_gps_or_place(self):
+        self.image_path.unlink()
+        for name, stamp in (("d0", "2026:10:22 08:00:00"), ("d1", "2026:10:22 17:00:00"), ("d2", "2026:10:22 18:00:00"),
+                            ("d3", "2026:10:22 19:00:00"), ("d4", "2026:10:23 08:00:00")):
+            exif = Image.Exif(); exif[36867] = stamp
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg", exif=exif)
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            photos = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+            library.catalog.update_location(photos["d2"], latitude=-62.0, longitude=-58.0, altitude=None)
+            library.catalog.update_place(photos["d3"], place="Typed earlier", country=None)
+            result = library.set_place(photos["d0"], "Hide", "Botswana", scope="day", remember=False)
+            self.assertEqual(sorted([photos["d0"], photos["d1"]]), sorted(result["photo_ids"]),
+                             "same day, no GPS, no place; a fix, a typed name and the next day stay out")
+            self.assertEqual("Hide", library.catalog.get_photo(photos["d1"]).place)
+            self.assertEqual("Typed earlier", library.catalog.get_photo(photos["d3"]).place)
+            self.assertIsNone(library.catalog.get_photo(photos["d4"]).place)
+            self.assertEqual(["day"], [event.details["scope"] for event in library.catalog.events_for(photos["d1"])
+                                       if event.kind == "place_edited"])
+            again = library.set_place(photos["d0"], "Hide 2", "", scope="day", remember=False)
+            self.assertEqual([photos["d0"]], again["photo_ids"], "this frame is always renamed; filled frames are no longer blank")
+
     def test_online_place_lookup_is_opt_in_and_cached_into_the_index(self):
         geonames = self.library_dir.parent / "geonames"
         write_geonames_fixture(geonames)
