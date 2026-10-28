@@ -2438,8 +2438,34 @@ function showFrame(photo) {
   fullButton.setAttribute('aria-pressed', 'false');
   inspect(photo).catch(error => announce(error.message));  // sets selectedId before its first await, so the crops below are this frame's
   loadComposition();
+  if (document.querySelector('#exif-tab').getAttribute('aria-selected') === 'true') loadExif(photo.id);  // a step keeps the open tab current
   const ids = Array.from(document.querySelectorAll('.frame'), card => Number(card.dataset.id));
   announce(`${photo.name}, ${ids.indexOf(photo.id) + 1} of ${ids.length}`);
+}
+
+// Read from the original on demand, so the catalog stores none of it; a newer request (a step) wins.
+let exifRequest = 0;
+async function loadExif(photoId) {
+  const requestId = ++exifRequest;
+  const list = document.querySelector('#exif-fields');
+  const status = document.querySelector('#exif-status');
+  list.replaceChildren();
+  status.textContent = photoId ? 'Reading EXIF…' : '';
+  if (!photoId) return;
+  try {
+    const { fields } = await request(`/api/photos/${photoId}/exif`);
+    if (requestId !== exifRequest) return;
+    list.replaceChildren(...fields.flatMap(({ label, value }) => {
+      const term = document.createElement('dt');
+      term.textContent = label;
+      const detail = document.createElement('dd');
+      detail.textContent = value;
+      return [term, detail];
+    }));
+    status.textContent = fields.length ? '' : 'No EXIF in this file.';
+  } catch (error) {
+    if (requestId === exifRequest) status.textContent = error.message;
+  }
 }
 
 // Swap between the stored preview and the camera's embedded full-size JPEG; the button names the real pixel size.
@@ -2561,7 +2587,10 @@ const cropOverlay = document.querySelector('#crop-overlay');
 const cropOutline = document.querySelector('#crop-outline');
 const cropLock = document.querySelector('#crop-lock');
 const selectFrameTab = wireTablist('#frame-tabs', 'lumen-frame-tab', tab => {
+  // The options steer "Export this frame", which only Crop and Develop carry.
+  document.querySelector('#loupe-export-options').hidden = !['crop-tab', 'develop-tab'].includes(tab.id);
   if (tab.id === 'develop-tab') return renderDevelopPreview();  // the panel's render is also the histogram's source
+  if (tab.id === 'exif-tab') loadExif(state.selectedId);
   // Only a develop render needs handing back. The embedded JPEG at full size belongs to the
   // Frame and Crop tabs, and resetting that would throw away a zoom the photographer set.
   if (!state.develop.zoomShown) return;

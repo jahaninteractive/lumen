@@ -458,6 +458,7 @@
         <button type="button" id="frame-tab" role="tab" aria-controls="frame-panel" aria-selected="true" tabindex="0">Frame</button>
         <button type="button" id="crop-tab" role="tab" aria-controls="crop-panel" aria-selected="false" tabindex="-1">Crop</button>
         <button type="button" id="develop-tab" role="tab" aria-controls="develop-panel" aria-selected="false" tabindex="-1">Develop</button>
+        <button type="button" id="exif-tab" role="tab" aria-controls="exif-panel" aria-selected="false" tabindex="-1">EXIF</button>
       </div>
       <section id="frame-panel" role="tabpanel" aria-labelledby="frame-tab">
         <div id="inspection"></div>
@@ -622,9 +623,15 @@
         </div>
         <p id="develop-status" role="status" aria-live="polite"></p>
       </section>
+      <section id="exif-panel" role="tabpanel" aria-labelledby="exif-tab" hidden>
+        <dl id="exif-fields"></dl>
+        <p id="exif-status" class="quiet" role="status" aria-live="polite"></p>
+      </section>
       <div class="button-row">
-        <label class="toggle" for="loupe-keep-original"><input type="checkbox" id="loupe-keep-original"> Also export the untouched version</label>
-        <label class="toggle" for="loupe-dated-folder"><input type="checkbox" id="loupe-dated-folder" checked> Subfolder named for the capture date</label>
+        <span id="loupe-export-options" hidden>
+          <label class="toggle" for="loupe-keep-original"><input type="checkbox" id="loupe-keep-original"> Also export the untouched version</label>
+          <label class="toggle" for="loupe-dated-folder"><input type="checkbox" id="loupe-dated-folder" checked> Subfolder named for the capture date</label>
+        </span>
         <button type="button" id="close-loupe" class="secondary">Close</button>
       </div>
     </div>

@@ -25,7 +25,7 @@ from .jobs import LocalJobRunner
 from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS, validate_watermark
-from .previews import full_size_for, thumbnail_for
+from .previews import PreviewError, full_size_for, read_exif_summary, thumbnail_for
 from .rawdevelop import DevelopError, render_raw
 
 
@@ -336,6 +336,23 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             if match:
                 with Library(settings) as library:
                     self._send_json({"critique": library.latest_critique(int(match.group(1)))})
+                return
+            match = re.fullmatch(r"/api/photos/(\d+)/exif", path)
+            if match:
+                with Library(settings) as library:
+                    photo = library.catalog.get_photo(int(match.group(1)))
+                if not photo:
+                    self._send_json({"error": "unknown photo"}, status=HTTPStatus.NOT_FOUND)
+                    return
+                if not Path(photo.path).is_file():
+                    self._send_json({"error": "the original is offline"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                try:
+                    fields = read_exif_summary(Path(photo.path))
+                except PreviewError as error:
+                    self._send_json({"error": str(error)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._send_json({"photo_id": photo.id, "fields": [{"label": label, "value": value} for label, value in fields]})
                 return
             match = re.fullmatch(r"/api/photos/(\d+)/crops", path)
             if match:

@@ -205,6 +205,33 @@ def read_metadata(path: Path) -> dict[str, str | float | None]:
             "raw_warning": warning, "latitude": latitude, "longitude": longitude, "altitude": altitude}
 
 
+# The frame view's EXIF tab: a fixed list, so paths and file-system tags in exiftool's output never reach the browser.
+EXIF_SUMMARY = (("Make", "Make"), ("Model", "Camera"), ("LensModel", "Lens"), ("FocalLength", "Focal length"),
+                ("FocalLengthIn35mmFormat", "35 mm equivalent"), ("FNumber", "Aperture"), ("ExposureTime", "Shutter speed"),
+                ("ISO", "ISO"), ("ExposureCompensation", "Exposure compensation"), ("ExposureProgram", "Exposure program"),
+                ("MeteringMode", "Metering"), ("FocusMode", "Focus mode"), ("Flash", "Flash"), ("WhiteBalance", "White balance"),
+                ("DateTimeOriginal", "Captured"), ("OffsetTimeOriginal", "Time zone"), ("ImageSize", "Image size"),
+                ("Megapixels", "Megapixels"), ("ShutterCount", "Shutter count"), ("Software", "Firmware"),
+                ("Artist", "Artist"), ("Copyright", "Copyright"))
+
+
+def read_exif_summary(path: Path) -> list[tuple[str, str]]:
+    """(label, value) for each EXIF_SUMMARY tag the file carries, in exiftool's readable form."""
+    exiftool = shutil.which("exiftool")
+    if not exiftool:
+        raise PreviewError("exiftool is required to read EXIF")
+    try:
+        result = subprocess.run([exiftool, "-json", *(f"-{tag}" for tag, _ in EXIF_SUMMARY), str(path)],
+                                capture_output=True, text=True, timeout=30, check=False)
+        item = json.loads(result.stdout)[0] if result.returncode == 0 else None
+    except (subprocess.SubprocessError, json.JSONDecodeError, IndexError, TypeError):
+        item = None
+    if not isinstance(item, dict):
+        raise PreviewError("EXIF could not be read from this file")
+    shown = {"FNumber": "f/{}", "ExposureTime": "{} s"}
+    return [(label, shown.get(tag, "{}").format(item[tag])) for tag, label in EXIF_SUMMARY if item.get(tag) not in (None, "")]
+
+
 def _normalize_exif_date(value: str | None) -> str | None:
     if not value:
         return None

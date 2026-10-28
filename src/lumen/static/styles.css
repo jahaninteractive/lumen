@@ -152,6 +152,7 @@ legend { padding: 0; font-weight: 700; }
 .terms dt { font-weight: 700; }
 .terms dd { margin: 0; color: var(--muted); }
 .button-row { display: flex; flex-wrap: wrap; gap: .6rem; margin: .75rem 0; }
+#loupe-export-options:not([hidden]) { display: contents; }  /* its labels stay flex items of the row */
 .path { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
 #export-results { margin: .75rem 0 0; padding-left: 1.25rem; }
 #export-results li { margin: .5rem 0; }
@@ -274,9 +275,9 @@ dialog h2 { margin-top: 0; font-size: 1.1rem; }
 .compare-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .compare-pane { min-width: 0; }
 .compare-pane figure { margin: 0; }
-.compare-pane dl { display: grid; grid-template-columns: auto 1fr; gap: .2rem 1rem; font-variant-numeric: tabular-nums; }
-.compare-pane dt { color: var(--muted); }
-.compare-pane dd { margin: 0; }
+.compare-pane dl, #exif-fields { display: grid; grid-template-columns: auto 1fr; gap: .2rem 1rem; font-variant-numeric: tabular-nums; }
+.compare-pane dt, #exif-fields dt { color: var(--muted); }
+.compare-pane dd, #exif-fields dd { margin: 0; overflow-wrap: anywhere; }
 .compare-pane .button-row { align-items: center; }
 .compare-pane select { padding: .5rem; color: var(--paper); background: var(--graphite); }
 /* Scale 1: the img keeps its stored preview size, so both panes zoom alike. No smooth scrolling: it would fight synced panning. */

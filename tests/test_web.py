@@ -21,6 +21,7 @@ from lumen.config import Settings
 from lumen.domain import DEVELOP_FLAGS, DEVELOP_RANGES, DevelopSettings
 from lumen.library import Library
 from lumen.omlx import DevelopAdvice
+from lumen.previews import PreviewError
 from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionReview, OmlxError
 from lumen.pipelines import DarktablePipeline
@@ -1573,7 +1574,7 @@ const tabElements = ['ingest', 'import', 'review', 'astro', 'export', 'clear'].m
   tab.setAttribute('aria-selected', String(name === 'export'));
   return tab;
 });
-const frameTabElements = ['frame', 'crop', 'develop'].map((name, index) => {
+const frameTabElements = ['frame', 'crop', 'develop', 'exif'].map((name, index) => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
@@ -1717,6 +1718,7 @@ let networkDown = false;  // the browser's fetch itself fails, as when lumen ser
 let routeMissing = false;  // the route is absent, so the stdlib answers with an HTML error page, not JSON
 let cropLoads = 0;
 const cropRequests = [];
+const exifRequests = [];
 let deferCropLoads = false;
 let deferReviews = false;
 const pendingCropLoads = [];
@@ -1874,6 +1876,10 @@ async function fetch(url, options = {}) {
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null }),
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
       : scenario.startsWith('keyword') && url.endsWith('/1') ? { model: 'fast-model', data: { description: 'Penguins on ice', subjects: [...keywordData.subjects], suggested: [...keywordData.suggested], species: [{ name: 'gentoo penguin', confidence: 0.82 }] } } : null, warnings: scenario === 'raw-warning' && url.endsWith('/2') ? ['Sony reduced-size lossless raw; darktable cannot decode it'] : [] };
+  else if (/^\/api\/photos\/\d+\/exif$/.test(url)) {
+    exifRequests.push(url);
+    payload = { photo_id: Number(url.split('/')[3]), fields: [{ label: 'Camera', value: 'ILCE-7CM2' }, { label: 'ISO', value: '100' }] };
+  }
   else if (/^\/api\/photos\/\d+\/crops$/.test(url)) {
     cropLoads += 1;
     cropRequests.push(url);
@@ -2655,18 +2661,22 @@ const regression = `
     return;
   }
   if (scenario === 'frame-tabs') {
+    element('#loupe-export-options').hidden = true;  // as the markup ships it
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
     const loupe = Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
-    const [frameTab, cropTab, developTabButton] = frameTabElements;
+    const [frameTab, cropTab, developTabButton, exifTab] = frameTabElements;
     await key('Enter', card(1), element('#contact-sheet'));
     await new Promise(setImmediate);
     assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'the frame view opens on Frame by default');
     assert.ok(!element('#frame-panel').hidden);
+    const exportOptions = element('#loupe-export-options');
+    assert.equal(exportOptions.hidden, true, 'export options sit with the export buttons, which Frame lacks');
     assert.ok(!element('#inspection').children.some(node => node.tagName === 'H3' && node.textContent === 'photo-1.jpg'), 'the dialog heading carries the name, not the inspector');
     cropTab.listeners.click();
     assert.equal(cropTab.getAttribute('aria-selected'), 'true');
+    assert.equal(exportOptions.hidden, false, 'Crop exports this frame');
     assert.equal(frameTab.getAttribute('aria-selected'), 'false');
     assert.equal(cropTab.tabIndex, 0);
     assert.equal(frameTab.tabIndex, -1);
@@ -2678,8 +2688,16 @@ const regression = `
     assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'ArrowLeft on Crop selects Frame');
     assert.equal(focused, frameTab);
     await key('End', frameTab, frameTab);
-    assert.equal(developTabButton.getAttribute('aria-selected'), 'true', 'End selects the last tab, Develop');
-    assert.equal(focused, developTabButton);
+    assert.equal(exifTab.getAttribute('aria-selected'), 'true', 'End selects the last tab, EXIF');
+    assert.equal(focused, exifTab);
+    assert.equal(exportOptions.hidden, true, 'EXIF exports nothing');
+    await new Promise(setImmediate);
+    assert.deepEqual(exifRequests, ['/api/photos/1/exif'], 'EXIF is read when its tab opens');
+    assert.deepEqual(element('#exif-fields').children.map(node => [node.tagName, node.textContent]), [['DT', 'Camera'], ['DD', 'ILCE-7CM2'], ['DT', 'ISO'], ['DD', '100']]);
+    assert.equal(element('#exif-status').textContent, '');
+    await key('ArrowLeft', exifTab, exifTab);
+    assert.equal(developTabButton.getAttribute('aria-selected'), 'true', 'Develop sits just before EXIF');
+    assert.equal(exportOptions.hidden, false, 'Develop exports this frame');
     await key('Home', developTabButton, developTabButton);
     assert.equal(frameTab.getAttribute('aria-selected'), 'true');
     await key('ArrowRight', frameTab, frameTab);
@@ -2724,9 +2742,10 @@ const regression = `
       assert.equal(element('#develop-apply-group').disabled, true, 'a burst cannot be developed from a frame that cannot be rendered');
       assert.equal(element('#develop-exposure_ev').disabled, true);
       assert.equal(element('#develop-point-0').getAttribute('tabindex'), '-1');
-      const [frameTab, , developTabButton] = frameTabElements;
+      const [frameTab, , developTabButton, exifTab] = frameTabElements;
       await key('End', frameTab, frameTab);
-      assert.equal(developTabButton.getAttribute('aria-selected'), 'false', 'End skips the unavailable tab');
+      await key('ArrowLeft', exifTab, exifTab);
+      assert.equal(developTabButton.getAttribute('aria-selected'), 'false', 'arrows skip the unavailable tab');
       assert.equal(element('#crop-tab').getAttribute('aria-selected'), 'true');
       assert.deepEqual(developPosts, [], 'nothing is rendered without the raw');
       return;
@@ -4582,6 +4601,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai", "loupe-export"]),
             ("develop-tab", "develop-panel", "false", ["develop-curve", "develop-curve-reset", "develop-exposure_ev", "develop-exposure_ev-value",
                                                        "develop-exposure_ev-reset", "develop-reset-all", "develop-apply-group", "develop-export"]),
+            ("exif-tab", "exif-panel", "false", ["exif-fields", "exif-status"]),
         ):
             self.assertIn(tablist, by_id[tab]["parents"])
             self.assertEqual(("tab", panel, selected), (by_id[tab]["attrs"].get("role"), by_id[tab]["attrs"].get("aria-controls"), by_id[tab]["attrs"].get("aria-selected")))
@@ -4592,6 +4612,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn('<label for="crop-lock">Crop lock</label>', html, "the label matches the README")
         self.assertNotIn(by_id["crop-panel"], by_id["close-loupe"]["parents"])
         self.assertNotIn(by_id["frame-panel"], by_id["close-loupe"]["parents"])
+        self.assertIn("hidden", by_id["loupe-export-options"]["attrs"], "the Frame tab opens without export options")
+        for name in ("loupe-keep-original", "loupe-dated-folder"):
+            self.assertIn(by_id["loupe-export-options"], by_id[name]["parents"])
         self.run_javascript_cleanup_regression("frame-tabs")
 
     def test_compare_and_loupe_dialogs_have_labeled_viewports_and_actions(self):
@@ -5060,6 +5083,17 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_place_editor_posts_burst_scope_and_disables_remember_without_a_fix(self):
         self.run_javascript_cleanup_regression("place-edit")
+
+    def test_exif_route_returns_labelled_fields_and_json_errors(self):
+        with patch("lumen.web.read_exif_summary", return_value=[("Camera", "ILCE-7CM2"), ("ISO", "100")]) as read:
+            code, body = self.get_json("/api/photos/1/exif")
+        self.assertEqual((200, {"photo_id": 1, "fields": [{"label": "Camera", "value": "ILCE-7CM2"}, {"label": "ISO", "value": "100"}]}), (code, body))
+        self.assertTrue(read.call_args.args[0].is_file(), "it reads the original, not the preview")
+        with patch("lumen.web.read_exif_summary", side_effect=PreviewError("exiftool is required to read EXIF")):
+            code, body = self.get_json("/api/photos/1/exif")
+        self.assertEqual((503, {"error": "exiftool is required to read EXIF"}), (code, body))
+        code, body = self.get_json("/api/photos/999/exif")
+        self.assertEqual((404, "unknown photo"), (code, body.get("error")))
 
     def test_photo_detail_carries_place_and_country(self):
         from lumen.catalog import Catalog

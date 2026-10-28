@@ -11,7 +11,8 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
-from lumen.previews import ExifToolPreviewProvider, PreviewError, fingerprint_file, full_size_for, prune_thumbnails, read_image_dimensions, read_metadata, thumbnail_for
+from lumen.previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, full_size_for, prune_thumbnails, read_exif_summary,
+                            read_image_dimensions, read_metadata, thumbnail_for)
 
 
 def write_fake_darktable(directory: Path, sharp: tuple[str, ...] = ()) -> str:
@@ -75,6 +76,22 @@ class PreviewTests(unittest.TestCase):
             with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch("lumen.previews.subprocess.run", return_value=response):
                 metadata = read_metadata(source)
             self.assertEqual((None, None, None), (metadata["latitude"], metadata["longitude"], metadata["altitude"]), "half a fix is no fix")
+
+    def test_exif_summary_labels_a_fixed_list_and_never_passes_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.ARW"
+            source.write_bytes(b"raw")
+            response = subprocess.CompletedProcess(["exiftool"], 0, json.dumps([{
+                "SourceFile": str(source), "Directory": directory, "Model": "ILCE-7CM2", "LensModel": "FE 24-105mm F4 G OSS",
+                "FNumber": 8.0, "ExposureTime": "1/250", "ISO": 100, "FocalLength": "35.0 mm"}]), "")
+            with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch("lumen.previews.subprocess.run", return_value=response) as run:
+                fields = read_exif_summary(source)
+            self.assertEqual([("Camera", "ILCE-7CM2"), ("Lens", "FE 24-105mm F4 G OSS"), ("Focal length", "35.0 mm"),
+                              ("Aperture", "f/8.0"), ("Shutter speed", "1/250 s"), ("ISO", "100")], fields)
+            self.assertNotIn(directory, json.dumps(fields))
+            self.assertNotIn("-a", run.call_args.args[0])
+            with patch("lumen.previews.shutil.which", return_value=None), self.assertRaises(PreviewError):
+                read_exif_summary(source)
 
     def test_metadata_reads_exposure_seconds_numerically(self):
         with tempfile.TemporaryDirectory() as directory:
