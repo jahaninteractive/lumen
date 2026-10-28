@@ -12,9 +12,9 @@ and hands exports to local tools such as darktable.
 The included defaults target a 48 GB M4 Mac with two oMLX models: a fast
 vision model (`Qwen3-VL-8B-Instruct-4bit`) for tagging, problem scans, and
 astro triage, and a review model (`Qwen3.8-27B-4bit`) for critique, captions,
-digests, composition advice, and develop suggestions. A **Review model**
-dropdown in the header switches the review role between the two while Lumen
-runs (see [Local AI](#local-ai)).
+digests, composition advice, and develop suggestions. **Review model** and
+**Fast model** dropdowns in the header move either role between the two while
+Lumen runs (see [Choosing the models](#choosing-the-models)).
 
 ## Why Lumen exists
 
@@ -492,10 +492,10 @@ Every action checks oMLX's live status first and refuses with a message naming
 the unloaded model; the UI disables the matching buttons with the same reason.
 Trust `lumen doctor` (`omlx_roles`) over the configured names.
 
-### Choosing the review model
+### Choosing the models
 
 The 8B is fast; the 27B reads a frame more closely. Neither wins outright, so
-Lumen lets you switch between them instead of fixing one:
+Lumen lets you switch each role between them instead of fixing one:
 
 - At startup, `lumen serve` puts the review role on the 27B if oMLX has it
   loaded, and on the 8B if it does not.
@@ -531,6 +531,30 @@ returned usable develop settings, so it is not offered.
 So the 8B is good enough for captions, burst picks, and a starting point you
 will adjust, at a few seconds a frame; the 27B gives bolder, frame-specific
 develop advice at about 13 s. Running only the 8B frees about 16 GB.
+
+#### Tagging speed
+
+Every image a model sees is resized to a 1024-pixel long edge before it is
+sent (burst critique excepted, because it compares sharpness between frames),
+and the tag prompt asks for one-line JSON. Both came from measuring where the
+27B's time went: most of it was reading a 1616-pixel preview, the rest was
+writing pretty-printed JSON. Tagging a frame now takes:
+
+| Fast model | Before | Now | What you get |
+|------------|--------|-----|--------------|
+| 8B | about 7 s | about 3 s | one plain sentence; sometimes names species that are not in the frame |
+| 27B | about 18 s | 9 to 11 s | where the subject sits, the light, the background, secondary animals |
+
+Measured on fresh safari frames with both models loaded. Descriptions at 1024
+pixels matched those at full size; at 768 the 27B started naming second
+species the way the 8B does, so it stays at 1024. A JSON-schema
+`response_format` was tried and dropped: oMLX enforces it, but it made the 27B
+about a third slower and fixed nothing that was failing.
+
+The practical rule: tag a day with the 8B, then switch the **Fast model**
+dropdown to the 27B and re-tag the keepers with `--retag` when you want the
+fuller descriptions. The measurements and the remaining ideas are in
+`docs/model-speed/HANDOFF.md`.
 
 Start oMLX, then tag:
 
