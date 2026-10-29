@@ -1524,11 +1524,13 @@ async function load() {
     inspection.textContent = 'Select a frame to see why it ranked where it did.';
   }
   // A server older than this page answers without omlx_roles; the sheet must still render, so the status line only reports it.
-  const roleText = role => `${role} ${status.omlx_roles[role].model} ${status.omlx_roles[role].loaded ? 'loaded' : 'not loaded'}`;
+  // The header reports health only; model names and their load state live in the footer strip.
   const systemStatus = document.querySelector('#system-status');
+  const missing = Object.entries(status.tools || {}).filter(([, tool]) => tool?.available === false).map(([name]) => `${name} missing`);
+  const health = [status.omlx_live?.online ? 'Local AI online' : 'Local AI offline', ...missing].join(' · ');
   const tools = status.omlx_roles
-    ? `${status.omlx_live.summary} · ${roleText('fast')} · ${roleText('review')}`
-    : `${status.omlx_live?.summary || 'Status unavailable'} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
+    ? health
+    : `${health} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
   // Static files are read from disk on every request while the Python stays as it was
   // imported, so a stale server looks current and fails as whatever validation error comes
   // first. It goes ahead of the tool summary because nothing else here is actionable until
@@ -2199,6 +2201,7 @@ function updateWorkflow() {
   document.querySelector('#browse-path').disabled = state.busy;
   document.querySelector('#open-compare').disabled = state.cullingBlocked || state.compare.length !== 2;
   const fastLoaded = roleReady('fast');
+  document.querySelector('#ai-availability').textContent = roleUnavailable('fast') || roleUnavailable('review') || '';
   document.querySelector('#tag-all').disabled = state.busy || !fastLoaded;
   document.querySelector('#tag-all-availability').textContent = roleUnavailable('fast');
   document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;

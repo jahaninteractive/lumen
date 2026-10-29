@@ -382,6 +382,25 @@ class WebTests(unittest.TestCase):
             self.assertIn(word, javascript)
         self.assertNotRegex(javascript, r"job[^\n]*\.innerHTML")
 
+    def test_footer_strip_holds_model_selects_availability_activity_and_jobs(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        footer = next(node for node in parser.nodes if node["tag"] == "footer")
+        header = next(node for node in parser.nodes if node["tag"] == "header")
+        for name in ("role-model-pair", "ai-availability", "ai-status", "job-strip"):
+            self.assertIn(footer, by_id[name]["parents"], name)
+            self.assertNotIn(header, by_id[name]["parents"], name)
+        order = [node["attrs"]["id"] for node in parser.nodes
+                 if node["attrs"].get("id") in {"role-model-pair", "ai-availability", "ai-status", "job-strip"}]
+        self.assertEqual(["role-model-pair", "ai-availability", "ai-status", "job-strip"], order)
+        self.assertIn("hidden", by_id["job-strip"]["attrs"])
+        self.assertEqual("quiet", by_id["ai-availability"]["attrs"].get("class"))
+
+    def test_javascript_header_reports_health_without_model_names(self):
+        self.run_javascript_cleanup_regression("status-health")
+
     def test_javascript_job_strip_polls_import_disables_actions_and_refreshes_once(self):
         self.run_javascript_cleanup_regression("job-strip")
 
@@ -1831,7 +1850,7 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
   else if (url === '/api/status' && scenario === 'stale-server') payload = { omlx_live: { summary: 'Ready' }, stale: ['This server is running code older than the files on disk. Restart it with lumen serve, then reload this page.'], omlx_roles: { fast: { model: 'm', loaded: true }, review: { model: 'm', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
-  else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
+  else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready', online: true }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
     critiqueRequests.push([url, options.method]);
@@ -2211,7 +2230,8 @@ const regression = `
     const loaded = scenario === 'keywords';
     assert.equal(element('#tag-keepers').textContent, 'Tag keepers with local AI (2 keepers)');
     const state_ = loaded ? 'loaded' : 'not loaded';
-    assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + state_ + ' · review Qwen3.8-27B-4bit ' + state_);
+    assert.equal(element('#system-status').textContent, 'Local AI online');
+    assert.equal(element('#ai-availability').textContent, loaded ? '' : 'Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX. Load it in oMLX, then reload this page.');
     assert.equal(element('#system-status').getAttribute('data-stale'), undefined, 'a current server carries no warning');
     const aiTree = node => [node, ...(node.children || []).flatMap(aiTree)];
     if (!loaded) {
@@ -4163,13 +4183,21 @@ const regression = `
     assert.equal(state.selectedGroupId, 2);
     return;
   }
+  if (scenario === 'status-health') {
+    darktableReady = false;
+    await load();
+    const line = element('#system-status').textContent;
+    assert.equal(line, 'Local AI online · darktable-cli missing');
+    assert.ok(!line.includes('Qwen'), 'the header names no model');
+    return;
+  }
   if (scenario === 'stale-server') {
     await load();
     const line = element('#system-status');
     // Ahead of the tool summary: nothing else on this line can be acted on until the server
     // is restarted, and the failure it causes looks like anything but a stale server.
     assert.ok(line.textContent.startsWith('This server is running code older than the files on disk.'), line.textContent);
-    assert.ok(line.textContent.includes('Ready'), 'the tool summary is still there');
+    assert.ok(line.textContent.endsWith('Local AI offline'), 'the health summary is still there');
     assert.equal(line.getAttribute('data-stale'), '', 'and it is marked so it reads as a warning');
     assert.equal(document.querySelectorAll('.frame').length, 2, 'the sheet still renders');
     return;
@@ -4177,7 +4205,7 @@ const regression = `
   if (scenario === 'status-skew') {
     await load();
     assert.equal(document.querySelectorAll('.frame').length, 2, 'the sheet renders even when the status payload lacks the AI role block');
-    assert.ok(element('#system-status').textContent.includes('Ready'), element('#system-status').textContent);
+    assert.ok(element('#system-status').textContent.startsWith('Local AI offline · '), element('#system-status').textContent);
     assert.ok(element('#system-status').textContent.toLowerCase().includes('restart'), 'the status line says the server is older than the page');
     assert.equal(element('#tag-all').disabled, true, 'AI controls stay disabled without role status');
     return;

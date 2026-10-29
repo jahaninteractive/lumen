@@ -15,18 +15,7 @@
       <span class="subtitle">local RAW workbench</span>
     </div>
     <p id="system-status" role="status" aria-live="polite">Checking local tools…</p>
-    <span class="pair" id="role-model-pair" hidden><label for="review-model">Review model</label>
-    <select id="review-model" data-role="review"></select>
-    <label for="fast-model">Fast model</label>
-    <select id="fast-model" data-role="fast"></select></span>
   </header>
-
-  <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
-    <p id="job-label">No background job</p>
-    <progress id="job-progress" aria-labelledby="job-label" max="100" value="0"></progress>
-    <p id="job-status" role="status" aria-live="polite"></p>
-    <button type="button" id="cancel-job" class="danger" disabled>Cancel job</button>
-  </section>
 
   <div class="workspace">
     <nav aria-label="Photo batches" class="batch-rail">
@@ -350,8 +339,19 @@
 
   </div>
 
-  <footer class="ai-bar" aria-label="Local AI activity">
+  <footer class="ai-bar" aria-label="Local AI">
+    <span class="pair" id="role-model-pair" hidden><label for="review-model">Review model</label>
+    <select id="review-model" data-role="review"></select>
+    <label for="fast-model">Fast model</label>
+    <select id="fast-model" data-role="fast"></select></span>
+    <p id="ai-availability" class="quiet"></p>
     <p id="ai-status" role="status" aria-live="polite">Local AI idle. Requests and their results are reported here.</p>
+    <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
+      <p id="job-label">No background job</p>
+      <progress id="job-progress" aria-labelledby="job-label" max="100" value="0"></progress>
+      <p id="job-status" role="status" aria-live="polite"></p>
+      <button type="button" id="cancel-job" class="danger" disabled>Cancel job</button>
+    </section>
   </footer>
 
   <dialog id="export-dialog" aria-labelledby="export-dialog-heading">
