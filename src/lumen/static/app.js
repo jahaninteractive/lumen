@@ -1505,6 +1505,7 @@ for (const select of roleSelects) {
 }
 
 let resumed = false;
+let defaultTabChosen = false;  // only the first load picks the tab a fresh visit opens
 async function load() {
   const [status, groups] = await Promise.all([request('/api/status'), request(`/api/groups${location.search}`)]);
   state.status = status;
@@ -1513,6 +1514,7 @@ async function load() {
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
   state.keeperCount = groups.keeper_count;
+  if (!defaultTabChosen) { defaultTabChosen = true; chooseDefaultTab(state.photoCount); }
   syncFilters(groups.cameras);
   const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId))
     || (state.selectedId === null ? state.groups.find(group => group.id === state.selectedGroupId) : undefined);
@@ -2292,7 +2294,8 @@ function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = nul
 const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   collapsePanel(false);  // choosing a tab always shows its panel
   document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
-  if (tab.id === 'review-tab') { loadRejectSuggestions(); loadVocabulary(); }
+  if (tab.id === 'review-tab') loadRejectSuggestions();
+  if (tab.id === 'assist-tab') loadVocabulary();
   if (tab.id === 'clear-tab') loadCleared();
 }, () => togglePanel());  // clicking the open tab again folds the panel away, and back
 
@@ -2309,8 +2312,28 @@ function togglePanel() {
   announce(collapsed ? 'Workflow panel collapsed; the contact sheet has the space.' : 'Workflow panel shown.');
 }
 try {
-  selectTab.restore();  // before load(), so the first load fills the right panel; a removed tab stays on Export
+  selectTab.restore();  // before load(), so the first load fills the right panel; a removed tab stays on Add photos
   if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
+} catch { /* per-visit only */ }
+// A fresh visit (no remembered tab) opens Add photos on an empty catalog and the folded panel otherwise; Add photos is selected in the markup.
+function chooseDefaultTab(photoCount) {
+  let remembered = null;
+  try { remembered = localStorage.getItem('lumen-tab'); } catch { /* per-visit only */ }
+  if (remembered === null) collapsePanel(photoCount > 0);
+}
+// Add photos holds two sections; the radios, not the tablist, show one of them.
+const addSourceRadios = [...document.querySelectorAll('input[name="add-source"]')];
+function showAddSource(value) {
+  document.querySelector('#ingest-panel').hidden = value !== 'ingest';
+  document.querySelector('#import-panel').hidden = value !== 'import';
+}
+addSourceRadios.forEach(radio => radio.addEventListener('change', () => {
+  showAddSource(radio.value);
+  try { localStorage.setItem('lumen-add-source', radio.value); } catch { /* per-visit only */ }
+}));
+try {
+  const source = addSourceRadios.find(radio => radio.value === localStorage.getItem('lumen-add-source'));
+  if (source) { addSourceRadios.forEach(radio => { radio.checked = radio === source; }); showAddSource(source.value); }
 } catch { /* per-visit only */ }
 
 document.querySelector('#jump-selected').addEventListener('click', () => {

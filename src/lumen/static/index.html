@@ -38,8 +38,6 @@
         <button type="button" id="merge-batches" class="secondary" disabled>Merge selected batches</button>
         <button type="button" id="jump-selected" class="secondary">Jump to selected</button>
         <button type="button" id="back-to-top" class="secondary">Back to top</button>
-        <button type="button" id="write-digest" class="secondary">Write today's digest</button>
-        <p id="digest-result" class="path"></p>
       </div>
       <div id="batch-list"><p class="quiet">No imported batches yet.</p></div>
     </nav>
@@ -48,26 +46,94 @@
       <div class="main-top">
       <div class="tab-row">
         <div class="tab-rail" role="tablist" aria-label="Workflow">
-          <button type="button" id="ingest-tab" role="tab" aria-controls="ingest-panel" aria-selected="false" tabindex="-1">Ingest</button>
-          <button type="button" id="import-tab" role="tab" aria-controls="import-panel" aria-selected="false" tabindex="-1">Import</button>
+          <button type="button" id="add-tab" role="tab" aria-controls="add-panel" aria-selected="true" tabindex="0">Add photos</button>
           <button type="button" id="review-tab" role="tab" aria-controls="review-panel" aria-selected="false" tabindex="-1">Review</button>
+          <button type="button" id="assist-tab" role="tab" aria-controls="assist-panel" aria-selected="false" tabindex="-1">Assist</button>
           <button type="button" id="astro-tab" role="tab" aria-controls="astro-panel" aria-selected="false" tabindex="-1">Astro</button>
-          <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="true" tabindex="0">Export</button>
+          <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
       </div>
       </div>
 
       <section id="workflow-panels" class="workflow" aria-label="Finish this shoot">
-        <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0">
-          <h2>Finish as JPEG</h2>
-          <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
-          <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
-          <dl class="terms" aria-label="What the words mean">
-            <dt>Flagged</dt><dd>You marked the frame to keep, with <kbd>F</kbd> or the Flag button. A flagged frame is always a keeper.</dd>
-            <dt>Unsorted</dt><dd>No decision yet: neither flagged nor rejected.</dd>
-            <dt>Tagged</dt><dd>The local AI has described the frame with keywords, using Tag keepers or Tag all below. Tags make it findable in search and go into the exported JPEG as keywords.</dd>
-          </dl>
+        <section id="add-panel" role="tabpanel" aria-labelledby="add-tab" tabindex="0">
+          <fieldset id="add-source" class="segmented">
+            <legend class="sr-only">Where are the photos?</legend>
+            <label for="add-source-ingest"><input type="radio" name="add-source" id="add-source-ingest" value="ingest"><span>Still on the memory card</span></label>
+            <label for="add-source-import"><input type="radio" name="add-source" id="add-source-import" value="import" checked><span>Already on a drive</span></label>
+          </fieldset>
+          <section id="ingest-panel" hidden>
+            <h2>Ingest: copy a memory card safely, then import it</h2>
+            <p>Use Ingest when the photos are still on the camera's card and that card is the only copy. Ingest does three things in order:</p>
+            <ol class="steps">
+              <li><strong>Copy.</strong> Every file on the card, videos included, is copied to your primary folder and, if you choose one, a mirror folder on a second drive.</li>
+              <li><strong>Verify.</strong> Each copy is read back from its drive and its SHA-256 checksum compared with the card's. A copy that does not match is reported, never trusted.</li>
+              <li><strong>Import.</strong> The verified photos in the primary folder are added to Lumen, exactly as Import would.</li>
+            </ol>
+            <p class="quiet">Lumen only reads the card; it never writes to or erases it. Hidden system files are skipped. Format the card in the camera only after the panel ends with "Every file verified on every destination."</p>
+            <fieldset id="ingest-controls">
+              <legend>Card and destinations</legend>
+              <p id="ingest-card-label">Memory card folder</p>
+              <p id="ingest-card-path" class="path" aria-labelledby="ingest-card-label">None</p>
+              <div class="button-row">
+                <button type="button" id="browse-ingest-card" class="secondary">Choose card…</button>
+              </div>
+              <p id="ingest-primary-label">Primary destination (imported into Lumen)</p>
+              <p id="ingest-primary-path" class="path" aria-labelledby="ingest-primary-label">None</p>
+              <div class="button-row">
+                <button type="button" id="browse-ingest-primary" class="secondary">Choose primary…</button>
+              </div>
+              <p id="ingest-mirror-label">Mirror destination (optional second copy)</p>
+              <p id="ingest-mirror-path" class="path" aria-labelledby="ingest-mirror-label">No mirror</p>
+              <div class="button-row">
+                <button type="button" id="browse-ingest-mirror" class="secondary">Choose mirror…</button>
+                <button type="button" id="reset-ingest-mirror" class="secondary" disabled>No mirror</button>
+              </div>
+            </fieldset>
+            <div class="button-row">
+              <button type="button" id="start-ingest" disabled>Start ingest</button>
+            </div>
+            <p id="ingest-counts"></p>
+            <p id="ingest-manifest-label">Manifest</p>
+            <p id="ingest-manifest" class="path" aria-labelledby="ingest-manifest-label">Appears when an ingest starts</p>
+            <p id="ingest-snapshot" class="quiet"></p>
+            <p id="ingest-verdict"></p>
+            <p id="ingest-status" role="status" aria-live="polite"></p>
+          </section>
+          <section id="import-panel">
+            <h2>Import: add photos that are already on a drive</h2>
+            <p>Use Import for photos already copied off the card and backed up: a folder on your Mac or an external drive, or a single photo. Lumen reads them where they are and adds them to the contact sheet. Nothing is copied, moved, or renamed; Lumen writes only previews and sidecars into its own library.</p>
+            <p class="quiet">The originals must stay reachable: if their drive is unplugged, the contact sheet still shows previews, but export and preview refinement need the drive plugged back in. Photos still on a memory card? Use Ingest first, so a verified copy exists before you format the card.</p>
+            <form id="import-form" class="import-bar">
+              <label for="import-path">Folder or photo path</label>
+              <div class="input-row">
+                <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
+                <button type="button" id="browse-path" class="secondary">Browse…</button>
+              </div>
+              <label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>
+              <p class="quiet">Frames you removed or cleared before are skipped unless ticked.</p>
+              <p id="import-status" role="status" aria-live="polite"></p>
+              <div class="button-row">
+                <button type="submit">Import originals</button>
+              </div>
+            </form>
+          </section>
+        </section>
+        <section id="review-panel" role="tabpanel" aria-labelledby="review-tab" tabindex="0" hidden>
+          <h2>Review suggested rejects</h2>
+          <p class="quiet">The fast local model looks for technical failures in your keepers. Nothing is rejected until you choose Reject. With a row's button focused, press <kbd>X</kbd> to reject, <kbd>K</kbd> to keep, and <kbd>&uarr;</kbd> <kbd>&darr;</kbd> to move between rows.</p>
+          <div class="button-row">
+            <button type="button" id="scan-rejects" class="secondary" aria-describedby="scan-rejects-availability" disabled>Scan keepers for problems</button>
+            <button type="button" id="reject-all-shown" disabled>Reject all shown…</button>
+          </div>
+          <p id="scan-rejects-availability" class="quiet"></p>
+          <p id="review-count" role="status" aria-live="polite">0 suggested rejects</p>
+          <ul id="reject-list" aria-label="Suggested rejects"></ul>
+          <datalist id="vocabulary-words"></datalist>
+        </section>
+        <section id="assist-panel" role="tabpanel" aria-labelledby="assist-tab" tabindex="0" hidden>
+          <h2>Local AI</h2>
           <div class="button-row">
             <button type="button" id="assist-keepers" aria-describedby="assist-keepers-availability" disabled>Run all local AI on keepers (0 keepers)</button>
             <button type="button" id="tag-keepers" class="secondary" aria-describedby="tag-keepers-availability" disabled>Tag keepers with local AI (0 keepers)</button>
@@ -84,56 +150,12 @@
             <p id="tag-all-availability" class="quiet"></p>
             <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the top.</p>
           </div>
-          <fieldset id="export-controls">
-            <legend>Choose what to export</legend>
-            <div class="scope-options">
-              <label><input type="radio" name="export-scope" value="current" checked> Current photo <span id="current-export-name">No photo selected</span></label>
-              <label><input type="radio" name="export-scope" value="keepers"> All keepers <span id="keeper-count">0 keepers</span></label>
-              <label><input type="radio" name="export-scope" value="filtered"> Frames the contact sheet filters show <span id="filtered-export-count">0 frames</span></label>
-            </div>
-            <label class="toggle" for="export-keep-original"><input type="checkbox" id="export-keep-original"> Also export the untouched version</label>
-            <label class="toggle" for="export-dated-folder"><input type="checkbox" id="export-dated-folder" checked> Put each frame in a subfolder named for the date it was taken</label>
-            <fieldset id="export-preset">
-              <legend>Size</legend>
-              <div class="scope-options">
-                <label><input type="radio" name="export-preset" value="full" checked> Full resolution (quality 92, keeps GPS)</label>
-                <label><input type="radio" name="export-preset" value="share"> Share (2048 px long edge, quality 85, no GPS)</label>
-                <label><input type="radio" name="export-preset" value="web"> Web (1600 px long edge, quality 82, no GPS)</label>
-              </div>
-            </fieldset>
-            <div><label for="export-watermark">Watermark text (optional)</label><input type="text" id="export-watermark" maxlength="80" autocomplete="off"></div>
-            <p id="profile-label">Optional darktable XMP profile</p>
-            <p id="profile-path" class="path" aria-labelledby="profile-label">Camera-aware defaults</p>
-            <div class="button-row">
-              <button type="button" id="browse-xmp" class="secondary">Choose XMP…</button>
-              <button type="button" id="reset-xmp" class="secondary" disabled>Use camera defaults</button>
-            </div>
-            <p>Destination</p>
-            <p id="export-destination" class="path">Checking managed output folder…</p>
-            <p id="export-availability" class="quiet">Checking darktable…</p>
-            <div class="button-row">
-              <button type="button" id="export-jpegs" disabled>Export JPEGs</button>
-              <button type="button" id="reveal-outputs" class="secondary">Show outputs in Finder</button>
-            </div>
-          </fieldset>
-          <p id="export-status" role="status" aria-live="polite"></p>
-          <ul id="export-results" aria-label="Export result paths"></ul>
-        </section>
-        <section id="review-panel" role="tabpanel" aria-labelledby="review-tab" tabindex="0" hidden>
-          <h2>Review suggested rejects</h2>
-          <p class="quiet">The fast local model looks for technical failures in your keepers. Nothing is rejected until you choose Reject. With a row's button focused, press <kbd>X</kbd> to reject, <kbd>K</kbd> to keep, and <kbd>&uarr;</kbd> <kbd>&darr;</kbd> to move between rows.</p>
-          <div class="button-row">
-            <button type="button" id="scan-rejects" class="secondary" aria-describedby="scan-rejects-availability" disabled>Scan keepers for problems</button>
-            <button type="button" id="reject-all-shown" disabled>Reject all shown…</button>
-          </div>
-          <p id="scan-rejects-availability" class="quiet"></p>
-          <p id="review-count" role="status" aria-live="polite">0 suggested rejects</p>
-          <ul id="reject-list" aria-label="Suggested rejects"></ul>
           <details id="vocabulary-panel"><summary>Learned keywords <span id="vocabulary-count" class="quiet"></span></summary>
             <p class="quiet">Words the local models added to your vocabulary. Forget removes a word from every frame and stops it being learned again.</p>
             <ul id="vocabulary-list" aria-label="Learned keywords"></ul>
           </details>
-          <datalist id="vocabulary-words"></datalist>
+          <button type="button" id="write-digest" class="secondary">Write today's digest</button>
+          <p id="digest-result" class="path"></p>
         </section>
         <section id="astro-panel" role="tabpanel" aria-labelledby="astro-tab" tabindex="0" hidden>
           <h2>Stack a night-sky batch with Siril</h2>
@@ -188,61 +210,49 @@
           <div id="astro-paths" class="recovery" aria-label="Managed job files"></div>
           <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
         </section>
-        <section id="ingest-panel" role="tabpanel" aria-labelledby="ingest-tab" tabindex="0" hidden>
-          <h2>Ingest: copy a memory card safely, then import it</h2>
-          <p>Use Ingest when the photos are still on the camera's card and that card is the only copy. Ingest does three things in order:</p>
-          <ol class="steps">
-            <li><strong>Copy.</strong> Every file on the card, videos included, is copied to your primary folder and, if you choose one, a mirror folder on a second drive.</li>
-            <li><strong>Verify.</strong> Each copy is read back from its drive and its SHA-256 checksum compared with the card's. A copy that does not match is reported, never trusted.</li>
-            <li><strong>Import.</strong> The verified photos in the primary folder are added to Lumen, exactly as Import would.</li>
-          </ol>
-          <p class="quiet">Lumen only reads the card; it never writes to or erases it. Hidden system files are skipped. Format the card in the camera only after the panel ends with "Every file verified on every destination."</p>
-          <fieldset id="ingest-controls">
-            <legend>Card and destinations</legend>
-            <p id="ingest-card-label">Memory card folder</p>
-            <p id="ingest-card-path" class="path" aria-labelledby="ingest-card-label">None</p>
-            <div class="button-row">
-              <button type="button" id="browse-ingest-card" class="secondary">Choose card…</button>
+        <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
+          <h2>Finish as JPEG</h2>
+          <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
+          <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
+          <dl class="terms" aria-label="What the words mean">
+            <dt>Flagged</dt><dd>You marked the frame to keep, with <kbd>F</kbd> or the Flag button. A flagged frame is always a keeper.</dd>
+            <dt>Unsorted</dt><dd>No decision yet: neither flagged nor rejected.</dd>
+            <dt>Tagged</dt><dd>The local AI has described the frame with keywords, using Tag keepers or Tag all on the Assist tab. Tags make it findable in search and go into the exported JPEG as keywords.</dd>
+          </dl>
+          <fieldset id="export-controls">
+            <legend>Choose what to export</legend>
+            <div class="scope-options">
+              <label><input type="radio" name="export-scope" value="current" checked> Current photo <span id="current-export-name">No photo selected</span></label>
+              <label><input type="radio" name="export-scope" value="keepers"> All keepers <span id="keeper-count">0 keepers</span></label>
+              <label><input type="radio" name="export-scope" value="filtered"> Frames the contact sheet filters show <span id="filtered-export-count">0 frames</span></label>
             </div>
-            <p id="ingest-primary-label">Primary destination (imported into Lumen)</p>
-            <p id="ingest-primary-path" class="path" aria-labelledby="ingest-primary-label">None</p>
+            <label class="toggle" for="export-keep-original"><input type="checkbox" id="export-keep-original"> Also export the untouched version</label>
+            <label class="toggle" for="export-dated-folder"><input type="checkbox" id="export-dated-folder" checked> Put each frame in a subfolder named for the date it was taken</label>
+            <fieldset id="export-preset">
+              <legend>Size</legend>
+              <div class="scope-options">
+                <label><input type="radio" name="export-preset" value="full" checked> Full resolution (quality 92, keeps GPS)</label>
+                <label><input type="radio" name="export-preset" value="share"> Share (2048 px long edge, quality 85, no GPS)</label>
+                <label><input type="radio" name="export-preset" value="web"> Web (1600 px long edge, quality 82, no GPS)</label>
+              </div>
+            </fieldset>
+            <div><label for="export-watermark">Watermark text (optional)</label><input type="text" id="export-watermark" maxlength="80" autocomplete="off"></div>
+            <p id="profile-label">Optional darktable XMP profile</p>
+            <p id="profile-path" class="path" aria-labelledby="profile-label">Camera-aware defaults</p>
             <div class="button-row">
-              <button type="button" id="browse-ingest-primary" class="secondary">Choose primary…</button>
+              <button type="button" id="browse-xmp" class="secondary">Choose XMP…</button>
+              <button type="button" id="reset-xmp" class="secondary" disabled>Use camera defaults</button>
             </div>
-            <p id="ingest-mirror-label">Mirror destination (optional second copy)</p>
-            <p id="ingest-mirror-path" class="path" aria-labelledby="ingest-mirror-label">No mirror</p>
+            <p>Destination</p>
+            <p id="export-destination" class="path">Checking managed output folder…</p>
+            <p id="export-availability" class="quiet">Checking darktable…</p>
             <div class="button-row">
-              <button type="button" id="browse-ingest-mirror" class="secondary">Choose mirror…</button>
-              <button type="button" id="reset-ingest-mirror" class="secondary" disabled>No mirror</button>
+              <button type="button" id="export-jpegs" disabled>Export JPEGs</button>
+              <button type="button" id="reveal-outputs" class="secondary">Show outputs in Finder</button>
             </div>
           </fieldset>
-          <div class="button-row">
-            <button type="button" id="start-ingest" disabled>Start ingest</button>
-          </div>
-          <p id="ingest-counts"></p>
-          <p id="ingest-manifest-label">Manifest</p>
-          <p id="ingest-manifest" class="path" aria-labelledby="ingest-manifest-label">Appears when an ingest starts</p>
-          <p id="ingest-snapshot" class="quiet"></p>
-          <p id="ingest-verdict"></p>
-          <p id="ingest-status" role="status" aria-live="polite"></p>
-        </section>
-        <section id="import-panel" role="tabpanel" aria-labelledby="import-tab" tabindex="0" hidden>
-          <h2>Import: add photos that are already on a drive</h2>
-          <p>Use Import for photos already copied off the card and backed up: a folder on your Mac or an external drive, or a single photo. Lumen reads them where they are and adds them to the contact sheet. Nothing is copied, moved, or renamed; Lumen writes only previews and sidecars into its own library.</p>
-          <p class="quiet">The originals must stay reachable: if their drive is unplugged, the contact sheet still shows previews, but export and preview refinement need the drive plugged back in. Photos still on a memory card? Use Ingest first, so a verified copy exists before you format the card.</p>
-          <form id="import-form" class="import-bar">
-            <label for="import-path">Folder or photo path</label>
-            <div class="input-row">
-              <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
-              <button type="button" id="browse-path" class="secondary">Browse…</button>
-            </div>
-            <label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>
-            <p class="quiet">Frames you removed or cleared before are skipped unless ticked.</p>
-            <p id="import-status" role="status" aria-live="polite"></p>
-            <div class="button-row">
-              <button type="submit">Import originals</button>
-            </div>
-          </form>
+          <p id="export-status" role="status" aria-live="polite"></p>
+          <ul id="export-results" aria-label="Export result paths"></ul>
         </section>
 
         <section id="clear-panel" role="tabpanel" aria-labelledby="clear-tab" tabindex="0" hidden>

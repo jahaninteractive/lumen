@@ -327,6 +327,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .segmented label:last-of-type > span { border-radius: 0 6px 6px 0; }
 .segmented input:checked + span { position: relative; z-index: 1; border-color: var(--amber); color: var(--black); background: var(--amber); }
 .segmented input:focus-visible + span { outline: 3px solid var(--cyan); outline-offset: 3px; z-index: 2; }
+#add-source { margin-bottom: 1rem; }
 #show-more { display: block; margin: 1rem auto 0; }
 #show-more[hidden] { display: none; }
 .day { margin-bottom: .75rem; }

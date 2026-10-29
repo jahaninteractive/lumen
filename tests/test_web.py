@@ -281,7 +281,7 @@ class WebTests(unittest.TestCase):
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         panel = by_id["ingest-panel"]
-        self.assertEqual(("tabpanel", "ingest-tab"), (panel["attrs"].get("role"), panel["attrs"].get("aria-labelledby")))
+        self.assertIn(by_id["add-panel"], panel["parents"], "Ingest is one source in the Add photos tab")
         for kind in ("card", "primary", "mirror"):
             browse = by_id[f"browse-ingest-{kind}"]
             self.assertEqual(("button", "button"), (browse["tag"], browse["attrs"].get("type")))
@@ -781,17 +781,31 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"]]
-        self.assertEqual(["Ingest", "Import", "Review", "Astro", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
+        self.assertEqual(["Add photos", "Review", "Assist", "Astro", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for tab in tabs:
             self.assertEqual("button", tab["tag"])
-            export = tab["text"].strip() == "Export"  # Export stays the default tab wherever it sits
-            self.assertEqual(str(export).lower(), tab["attrs"]["aria-selected"])
-            self.assertEqual("0" if export else "-1", tab["attrs"].get("tabindex"))
+            default = tab["text"].strip() == "Add photos"  # the markup default; the first load folds it away when the catalog has frames
+            self.assertEqual(str(default).lower(), tab["attrs"]["aria-selected"])
+            self.assertEqual("0" if default else "-1", tab["attrs"].get("tabindex"))
             panel = by_id[tab["attrs"]["aria-controls"]]
             self.assertEqual("tabpanel", panel["attrs"].get("role"))
             self.assertEqual(tab["attrs"]["id"], panel["attrs"].get("aria-labelledby"))
-            self.assertEqual(not export, "hidden" in panel["attrs"])
+            self.assertEqual(not default, "hidden" in panel["attrs"])
+        assist_ids = ["assist-keepers", "tag-keepers", "redo-keepers", "tag-all", "retag-all", "vocabulary-panel", "write-digest", "digest-result"]
+        self.assertEqual(assist_ids, [node["attrs"]["id"] for node in parser.nodes if node["attrs"].get("id") in assist_ids], "Assist holds them in this order")
+        for name in assist_ids:
+            self.assertIn(by_id["assist-panel"], by_id[name]["parents"], f"{name} lives in the Assist tab")
+            self.assertNotIn(by_id["export-panel"], by_id[name]["parents"], f"{name} left the Export tab")
+        for name in ("ingest-panel", "import-panel"):
+            self.assertIn(by_id["add-panel"], by_id[name]["parents"])
+            self.assertNotIn("role", by_id[name]["attrs"], "the add-source radios, not the tablist, show these sections")
+        self.assertEqual(("fieldset", "segmented"), (by_id["add-source"]["tag"], by_id["add-source"]["attrs"].get("class")))
+        radios = [node for node in parser.nodes if node["attrs"].get("name") == "add-source"]
+        self.assertEqual([("ingest", False), ("import", True)], [(node["attrs"]["value"], "checked" in node["attrs"]) for node in radios])
+        for radio, label in zip(radios, ("Still on the memory card", "Already on a drive")):
+            self.assertTrue(any(node["tag"] == "label" and node["text"].strip() == label for node in radio["parents"]), label)
+        self.assertEqual((True, False), ("hidden" in by_id["ingest-panel"]["attrs"], "hidden" in by_id["import-panel"]["attrs"]))
         for node in parser.nodes:
             if node["tag"] == "button":
                 self.assertIn(node["attrs"].get("type"), {"button", "submit"})
@@ -1304,7 +1318,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual((["ice"], None), (vocab["blocked"], vocab["counts"].get("ice")))
         self.assertEqual(["bay"], self.get_json(f"/api/photos/{photo_id}")[1]["tags"]["data"]["subjects"])
 
-    def test_export_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
+    def test_assist_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
         self.assertIn('id="tag-keepers"', html)
         self.assertIn('id="tag-keepers-availability"', html)
@@ -1638,11 +1652,12 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['ingest', 'import', 'review', 'astro', 'export', 'clear'].map(name => {
+const tabElements = ['add', 'review', 'assist', 'astro', 'export', 'clear'].map(name => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
-  tab.setAttribute('aria-selected', String(name === 'export'));
+  tab.setAttribute('aria-selected', String(name === 'add'));
+  element('#' + name + '-panel').hidden = name !== 'add';  // as the markup ships it
   return tab;
 });
 const frameTabElements = ['frame', 'crop', 'develop', 'exif'].map((name, index) => {
@@ -1657,6 +1672,8 @@ const presetRadios = ['full', 'share', 'web'].map((value, index) => Object.assig
 const webRadio = presetRadios[2];
 const recipes = ['tracked', 'untracked'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const nrModes = ['auto', 'off', 'manual'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
+const addSources = ['ingest', 'import'].map(value => Object.assign(element('#add-source-' + value), { value, checked: value === 'import' }));
+element('#ingest-panel').hidden = true;  // as the markup ships it
 const document = {
   get activeElement() { return focused; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
@@ -1670,6 +1687,7 @@ const document = {
     if (selector === 'input[name="astro-recipe"]') return recipes;
     if (selector === 'input[name="export-preset"]') return presetRadios;
     if (selector === 'input[name="develop-nr-mode"]') return nrModes;
+    if (selector === 'input[name="add-source"]') return addSources;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
     return byData(selector) || [];
@@ -1689,7 +1707,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -1707,7 +1725,7 @@ let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
-let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'default-tab' ? [] : scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
 if (scenario === 'export-watermark') Object.assign(stored, { 'lumen-watermark': '\u00a9 N. David', 'lumen-export-preset': 'web' });  // remembered from an earlier visit
 if (scenario === 'export-bad-preset') stored['lumen-export-preset'] = 'huge';
@@ -2431,7 +2449,7 @@ const regression = `
   }
   if (scenario === 'vocabulary') {
     await load();
-    element('#review-tab').listeners.click();
+    element('#assist-tab').listeners.click();
     await new Promise(setImmediate);
     const rows = () => element('#vocabulary-list').children;
     assert.equal(rows().length, 2);
@@ -2692,7 +2710,7 @@ const regression = `
     return;
   }
   if (scenario === 'frame-view') {
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'a remembered Compose tab falls back to Export');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true', 'a remembered Compose tab falls back to Add photos');
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     let prevented = 0;
@@ -3713,7 +3731,12 @@ const regression = `
   }
   if (scenario === 'ingest') {
     await load();
-    element('#ingest-tab').listeners.click();
+    element('#add-tab').listeners.click();
+    element('#add-source-ingest').checked = true; element('#add-source-import').checked = false;
+    element('#add-source-ingest').listeners.change();
+    assert.equal(element('#ingest-panel').hidden, false, 'the ingest radio shows its section');
+    assert.equal(element('#import-panel').hidden, true);
+    assert.equal(stored['lumen-add-source'], 'ingest', 'the source is remembered');
     assert.equal(element('#start-ingest').disabled, true, 'a card and a primary destination are required');
     await element('#browse-ingest-card').listeners.click();
     assert.equal(element('#ingest-card-path').textContent, '/Volumes/CARD');
@@ -3761,10 +3784,10 @@ const regression = `
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const cue = tree(element('#contact-sheet')).find(node => node.className === 'astro-cue');
     assert.equal(cue?.textContent, 'Looks like astro', 'the cue is text in the burst header');
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
     await inspect(state.groups[0].photos[0]);
     await new Promise(setImmediate);
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
     assert.deepEqual(triageRequests, ['/api/groups/1/triage']);
     const lights = document.querySelectorAll('#astro-lights input');
     const triageTexts = element('#astro-lights').children.map(label => label.children[2].textContent);
@@ -3784,7 +3807,7 @@ const regression = `
     assert.deepEqual(astroLights().excluded, [2]);
     assert.equal(element('#announcer').textContent, '1 light excluded');
     assert.equal(element('#exclude-flagged').textContent, 'Exclude flagged lights (0)');
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true');
     return;
   }
   if (scenario === 'resume') {
@@ -4048,8 +4071,27 @@ const regression = `
     return;
   }
   if (scenario === 'tabs-remembered') {
+    await new Promise(setImmediate);  // the startup load
     assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'a remembered tab is selected at startup');
     assert.equal(element('#review-panel').hidden, true);
+    assert.notEqual(element('#workflow-panels').hidden, true, 'a remembered tab wins over the folded default');
+    assert.deepEqual([element('#ingest-panel').hidden, element('#import-panel').hidden, element('#add-source-ingest').checked], [false, true, true], 'the remembered source is restored');
+    return;
+  }
+  if (scenario === 'default-tab' || scenario === 'default-tab-frames') {
+    await new Promise(setImmediate);  // the startup load
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(stored['lumen-tab'], undefined, 'the default is not remembered as a choice');
+    if (scenario === 'default-tab') {
+      assert.equal(element('#workflow-panels').hidden, false, 'an empty catalog opens Add photos');
+      assert.equal(element('#add-panel').hidden, false);
+    } else {
+      assert.equal(element('#workflow-panels').hidden, true, 'a catalog with frames opens folded on the sheet');
+    }
+    await load();
+    element('#workflow-panels').hidden = false;
+    await load();
+    assert.equal(element('#workflow-panels').hidden, false, 'only the first load chooses');
     return;
   }
   if (scenario === 'keep-only') {
@@ -4186,8 +4228,10 @@ const regression = `
   }
   if (scenario === 'import-tab') {
     await load();
-    element('#import-tab').listeners.click();
-    assert.equal(element('#import-panel').hidden, false, 'the Import tab shows its panel');
+    element('#add-tab').listeners.click();
+    element('#add-source-import').checked = true; element('#add-source-ingest').checked = false;
+    element('#add-source-import').listeners.change();
+    assert.equal(element('#import-panel').hidden, false, 'the import radio shows its section');
     assert.equal(element('#ingest-panel').hidden, true);
     element('#import-path').value = '/Volumes/Card';
     await element('#import-form').listeners.submit({ preventDefault() {}, currentTarget: element('#import-form') });
@@ -4401,7 +4445,7 @@ const regression = `
     assert.deepEqual(scrolled.at(-1), [element('#main-content'), { top: 0, behavior: 'auto' }]);
     assert.ok(element('#announcer').textContent.includes('workflow tabs'));
 
-    const exportTab = element('#export-tab');
+    const exportTab = element('#add-tab');  // the open tab
     element('#workflow-panels').hidden = false;
     exportTab.listeners.click();
     assert.equal(element('#workflow-panels').hidden, true, 'clicking the open tab folds the panel away');
@@ -5187,20 +5231,20 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_assist_button_runs_one_job_over_keepers(self):
         self.run_javascript_cleanup_regression("assist")
 
-    def test_javascript_import_is_a_tab_beside_ingest(self):
+    def test_javascript_import_is_a_source_beside_ingest(self):
         self.run_javascript_cleanup_regression("import-tab")
 
     def test_javascript_import_sends_include_cleared_only_when_ticked(self):
         self.run_javascript_cleanup_regression("import-cleared")
 
-    def test_import_tab_and_export_tab_own_the_import_and_tag_controls(self):
+    def test_add_photos_tab_and_assist_tab_own_the_import_and_tag_controls(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         panel = by_id["import-panel"]
-        self.assertEqual(("tabpanel", "import-tab"), (panel["attrs"].get("role"), panel["attrs"].get("aria-labelledby")))
-        self.assertIn(panel, by_id["import-form"]["parents"], "the import form lives in the Import tab")
+        self.assertIn(by_id["add-panel"], panel["parents"], "Import is one source in the Add photos tab")
+        self.assertIn(panel, by_id["import-form"]["parents"], "the import form lives in the Import section")
         self.assertNotIn("import-dialog", by_id)
         self.assertNotIn("open-import", by_id, "the Import… button gave way to the tab")
         for text in ("Nothing is copied, moved, or renamed", "Use Ingest first"):
@@ -5209,7 +5253,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                      "Frames you removed or cleared before are skipped unless ticked."):
             self.assertIn(text, html)
         for name in ("tag-all", "retag-all"):
-            self.assertIn(by_id["export-panel"], by_id[name]["parents"], f"{name} moved into the Export tab")
+            self.assertIn(by_id["assist-panel"], by_id[name]["parents"], f"{name} moved into the Assist tab")
 
     def test_javascript_network_failure_names_the_server_not_the_browser(self):
         self.run_javascript_cleanup_regression("network-error")
@@ -5282,6 +5326,10 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_choosing_a_tab_scrolls_its_panel_into_view(self):
         self.run_javascript_cleanup_regression("tabs")
         self.run_javascript_cleanup_regression("tabs-remembered")
+
+    def test_javascript_default_tab_follows_the_catalog_on_a_fresh_visit(self):
+        self.run_javascript_cleanup_regression("default-tab")
+        self.run_javascript_cleanup_regression("default-tab-frames")
 
     def test_frames_tab_row_and_caption_inputs_fit_the_sticky_layout(self):
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
