@@ -1019,7 +1019,6 @@ class Library:
         self._develop(photo_id, settings)
         return settings
 
-    @_coordinated
     def suggest_develop(self, photo_id: int, tagger, *, settings: DevelopSettings,
                         feedback: str | None = None) -> DevelopAdvice:
         """Advisory: the review model proposes develop settings for one frame and says why.
@@ -1044,12 +1043,14 @@ class Library:
                 advice = tagger.suggest_develop(render.path, settings=fields, feedback=feedback,
                                                 histogram_note=describe_histogram(render.histogram))
             except Exception as error:
-                self.catalog.append_event(photo_id, "develop_advice_failed", {
-                    "model": model, "role": role, "error": str(error),
-                    "raw_response": getattr(error, "raw_response", None)})
+                with self._mutation():
+                    self.catalog.append_event(photo_id, "develop_advice_failed", {
+                        "model": model, "role": role, "error": str(error),
+                        "raw_response": getattr(error, "raw_response", None)})
                 raise
-        self.catalog.append_event(photo_id, "develop_advised", {
-            "model": model, "role": role, "settings": advice.settings, "feedback": feedback})
+        with self._mutation():
+            self.catalog.append_event(photo_id, "develop_advised", {
+                "model": model, "role": role, "settings": advice.settings, "feedback": feedback})
         return advice
 
     def clear_develop(self, photo_id: int) -> None:
@@ -1123,7 +1124,6 @@ class Library:
                 and not self.catalog.preview_references(str(previous))):
             previous.unlink(missing_ok=True)
 
-    @_coordinated
     def review_composition(self, photo_id: int, tagger):
         photo = self.catalog.get_photo(photo_id)
         if not photo or not photo.preview_path or not (preview := Path(photo.preview_path)).is_file():
@@ -1147,27 +1147,29 @@ class Library:
                 if getattr(result, "candidate_id", None) not in candidate_ids:
                     raise ValueError("composition review returned an unavailable candidate")
         except Exception as error:
-            self.catalog.append_event(photo_id, "composition_review_failed", {
+            with self._mutation():
+                self.catalog.append_event(photo_id, "composition_review_failed", {
+                    "model": model,
+                    "role": getattr(tagger, "role", None),
+                    "error": str(error),
+                    "raw_response": getattr(error, "raw_response", None),
+                    "candidate_ids": candidate_ids,
+                })
+                try:
+                    self._write_sidecar(photo_id)
+                except Exception as sidecar_error:
+                    error.add_note(f"composition failure sidecar write failed: {sidecar_error}")
+            raise
+        with self._mutation():
+            self.catalog.append_event(photo_id, "composition_reviewed", {
                 "model": model,
                 "role": getattr(tagger, "role", None),
-                "error": str(error),
-                "raw_response": getattr(error, "raw_response", None),
+                "candidate_id": result.candidate_id,
+                "rationale": result.rationale,
+                "confidence": result.confidence,
                 "candidate_ids": candidate_ids,
             })
-            try:
-                self._write_sidecar(photo_id)
-            except Exception as sidecar_error:
-                error.add_note(f"composition failure sidecar write failed: {sidecar_error}")
-            raise
-        self.catalog.append_event(photo_id, "composition_reviewed", {
-            "model": model,
-            "role": getattr(tagger, "role", None),
-            "candidate_id": result.candidate_id,
-            "rationale": result.rationale,
-            "confidence": result.confidence,
-            "candidate_ids": candidate_ids,
-        })
-        self._write_sidecar(photo_id)
+            self._write_sidecar(photo_id)
         return result
 
     def _group(self, group_id: int) -> dict | None:
@@ -1180,7 +1182,6 @@ class Library:
                 "rationale": details["rationale"], "confidence": details["confidence"],
                 "candidate_ids": details["candidate_ids"]}
 
-    @_coordinated
     def critique_burst(self, group_id: int, tagger) -> dict:
         """Advisory: ask the review model for the best frame of a burst; the pick is never changed here."""
         group = self._group(group_id)
@@ -1194,27 +1195,35 @@ class Library:
             raise ValueError(f"burst {group_id} has a frame without a preview")
         candidate_ids = [int(photo["id"]) for photo in frames]
         model, role, raw = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None), None
-        try:
+
+        def failed(error: Exception) -> None:
+            with self._mutation():
+                self.catalog.append_event(None, "burst_review_failed", {
+                    "model": model, "role": role, "group_id": group_id, "error": str(error),
+                    "raw_response": getattr(error, "raw_response", None) or raw, "candidate_ids": candidate_ids})
+
+        try:  # The model answers with no lock held, so culling carries on meanwhile.
             result = tagger.critique_burst([(str(photo["id"]), Path(photo["preview_path"])) for photo in frames])
             raw = result.raw_response
             if result.frame_id not in {str(photo_id) for photo_id in candidate_ids}:
                 raise BurstResponseError("oMLX returned a frame that was not supplied", raw)
+        except Exception as error:
+            failed(error)
+            raise
+        with self._mutation():
             current = self._group(group_id)
             chosen = next((photo for photo in (current or {}).get("photos", [])
                            if photo["id"] == int(result.frame_id) and photo["decision"] != "reject"), None)
             if chosen is None:
-                raise ValueError("burst changed during review")
-        except Exception as error:
-            self.catalog.append_event(None, "burst_review_failed", {
-                "model": model, "role": role, "group_id": group_id, "error": str(error),
-                "raw_response": getattr(error, "raw_response", None) or raw, "candidate_ids": candidate_ids})
-            raise
-        details = {"model": model, "role": role, "group_id": group_id, "frame_id": int(chosen["id"]),
-                   "candidate_ids": candidate_ids, "rationale": result.rationale, "confidence": result.confidence,
-                   "raw_response": raw}
-        self.catalog.append_event(int(chosen["id"]), "burst_reviewed", details)
-        for photo in current["photos"]:
-            self._write_sidecar(int(photo["id"]))
+                error = ValueError("burst changed during review")
+                failed(error)
+                raise error
+            details = {"model": model, "role": role, "group_id": group_id, "frame_id": int(chosen["id"]),
+                       "candidate_ids": candidate_ids, "rationale": result.rationale, "confidence": result.confidence,
+                       "raw_response": raw}
+            self.catalog.append_event(int(chosen["id"]), "burst_reviewed", details)
+            for photo in current["photos"]:
+                self._write_sidecar(int(photo["id"]))
         return self._critique(group_id, chosen, details)
 
     def latest_critique(self, group_id: int) -> dict | None:
@@ -1239,7 +1248,6 @@ class Library:
                 terms.append(term)
         return {"query": query, "terms": terms, "text": " | ".join([query, *terms])}
 
-    @_coordinated
     def caption_photo(self, photo_id: int, tagger) -> dict:
         """Advisory: store the review model's caption and alt text for the photographer to edit."""
         photo = self.catalog.get_photo(photo_id)
@@ -1249,12 +1257,14 @@ class Library:
         try:
             result = tagger.caption(Path(photo.preview_path), place=photo.place_label)
         except Exception as error:
-            self.catalog.append_event(photo_id, "caption_failed", {
-                "model": model, "role": role, "error": str(error), "raw_response": getattr(error, "raw_response", None)})
-            self._write_sidecar(photo_id)
+            with self._mutation():
+                self.catalog.append_event(photo_id, "caption_failed", {
+                    "model": model, "role": role, "error": str(error), "raw_response": getattr(error, "raw_response", None)})
+                self._write_sidecar(photo_id)
             raise
-        return self._save_caption(photo_id, {"caption": result.caption, "alt_text": result.alt_text}, model, {
-            "model": model, "role": role, "raw_response": result.raw_response, "author": "model"})
+        with self._mutation():
+            return self._save_caption(photo_id, {"caption": result.caption, "alt_text": result.alt_text}, model, {
+                "model": model, "role": role, "raw_response": result.raw_response, "author": "model"})
 
     @_coordinated
     def set_caption(self, photo_id: int, *, caption: str | None, alt_text: str | None) -> dict:
@@ -1914,7 +1924,6 @@ class Library:
         warning = latest.details.get("raw_warning") if latest else None
         return [warning] if warning else []
 
-    @_coordinated
     def tag_photo(self, photo_id: int, tagger, *, job_id: int | None = None):
         photo = self.catalog.get_photo(photo_id)
         if not photo or not photo.preview_path:
@@ -1924,58 +1933,60 @@ class Library:
             vocab = load_vocabulary(self.settings)
             result = tagger.tag(Path(photo.preview_path), vocabulary=vocab, place=photo.place_label)
         except Exception as error:
-            raw_response = getattr(error, "raw_response", None)
+            with self._mutation():
+                raw_response = getattr(error, "raw_response", None)
+                self.catalog.append_event(
+                    photo_id,
+                    "tag_failed",
+                    {
+                        "model": getattr(tagger, "model", "unknown"),
+                        "role": role,
+                        "error": str(error),
+                        "raw_response": raw_response,
+                    } | _job_detail(job_id),
+                )
+                self._write_sidecar(photo_id)
+            raise
+        with self._mutation():
+            # A species below 0.6 is never applied, even when the model also lists it as a subject; it stays a suggestion.
+            weak = {item["name"].casefold() for item in result.species if item["confidence"] < 0.6}
+            candidates = list(result.subjects) + ([result.scene] if result.scene else []) + list(result.conditions)
+            applied, suggested = match_keywords([word for word in candidates if word.strip().casefold() not in weak], vocab)
+            # The vocabulary learns from the model: free-text words and confident species become keywords and join the file.
+            # Only a weak species (< 0.6) stays a suggestion for the photographer.
+            confident_species = [item["name"] for item in result.species if item["confidence"] >= 0.6
+                                 and item["name"].casefold() not in {word.casefold() for word in applied + suggested}]
+            # The place is stated, not inferred: it is applied even when the model's reply never mentions it.
+            place_words = [word for word in (photo.place, photo.place_country) if word]
+            learned = learn_keywords(self.settings, {"places": place_words, "learned": suggested, "wildlife": confident_species})
+            if learned:
+                self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned} | _job_detail(job_id))
+            vocab = load_vocabulary(self.settings)
+            applied = match_keywords(applied + suggested + confident_species + place_words, vocab)[0]
+            existing = self.catalog.get_tags(photo_id)
+            # The photographer's words lead and keep their casing; the model's words follow. A model word removed earlier may return.
+            kept = (existing["data"] if existing else {}).get("photographer", [])
+            applied = kept + [word for word in applied if word.casefold() not in {k.casefold() for k in kept}]
+            suggested = [item["name"] for item in result.species if item["confidence"] < 0.6
+                         and item["name"].casefold() not in {word.casefold() for word in applied}]
+            payload = (existing["data"] if existing else {}) | {
+                "description": result.description,
+                "subjects": applied,
+                "scene": result.scene,
+                "technical": result.technical,
+                "confidence": result.confidence,
+                "species": list(result.species),
+                "conditions": list(result.conditions),
+                "suggested": suggested,
+            }
+            self.catalog.save_tags(photo_id, payload, tagger.model)
             self.catalog.append_event(
                 photo_id,
-                "tag_failed",
-                {
-                    "model": getattr(tagger, "model", "unknown"),
-                    "role": role,
-                    "error": str(error),
-                    "raw_response": raw_response,
-                } | _job_detail(job_id),
+                "tagged",
+                {"model": tagger.model, "role": role, "confidence": result.confidence, "applied": applied,
+                 "suggested": suggested, "raw_response": result.raw_response} | _job_detail(job_id),
             )
             self._write_sidecar(photo_id)
-            raise
-        # A species below 0.6 is never applied, even when the model also lists it as a subject; it stays a suggestion.
-        weak = {item["name"].casefold() for item in result.species if item["confidence"] < 0.6}
-        candidates = list(result.subjects) + ([result.scene] if result.scene else []) + list(result.conditions)
-        applied, suggested = match_keywords([word for word in candidates if word.strip().casefold() not in weak], vocab)
-        # The vocabulary learns from the model: free-text words and confident species become keywords and join the file.
-        # Only a weak species (< 0.6) stays a suggestion for the photographer.
-        confident_species = [item["name"] for item in result.species if item["confidence"] >= 0.6
-                             and item["name"].casefold() not in {word.casefold() for word in applied + suggested}]
-        # The place is stated, not inferred: it is applied even when the model's reply never mentions it.
-        place_words = [word for word in (photo.place, photo.place_country) if word]
-        learned = learn_keywords(self.settings, {"places": place_words, "learned": suggested, "wildlife": confident_species})
-        if learned:
-            self.catalog.append_event(photo_id, "vocabulary_learned", {"words": learned} | _job_detail(job_id))
-        vocab = load_vocabulary(self.settings)
-        applied = match_keywords(applied + suggested + confident_species + place_words, vocab)[0]
-        existing = self.catalog.get_tags(photo_id)
-        # The photographer's words lead and keep their casing; the model's words follow. A model word removed earlier may return.
-        kept = (existing["data"] if existing else {}).get("photographer", [])
-        applied = kept + [word for word in applied if word.casefold() not in {k.casefold() for k in kept}]
-        suggested = [item["name"] for item in result.species if item["confidence"] < 0.6
-                     and item["name"].casefold() not in {word.casefold() for word in applied}]
-        payload = (existing["data"] if existing else {}) | {
-            "description": result.description,
-            "subjects": applied,
-            "scene": result.scene,
-            "technical": result.technical,
-            "confidence": result.confidence,
-            "species": list(result.species),
-            "conditions": list(result.conditions),
-            "suggested": suggested,
-        }
-        self.catalog.save_tags(photo_id, payload, tagger.model)
-        self.catalog.append_event(
-            photo_id,
-            "tagged",
-            {"model": tagger.model, "role": role, "confidence": result.confidence, "applied": applied,
-             "suggested": suggested, "raw_response": result.raw_response} | _job_detail(job_id),
-        )
-        self._write_sidecar(photo_id)
         return result
 
     @_coordinated
