@@ -2791,6 +2791,7 @@ const regression = `
     assert.deepEqual(exportPosts.at(-1), { scope: 'current', profile: null, preset: 'full', photo_id: 2 });
     assert.ok(element('#export-status').textContent.startsWith('Full resolution export complete: 1 saved'));
     assert.equal(element('#compose-status').textContent, element('#export-status').textContent, 'the export result shows in the frame view');
+    assert.equal(element('#announcer').textContent, element('#export-status').textContent, 'a Frame-tab export announces its result, since the Crop tab status is not on screen');
     await key('Escape', viewport, loupe);
     assert.equal(loupe.hidden, true);
     assert.equal(focused, card(2), 'closing returns focus to the frame last shown');

@@ -3350,7 +3350,10 @@ async function runExport(scope) {
     if (scope !== 'current') {
       watchJob(await post('/api/export', payload));
       document.querySelector('#export-status').textContent = `Exporting ${what} at ${size}. Progress is in the dialog and the status bar; finished JPEGs are kept if you cancel.`;
-    } else showExportResults((await post('/api/export', payload)).results, size);
+    } else {
+      showExportResults((await post('/api/export', payload)).results, size);
+      announce(document.querySelector('#export-status').textContent);  // the frame view may be on a tab without #compose-status
+    }
   } catch (error) {
     if (error.payload?.results) showExportResults(error.payload.results, size);
     else document.querySelector('#export-status').textContent = `${error.message}. Check darktable and the selected XMP, then retry. You can also use camera defaults.`;
