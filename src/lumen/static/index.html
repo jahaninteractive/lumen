@@ -47,6 +47,8 @@
 
       <section id="workflow-panels" class="workflow" aria-label="Finish this shoot">
         <section id="add-panel" role="tabpanel" aria-labelledby="add-tab" tabindex="0">
+          <h2>Add photos</h2>
+          <p class="lead">Copy a memory card with verification, or add photos already on a drive. Originals are never moved, renamed or changed.</p>
           <fieldset id="add-source" class="segmented">
             <legend class="sr-only">Where are the photos?</legend>
             <label for="add-source-ingest"><input type="radio" name="add-source" id="add-source-ingest" value="ingest"><span>Still on the memory card</span></label>
@@ -54,6 +56,7 @@
           </fieldset>
           <section id="ingest-panel" hidden>
             <h2>Ingest: copy a memory card safely, then import it</h2>
+            <details class="how"><summary>How this works</summary>
             <p>Use Ingest when the photos are still on the camera's card and that card is the only copy. Ingest does three things in order:</p>
             <ol class="steps">
               <li><strong>Copy.</strong> Every file on the card, videos included, is copied to your primary folder and, if you choose one, a mirror folder on a second drive.</li>
@@ -61,6 +64,7 @@
               <li><strong>Import.</strong> The verified photos in the primary folder are added to Lumen, exactly as Import would.</li>
             </ol>
             <p class="quiet">Lumen only reads the card; it never writes to or erases it. Hidden system files are skipped. Format the card in the camera only after the panel ends with "Every file verified on every destination."</p>
+            </details>
             <fieldset id="ingest-controls">
               <legend>Card and destinations</legend>
               <p id="ingest-card-label">Memory card folder</p>
@@ -92,8 +96,10 @@
           </section>
           <section id="import-panel">
             <h2>Import: add photos that are already on a drive</h2>
+            <details class="how"><summary>How this works</summary>
             <p>Use Import for photos already copied off the card and backed up: a folder on your Mac or an external drive, or a single photo. Lumen reads them where they are and adds them to the contact sheet. Nothing is copied, moved, or renamed; Lumen writes only previews and sidecars into its own library.</p>
             <p class="quiet">The originals must stay reachable: if their drive is unplugged, the contact sheet still shows previews, but export and preview refinement need the drive plugged back in. Photos still on a memory card? Use Ingest first, so a verified copy exists before you format the card.</p>
+            </details>
             <form id="import-form" class="import-bar">
               <label for="import-path">Folder or photo path</label>
               <div class="input-row">
@@ -111,7 +117,7 @@
         </section>
         <section id="review-panel" role="tabpanel" aria-labelledby="review-tab" tabindex="0" hidden>
           <h2>Review suggested rejects</h2>
-          <p class="quiet">The fast local model looks for technical failures in your keepers. Nothing is rejected until you choose Reject. With a row's button focused, press <kbd>X</kbd> to reject, <kbd>K</kbd> to keep, and <kbd>&uarr;</kbd> <kbd>&darr;</kbd> to move between rows.</p>
+          <p class="lead">The fast model looks for technical failures in keepers. Nothing is rejected until you choose Reject.</p>
           <div class="button-row">
             <button type="button" id="scan-rejects" class="secondary" aria-describedby="scan-rejects-availability" disabled>Scan keepers for problems</button>
             <button type="button" id="reject-all-shown" disabled>Reject all shown…</button>
@@ -122,13 +128,17 @@
           <datalist id="vocabulary-words"></datalist>
         </section>
         <section id="assist-panel" role="tabpanel" aria-labelledby="assist-tab" tabindex="0" hidden>
-          <h2>Local AI</h2>
+          <h2>Assist</h2>
+          <p class="lead">Tags, a problem scan and a caption for every keeper that lacks them. Already finished work is skipped.</p>
+          <details class="how"><summary>How this works</summary>
+          <p class="quiet">Run all: tags, a problem scan, and a caption for every keeper that lacks them. Already finished work is skipped, so run it again after more culling.</p>
+          <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the top.</p>
+          </details>
           <div class="button-row">
             <button type="button" id="assist-keepers" aria-describedby="assist-keepers-availability" disabled>Run all local AI on keepers (0 keepers)</button>
             <button type="button" id="tag-keepers" class="secondary" aria-describedby="tag-keepers-availability" disabled>Tag keepers with local AI (0 keepers)</button>
           </div>
           <label class="toggle" for="redo-keepers"><input type="checkbox" id="redo-keepers"> Redo finished work (captions you wrote are kept)</label>
-          <p class="quiet">Run all: tags, a problem scan, and a caption for every keeper that lacks them. Already finished work is skipped, so run it again after more culling.</p>
           <p id="assist-keepers-availability" class="quiet"></p>
           <p id="tag-keepers-availability" class="quiet"></p>
           <div class="tag-bar">
@@ -137,7 +147,6 @@
               <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
             </div>
             <p id="tag-all-availability" class="quiet"></p>
-            <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the top.</p>
           </div>
           <details id="vocabulary-panel"><summary>Learned keywords <span id="vocabulary-count" class="quiet"></span></summary>
             <p class="quiet">Words the local models added to your vocabulary. Forget removes a word from every frame and stops it being learned again.</p>
@@ -148,13 +157,16 @@
         </section>
         <section id="astro-panel" role="tabpanel" aria-labelledby="astro-tab" tabindex="0" hidden>
           <h2>Stack a night-sky batch with Siril</h2>
+          <p class="lead">Stacks the selected batch with one reviewed Siril script. Camera originals are never changed.</p>
+          <details class="how"><summary>How this works</summary>
           <p class="quiet">Lumen links the selected batch into its own library folder and runs one reviewed Siril script. Camera originals are never changed. Darks, flats, and biases are optional; missing sets only add a warning.</p>
+          <p class="quiet">Local AI triage is advice only. Flagged means cloud, not sky, trailing, or a cloud band; no light is unchecked until you confirm.</p>
+          </details>
           <p id="astro-availability" class="quiet">Checking Siril…</p>
           <fieldset id="astro-lights-group">
             <legend>Lights to include <span id="astro-group-count" class="quiet">No batch selected</span></legend>
             <div id="astro-lights" class="scope-options"></div>
           </fieldset>
-          <p class="quiet">Local AI triage is advice only. Flagged means cloud, not sky, trailing, or a cloud band; no light is unchecked until you confirm.</p>
           <div class="button-row">
             <button type="button" id="triage-astro" class="secondary" aria-describedby="triage-astro-availability" disabled>Triage lights with local AI</button>
             <button type="button" id="exclude-flagged" class="secondary" aria-haspopup="dialog" disabled>Exclude flagged lights (0)</button>
@@ -201,13 +213,11 @@
         </section>
         <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
           <h2>Finish as JPEG</h2>
+          <p class="lead">sRGB JPEGs with camera EXIF, caption, keywords and rating. Only Full resolution keeps GPS.</p>
+          <details class="how"><summary>How this works</summary>
           <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
           <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
-          <dl class="terms" aria-label="What the words mean">
-            <dt>Flagged</dt><dd>You marked the frame to keep, with <kbd>F</kbd> or the Flag button. A flagged frame is always a keeper.</dd>
-            <dt>Unsorted</dt><dd>No decision yet: neither flagged nor rejected.</dd>
-            <dt>Tagged</dt><dd>The local AI has described the frame with keywords, using Tag keepers or Tag all on the Assist tab. Tags make it findable in search and go into the exported JPEG as keywords.</dd>
-          </dl>
+          </details>
           <fieldset id="export-controls">
             <legend>Choose what to export</legend>
             <div class="scope-options">
@@ -246,7 +256,11 @@
 
         <section id="clear-panel" role="tabpanel" aria-labelledby="clear-tab" tabindex="0" hidden>
           <h2>Make room for the next shoot</h2>
+          <p class="lead">Camera originals and finished exports remain. Working files move to recoverable library trash.</p>
+          <details class="how"><summary>How this works</summary>
           <p class="quiet">Camera originals and completed exports remain. Lumen moves working files and a catalog snapshot into recoverable library trash.</p>
+          <p class="quiet">Frames whose content you removed or cleared in an earlier session. Removing them here is recoverable like any batch removal; a frame you re-imported on purpose with "Include frames cleared in earlier sessions" counts too.</p>
+          </details>
           <div class="cleanup-group">
             <h3>Selected batch</h3>
             <p id="group-cleanup-count">No batch selected · 0 frames</p>
@@ -255,7 +269,6 @@
           <div class="cleanup-group">
             <h3>Previously cleared frames</h3>
             <p id="cleared-count">Checking…</p>
-            <p class="quiet">Frames whose content you removed or cleared in an earlier session. Removing them here is recoverable like any batch removal; a frame you re-imported on purpose with "Include frames cleared in earlier sessions" counts too.</p>
             <button type="button" id="remove-cleared" class="danger" disabled>Remove previously cleared frames</button>
           </div>
           <div class="cleanup-group">
@@ -385,7 +398,9 @@
         <dt><kbd>Esc</kbd></dt><dd>Close compare or the frame view</dd>
         <dt><kbd>[</kbd> <kbd>]</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>Previous or next frame in the frame view; at full size the arrows pan instead</dd>
         <dt><kbd>Z</kbd></dt><dd>Full size on or off in the frame view</dd>
+        <dt><kbd>X</kbd> <kbd>K</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>In Review, with a row's button focused: reject, keep, previous or next row</dd>
         <dt>Drag</dt><dd>Draw a crop on the frame-view image; drag inside the outline to move it, hold Shift to draw a new one over it</dd>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> on a curve point</dt><dd>Nudge the tone curve point</dd>
       </dl>
       <button type="submit">Close</button>
     </form>
@@ -534,7 +549,6 @@
           <div class="button-row">
             <button type="button" id="develop-curve-reset" class="secondary">Reset the curve</button>
           </div>
-          <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping. Drag a curve point, or focus one and nudge it with the arrow keys.</p>
           <details id="develop-suggest" open>
             <summary>Where to start</summary>
             <p id="develop-task" class="ai-task" hidden></p>
@@ -549,7 +563,6 @@
               <button type="button" id="develop-use-advice" class="secondary" hidden>Park the handles here</button>
             </div>
             <p id="develop-suggest-availability" class="quiet"></p>
-            <p class="quiet">The loaded local vision model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>
           </details>
           <details open>
             <summary>Brightness</summary>
@@ -574,7 +587,6 @@
               <input type="number" id="develop-tint-value" min="-150" max="150" step="1" placeholder="not set" aria-label="Tint">
               <button type="button" class="secondary" id="develop-tint-reset">Reset</button>
             </div>
-            <p class="quiet">The handles start at this frame's own neutral, which the camera and the light set. Until you move one, nothing is sent.</p>
           </details>
           <details>
             <summary>Contrast</summary>
@@ -599,7 +611,6 @@
               <input type="number" id="develop-clarity-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Clarity">
               <button type="button" class="secondary" id="develop-clarity-reset">Reset</button>
             </div>
-            <p class="quiet">Sharpness is the decoder's own, and arrives at full strength, so it only goes down. Clarity is separate: a wide, gentle local contrast that lifts texture. Sharpness works on single pixels, so choose Full size to judge it: at viewport size the change is averaged away.</p>
           </details>
           <details>
             <summary>Lens Correction</summary>
@@ -630,9 +641,15 @@
               <button type="button" class="secondary" id="develop-color_nr-reset">Reset</button>
             </div>
             </div>
-            <p class="quiet">Auto leaves the file's own baseline alone. Off asks for none at all. Manual sets both amounts by hand. Like sharpness, noise lives in single pixels: judge it at Full size.</p>
           </details>
-          <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own. Your RAW files never change.</p>
+          <details class="how"><summary>How this works</summary>
+            <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping.</p>
+            <p class="quiet">The loaded local vision model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>
+            <p class="quiet">The handles start at this frame's own neutral, which the camera and the light set. Until you move one, nothing is sent.</p>
+            <p class="quiet">Sharpness is the decoder's own, and arrives at full strength, so it only goes down. Clarity is separate: a wide, gentle local contrast that lifts texture. Sharpness works on single pixels, so choose Full size to judge it: at viewport size the change is averaged away.</p>
+            <p class="quiet">Auto leaves the file's own baseline alone. Off asks for none at all. Manual sets both amounts by hand. Like sharpness, noise lives in single pixels: judge it at Full size.</p>
+            <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own. Your RAW files never change.</p>
+          </details>
           <div class="button-row">
             <button type="button" id="develop-reset-all" class="secondary">Reset all</button>
             <button type="button" id="develop-apply-group" class="secondary">Apply to every frame in this burst</button>

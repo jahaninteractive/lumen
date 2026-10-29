@@ -299,7 +299,9 @@ class WebTests(unittest.TestCase):
         self.assertIn("Do not format the card: ", javascript)
         self.assertNotRegex(javascript.lower(), r"safe to (format|erase|wipe)|card is safe")
         self.assertNotRegex(javascript, r"ingest[^\n]*\.innerHTML")
-        copy = " ".join(panel["text"].split())
+        fold = next(node for node in parser.nodes if node["tag"] == "details" and node["parents"][-1] is panel)
+        self.assertEqual("how", fold["attrs"].get("class"), "the explanation folds under How this works")
+        copy = " ".join(fold["text"].split())
         for text in ("Copy.", "Verify.", "Import.", "never writes to or erases it", "Every file verified on every destination."):
             self.assertIn(text, copy)
 
@@ -4767,7 +4769,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         # The suggestion panel is not a develop control, so it sits above them all rather than in
         # their order: it is where a photographer who cannot read the histogram yet starts.
         self.assertEqual(["Where to start", "Brightness", "White Balance", "Contrast", "Sharpness",
-                          "Lens Correction", "Noise Reduction"], summaries, "IEDT's order, after the suggestion")
+                          "Lens Correction", "Noise Reduction", "How this works"], summaries, "IEDT's order, after the suggestion")
         # Every flag in DEVELOP_FLAGS needs a control, or the server accepts a setting the
         # panel cannot reach.
         for flag in DEVELOP_FLAGS:
@@ -4868,6 +4870,62 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
         self.assertRegex(styles, r"\.loupe-viewport\s*\{[^}]*overflow:\s*auto")
         self.assertRegex(styles, r"@media \(max-width: 680px\)\s*\{[^@]*\.compare-grid\s*\{\s*grid-template-columns:\s*1fr")
+
+    def test_panels_lead_with_one_line_and_fold_the_rest(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        leads = {
+            "add-panel": "Copy a memory card with verification, or add photos already on a drive. Originals are never moved, renamed or changed.",
+            "review-panel": "The fast model looks for technical failures in keepers. Nothing is rejected until you choose Reject.",
+            "assist-panel": "Tags, a problem scan and a caption for every keeper that lacks them. Already finished work is skipped.",
+            "astro-panel": "Stacks the selected batch with one reviewed Siril script. Camera originals are never changed.",
+            "export-panel": "sRGB JPEGs with camera EXIF, caption, keywords and rating. Only Full resolution keeps GPS.",
+            "clear-panel": "Camera originals and finished exports remain. Working files move to recoverable library trash.",
+        }
+        def children(parent):
+            return [node for node in parser.nodes if node["parents"] and node["parents"][-1] is parent]
+        def how(parent):
+            return [node for node in children(parent) if node["tag"] == "details" and node["attrs"].get("class") == "how"]
+        for panel_id, line in leads.items():
+            with self.subTest(panel=panel_id):
+                panel = by_id[panel_id]
+                kids = children(panel)
+                self.assertEqual(["h2", "p"], [node["tag"] for node in kids[:2]], "the heading, then the one line")
+                self.assertEqual(("lead", line), (kids[1]["attrs"].get("class"), " ".join(kids[1]["text"].split())))
+                # Review's old paragraph became its lead and a Shortcuts row, so nothing is left to fold.
+                # Add photos folds inside each of its two sources instead, beside that source's controls.
+                expected = 0 if panel_id in ("review-panel", "add-panel") else 1
+                folds = how(panel)
+                self.assertEqual(expected, len(folds))
+                if folds:
+                    self.assertIs(kids[2], folds[0], "the fold sits right under the line")
+        for section in ("ingest-panel", "import-panel"):
+            folds = how(by_id[section])
+            self.assertEqual(1, len(folds), section)
+            self.assertIs(children(by_id[section])[1], folds[0], "under the section's heading")
+        for fold in (node for node in parser.nodes if node["attrs"].get("class") == "how"):
+            summary = children(fold)[0]
+            self.assertEqual(("summary", "How this works"), (summary["tag"], summary["text"].strip()))
+        self.assertFalse([node for node in parser.nodes if "terms" in node["attrs"].get("class", "").split()], "the glossary is gone")
+        develop = [node for node in parser.nodes if node["attrs"].get("class") == "how" and by_id["develop-panel"] in node["parents"]]
+        self.assertEqual(1, len(develop), "one fold for the Develop panel's explanations")
+        text = " ".join(develop[0]["text"].split())
+        for sentence in ("A spike at either edge is clipping.", "Nothing is saved until you leave the tab",
+                         "frame's own neutral", "Sharpness is the decoder's own", "Auto leaves the file's own baseline alone.",
+                         "Apply gives every other frame in this burst"):
+            self.assertIn(sentence, text)
+        self.assertNotIn("nudge it with the arrow keys", html)
+        self.assertNotIn("to move between rows", html)
+        legend = [node for node in parser.nodes if by_id["shortcuts"] in node["parents"]]
+        rows = [(" ".join(node["text"].split())) for node in legend if node["tag"] in ("dt", "dd")]
+        for row in ("X K ↑ ↓", "In Review, with a row's button focused: reject, keep, previous or next row",
+                    "↑ ↓ ← → on a curve point", "Nudge the tone curve point"):
+            self.assertIn(row, rows)
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\.lead \{[^}]*color: var\(--muted\)")
+        self.assertRegex(styles, r"\.how summary[^{]*\{[^}]*min-height: 44px")
 
     def test_index_has_shortcuts_button_and_readable_legend_without_reserved_modifiers(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
@@ -5275,8 +5333,10 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn(panel, by_id["import-form"]["parents"], "the import form lives in the Import section")
         self.assertNotIn("import-dialog", by_id)
         self.assertNotIn("open-import", by_id, "the Import… button gave way to the tab")
+        fold = next(node for node in parser.nodes if node["tag"] == "details" and node["parents"][-1] is panel)
+        self.assertEqual("how", fold["attrs"].get("class"), "the explanation folds under How this works")
         for text in ("Nothing is copied, moved, or renamed", "Use Ingest first"):
-            self.assertIn(text, " ".join(panel["text"].split()))
+            self.assertIn(text, " ".join(fold["text"].split()))
         for text in ('<label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>',
                      "Frames you removed or cleared before are skipped unless ticked."):
             self.assertIn(text, html)
