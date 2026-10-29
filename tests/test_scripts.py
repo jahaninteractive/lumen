@@ -26,9 +26,10 @@ class ScriptTests(unittest.TestCase):
                 rf'swiftc[^"]*"\$project_root/tools/{helper}\.swift"\s*\\?\s*-o\s*"\$native_bin/{helper}"',
             )
 
-    def test_web_ui_displays_live_omlx_summary(self):
+    def test_web_ui_reports_live_omlx_health(self):
         script = Path("src/lumen/static/app.js").read_text()
-        self.assertIn("status.omlx_live.summary", script)
+        self.assertIn("status.omlx_live?.online", script)
+        self.assertIn("'Local AI online'", script)
 
 
 if __name__ == "__main__":
