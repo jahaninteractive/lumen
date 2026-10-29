@@ -2,7 +2,7 @@
 
 ## Recommendation
 
-Lumen uses two oMLX model roles. The defaults, and what the header dropdowns
+Lumen uses two oMLX model roles. The defaults, and what the footer strip's dropdowns
 can switch each role to while `lumen serve` runs:
 
 | Role | Default | Env var | Jobs |

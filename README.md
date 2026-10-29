@@ -16,7 +16,7 @@ captions, digests, composition advice, and develop suggestions. With more
 memory, such as the 48 GB M4 it was built on, add the review model
 (`Qwen3.8-27B-4bit`, about 16 GB loaded) for closer reads of a frame and bolder
 develop advice, and keep it loaded for whatever else you use oMLX for, such as
-its chat. **Review model** and **Fast model** dropdowns in the header move
+its chat. **Review model** and **Fast model** dropdowns in the footer strip move
 either role between the two while Lumen runs (see
 [Choosing the models](docs/GUIDE.md#choosing-the-models)).
 
@@ -143,7 +143,8 @@ The server listens only on `127.0.0.1:8765`. To use another library:
 uv run lumen --library "/Volumes/Photo Catalog/Lumen" serve --open
 ```
 
-The line under the header reports the local tools, and reports first when the
+The header reports tool health ("Local AI online" or "Local AI offline", then
+"<tool> missing" for each unavailable tool), and reports first when the
 running server is older than the files on disk: the browser is served fresh
 from disk on every request while the Python stays as it was imported, so an
 edit after startup otherwise leaves a stale server looking current and failing
