@@ -373,7 +373,7 @@ class WebTests(unittest.TestCase):
         for name in ("job-label", "job-progress", "job-status", "cancel-job"):
             self.assertIn(strip, by_id[name]["parents"])
             self.assertNotIn(by_id["main-content"], by_id[name]["parents"])
-        self.assertEqual(("button", "button", "Tag all untagged"), (by_id["tag-all"]["tag"], by_id["tag-all"]["attrs"].get("type"), by_id["tag-all"]["text"].strip()))
+        self.assertEqual(("button", "button", "Tag every untagged frame"), (by_id["tag-all"]["tag"], by_id["tag-all"]["attrs"].get("type"), by_id["tag-all"]["text"].strip()))
         self.assertEqual(("input", "checkbox"), (by_id["retag-all"]["tag"], by_id["retag-all"]["attrs"].get("type")))
         retag_label = next(node for node in parser.nodes if node["tag"] == "label" and node["attrs"].get("for") == "retag-all")
         self.assertEqual("Re-tag already tagged", retag_label["text"].strip())
@@ -1342,7 +1342,6 @@ class WebTests(unittest.TestCase):
     def test_assist_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
         self.assertIn('id="tag-keepers"', html)
-        self.assertIn('id="tag-keepers-availability"', html)
         js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
         self.assertIn("omlx_roles", js)
         self.assertIn("suggested-keywords", js)
@@ -2230,33 +2229,29 @@ const regression = `
     keeperOverride = 2;
     await load();
     const loaded = scenario === 'keywords';
-    assert.equal(element('#tag-keepers').textContent, 'Tag keepers with local AI (2 keepers)');
+    assert.equal(element('#tag-keepers').textContent, 'Tag keepers (2)');
     const state_ = loaded ? 'loaded' : 'not loaded';
     assert.equal(element('#system-status').textContent, 'Local AI online');
     assert.equal(element('#ai-availability').textContent, loaded ? '' : 'Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX. Load it in oMLX, then reload this page.');
+    assert.equal(element('#frame-ai-availability').textContent, element('#ai-availability').textContent, 'the frame view repeats the one line');
     assert.equal(element('#system-status').getAttribute('data-stale'), undefined, 'a current server carries no warning');
     const aiTree = node => [node, ...(node.children || []).flatMap(aiTree)];
     if (!loaded) {
       assert.equal(element('#assist-keepers').disabled, true, 'the combined run waits for both models');
       for (const id of ['#tag-keepers', '#tag-all']) {
         assert.equal(element(id).disabled, true, id + ' waits for the fast model');
-        assert.ok(element(id + '-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX'));
       }
       await inspect(state.groups[0].photos[0]);
       const tagPhoto = aiTree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true');
       assert.equal(tagPhoto.disabled, true, 'the per-photo tag button waits for the fast model');
-      assert.ok(aiTree(element('#inspection')).some(node => node.id === 'tag-photo-availability' && node.textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded')));
+      assert.ok(!aiTree(element('#inspection')).some(node => node.id?.endsWith('-availability')), 'the frame-level line replaces per-block reasons');
       state.composition = { photo_id: state.selectedId };
       updateWorkflow();
       assert.equal(element('#ask-composition-ai').disabled, true, 'composition review waits for the review model');
-      assert.ok(element('#composition-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX'));
       return;
     }
     assert.equal(element('#tag-all').disabled, false);
-    assert.equal(element('#tag-all-availability').textContent, '');
-    assert.equal(element('#composition-availability').textContent, '');
     assert.equal(element('#tag-keepers').disabled, false);
-    assert.equal(element('#tag-keepers-availability').textContent, '');
     const loadsBefore = groupLoads;
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const list = id => tree(element('#inspection')).find(node => node.id === id);
@@ -2372,16 +2367,18 @@ const regression = `
     await byId('save-caption').listeners.click();
     assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption/edit', body: { caption: 'Edited.', alt_text: 'Alt.' } });
     assert.ok(announcements.includes('Caption saved for photo-1.jpg'));
-    assert.equal(byId('ask-caption-ai').textContent, 'Write caption with local AI');
+    assert.equal(byId('ask-caption-ai').textContent, 'Draft a caption');
     assert.equal(byId('ask-caption-ai').disabled, false);
     await byId('ask-caption-ai').listeners.click();
     assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption', body: {} });
     assert.deepEqual([caption.value, alt.value], ['Drafted.', 'Drafted alt.']);
     state.status.omlx_roles.review.loaded = false;
+    updateWorkflow();  // as a status refresh does
     renderInspector(state.groups[0].photos[0]);
     assert.equal(byId('ask-caption-ai').disabled, true);
-    assert.equal(byId('ask-caption-ai').getAttribute('aria-describedby'), 'caption-ai-availability');
-    assert.ok(byId('caption-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
+    assert.equal(byId('ask-caption-ai').getAttribute('aria-describedby'), 'frame-ai-availability');
+    assert.ok(byId('ask-caption-ai').className.split(' ').includes('ai'));
+    assert.ok(element('#frame-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'), 'the reason is said once, at the top of the frame panel');
     return;
   }
   if (scenario === 'advice-status') {
@@ -2424,7 +2421,7 @@ const regression = `
     const byId = id => tree(element('#inspection')).find(node => node.id === id);
     await inspect(state.groups[0].photos[0]);
     assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Best timing. (confidence 72%)');
-    assert.equal(byId('ask-burst-ai').textContent, 'Ask local AI which frame is best');
+    assert.equal(byId('ask-burst-ai').textContent, 'Pick the best frame');
     assert.equal(byId('ask-burst-ai').disabled, false);
     assert.deepEqual(picks, [], 'rendering stored advice never changes the pick');
     await inspect(state.groups[0].photos[1]);
@@ -2465,8 +2462,9 @@ const regression = `
     state.status.omlx_roles.review.loaded = false;
     renderInspector(state.groups[0].photos[1]);
     assert.equal(byId('ask-burst-ai').disabled, true);
-    assert.ok(byId('burst-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
-    assert.equal(byId('ask-burst-ai').getAttribute('aria-describedby'), 'burst-ai-availability');
+    assert.equal(byId('burst-ai-availability'), undefined, 'the frame-level line replaces the per-block reason');
+    assert.equal(byId('ask-burst-ai').getAttribute('aria-describedby'), 'frame-ai-availability');
+    assert.ok(byId('ask-burst-ai').className.split(' ').includes('ai'));
     return;
   }
   if (scenario === 'vocabulary') {
@@ -2507,7 +2505,6 @@ const regression = `
     assert.equal(rows()[0].children[0].loading, 'lazy');
     assert.equal(rows()[0].children[1].children[1].textContent, 'motion blur 84%, eyes closed 61%');
     assert.equal(element('#scan-rejects').disabled, false, 'the fast role is loaded');
-    assert.equal(element('#scan-rejects-availability').textContent, '');
     const typing = { key: 'x', target: Object.assign(document.createElement('input'), { parent: rows()[0] }), preventDefault() {} };
     await element('#reject-list').listeners.keydown(typing);
     assert.deepEqual(rejectPosts, [], 'X typed in a field is ignored');
@@ -2733,6 +2730,7 @@ const regression = `
   }
   if (scenario === 'frame-view') {
     assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true', 'a remembered Compose tab falls back to Add photos');
+    element('#loupe-export-options').hidden = false;  // as the markup ships it
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     let prevented = 0;
@@ -2772,6 +2770,13 @@ const regression = `
     assert.deepEqual(photoDetailRequests, ['/api/photos/1', '/api/photos/2']);
     assert.deepEqual(cropRequests, ['/api/photos/1/crops', '/api/photos/2/crops']);
     assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg');
+    assert.equal(element('#loupe-export-options').hidden, false, 'the export options show on the Frame tab');
+    const inspected = tree(element('#inspection'));
+    const chooseBest = inspected.find(node => node.textContent === 'Choose as best');
+    const tagFrame = inspected.find(node => node.textContent === 'Tag this frame');
+    assert.ok(!chooseBest.className.split(' ').includes('secondary'), 'Choose as best is the primary action');
+    assert.deepEqual(['secondary', 'ai'].map(name => tagFrame.className.split(' ').includes(name)), [true, true], 'tagging is a secondary AI action');
+    assert.equal(tagFrame.getAttribute('aria-describedby'), 'frame-ai-availability');
     const exportButton = Object.assign(element('#loupe-export'), { tagName: 'BUTTON' });
     before = prevented;
     await key('Enter', exportButton, loupe);
@@ -2819,7 +2824,7 @@ const regression = `
     return;
   }
   if (scenario === 'frame-tabs') {
-    element('#loupe-export-options').hidden = true;  // as the markup ships it
+    element('#loupe-export-options').hidden = false;  // as the markup ships it
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
@@ -2830,11 +2835,11 @@ const regression = `
     assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'the frame view opens on Frame by default');
     assert.ok(!element('#frame-panel').hidden);
     const exportOptions = element('#loupe-export-options');
-    assert.equal(exportOptions.hidden, true, 'export options sit with the export buttons, which Frame lacks');
+    assert.equal(exportOptions.hidden, false, 'the one export button and its options serve every tab');
     assert.ok(!element('#inspection').children.some(node => node.tagName === 'H3' && node.textContent === 'photo-1.jpg'), 'the dialog heading carries the name, not the inspector');
     cropTab.listeners.click();
     assert.equal(cropTab.getAttribute('aria-selected'), 'true');
-    assert.equal(exportOptions.hidden, false, 'Crop exports this frame');
+    assert.equal(exportOptions.hidden, false, 'Crop keeps the export options');
     assert.equal(frameTab.getAttribute('aria-selected'), 'false');
     assert.equal(cropTab.tabIndex, 0);
     assert.equal(frameTab.tabIndex, -1);
@@ -2848,14 +2853,14 @@ const regression = `
     await key('End', frameTab, frameTab);
     assert.equal(exifTab.getAttribute('aria-selected'), 'true', 'End selects the last tab, EXIF');
     assert.equal(focused, exifTab);
-    assert.equal(exportOptions.hidden, true, 'EXIF exports nothing');
+    assert.equal(exportOptions.hidden, false, 'EXIF still offers the export');
     await new Promise(setImmediate);
     assert.deepEqual(exifRequests, ['/api/photos/1/exif'], 'EXIF is read when its tab opens');
     assert.deepEqual(element('#exif-fields').children.map(node => [node.tagName, node.textContent]), [['DT', 'Camera'], ['DD', 'ILCE-7CM2'], ['DT', 'ISO'], ['DD', '100']]);
     assert.equal(element('#exif-status').textContent, '');
     await key('ArrowLeft', exifTab, exifTab);
     assert.equal(developTabButton.getAttribute('aria-selected'), 'true', 'Develop sits just before EXIF');
-    assert.equal(exportOptions.hidden, false, 'Develop exports this frame');
+    assert.equal(exportOptions.hidden, false, 'Develop keeps the export options');
     await key('Home', developTabButton, developTabButton);
     assert.equal(frameTab.getAttribute('aria-selected'), 'true');
     await key('ArrowRight', frameTab, frameTab);
@@ -3134,7 +3139,7 @@ const regression = `
     dated.checked = false;
     dated.listeners.change();
     assert.equal(element('#export-dated-folder').checked, false, 'the dated-folder boxes stay in step');
-    await element('#develop-export').listeners.click();
+    await element('#loupe-export').listeners.click();
     await flush();
     assert.equal(exportPosts.at(-1).dated_folder, false, 'unchecking it exports loose into the JPEG folder');
     dated.checked = true;
@@ -3495,7 +3500,7 @@ const regression = `
     state.status.omlx_roles.fast.loaded = false;
     updateWorkflow();
     assert.equal(button.disabled, true);
-    assert.ok(element('#expand-search-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX.'));
+    assert.ok(element('#ai-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX.'));
     return;
   }
   if (scenario === 'find') {
@@ -4237,7 +4242,7 @@ const regression = `
     keeperOverride = 2;
     await load();
     const button = element('#assist-keepers');
-    assert.equal(button.textContent, 'Run all local AI on keepers (2 keepers)');
+    assert.equal(button.textContent, 'Tag, scan and caption keepers (2)');
     assert.equal(button.disabled, false);
     await button.listeners.click();
     assert.deepEqual(assistPosts, [{ scope: 'keepers' }]);
@@ -4761,6 +4766,42 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertRegex(styles, r"#loupe\[open\] \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\)")  # the viewport keeps two thirds
         self.run_javascript_cleanup_regression("frame-view")
 
+    def test_ai_buttons_share_grammar_and_one_availability_line(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        labels = {
+            "assist-keepers": "Tag, scan and caption keepers", "tag-keepers": "Tag keepers",
+            "tag-all": "Tag every untagged frame", "scan-rejects": "Scan keepers for problems",
+            "triage-astro": "Triage lights", "expand-search": "Expand search",
+            "ask-composition-ai": "Suggest a crop", "develop-ask": "Suggest settings",
+            "write-digest": "Write today's digest",
+        }
+        for name, label in labels.items():
+            node = by_id[name]
+            self.assertIn("ai", node["attrs"].get("class", "").split(), name)
+            line = "frame-ai-availability" if by_id["loupe"] in node["parents"] else "ai-availability"
+            self.assertEqual(line, node["attrs"].get("aria-describedby"), name)
+            self.assertEqual(label, " ".join(node["text"].split()).partition(" (")[0], name)
+        self.assertEqual("Tag keepers (0)", by_id["tag-keepers"]["text"].strip(), "the count is the bare number")
+        lines = {name for name in by_id if name.endswith("-availability")}
+        self.assertEqual({"ai-availability", "frame-ai-availability", "export-availability", "refine-availability", "astro-availability"}, lines)
+        panel = next(node for node in parser.nodes if "frame-panel" in node["attrs"].get("class", "").split())
+        first = next(node for node in parser.nodes if node["parents"] and node["parents"][-1] is panel)
+        self.assertEqual("frame-ai-availability", first["attrs"].get("id"), "the not-loaded line leads the frame panel")
+        self.assertNotIn("develop-export", by_id)
+        self.assertEqual(1, html.count('id="loupe-export"'))
+        export = by_id["loupe-export"]
+        self.assertIn(by_id["loupe"], export["parents"])
+        for tab_panel in ("frame-panel", "crop-panel", "develop-panel", "exif-panel"):
+            self.assertNotIn(by_id[tab_panel], export["parents"], "the export sits in the dialog footer, under every tab")
+        self.assertGreater(parser.nodes.index(export), parser.nodes.index(by_id["exif-panel"]))
+        self.assertNotIn("hidden", by_id["loupe-export-options"]["attrs"], "the options show on every frame tab")
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertIn('button.ai::before { content: "\u2726 "; color: var(--cyan); }', styles)
+        self.assertIn("button.ai:not(.secondary)::before { color: var(--black); }", styles)
+
     def test_javascript_frame_view_ignores_stale_frame_responses(self):
         self.run_javascript_cleanup_regression("frame-view-race")
 
@@ -4804,7 +4845,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(["auto", "off", "manual"], modes, "auto first: it is what an untouched frame is")
         self.assertIn(by_id["export-controls"], by_id["export-keep-original"]["parents"])
         self.assertIn(by_id["loupe"], by_id["loupe-keep-original"]["parents"])
-        self.assertNotIn(by_id["develop-panel"], by_id["loupe-keep-original"]["parents"])  # both frame-view exports honour it, so both tabs show it
+        self.assertNotIn(by_id["develop-panel"], by_id["loupe-keep-original"]["parents"])  # the frame view's one export honours it, so the dialog footer shows it
         for name in ("export-keep-original", "loupe-keep-original"):
             self.assertEqual("checkbox", by_id[name]["attrs"]["type"])
             label = next(node for node in parser.nodes if node["tag"] == "label" and node["attrs"].get("for") == name)
@@ -4834,9 +4875,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn(by_id["loupe"], tablist["parents"])
         for tab, panel, selected, contents in (
             ("frame-tab", "frame-panel", "true", ["inspection"]),
-            ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai", "loupe-export"]),
+            ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai"]),
             ("develop-tab", "develop-panel", "false", ["develop-curve", "develop-curve-reset", "develop-exposure_ev", "develop-exposure_ev-value",
-                                                       "develop-exposure_ev-reset", "develop-reset-all", "develop-apply-group", "develop-export"]),
+                                                       "develop-exposure_ev-reset", "develop-reset-all", "develop-apply-group"]),
             ("exif-tab", "exif-panel", "false", ["exif-fields", "exif-status"]),
         ):
             self.assertIn(tablist, by_id[tab]["parents"])
@@ -4848,7 +4889,6 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn('<label for="crop-lock">Crop lock</label>', html, "the label matches the README")
         self.assertNotIn(by_id["crop-panel"], by_id["close-loupe"]["parents"])
         self.assertNotIn(by_id["frame-panel"], by_id["close-loupe"]["parents"])
-        self.assertIn("hidden", by_id["loupe-export-options"]["attrs"], "the Frame tab opens without export options")
         for name in ("loupe-keep-original", "loupe-dated-folder"):
             self.assertIn(by_id["loupe-export-options"], by_id[name]["parents"])
         self.run_javascript_cleanup_regression("frame-tabs")
@@ -5103,9 +5143,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertTrue(any(node["tag"] == "legend" and node["text"].strip() == "Show" for node in parser.nodes if by_id["filter-status"] in node["parents"]))
         self.assertEqual(["0", "1", "2", "3", "4", "5"], options("filter-rating"))
         buttons = {node["text"].strip(): node["attrs"].get("type") for node in parser.nodes if node["tag"] == "button" and form in node["parents"]}
-        self.assertEqual({"Reset": "button", "Expand with local AI": "button"}, buttons)
-        self.assertEqual("expand-search-availability", by_id["expand-search"]["attrs"].get("aria-describedby"))
-        self.assertIn(form, by_id["expand-search-availability"]["parents"])
+        self.assertEqual({"Reset": "button", "Expand search": "button"}, buttons)
+        self.assertEqual("ai-availability", by_id["expand-search"]["attrs"].get("aria-describedby"))
         more = by_id["show-more"]
         self.assertEqual(("button", "button"), (more["tag"], more["attrs"].get("type")))
         self.assertIn("hidden", more["attrs"])

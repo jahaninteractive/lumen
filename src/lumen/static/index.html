@@ -119,10 +119,9 @@
           <h2>Review suggested rejects</h2>
           <p class="lead">The fast model looks for technical failures in keepers. Nothing is rejected until you choose Reject.</p>
           <div class="button-row">
-            <button type="button" id="scan-rejects" class="secondary" aria-describedby="scan-rejects-availability" disabled>Scan keepers for problems</button>
+            <button type="button" id="scan-rejects" class="secondary ai" aria-describedby="ai-availability" disabled>Scan keepers for problems</button>
             <button type="button" id="reject-all-shown" disabled>Reject all shown…</button>
           </div>
-          <p id="scan-rejects-availability" class="quiet"></p>
           <p id="review-count" role="status" aria-live="polite">0 suggested rejects</p>
           <ul id="reject-list" aria-label="Suggested rejects"></ul>
           <datalist id="vocabulary-words"></datalist>
@@ -135,24 +134,21 @@
           <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the top.</p>
           </details>
           <div class="button-row">
-            <button type="button" id="assist-keepers" aria-describedby="assist-keepers-availability" disabled>Run all local AI on keepers (0 keepers)</button>
-            <button type="button" id="tag-keepers" class="secondary" aria-describedby="tag-keepers-availability" disabled>Tag keepers with local AI (0 keepers)</button>
+            <button type="button" id="assist-keepers" class="ai" aria-describedby="ai-availability" disabled>Tag, scan and caption keepers (0)</button>
+            <button type="button" id="tag-keepers" class="secondary ai" aria-describedby="ai-availability" disabled>Tag keepers (0)</button>
           </div>
           <label class="toggle" for="redo-keepers"><input type="checkbox" id="redo-keepers"> Redo finished work (captions you wrote are kept)</label>
-          <p id="assist-keepers-availability" class="quiet"></p>
-          <p id="tag-keepers-availability" class="quiet"></p>
           <div class="tag-bar">
             <div class="input-row">
-              <button type="button" id="tag-all" class="secondary" aria-describedby="tag-all-availability">Tag all untagged</button>
+              <button type="button" id="tag-all" class="secondary ai" aria-describedby="ai-availability">Tag every untagged frame</button>
               <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
             </div>
-            <p id="tag-all-availability" class="quiet"></p>
           </div>
           <details id="vocabulary-panel"><summary>Learned keywords <span id="vocabulary-count" class="quiet"></span></summary>
             <p class="quiet">Words the local models added to your vocabulary. Forget removes a word from every frame and stops it being learned again.</p>
             <ul id="vocabulary-list" aria-label="Learned keywords"></ul>
           </details>
-          <button type="button" id="write-digest" class="secondary">Write today's digest</button>
+          <button type="button" id="write-digest" class="secondary ai" aria-describedby="ai-availability">Write today's digest</button>
           <p id="digest-result" class="path"></p>
         </section>
         <section id="astro-panel" role="tabpanel" aria-labelledby="astro-tab" tabindex="0" hidden>
@@ -168,10 +164,9 @@
             <div id="astro-lights" class="scope-options"></div>
           </fieldset>
           <div class="button-row">
-            <button type="button" id="triage-astro" class="secondary" aria-describedby="triage-astro-availability" disabled>Triage lights with local AI</button>
+            <button type="button" id="triage-astro" class="secondary ai" aria-describedby="ai-availability" disabled>Triage lights</button>
             <button type="button" id="exclude-flagged" class="secondary" aria-haspopup="dialog" disabled>Exclude flagged lights (0)</button>
           </div>
-          <p id="triage-astro-availability" class="quiet"></p>
           <fieldset>
             <legend>Calibration folders (optional)</legend>
             <p id="astro-darks-label">Dark frames</p>
@@ -306,7 +301,7 @@
           <div class="filter-row">
             <label for="filter-text" class="sr-only">Tag text</label>
             <input type="search" id="filter-text" autocomplete="off" placeholder="Search tags or place: fox, harbour…">
-            <button type="button" id="expand-search" class="secondary" aria-describedby="expand-search-availability">Expand with local AI</button>
+            <button type="button" id="expand-search" class="secondary ai" aria-describedby="ai-availability">Expand search</button>
             <fieldset id="filter-status" class="segmented">
               <legend class="sr-only">Show</legend>
               <label for="status-all"><input type="radio" name="filter-status" id="status-all" value="all" checked><span>All</span></label>
@@ -326,7 +321,6 @@
             </select></span>
             <button type="button" id="reset-filters" class="secondary">Reset</button>
           </div>
-          <p id="expand-search-availability" class="quiet"></p>
           <div class="filter-row">
             <span class="pair"><label for="filter-from">From</label><input type="date" id="filter-from"></span>
             <span class="pair"><label for="filter-to">To</label><input type="date" id="filter-to"></span>
@@ -489,6 +483,7 @@
       </div>
     </div>
     <div class="frame-panel">
+      <p id="frame-ai-availability" class="quiet"></p>
       <div id="frame-tabs" class="tab-rail" role="tablist" aria-label="Frame view">
         <button type="button" id="frame-tab" role="tab" aria-controls="frame-panel" aria-selected="true" tabindex="0">Frame</button>
         <button type="button" id="crop-tab" role="tab" aria-controls="crop-panel" aria-selected="false" tabindex="-1">Crop</button>
@@ -512,9 +507,8 @@
         <p id="compose-empty" hidden></p>
         <div id="compose-workspace" hidden>
           <div class="button-row">
-            <button type="button" id="ask-composition-ai" class="secondary" aria-describedby="composition-availability">Ask local AI</button>
+            <button type="button" id="ask-composition-ai" class="secondary ai" aria-describedby="frame-ai-availability">Suggest a crop</button>
           </div>
-          <p id="composition-availability" class="quiet"></p>
           <p id="composition-advice" class="quiet"></p>
           <div id="primary-crops" class="crop-grid"></div>
           <details id="more-crop-shapes">
@@ -525,9 +519,6 @@
         <p class="quiet">Compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
         <p id="compose-status" role="status" aria-live="polite"></p>
         <p id="compose-task" class="ai-task" hidden></p>
-        <div class="button-row">
-          <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
-        </div>
       </section>
       <section id="develop-panel" role="tabpanel" aria-labelledby="develop-tab" hidden>
         <p id="develop-unavailable" hidden></p>
@@ -563,11 +554,10 @@
               <input type="text" id="develop-feedback" maxlength="200" placeholder="too warm, lost the shadows…">
             </div>
             <div class="button-row">
-              <button type="button" id="develop-ask" class="secondary" aria-describedby="develop-suggest-availability">Suggest settings</button>
+              <button type="button" id="develop-ask" class="secondary ai" aria-describedby="frame-ai-availability">Suggest settings</button>
               <button type="button" id="develop-discard-advice" class="secondary">Discard the suggestion</button>
               <button type="button" id="develop-use-advice" class="secondary" hidden>Park the handles here</button>
             </div>
-            <p id="develop-suggest-availability" class="quiet"></p>
           </details>
           <details open>
             <summary>Brightness</summary>
@@ -658,7 +648,6 @@
           <div class="button-row">
             <button type="button" id="develop-reset-all" class="secondary">Reset all</button>
             <button type="button" id="develop-apply-group" class="secondary">Apply to every frame in this burst</button>
-            <button type="button" id="develop-export" aria-describedby="export-availability">Export this frame</button>
           </div>
         </div>
         <p id="develop-status" role="status" aria-live="polite"></p>
@@ -668,7 +657,8 @@
         <p id="exif-status" class="quiet" role="status" aria-live="polite"></p>
       </section>
       <div class="button-row">
-        <span id="loupe-export-options" hidden>
+        <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
+        <span id="loupe-export-options">
           <label class="toggle" for="loupe-keep-original"><input type="checkbox" id="loupe-keep-original"> Also export the untouched version</label>
           <label class="toggle" for="loupe-dated-folder"><input type="checkbox" id="loupe-dated-folder" checked> Subfolder named for the capture date</label>
         </span>

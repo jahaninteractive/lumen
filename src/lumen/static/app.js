@@ -608,11 +608,12 @@ function burstCritique(photo, group) {
   block.id = 'burst-critique';
   const ask = document.createElement('button');
   ask.type = 'button';
-  ask.className = 'secondary';
+  ask.className = 'secondary ai';
   ask.id = 'ask-burst-ai';
+  ask.setAttribute('aria-describedby', 'frame-ai-availability');
   const taskKey = `critique:${group.id}`;
   const running = aiRunning(taskKey);
-  ask.textContent = running ? 'Asking local AI…' : 'Ask local AI which frame is best';
+  ask.textContent = running ? 'Asking local AI…' : 'Pick the best frame';
   ask.disabled = running || !roleReady('review');
   if (running) ask.setAttribute('aria-busy', 'true');
   ask.addEventListener('click', async () => {
@@ -634,14 +635,6 @@ function burstCritique(photo, group) {
     if (data) announce(document.querySelector('#burst-advice')?.textContent || `Local AI suggests ${data.name}`);
   });
   block.append(aiTaskLine(taskKey), ask);
-  if (roleUnavailable('review')) {
-    const reason = document.createElement('p');
-    reason.className = 'quiet';
-    reason.id = 'burst-ai-availability';
-    reason.textContent = roleUnavailable('review');
-    ask.setAttribute('aria-describedby', reason.id);
-    block.append(reason);
-  }
   const data = state.critique?.groupId === group.id ? state.critique.data : null;
   const index = data ? group.photos.findIndex(item => item.id === data.photo_id) : -1;
   if (index >= 0) {
@@ -931,7 +924,6 @@ function renderInspector(photo) {
   if (photo.id !== photo.groupPick || photo.decision === 'reject') {  // Choosing a rejected frame clears its rejection.
     const choose = document.createElement('button');
     choose.type = 'button';
-    choose.className = 'secondary';
     choose.textContent = 'Choose as best';
     choose.addEventListener('click', () => decide(photo, 'pick', null, `.frame[data-id="${photo.id}"]`));
     actions.append(choose);
@@ -946,7 +938,9 @@ function renderInspector(photo) {
   }
   const tag = document.createElement('button');
   tag.type = 'button';
-  tag.textContent = 'Add local AI tags';
+  tag.className = 'secondary ai';
+  tag.setAttribute('aria-describedby', 'frame-ai-availability');
+  tag.textContent = 'Tag this frame';
   tag.dataset.tagPhoto = 'true';
   const tagKey = `tag:${photo.id}`;
   tag.disabled = aiRunning(tagKey) || !roleReady('fast');
@@ -967,14 +961,6 @@ function renderInspector(photo) {
   });
   actions.append(tag, aiTaskLine(tagKey));
   inspection.append(actions);
-  if (roleUnavailable('fast')) {
-    const reason = document.createElement('p');
-    reason.className = 'quiet';
-    reason.id = 'tag-photo-availability';
-    reason.textContent = roleUnavailable('fast');
-    tag.setAttribute('aria-describedby', reason.id);
-    inspection.append(reason);
-  }
   keepFrameViewFocus();
 }
 
@@ -1024,9 +1010,10 @@ function captionControls(photo, data) {
   });
   const ask = document.createElement('button');
   ask.type = 'button';
-  ask.className = 'secondary';
+  ask.className = 'secondary ai';
   ask.id = 'ask-caption-ai';
-  ask.textContent = 'Write caption with local AI';
+  ask.setAttribute('aria-describedby', 'frame-ai-availability');
+  ask.textContent = 'Draft a caption';
   const captionKey = `caption:${photo.id}`;
   ask.disabled = aiRunning(captionKey) || !roleReady('review');
   ask.addEventListener('click', async () => {
@@ -1050,14 +1037,6 @@ function captionControls(photo, data) {
   });
   actions.append(save, ask);
   block.append(actions);
-  if (roleUnavailable('review')) {
-    const reason = document.createElement('p');
-    reason.className = 'quiet';
-    reason.id = 'caption-ai-availability';
-    reason.textContent = roleUnavailable('review');
-    ask.setAttribute('aria-describedby', reason.id);
-    block.append(reason);
-  }
   return block;
 }
 
@@ -2204,21 +2183,19 @@ function updateWorkflow() {
   document.querySelector('#open-compare').disabled = state.cullingBlocked || state.compare.length !== 2;
   document.querySelector('#open-compare').hidden = state.compare.length === 0;
   const fastLoaded = roleReady('fast');
-  document.querySelector('#ai-availability').textContent = roleUnavailable('fast') || roleUnavailable('review') || '';
+  // The not-loaded sentence is said once in the footer, and again atop the frame dialog, which hides the footer.
+  const unavailable = roleUnavailable('fast') || roleUnavailable('review') || '';
+  document.querySelector('#ai-availability').textContent = unavailable;
+  document.querySelector('#frame-ai-availability').textContent = unavailable;
   document.querySelector('#tag-all').disabled = state.busy || !fastLoaded;
-  document.querySelector('#tag-all-availability').textContent = roleUnavailable('fast');
-  document.querySelector('#tag-keepers').textContent = `Tag keepers with local AI (${keepers} keeper${keepers === 1 ? '' : 's'})`;
+  document.querySelector('#tag-keepers').textContent = `Tag keepers (${keepers})`;
   document.querySelector('#tag-keepers').disabled = state.busy || !keepers || !fastLoaded;
-  document.querySelector('#tag-keepers-availability').textContent = roleUnavailable('fast');
   updateExpandSearch();
   const bothLoaded = fastLoaded && roleReady('review');
-  document.querySelector('#assist-keepers').textContent = `Run all local AI on keepers (${keepers} keeper${keepers === 1 ? '' : 's'})`;
+  document.querySelector('#assist-keepers').textContent = `Tag, scan and caption keepers (${keepers})`;
   document.querySelector('#assist-keepers').disabled = state.busy || !keepers || !bothLoaded;
-  document.querySelector('#assist-keepers-availability').textContent = roleUnavailable('fast') || roleUnavailable('review');
   document.querySelector('#scan-rejects').disabled = state.busy || !keepers || !fastLoaded;
-  document.querySelector('#scan-rejects-availability').textContent = roleUnavailable('fast');
   document.querySelector('#reject-all-shown').disabled = state.cullingBlocked || !state.rejectSuggestions.length;
-  document.querySelector('#composition-availability').textContent = roleUnavailable('review');
   document.querySelector('#retag-all').disabled = state.busy;
   document.querySelector('#redo-keepers').disabled = state.busy;
   document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review') || !state.composition || state.composition.photo_id !== state.selectedId || aiRunning(`composition:${state.selectedId}`);
@@ -2237,7 +2214,6 @@ function updateWorkflow() {
   document.querySelectorAll('#astro-lights input').forEach(input => { input.disabled = activeJob; });
   const flagged = flaggedLights().length;
   document.querySelector('#triage-astro').disabled = state.busy || !group || !roleReady('fast');
-  document.querySelector('#triage-astro-availability').textContent = roleUnavailable('fast');
   document.querySelector('#exclude-flagged').textContent = `Exclude flagged lights (${flagged})`;
   document.querySelector('#exclude-flagged').disabled = activeJob || !flagged;
   document.querySelector('#astro-confirm').disabled = activeJob;
@@ -2417,7 +2393,6 @@ document.querySelector('#filter-form').addEventListener('submit', event => {
 function updateExpandSearch() {
   const blank = ['#find', '#filter-text'].every(selector => !document.querySelector(selector).value.trim());
   document.querySelector('#expand-search').disabled = state.busy || blank || !roleReady('fast');
-  document.querySelector('#expand-search-availability').textContent = roleUnavailable('fast');
 }
 document.querySelector('#expand-search').addEventListener('click', async () => {
   const query = (document.querySelector('#filter-text').value || document.querySelector('#find').value).trim();
@@ -2758,8 +2733,6 @@ const cropOverlay = document.querySelector('#crop-overlay');
 const cropOutline = document.querySelector('#crop-outline');
 const cropLock = document.querySelector('#crop-lock');
 const selectFrameTab = wireTablist('#frame-tabs', 'lumen-frame-tab', tab => {
-  // The options steer "Export this frame", which only Crop and Develop carry.
-  document.querySelector('#loupe-export-options').hidden = !['crop-tab', 'develop-tab'].includes(tab.id);
   if (tab.id === 'develop-tab') return renderDevelopPreview();  // the panel's render is also the histogram's source
   if (tab.id === 'exif-tab') loadExif(state.selectedId);
   // Only a develop render needs handing back. The embedded JPEG at full size belongs to the
@@ -2983,10 +2956,8 @@ function syncDevelopControls() {
   developNode('develop-feedback').disabled = !ready;
   developNode('develop-discard-advice').disabled = state.busy || state.develop.beforeAdvice === null;
   developNode('develop-use-advice').hidden = !ready || !state.develop.advice || state.develop.beforeAdvice !== null;  // a parked suggestion needs no second way in
-  developNode('develop-suggest-availability').textContent = ready ? roleUnavailable('review') : '';
   developNode('develop-reset-all').disabled = !ready || (!touched && state.develop.saved === '{}');
   developNode('develop-apply-group').disabled = state.busy || !ready || !touched;
-  developNode('develop-export').disabled = developNode('loupe-export').disabled;
 }
 
 // The frame's saved settings and its offline flag arrive with its details; every render needs the raw itself.
@@ -3307,7 +3278,6 @@ function discardDevelopAdvice() {
 developNode('develop-ask').addEventListener('click', () => askDevelopAdvice());
 developNode('develop-discard-advice').addEventListener('click', () => discardDevelopAdvice());
 developNode('develop-use-advice').addEventListener('click', () => useStoredDevelopAdvice());
-developNode('develop-export').addEventListener('click', () => exportCurrentFrame());
 developNode('develop-apply-group').addEventListener('click', async () => {
   const photoId = state.develop.photoId;
   state.busy = true;
