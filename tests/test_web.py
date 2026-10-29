@@ -5346,6 +5346,11 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             self.assertIn(kind[:-1], browse["text"].lower())
             self.assertEqual("path", by_id[f"astro-{kind}-path"]["attrs"].get("class"))
             self.assertTrue(by_id[f"astro-{kind}-path"]["attrs"].get("aria-labelledby"))
+            row = browse["parents"][-1]
+            self.assertEqual(("div", "calibration-row"), (row["tag"], row["attrs"].get("class")), kind)
+            children = [node["attrs"].get("id") for node in parser.nodes if node["parents"] and node["parents"][-1] is row]
+            self.assertEqual([f"astro-{kind}-label", f"astro-{kind}-path", f"browse-astro-{kind}", f"reset-astro-{kind}"], children)
+        self.assertEqual(3, sum(node["attrs"].get("class") == "calibration-row" for node in parser.nodes))
         for name in ("prepare-astro", "run-astro", "cancel-astro", "reveal-astro"):
             self.assertEqual("button", by_id[name]["tag"])
             self.assertIn(panel, by_id[name]["parents"])

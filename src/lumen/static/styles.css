@@ -347,6 +347,8 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .meter i { display: block; height: 100%; background: var(--cyan); }
 .actions { display: grid; gap: .6rem; margin-top: 1.25rem; }
 
+.calibration-row { display: grid; grid-template-columns: 7rem minmax(0, 1fr) auto auto; align-items: center; gap: .5rem; margin: .35rem 0; }
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 980px) {
@@ -368,6 +370,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   .segmented label > span, .segmented label:first-of-type > span, .segmented label:last-of-type > span { margin-left: 0; border-radius: 6px; }
   .burst-frames { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .compare-grid { grid-template-columns: 1fr; }
+  .calibration-row { grid-template-columns: 1fr; }
   .loupe-viewport { height: 40vh; }
 }
 
