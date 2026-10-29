@@ -1050,7 +1050,8 @@ class Library:
                 raise
         with self._mutation():
             self.catalog.append_event(photo_id, "develop_advised", {
-                "model": model, "role": role, "settings": advice.settings, "feedback": feedback})
+                "model": model, "role": role, "settings": advice.settings, "rationale": advice.rationale,
+                "feedback": feedback})
         return advice
 
     def clear_develop(self, photo_id: int) -> None:
@@ -1236,6 +1237,32 @@ class Library:
             ORDER BY provenance.id DESC LIMIT 1
         """, (group_id, group_id)).fetchone()
         return self._critique(group_id, dict(row), json.loads(row["details_json"])) if row else None
+
+    def latest_composition_review(self, photo_id: int, candidate_ids: list[str]) -> dict | None:
+        """The newest stored crop review whose pick is still among `candidate_ids`, without raw output."""
+        if not candidate_ids:
+            return None
+        row = self.catalog.connection.execute(f"""
+            SELECT details_json FROM provenance
+            WHERE kind = 'composition_reviewed' AND photo_id = ?
+              AND json_extract(details_json, '$.candidate_id') IN ({", ".join("?" * len(candidate_ids))})
+            ORDER BY id DESC LIMIT 1
+        """, (photo_id, *candidate_ids)).fetchone()
+        if not row:
+            return None
+        details = json.loads(row["details_json"])
+        return {key: details[key] for key in ("candidate_id", "rationale", "confidence")}
+
+    def latest_develop_advice(self, photo_id: int) -> dict | None:
+        """The newest stored develop advice, without raw output."""
+        row = self.catalog.connection.execute("""
+            SELECT details_json FROM provenance WHERE kind = 'develop_advised' AND photo_id = ?
+            ORDER BY id DESC LIMIT 1
+        """, (photo_id,)).fetchone()
+        if not row:
+            return None
+        details = json.loads(row["details_json"])
+        return {"settings": details["settings"], "rationale": details.get("rationale")}
 
     def expand_search(self, query: str, tagger) -> dict:
         """Advisory: vocabulary keywords the fast model relates to `query`, as an OR text filter with the query first."""

@@ -1045,6 +1045,24 @@ class WebTests(unittest.TestCase):
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertIsNone(library.catalog.get_crop(1))
 
+    def test_crops_payload_carries_the_stored_review_only_while_its_candidate_exists(self):
+        class Tagger:
+            model = "local-vision"
+
+            def review_composition(self, original, candidates):
+                return CompositionReview(candidates[0][0], "The original keeps useful context.", 0.75)
+
+        code, crops = self.get_json("/api/photos/1/crops")
+        self.assertEqual(200, code, crops)
+        self.assertIsNone(crops["review"])
+        with patch("lumen.library.OmlxTagger", return_value=Tagger()), patch("lumen.library.get_server_status", return_value=REVIEW_LOADED):
+            self.assertEqual(200, self.post_json("/api/photos/1/composition-review", {})[0])
+        code, crops = self.get_json("/api/photos/1/crops")
+        self.assertEqual({"candidate_id": "crop-original", "rationale": "The original keeps useful context.",
+                          "confidence": 0.75}, crops["review"])
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertIsNone(library.latest_composition_review(1, ["nope"]))
+
     def test_composition_review_failure_is_json_and_preserves_active_crop(self):
         class BrokenTagger:
             model = "local-vision"
@@ -1099,6 +1117,26 @@ class WebTests(unittest.TestCase):
 
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertIsNone(library.develop_for(1), "a suggestion saves nothing")
+
+    def test_photo_payload_carries_the_last_develop_advice(self):
+        class Tagger:
+            model, role = "local-vision", "review"
+
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                return DevelopAdvice({"exposure_ev": 0.5}, "lift", '{"secret": 1}')
+
+        render = lambda source, destination, executable, **kwargs: (
+            Image.new("RGB", (64, 48), (90, 90, 90)).save(destination, format="JPEG"),
+            DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={},
+                          lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0))[1]
+        self.assertIsNone(self.get_json("/api/photos/1")[1]["advice"])
+        with patch("lumen.library.render_raw", side_effect=render), patch(
+                "lumen.library.OmlxTagger", return_value=Tagger()), patch(
+                "lumen.library.get_server_status", return_value=REVIEW_LOADED):
+            code, payload = self.post_json("/api/photos/1/develop/suggest", {"settings": {}, "feedback": None})
+        self.assertEqual(200, code, payload)
+        advice = self.get_json("/api/photos/1")[1]["advice"]
+        self.assertEqual({"settings": {"exposure_ev": 0.5}, "rationale": "lift"}, advice)
 
     def test_develop_suggest_failure_is_json_without_the_model_text(self):
         class BrokenTagger:
