@@ -83,6 +83,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 #ai-status[data-phase="running"] { color: var(--cyan); }
 #ai-status[data-phase="done"] { color: var(--paper); }
 #ai-status[data-phase="failed"] { color: var(--danger); }
+.ai-task { margin: 0; overflow-wrap: anywhere; }
+.ai-task[data-phase="running"] { color: var(--cyan); }
+.ai-task[data-phase="failed"] { color: var(--danger); }
 
 /* The page never scrolls: rail and main column each scroll on their own below the masthead. */
 .workspace {

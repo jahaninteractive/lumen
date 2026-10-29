@@ -1482,6 +1482,9 @@ class WebTests(unittest.TestCase):
     def test_javascript_astro_triage_excludes_only_after_confirmation_and_cue_is_text(self):
         self.run_javascript_cleanup_regression("astro-triage")
 
+    def test_javascript_advice_has_status_and_survives_leaving_the_frame(self):
+        self.run_javascript_cleanup_regression("advice-status")
+
     def test_javascript_burst_critique_shows_advice_and_only_use_this_pick_changes_the_pick(self):
         self.run_javascript_cleanup_regression("critique")
 
@@ -1704,7 +1707,7 @@ let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
-let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
 if (scenario === 'export-watermark') Object.assign(stored, { 'lumen-watermark': '\u00a9 N. David', 'lumen-export-preset': 'web' });  // remembered from an earlier visit
 if (scenario === 'export-bad-preset') stored['lumen-export-preset'] = 'huge';
@@ -1946,6 +1949,7 @@ async function fetch(url, options = {}) {
   }
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
     develop: scenario === 'develop' && url.endsWith('/1') ? { exposure_ev: 0.5 } : null,
+    advice: scenario === 'advice-status' && url.endsWith('/1') ? { settings: { exposure_ev: 0.5 }, rationale: 'lift' } : null,
     photo: Object.assign({ format: 'ARW', offline: scenario === 'develop-offline' },
       (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null }),
@@ -1961,6 +1965,7 @@ async function fetch(url, options = {}) {
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
     const id = Number(url.split('/')[3]);
     payload = { ...cropPayload(activeCrop?.photo_id && activeCrop.photo_id !== id ? null : activeCrop), photo_id: id };  // a drawn crop belongs to its own frame
+    if (scenario === 'advice-status') payload.review = { candidate_id: payload.candidates[0].id, rationale: 'tighter', confidence: 0.8 };
   }
   else if (/\/composition-review$/.test(url)) {
     compositionReviews.push(url);
@@ -2237,10 +2242,13 @@ const regression = `
     const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
     const tagging = tree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true').listeners.click();
     await new Promise(setImmediate);
-    assert.equal(control('reject').disabled, true, 'culling waits while the fast model holds the library');
+    assert.equal(state.busy, false, 'tagging one frame never sets busy');
+    assert.equal(control('reject').disabled, false, 'culling continues while the fast model answers');
+    assert.equal(tree(element('#inspection')).find(node => node.className === 'ai-task' && node.dataset.key === 'tag:1').textContent, 'Tags running…');
     pendingTags.shift()();
     await tagging;
     assert.equal(control('reject').disabled, false);
+    assert.equal(tree(element('#inspection')).find(node => node.className === 'ai-task' && node.dataset.key === 'tag:1').textContent, 'Tags ready');
     await element('#tag-keepers').listeners.click();
     assert.deepEqual(tagPosts, [{ scope: 'keepers' }]);
     assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
@@ -2336,6 +2344,40 @@ const regression = `
     assert.ok(byId('caption-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
     return;
   }
+  if (scenario === 'advice-status') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
+    const taskLine = () => tree(byId('burst-critique')).find(node => node.className === 'ai-task');
+    const firstCandidateId = cropPayload().candidates[0].id;
+    const resolveCritique = () => pendingCritiques.shift()();  // the fake answers { ...storedCritique, rationale: 'Fresh look.' }
+    deferCritique = true;
+    await inspect(photoById(1));
+    const ask = byId('ask-burst-ai');
+    const pending = ask.listeners.click();  // not awaited: the model is "thinking"
+    assert.equal(state.busy, false, 'advice never sets busy');
+    assert.equal(taskLine().textContent, 'Burst pick running…');
+    assert.equal(control('reject').disabled, false, 'culling stays enabled');
+    await inspect(photoById(2));  // walk away
+    assert.equal(byId('ask-burst-ai').disabled, true, 'a re-rendered ask stays disabled while the model is running');
+    resolveCritique({ ...storedCritique, rationale: 'Fresh look.' });
+    await pending;
+    await inspect(photoById(1));  // come back
+    assert.ok(byId('burst-advice').textContent.includes('Fresh look.'));
+    assert.equal(taskLine().textContent, 'Burst pick ready');
+    assert.equal(byId('ask-burst-ai').disabled, false);
+    await loadComposition();
+    assert.equal(state.recommendedCropId, firstCandidateId, 'stored crop review is applied on load');
+    assert.ok(element('#composition-advice').textContent.includes('tighter'));
+    fillDevelop(photoById(1));
+    assert.equal(element('#develop-advice').textContent, 'lift');
+    assert.equal(element('#develop-use-advice').hidden, false);
+    await element('#develop-use-advice').listeners.click();
+    assert.equal(state.develop.fields.exposure_ev, 0.5);
+    assert.equal(element('#develop-use-advice').hidden, true, 'a parked suggestion hides the button');
+    return;
+  }
   if (scenario === 'critique') {
     await load();
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
@@ -2351,7 +2393,8 @@ const regression = `
     deferCritique = true;
     const asking = byId('ask-burst-ai').listeners.click();
     await new Promise(setImmediate);
-    assert.equal(control('reject').disabled, true, 'culling waits while the review model holds the library');
+    assert.equal(state.busy, false, 'a burst critique never sets busy');
+    assert.equal(control('reject').disabled, false, 'culling continues while the review model answers');
     assert.deepEqual([byId('ask-burst-ai').getAttribute('aria-busy'), byId('ask-burst-ai').textContent], ['true', 'Asking local AI…'], 'the button shows the wait where the status bar is hidden');
     pendingCritiques.shift()();
     await asking;

@@ -494,6 +494,7 @@
         </div>
         <p class="quiet">Compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
         <p id="compose-status" role="status" aria-live="polite"></p>
+        <p id="compose-task" class="ai-task" hidden></p>
         <div class="button-row">
           <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
         </div>
@@ -526,6 +527,7 @@
           <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping. Drag a curve point, or focus one and nudge it with the arrow keys.</p>
           <details id="develop-suggest" open>
             <summary>Where to start</summary>
+            <p id="develop-task" class="ai-task" hidden></p>
             <p id="develop-advice" class="quiet"></p>
             <div class="develop-row">
               <label for="develop-feedback">What to change</label>
@@ -534,6 +536,7 @@
             <div class="button-row">
               <button type="button" id="develop-ask" class="secondary" aria-describedby="develop-suggest-availability">Suggest settings</button>
               <button type="button" id="develop-discard-advice" class="secondary">Discard the suggestion</button>
+              <button type="button" id="develop-use-advice" class="secondary" hidden>Park the handles here</button>
             </div>
             <p id="develop-suggest-availability" class="quiet"></p>
             <p class="quiet">The loaded local vision model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>

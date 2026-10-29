@@ -5,8 +5,9 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null },
   mergeSelection: new Set(), clearedFrames: 0,
+  aiTasks: new Map(),  // per-panel local AI status by key, e.g. critique:<groupId>; it outlives the panel that asked
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
   get busy() { return this.acting || JOB_ACTIVE.includes(this.job?.status); },
@@ -65,14 +66,46 @@ function aiStatus(phase, text) {
   aiStatusLine.dataset.phase = phase;
   aiStatusLine.textContent = text;
 }
-async function aiCall(label, action) {
+// Advice never sets busy: the panel that asked shows its own line, updated in place, and finds it again on return.
+const AI_TASK_LABELS = { critique: 'Burst pick', composition: 'Crop suggestion', develop: 'Develop suggestion', caption: 'Caption', tag: 'Tags' };
+const aiTaskNodes = new Map();
+function paintAiTask(node, key) {
+  const task = state.aiTasks.get(key);
+  node.hidden = !task;
+  node.dataset.phase = task?.phase || '';
+  node.textContent = task?.text || '';
+}
+// Always returns the line, hidden while there is no task, so a panel can place it once and forget it.
+function aiTaskLine(key, node = document.createElement('p')) {
+  node.className = 'ai-task';
+  node.dataset.key = key;
+  aiTaskNodes.set(key, node);
+  paintAiTask(node, key);
+  return node;
+}
+function refreshAiTask(key) {
+  const node = aiTaskNodes.get(key);
+  if (node?.dataset.key === key) paintAiTask(node, key);  // a panel's fixed line may since show another frame's task
+}
+function aiRunning(key) {
+  return state.aiTasks.get(key)?.phase === 'running';
+}
+function aiTask(key, phase, text) {
+  if (!key) return;
+  state.aiTasks.set(key, { phase, text: `${AI_TASK_LABELS[key.split(':')[0]]} ${text}` });
+  refreshAiTask(key);
+}
+async function aiCall(label, action, key = null) {
   aiStatus('running', `${label} running…`);
+  aiTask(key, 'running', 'running…');
   try {
     const result = await action();
     aiStatus('done', `${label} finished`);
+    aiTask(key, 'done', 'ready');
     return result;
   } catch (error) {
     aiStatus('failed', `${label} failed: ${error.message}`);
+    aiTask(key, 'failed', `failed: ${error.message}`);
     throw error;
   }
 }
@@ -183,7 +216,16 @@ function renderComposition() {
   document.querySelector('#more-crop-shapes').hidden = alternatives.children.length === 0;
   document.querySelector('#compose-empty').hidden = true;
   document.querySelector('#compose-workspace').hidden = false;
-  document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review');
+  document.querySelector('#ask-composition-ai').disabled = state.busy || aiRunning(`composition:${state.composition.photo_id}`) || !roleReady('review');
+}
+
+// The stored or fresh review, phrased the same way; a review naming a candidate no longer offered says nothing.
+function showCompositionReview(review) {
+  const candidate = review && state.composition?.candidates.find(item => item.id === review.candidate_id);
+  state.recommendedCropId = candidate ? review.candidate_id : null;
+  const advice = candidate ? `${cropLabel(candidate.kind)} recommended (${Math.round(review.confidence * 100)}% confidence): ${review.rationale}` : '';
+  document.querySelector('#composition-advice').textContent = advice;
+  return advice;
 }
 
 async function loadComposition() {
@@ -195,11 +237,12 @@ async function loadComposition() {
   document.querySelector('#composition-advice').textContent = '';
   document.querySelector('#compose-workspace').hidden = true;
   document.querySelector('#compose-status').textContent = 'Loading crop choices…';
+  aiTaskLine(`composition:${photoId}`, document.querySelector('#compose-task'));
   try {
     const composition = await request(`/api/photos/${photoId}/crops`);
     if (requestId !== state.compositionRequest || state.selectedId !== photoId) return;
     state.composition = composition;
-    state.recommendedCropId = null;
+    showCompositionReview(composition.review);
     renderComposition();
     document.querySelector('#compose-status').textContent = 'Choose a crop or keep the original. Your RAW file will not change.';
   } catch (error) {
@@ -249,33 +292,31 @@ async function askCompositionAI() {
   if (!photoId || !state.composition || state.composition.photo_id !== photoId) return;
   const requestId = ++state.reviewRequest;
   const compositionRequest = state.compositionRequest;
-  state.busy = true;
-  updateWorkflow();
+  const key = `composition:${photoId}`;
+  document.querySelector('#ask-composition-ai').disabled = true;
   document.querySelector('#compose-status').textContent = 'Asking the loaded local vision model…';
+  // The server stores the review whether or not the frame is still shown; it is applied here only if it is.
+  const current = () => requestId === state.reviewRequest && compositionRequest === state.compositionRequest && state.selectedId === photoId;
   try {
-    const review = await aiCall('Composition review', () => post(`/api/photos/${photoId}/composition-review`));
-    if (requestId !== state.reviewRequest || compositionRequest !== state.compositionRequest || state.selectedId !== photoId) return;
-    const candidate = state.composition.candidates.find(item => item.id === review.candidate_id);
-    if (!candidate) {
+    const review = await aiCall('Composition review', () => post(`/api/photos/${photoId}/composition-review`), key);
+    if (!current()) return;
+    const advice = showCompositionReview(review);
+    if (!advice) {
       document.querySelector('#compose-status').textContent = 'Crop choices changed while the local AI was reviewing them. Reloading current choices…';
       announce('Crop choices changed. Reloading current choices.');
       await loadComposition();
       return;
     }
-    state.recommendedCropId = review.candidate_id;
     renderComposition();
-    const advice = `${cropLabel(candidate?.kind)} recommended (${Math.round(review.confidence * 100)}% confidence): ${review.rationale}`;
-    document.querySelector('#composition-advice').textContent = advice;
     document.querySelector('#compose-status').textContent = 'Local AI advice is ready. It has not changed your crop.';
     announce(advice);
   } catch (error) {
-    if (requestId !== state.reviewRequest || compositionRequest !== state.compositionRequest || state.selectedId !== photoId) return;
+    if (!current()) return;
     const message = `Local AI advice is unavailable: ${error.message}. Manual crop choices still work.`;
     document.querySelector('#compose-status').textContent = message;
     announce(message);
   } finally {
-    state.busy = false;
-    updateWorkflow();
+    if (state.composition?.photo_id === state.selectedId) renderComposition();  // re-enables Ask for the frame shown
   }
 }
 
@@ -508,6 +549,7 @@ function decisionControls(photo) {
     button.type = 'button';
     button.className = 'secondary';
     button.dataset.decisionControl = value;
+    button.disabled = state.cullingBlocked;  // a render between updateWorkflow calls starts in the right state
     button.textContent = label;
     button.addEventListener('click', () => decide(photo, 'decision', value, `[data-decision-control="${value}"]`));
     buttons.append(button);
@@ -568,31 +610,30 @@ function burstCritique(photo, group) {
   ask.type = 'button';
   ask.className = 'secondary';
   ask.id = 'ask-burst-ai';
-  ask.textContent = 'Ask local AI which frame is best';
-  ask.disabled = !roleReady('review');
+  const taskKey = `critique:${group.id}`;
+  const running = aiRunning(taskKey);
+  ask.textContent = running ? 'Asking local AI…' : 'Ask local AI which frame is best';
+  ask.disabled = running || !roleReady('review');
+  if (running) ask.setAttribute('aria-busy', 'true');
   ask.addEventListener('click', async () => {
     ask.disabled = true;
     ask.setAttribute('aria-busy', 'true');  // the status bar is under the frame view, so the button shows the wait itself
     ask.textContent = 'Asking local AI…';
-    state.busy = true;  // The server holds the library lock for the whole model call, so culling waits visibly.
-    updateWorkflow();
     announce('Asking local AI to compare this burst');
+    let data = null;
     try {
-      const data = await aiCall('Burst critique', () => post(`/api/groups/${group.id}/critique`));
-      state.critique = { groupId: group.id, data };
-      if (state.selectedId === photo.id) renderInspector(photo);
-      announce(document.querySelector('#burst-advice')?.textContent || `Local AI suggests ${data.name}`);
+      data = await aiCall('Burst critique', () => post(`/api/groups/${group.id}/critique`), taskKey);
+      if (state.selectedGroupId === group.id || state.critique?.groupId === group.id) state.critique = { groupId: group.id, data };
     } catch (error) {
       announce(error.message);
-      ask.disabled = !roleReady('review');
-    } finally {
-      ask.removeAttribute('aria-busy');
-      ask.textContent = 'Ask local AI which frame is best';
-      state.busy = false;
-      updateWorkflow();
     }
+    // The photographer may have moved on: a frame of this burst still shown is redrawn with the answer, elsewhere nothing moves.
+    const shown = state.selectedGroupId === group.id ? photoById(state.selectedId) : null;
+    if (!shown) return;
+    renderInspector(shown);
+    if (data) announce(document.querySelector('#burst-advice')?.textContent || `Local AI suggests ${data.name}`);
   });
-  block.append(ask);
+  block.append(aiTaskLine(taskKey), ask);
   if (roleUnavailable('review')) {
     const reason = document.createElement('p');
     reason.className = 'quiet';
@@ -907,24 +948,24 @@ function renderInspector(photo) {
   tag.type = 'button';
   tag.textContent = 'Add local AI tags';
   tag.dataset.tagPhoto = 'true';
-  tag.disabled = !roleReady('fast');
+  const tagKey = `tag:${photo.id}`;
+  tag.disabled = aiRunning(tagKey) || !roleReady('fast');
   tag.addEventListener('click', async () => {
     tag.disabled = true;
-    state.busy = true;  // The server holds the library lock for the whole model call.
-    updateWorkflow();
     try {
-      await aiCall(`Tagging ${photo.name}`, () => request(`/api/photos/${photo.id}/tag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }));
+      await aiCall(`Tagging ${photo.name}`, () => request(`/api/photos/${photo.id}/tag`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }), tagKey);
       announce(`Tags added to ${photo.name}`);
-      await inspect(photo);
     } catch (error) {
       announce(error.message);
-      tag.disabled = false;
-    } finally {
-      state.busy = false;
-      updateWorkflow();
     }
+    // The new tags and Ask enabled again, for this frame only; not inspect(), whose fillDevelop would drop unsaved develop handles.
+    if (state.selectedId !== photo.id) return;
+    const details = await request(`/api/photos/${photo.id}`).catch(() => null);
+    if (state.selectedId !== photo.id) return;
+    if (details) state.details = details;
+    renderInspector(photo);
   });
-  actions.append(tag);
+  actions.append(tag, aiTaskLine(tagKey));
   inspection.append(actions);
   if (roleUnavailable('fast')) {
     const reason = document.createElement('p');
@@ -947,7 +988,7 @@ function captionControls(photo, data) {
   note.className = 'quiet';
   note.id = 'caption-note';
   note.textContent = 'Used only by the Share and Web exports. A local AI draft is a suggestion: edit it, then save.';
-  block.append(heading, note);
+  block.append(aiTaskLine(`caption:${photo.id}`), heading, note);
   const fields = [['caption-input', 'Caption', data.caption], ['alt-input', 'Alt text', data.alt_text]].map(([id, text, value]) => {
     const label = document.createElement('label');
     label.htmlFor = id;
@@ -986,25 +1027,26 @@ function captionControls(photo, data) {
   ask.className = 'secondary';
   ask.id = 'ask-caption-ai';
   ask.textContent = 'Write caption with local AI';
-  ask.disabled = !roleReady('review');
+  const captionKey = `caption:${photo.id}`;
+  ask.disabled = aiRunning(captionKey) || !roleReady('review');
   ask.addEventListener('click', async () => {
     ask.disabled = true;
-    state.busy = true;  // The server holds the library lock for the whole model call.
-    updateWorkflow();
     announce(`Asking local AI to caption ${photo.name}`);
     try {
-      const drafted = await aiCall(`Caption for ${photo.name}`, () => post(`/api/photos/${photo.id}/caption`));
+      const drafted = await aiCall(`Caption for ${photo.name}`, () => post(`/api/photos/${photo.id}/caption`), captionKey);
       caption.value = drafted.caption || '';
       alt.value = drafted.alt_text || '';
       Object.assign(data, { caption: drafted.caption, alt_text: drafted.alt_text });
+      if (state.selectedId === photo.id && state.details) {  // so a redraw, now or later, shows the draft
+        state.details.tags = { ...state.details.tags, data: { ...state.details.tags?.data, caption: drafted.caption, alt_text: drafted.alt_text } };
+      }
       announce(`Local AI caption written for ${photo.name}; edit and save to change it`);
     } catch (error) {
       announce(error.message);
-    } finally {
-      ask.disabled = !roleReady('review');
-      state.busy = false;
-      updateWorkflow();
     }
+    // Culling went on meanwhile: if the inspector was redrawn under this block, redraw it again for the frame shown.
+    if (inspection.contains(block)) ask.disabled = !roleReady('review');
+    else if (state.selectedId === photo.id) renderInspector(photo);
   });
   actions.append(save, ask);
   block.append(actions);
@@ -2171,7 +2213,7 @@ function updateWorkflow() {
   document.querySelector('#composition-availability').textContent = roleUnavailable('review');
   document.querySelector('#retag-all').disabled = state.busy;
   document.querySelector('#redo-keepers').disabled = state.busy;
-  document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review') || !state.composition || state.composition.photo_id !== state.selectedId;
+  document.querySelector('#ask-composition-ai').disabled = state.busy || !roleReady('review') || !state.composition || state.composition.photo_id !== state.selectedId || aiRunning(`composition:${state.selectedId}`);
   document.querySelectorAll('[data-crop-action]').forEach(button => { button.disabled = state.busy || button.closest?.('.crop-card')?.classList?.contains('active'); });
   document.querySelectorAll('.batch-button').forEach((button, index) => button.setAttribute('aria-pressed', String(state.groups[index].id === state.selectedGroupId)));
 
@@ -2908,9 +2950,10 @@ function syncDevelopControls() {
     ? 'This file carries no lens profile Core Image can correct against.'
     : 'Uses the profile the camera recorded with the frame.';
   syncNoiseMode();
-  developNode('develop-ask').disabled = state.busy || !ready || !roleReady('review');
+  developNode('develop-ask').disabled = state.busy || !ready || !roleReady('review') || aiRunning(`develop:${state.develop.photoId}`);
   developNode('develop-feedback').disabled = !ready;
   developNode('develop-discard-advice').disabled = state.busy || state.develop.beforeAdvice === null;
+  developNode('develop-use-advice').hidden = !ready || !state.develop.advice || state.develop.beforeAdvice !== null;  // a parked suggestion needs no second way in
   developNode('develop-suggest-availability').textContent = ready ? roleUnavailable('review') : '';
   developNode('develop-reset-all').disabled = !ready || (!touched && state.develop.saved === '{}');
   developNode('develop-apply-group').disabled = state.busy || !ready || !touched;
@@ -2926,9 +2969,10 @@ function fillDevelop(photo) {
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
     neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, drag: null, controller: null,
-    beforeAdvice: null,
+    beforeAdvice: null, advice: state.details?.advice || null,
   });
-  developNode('develop-advice').textContent = '';
+  aiTaskLine(`develop:${photo.id}`, developNode('develop-task'));
+  developNode('develop-advice').textContent = develop.advice?.rationale ?? '';  // the last stored suggestion, not yet parked
   developNode('develop-feedback').value = '';
   develop.saved = JSON.stringify(develop.fields);
   const offline = detail.offline === true;
@@ -3181,14 +3225,14 @@ async function askDevelopAdvice() {
   if (!develop.ready || photoId === null || !roleReady('review')) return;
   const before = JSON.stringify(develop.fields);
   const feedback = developNode('develop-feedback').value.trim();
-  state.busy = true;
-  updateWorkflow();
+  developNode('develop-ask').disabled = true;
   developNode('develop-status').textContent = 'Asking the loaded local vision model where to start…';
   try {
     const advice = await aiCall('Develop suggestion', () => post(`/api/photos/${photoId}/develop/suggest`,
-      { settings: develop.fields, feedback: feedback || null }));
-    if (develop.photoId !== photoId) return;  // the panel moved on while the model was reading
+      { settings: develop.fields, feedback: feedback || null }), `develop:${photoId}`);
+    if (develop.photoId !== photoId) return;  // the server stored it; reopening the frame offers it again
     if (develop.beforeAdvice === null) develop.beforeAdvice = before;  // the first attempt is what Discard goes back to
+    develop.advice = advice;
     develop.fields = advice.settings;
     developNode('develop-advice').textContent = advice.rationale;
     developNode('develop-feedback').value = '';
@@ -3201,9 +3245,21 @@ async function askDevelopAdvice() {
     developNode('develop-status').textContent = `Local AI advice is unavailable: ${error.message}. The handles are untouched.`;
     announce(developNode('develop-status').textContent);
   } finally {
-    state.busy = false;
-    updateWorkflow();
+    syncDevelopControls();  // re-enables Ask for whichever frame the panel now holds
   }
+}
+
+// The stored suggestion from an earlier visit, parked exactly as a fresh one would be.
+function useStoredDevelopAdvice() {
+  const develop = state.develop;
+  if (!develop.ready || !develop.advice) return;
+  if (develop.beforeAdvice === null) develop.beforeAdvice = JSON.stringify(develop.fields);
+  develop.fields = JSON.parse(JSON.stringify(develop.advice.settings));
+  developNode('develop-advice').textContent = develop.advice.rationale ?? '';
+  developNode('develop-status').textContent = 'The handles are where the model would start. Nothing is saved yet.';
+  syncDevelopControls();
+  announce(developNode('develop-status').textContent);
+  renderDevelopPreview();
 }
 
 function discardDevelopAdvice() {
@@ -3221,6 +3277,7 @@ function discardDevelopAdvice() {
 
 developNode('develop-ask').addEventListener('click', () => askDevelopAdvice());
 developNode('develop-discard-advice').addEventListener('click', () => discardDevelopAdvice());
+developNode('develop-use-advice').addEventListener('click', () => useStoredDevelopAdvice());
 developNode('develop-export').addEventListener('click', () => exportCurrentFrame());
 developNode('develop-apply-group').addEventListener('click', async () => {
   const photoId = state.develop.photoId;
