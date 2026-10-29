@@ -382,7 +382,9 @@ What to expect from each, measured on real frames (the tables are in
 - The 27B gives bolder, frame-specific develop advice at about 13 s, and tag
   descriptions that place the subject and name the light, the background, and
   secondary animals, at 9 to 11 s a frame against the 8B's 3 s.
-- Running only the 8B frees about 16 GB.
+- Running only the 8B frees about 16 GB, and is the whole setup on a 16 GB
+  Mac. The 27B is worth loading on a machine with room for it, and once loaded
+  it serves whatever else you use oMLX for, such as its chat.
 
 The practical rule: tag a day with the 8B, then switch the **Fast model**
 dropdown to the 27B and re-tag the keepers with `--retag` when you want the

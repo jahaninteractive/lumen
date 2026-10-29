@@ -11,10 +11,16 @@ can switch each role to while `lumen serve` runs:
 | review | `mlx-community/Qwen3.8-27B-4bit` when oMLX has it loaded, else the fast model | `LUMEN_OMLX_REVIEW_MODEL` (pins it), else `LUMEN_OMLX_MODEL` | burst critique, captions and alt text, day digests, composition advice, develop suggestions |
 
 The fast model handles the per-photo volume work; the review model handles the
-few calls where reading the frame closely matters more than throughput. Both
-loaded together take about 21 GB of the 48 GB; the 8B alone works for every
-job and frees about 16 GB, at the cost of thinner descriptions and more timid
-develop advice. The **Review model** and **Fast model** dropdowns move either
+few calls where reading the frame closely matters more than throughput.
+
+Memory decides which to load. The 8B takes about 6 GB loaded and alone covers
+every job, which is why a 16 GB Apple Silicon Mac is the minimum (not yet
+tested; the measurements here are from a 48 GB M4). The 27B takes about 16 GB
+loaded, so both together are about 21 GB; on a machine with that headroom it
+earns its place with fuller descriptions and bolder, frame-specific develop
+advice, and it stays useful outside Lumen for anything else you run through
+oMLX, such as its chat. On the 8B alone you give up those two things and
+nothing else. The **Review model** and **Fast model** dropdowns move either
 role between the two for the running server only; the fast role always starts
 on the 8B. How to use the switch is in [GUIDE.md](GUIDE.md#choosing-the-models).
 

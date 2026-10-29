@@ -9,12 +9,16 @@ extracts previews, groups bursts, explains a best-shot choice, optionally tags
 previews through oMLX, writes portable sidecars, checks astrophotography frames,
 and hands exports to local tools such as darktable.
 
-The included defaults target a 48 GB M4 Mac with two oMLX models: a fast
-vision model (`Qwen3-VL-8B-Instruct-4bit`) for tagging, problem scans, and
-astro triage, and a review model (`Qwen3.8-27B-4bit`) for critique, captions,
-digests, composition advice, and develop suggestions. **Review model** and
-**Fast model** dropdowns in the header move either role between the two while
-Lumen runs (see [Choosing the models](docs/GUIDE.md#choosing-the-models)).
+Lumen runs on any Apple Silicon Mac with 16 GB of memory using one oMLX
+model, the fast vision model (`Qwen3-VL-8B-Instruct-4bit`, about 6 GB loaded),
+which covers every job: tagging, problem scans, astro triage, critique,
+captions, digests, composition advice, and develop suggestions. With more
+memory, such as the 48 GB M4 it was built on, add the review model
+(`Qwen3.8-27B-4bit`, about 16 GB loaded) for closer reads of a frame and bolder
+develop advice, and keep it loaded for whatever else you use oMLX for, such as
+its chat. **Review model** and **Fast model** dropdowns in the header move
+either role between the two while Lumen runs (see
+[Choosing the models](docs/GUIDE.md#choosing-the-models)).
 
 Install below; the workflow is in [docs/GUIDE.md](docs/GUIDE.md).
 
@@ -51,16 +55,18 @@ goes:
 
 It is a personal tool built for one photographer's workflow and shared as is.
 
-## Install on the M4 Mac
+## Install
 
 Prerequisites:
 
-1. macOS 13.5 or newer on Apple Silicon.
-2. oMLX installed with `Qwen3-VL-8B-Instruct-4bit` (fast, vision) and
-   `Qwen3.8-27B-4bit` (review) available. Both must be loaded in oMLX for the
-   **Run all local AI** button; `lumen doctor` reports which roles are loaded.
-   With only the 8B model loaded, Lumen starts the review role on it, so the
-   27B download is optional (see [Local AI](docs/GUIDE.md#local-ai)).
+1. macOS 13.5 or newer on an Apple Silicon Mac with at least 16 GB of memory.
+   Lumen was built and measured on a 48 GB M4; a 16 GB machine has not been
+   tested, but the fast model needs about 6 GB and nothing else in Lumen is
+   memory-hungry.
+2. oMLX installed with `Qwen3-VL-8B-Instruct-4bit` (fast, vision) loaded.
+   `Qwen3.8-27B-4bit` (review) is optional and wants about 16 GB more: with
+   only the 8B loaded, Lumen starts the review role on it too. `lumen doctor`
+   reports which roles are loaded (see [Local AI](docs/GUIDE.md#local-ai)).
 3. `uv`, ExifTool, and the Apple command-line developer tools:
 
    ```sh
