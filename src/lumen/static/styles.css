@@ -373,6 +373,10 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   .compare-grid { grid-template-columns: 1fr; }
   .calibration-row { grid-template-columns: 1fr; }
   .loupe-viewport { height: 40vh; }
+  .ai-bar { grid-template-columns: 1fr; }
+  #role-model-pair { flex-wrap: wrap; }
+  #role-model-pair select { min-width: 0; max-width: 100%; }
+  .tab-rail { flex-wrap: wrap; }
 }
 
 #ask-burst-ai[aria-busy="true"]::after {
