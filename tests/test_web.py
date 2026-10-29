@@ -1746,7 +1746,7 @@ let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
-let groups = scenario === 'default-tab' ? [] : scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'default-tab' ? [] : scenario === 'merge' || scenario === 'merge-batches' || scenario === 'rail-visibility' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
 if (scenario === 'export-watermark') Object.assign(stored, { 'lumen-watermark': '\u00a9 N. David', 'lumen-export-preset': 'web' });  // remembered from an earlier visit
 if (scenario === 'export-bad-preset') stored['lumen-export-preset'] = 'huge';
@@ -4522,6 +4522,29 @@ const regression = `
     assert.equal(clearedLoads, 3, 'other tabs do not count');
     return;
   }
+  if (scenario === 'rail-visibility') {
+    await load();
+    assert.equal(state.selectedGroupId, null);
+    assert.equal(element('#merge-count').hidden, true, 'nothing ticked: no merge count');
+    assert.equal(element('#merge-batches').hidden, true, 'nothing ticked: no merge button');
+    assert.equal(element('#jump-selected').hidden, true, 'no burst selected: no jump');
+    assert.ok(!element('#back-to-top').hidden, 'Back to top always applies');
+    assert.equal(element('#open-compare').hidden, true, 'nothing marked: no compare');
+    const boxes = document.querySelectorAll('.batch-select');
+    boxes[0].checked = true; boxes[0].listeners.change();
+    assert.equal(element('#merge-count').hidden, false);
+    assert.equal(element('#merge-batches').hidden, false, 'one ticked batch shows the merge button');
+    assert.equal(element('#merge-batches').disabled, true, 'but one batch is not a merge');
+    await document.querySelectorAll('.batch-button')[1].listeners.click();
+    assert.equal(element('#jump-selected').hidden, false, 'a selected burst shows Jump to selected');
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    await element('#contact-sheet').listeners.keydown({ key: 'c', metaKey: false, ctrlKey: false, altKey: false, target: card(state.selectedId), preventDefault() {}, stopPropagation() {} });
+    assert.equal(element('#open-compare').hidden, false, 'a marked frame shows Compare marked');
+    assert.equal(element('#open-compare').disabled, true, 'one marked frame cannot be compared');
+    boxes[0].checked = false; boxes[0].listeners.change();
+    assert.equal(element('#merge-batches').hidden, true, 'unticking hides it again');
+    return;
+  }
   if (scenario === 'merge-batches') {
     await load();
     const button = element('#merge-batches');
@@ -4675,7 +4698,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for name in ("filter-from", "filter-to", "filter-camera", "filter-tagged"):
             self.assertIn(rows[1], by_id[name]["parents"], f"{name} sits on the second row")
         heading = by_id["contact-heading"]["parents"][-1]
-        for name in ("tile-size", "refine-scope", "refine-previews", "open-compare", "shortcuts-button"):
+        for name in ("tile-size", "open-compare", "shortcuts-button"):
             self.assertIn(heading, by_id[name]["parents"], f"{name} sits in the heading row, apart from the filters")
         self.assertFalse(any(node["tag"] in {"details", "summary"} and form in node["parents"] for node in parser.nodes), "no folded section")
         self.assertFalse(any(node["tag"] == "button" and node["attrs"].get("type") == "submit" and form in node["parents"] for node in parser.nodes), "no Apply button")
@@ -5130,6 +5153,31 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_batch_rail_merges_selected_batches(self):
         self.run_javascript_cleanup_regression("merge-batches")
+
+    def test_javascript_rail_and_heading_controls_appear_only_when_they_apply(self):
+        self.run_javascript_cleanup_regression("rail-visibility")
+
+    def test_refine_previews_fold_under_the_filter_bar(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        fold = by_id["refine-fold"]
+        self.assertEqual("details", fold["tag"])
+        summary = next(node for node in parser.nodes if node["tag"] == "summary" and node["parents"][-1] is fold)
+        self.assertEqual("Refine previews", summary["text"].strip())
+        top = next(node for node in parser.nodes if "contact-top" in node["attrs"].get("class", "").split())
+        self.assertIs(top, fold["parents"][-1])
+        self.assertIs(top, by_id["filter-form"]["parents"][-1])
+        order = [node["attrs"].get("id") for node in parser.nodes if node["parents"] and node["parents"][-1] is top]
+        self.assertEqual(order.index("filter-form") + 1, order.index("refine-fold"), "the fold sits directly after the filter bar")
+        for name in ("refine-scope", "refine-previews", "refine-availability", "refine-status"):
+            self.assertIn(fold, by_id[name]["parents"], name)
+        view = next(node for node in parser.nodes if node["attrs"].get("class") == "view-controls")
+        self.assertEqual(["tile-size"], [node["attrs"]["id"] for node in parser.nodes if view in node["parents"] and node["tag"] in ("select", "button")])
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"#refine-fold summary[^{]*\{[^}]*min-height: 44px")
+        self.assertRegex(styles, r"\.rail-header button \{ width: 100%; \}")
 
     def test_javascript_cleanup_selection_follows_photo_after_group_refresh(self):
         for scenario in ("split", "merge", "missing"):

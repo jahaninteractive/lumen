@@ -23,9 +23,9 @@
         <h2>Batches</h2>
         <label for="find">Find</label>
         <input type="search" id="find" autocomplete="off" placeholder="penguin, blur, caption words…">
-        <p id="merge-count" class="quiet">0 batches selected</p>
-        <button type="button" id="merge-batches" class="secondary" disabled>Merge selected batches</button>
-        <button type="button" id="jump-selected" class="secondary">Jump to selected</button>
+        <p id="merge-count" class="quiet" hidden>0 batches selected</p>
+        <button type="button" id="merge-batches" class="secondary" hidden disabled>Merge selected batches</button>
+        <button type="button" id="jump-selected" class="secondary" hidden>Jump to selected</button>
         <button type="button" id="back-to-top" class="secondary">Back to top</button>
       </div>
       <div id="batch-list"><p class="quiet">No imported batches yet.</p></div>
@@ -298,19 +298,10 @@
               <option value="medium" selected>Medium</option>
               <option value="large">Large</option>
             </select></span>
-            <span class="pair"><label for="refine-scope">Refine</label>
-            <select id="refine-scope" aria-describedby="refine-availability">
-              <option value="group">Selected burst</option>
-              <option value="filtered">Filtered frames</option>
-              <option value="all">Whole catalog</option>
-            </select></span>
-            <button type="button" id="refine-previews" class="secondary" aria-describedby="refine-availability" disabled>Refine previews</button>
           </span>
-          <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" disabled>Compare marked</button>
+          <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" hidden disabled>Compare marked</button>
           <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
         </div>
-        <p id="refine-availability" class="quiet refine-note"></p>
-        <p id="refine-status" class="refine-note"></p>
         <form id="filter-form" class="filter-form" aria-label="Filter frames">
           <div class="filter-row">
             <label for="filter-text" class="sr-only">Tag text</label>
@@ -344,6 +335,20 @@
             <label for="filter-export-failed" class="toggle"><input type="checkbox" id="filter-export-failed"> Export failed</label>
           </div>
         </form>
+        <details id="refine-fold">
+          <summary>Refine previews</summary>
+          <span class="refine-controls">
+            <span class="pair"><label for="refine-scope">Refine</label>
+            <select id="refine-scope" aria-describedby="refine-availability">
+              <option value="group">Selected burst</option>
+              <option value="filtered">Filtered frames</option>
+              <option value="all">Whole catalog</option>
+            </select></span>
+            <button type="button" id="refine-previews" class="secondary" aria-describedby="refine-availability" disabled>Refine previews</button>
+          </span>
+          <p id="refine-availability" class="quiet refine-note"></p>
+          <p id="refine-status" class="refine-note"></p>
+        </details>
         </div>
         <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>
         <button type="button" id="show-more" class="secondary" hidden>Show 200 more</button>

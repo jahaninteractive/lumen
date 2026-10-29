@@ -2186,6 +2186,8 @@ function updateWorkflow() {
   document.querySelector('#remove-group').disabled = state.busy || !group;
   document.querySelector('#remove-cleared').disabled = state.busy || !state.clearedFrames;
   document.querySelector('#merge-batches').disabled = state.busy || state.mergeSelection.size < 2;
+  document.querySelector('#merge-batches').hidden = document.querySelector('#merge-count').hidden = state.mergeSelection.size === 0;
+  document.querySelector('#jump-selected').hidden = state.selectedGroupId === null;
   document.querySelector('#write-digest').disabled = state.busy;
   document.querySelector('#merge-count').textContent = `${state.mergeSelection.size} batch${state.mergeSelection.size === 1 ? '' : 'es'} selected`;
   document.querySelectorAll('[data-merge-group]').forEach(box => { box.checked = state.mergeSelection.has(Number(box.dataset.mergeGroup)); });
@@ -2200,6 +2202,7 @@ function updateWorkflow() {
   document.querySelector('#import-form button[type="submit"]').disabled = state.busy;
   document.querySelector('#browse-path').disabled = state.busy;
   document.querySelector('#open-compare').disabled = state.cullingBlocked || state.compare.length !== 2;
+  document.querySelector('#open-compare').hidden = state.compare.length === 0;
   const fastLoaded = roleReady('fast');
   document.querySelector('#ai-availability').textContent = roleUnavailable('fast') || roleUnavailable('review') || '';
   document.querySelector('#tag-all').disabled = state.busy || !fastLoaded;
