@@ -1361,6 +1361,19 @@ class WebTests(unittest.TestCase):
         self.assertEqual((["ice"], None), (vocab["blocked"], vocab["counts"].get("ice")))
         self.assertEqual(["bay"], self.get_json(f"/api/photos/{photo_id}")[1]["tags"]["data"]["subjects"])
 
+    def test_first_run_card_offers_ingest_and_import_under_the_pixel_mark(self):
+        response = urllib.request.urlopen(self.base + "/static/mark.svg", timeout=3)
+        self.assertEqual("image/svg+xml", response.headers["Content-Type"])
+        svg = response.read().decode()
+        self.assertIn('shape-rendering="crispEdges"', svg)
+        self.assertEqual(svg, (Path(__file__).parent.parent / "src/lumen/static/mark.svg").read_text())
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("/static/mark.svg", js)
+        for phrase in ("Photos still on a memory card", "Photos already on a drive or folder", "Not sure?"):
+            self.assertIn(phrase, js)
+        styles = (Path(__file__).parent.parent / "src/lumen/static/styles.css").read_text()
+        self.assertIn(".first-run", styles)
+
     def test_assist_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
         self.assertIn('id="tag-keepers"', html)

@@ -179,7 +179,7 @@ class OnlineLookupTests(unittest.TestCase):
         self.assertFalse(place.near)
         url, agent, timeout = calls[0]
         self.assertEqual("https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=-24.8&lon=26.2&zoom=10", url)
-        self.assertEqual(("Lumen/1.0 (local photo manager)", 5.0), (agent, timeout))
+        self.assertEqual(("Lumen/1.0 (local photo manager)", 30.0), (agent, timeout))
 
     def test_name_then_missing_country(self):
         opener, _ = nominatim({"name": "Somewhere", "address": {"village": "Elsewhere"}})

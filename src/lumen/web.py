@@ -33,6 +33,7 @@ STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/static/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/static/mark.svg": ("mark.svg", "image/svg+xml"),
 }
 
 DEVELOP_FEEDBACK_MAX = 200  # one short correction ("too warm"), matching the field's maxlength

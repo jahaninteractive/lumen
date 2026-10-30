@@ -239,7 +239,7 @@ class PlaceIndex:
         return None
 
 
-def online_lookup(lat: float, lon: float, *, timeout: float = 5.0, opener=None) -> Place | None:
+def online_lookup(lat: float, lon: float, *, timeout: float = 30.0, opener=None) -> Place | None:
     """Ask Nominatim for a place name; any failure or a nameless answer is None. Callers gate this on opt-in."""
     global _last_online_call
     if _last_online_call is not None:

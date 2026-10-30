@@ -1391,16 +1391,63 @@ function renderGroups() {
   const more = document.querySelector('#show-more');
   more.hidden = remaining <= 0;
   more.textContent = `Show ${Math.min(PAGE, remaining)} more · ${remaining} remaining`;
-  if (!photos.length) {
+  if (!photos.length && !location.search) sheet.append(firstRunCard());
+  else if (!photos.length) {
     const empty = document.createElement('p');
     empty.className = 'quiet';
-    empty.textContent = location.search ? 'No frames match these filters.' : 'Import a folder to build your first contact sheet.';
+    empty.textContent = 'No frames match these filters.';
     sheet.append(empty);
   }
   // A narrowed sheet says how much of the library it shows.
   document.querySelector('#photo-count').textContent = location.search ? `${photos.length} of ${frameCount(state.photoCount)}` : frameCount(photos.length);
   if (!state.groups.length) rail.textContent = location.search ? 'No batches match these filters.' : 'No imported batches yet.';
   updateWorkflow();
+}
+
+// An empty, unfiltered sheet shows the way in: each button opens Add photos on the matching source.
+function firstRunCard() {
+  const card = document.createElement('section');
+  card.className = 'first-run';
+  card.setAttribute('aria-label', 'Get started');
+  const mark = document.createElement('img');
+  mark.src = '/static/mark.svg';
+  mark.alt = '';
+  mark.width = 64;
+  mark.height = 64;
+  const intro = document.createElement('div');
+  const title = document.createElement('h2');
+  title.textContent = 'Lumen';
+  const promise = document.createElement('p');
+  promise.className = 'quiet';
+  promise.textContent = 'Reads your Sony raws where they are. Originals are never moved, renamed, or changed.';
+  intro.append(title, promise);
+  const choices = document.createElement('div');
+  choices.className = 'first-run-choices';
+  [['ingest', 'Photos still on a memory card', 'Ingest makes a verified copy first, so you can format the card.'],
+   ['import', 'Photos already on a drive or folder', 'Import adds them in place. Nothing is copied.']].forEach(([source, label, help]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.dataset.source = source;
+    const strong = document.createElement('strong');
+    strong.textContent = label;
+    const note = document.createElement('span');
+    note.textContent = help;
+    button.append(strong, note);
+    button.addEventListener('click', () => {
+      const radio = addSourceRadios.find(item => item.value === source);
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change'));
+      selectTab(document.querySelector('#add-tab'));
+      document.querySelector(source === 'ingest' ? '#browse-ingest-card' : '#browse-path').focus();
+    });
+    choices.append(button);
+  });
+  const hint = document.createElement('p');
+  hint.className = 'quiet';
+  hint.textContent = 'Not sure? Ingest if the card is in the reader. Import if the photos are already backed up.';
+  card.append(mark, intro, choices, hint);
+  return card;
 }
 
 function showMore() {

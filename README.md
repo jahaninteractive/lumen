@@ -1,4 +1,4 @@
-# Lumen
+# <img src="src/lumen/static/mark.svg" width="32" height="32" alt=""> Lumen
 
 Lumen is the program in this repository (`offline-raw-culler`); the Python
 package is `lumen-raw` and the command is `lumen`.

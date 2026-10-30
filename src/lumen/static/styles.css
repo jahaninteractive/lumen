@@ -73,7 +73,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 }
 
 .masthead strong { font-size: 1.35rem; letter-spacing: .02em; }
-.mark { display: inline-block; width: .8rem; height: .8rem; margin-right: .55rem; border-radius: 50%; background: var(--amber); }
+.mark { vertical-align: -.25rem; margin-right: .55rem; image-rendering: pixelated; }
 .subtitle { margin-left: .65rem; color: var(--muted); }
 #system-status { margin: 0; color: var(--cyan); font-size: .9rem; }
 .job-strip { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
@@ -233,6 +233,16 @@ button.danger { color: var(--danger); border-color: var(--danger); background: t
 #photo-count, #keeper-count, #group-cleanup-count, #workspace-cleanup-count { font-variant-numeric: tabular-nums; }
 
 .contact-area { padding: 0 1.25rem 1.25rem; }
+.first-run { display: grid; grid-template-columns: auto 1fr; gap: .75rem 1.25rem; align-items: center; max-width: 44rem; margin: 2rem auto; padding: 1.5rem; border: 1px solid var(--line); border-radius: 12px; background: var(--graphite); }
+.first-run img { image-rendering: pixelated; }
+.first-run h2 { margin: 0; }
+.first-run-choices, .first-run > .quiet:last-child { grid-column: 1 / -1; }
+.first-run-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.first-run-choices button { display: grid; gap: .25rem; padding: 1rem; text-align: left; white-space: normal; }
+.first-run-choices button strong { color: var(--amber); }
+.first-run-choices button:last-child strong { color: var(--cyan); }
+.first-run-choices button span { color: var(--muted); font-size: .9rem; }
+@media (max-width: 40rem) { .first-run-choices { grid-template-columns: 1fr; } }
 /* The heading and filter bar stay pinned under the tab row while the sheet scrolls beneath them. */
 .contact-top { position: sticky; top: var(--main-top, 0px); z-index: 1; padding-top: 1.25rem; background: var(--black); }
 .section-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .75rem; }
