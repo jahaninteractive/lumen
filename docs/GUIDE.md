@@ -125,7 +125,9 @@ In the contact sheet, with a frame focused (**Shortcuts** lists these):
   `0`–`5` set the rating.
 - `C` marks or unmarks a frame for compare (two at most); **Compare marked** opens
   both at 100 percent with panes that pan together.
-- `Enter` opens the frame view (see below); `Esc` closes compare or the frame
+- `M` merges the batches ticked in the rail (the same as **Merge selected
+  batches**); it works anywhere outside a text field.
+- `Enter` or `Space` opens the frame view (see below); `Esc` closes compare or the frame
   view.
 - In the frame view, `[` and `]` (or the Left and Right arrows) step to the
   previous or next frame along the filmstrip, `Z` toggles full size, and the
@@ -147,7 +149,7 @@ preview refinement, or a stack runs.
 
 ## Frame view
 
-Press `Enter` on a focused frame to open it in a dialog over the sheet. The
+Press `Enter` or `Space` on a focused frame to open it in a dialog over the sheet. The
 image fills two thirds of the dialog, fitted so the whole frame shows; **Full
 size** (`Z`) swaps in the largest JPEG the camera embedded in the raw at 1:1
 pixels for a sharpness check, and the button names the real pixel size. `[`

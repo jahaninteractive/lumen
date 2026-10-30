@@ -1206,7 +1206,7 @@ function toggleCompare(photo) {
   announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
 }
 
-const CULLING_KEYS = { p: 'pick', r: 'keepOnly', x: 'reject', f: 'flag', u: 'clear', c: 'compare', z: 'full', Enter: 'loupe', Escape: 'close' };
+const CULLING_KEYS = { p: 'pick', r: 'keepOnly', x: 'reject', f: 'flag', u: 'clear', c: 'compare', z: 'full', Enter: 'loupe', ' ': 'loupe', Escape: 'close' };
 const CULLING_ACTIONS = {
   pick: photo => decide(photo, 'pick'),
   keepOnly,
@@ -1229,6 +1229,7 @@ function handleCullingKey(event) {
   const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName)) return;
   if (key === 'Enter' && openView) return;  // no culling meaning in an open view: buttons, links, and summaries keep native activation
+  if (key === ' ' && (openView || target?.className !== 'frame')) return;  // Space opens a frame card only; elsewhere it scrolls or activates natively
   // Only frame cards cull on the sheet; in the frame view its own buttons cull too.
   if (target?.tagName === 'BUTTON' && target.className !== 'frame' && openView?.id !== 'loupe') return;
   // Left and Right step too, unless a tab list or the curve editor already used the arrow.
@@ -3440,6 +3441,16 @@ async function mergeBatches() {
   }
 }
 document.querySelector('#merge-batches').addEventListener('click', mergeBatches);
+// M merges from anywhere outside a text field or dialog; the button's disabled state is the only gate.
+document.addEventListener('keydown', event => {
+  if (event.key?.toLowerCase() !== 'm' || event.metaKey || event.ctrlKey || event.altKey || openView) return;
+  const tag = event.target?.tagName;  // the rail's checkboxes are inputs too; only typing fields keep the key
+  if (tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && !['checkbox', 'radio'].includes(event.target.type))) return;
+  const button = document.querySelector('#merge-batches');
+  if (button.disabled) return;
+  event.preventDefault();
+  return mergeBatches();
+});
 document.querySelector('#clear-workspace').addEventListener('click', () => cleanup('/api/library/clear', { confirmation: document.querySelector('#clear-confirmation').value }));
 
 const watermarkInput = document.querySelector('#export-watermark');

@@ -1618,6 +1618,8 @@ const recipes = ['tracked', 'untracked'].map((value, index) => Object.assign(new
 const nrModes = ['auto', 'off', 'manual'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const document = {
   get activeElement() { return focused; },
+  listeners: {},
+  addEventListener(name, callback) { this.listeners[name] = callback; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
   querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : selector === 'input[name="astro-recipe"]:checked' ? recipes.find(input => input.checked) : selector === 'input[name="export-preset"]:checked' ? presetRadios.find(input => input.checked) : selector === '.burst-frames' ? (() => { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).find(node => node.className === 'burst-frames') ?? null; })() : byData(selector) ? byData(selector)[0] ?? null
     : selector === '#rating' ? inspectorRating() : element(selector),
@@ -2519,6 +2521,10 @@ const regression = `
     const form = Object.assign(new Element(), { tagName: 'FORM', parent: dialog });
     if (scenario === 'loupe') {
       await key('ArrowRight', card(1));
+      await key(' ', card(2));
+      assert.equal(dialog.hidden, false, 'Space opens the loupe for the focused frame');
+      assert.equal(prevented, 2, 'Space never scrolls the sheet or clicks the card');
+      dialog.hidden = true; openView = null;
       await key('Enter', card(2));
       assert.equal(dialog.hidden, false, 'Enter opens the loupe for the focused frame');
       assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg');
@@ -4379,7 +4385,11 @@ const regression = `
     boxes[1].checked = true; boxes[1].listeners.change();
     assert.equal(button.disabled, false);
     const loadsBefore = groupLoads;
-    await button.listeners.click();
+    const mKey = (extra = {}) => document.listeners.keydown({ key: 'm', metaKey: false, ctrlKey: false, altKey: false, target: boxes[1], preventDefault() {}, ...extra });
+    await mKey({ target: document.createElement('input') });
+    await mKey({ metaKey: true });
+    assert.deepEqual(mergePosts, [], 'typing M in a field or with a modifier does not merge');
+    await mKey();
     assert.deepEqual(mergePosts, [{ group_ids: [1, 2] }]);
     assert.equal(groupLoads, loadsBefore + 1, 'merge reloads the batches');
     assert.equal(state.selectedGroupId, 1);
@@ -4734,7 +4744,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() == text for node in legend), text)
         self.assertIn("Z", keys)
         for key in keys:
-            self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down", "Enter", "Esc"}, key)
+            self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down", "Enter", "Space", "Esc"}, key)
         for key in ("Enter", "Esc"):
             self.assertIn(key, keys)
         for term in terms:
