@@ -94,8 +94,8 @@ cleared in earlier sessions** in the Import tab or pass
 ## Jobs
 
 Import, ingest, tag-all, preview refinement, and astro stacks run as background
-jobs, one at a time. The web page shows progress in the job strip at the bottom
-with a **Cancel job** button, which becomes **Clear** once the job has ended. From the CLI:
+jobs, one at a time. The web page shows progress in the job strip at the top
+with a **Cancel job** button. From the CLI:
 
 ```sh
 uv run lumen jobs --json

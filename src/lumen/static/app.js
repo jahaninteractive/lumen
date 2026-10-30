@@ -1832,10 +1832,7 @@ async function cancelCurrentJob() {
     updateWorkflow();
   }
 }
-document.querySelector('#cancel-job').addEventListener('click', () => {
-  if (JOB_ACTIVE.includes(state.job?.status)) return cancelCurrentJob();
-  document.querySelector('#job-strip').hidden = true;
-});
+document.querySelector('#cancel-job').addEventListener('click', cancelCurrentJob);
 
 // A keepers export runs as a job; this modal shows its progress and offers Cancel, then the outcome and Close.
 const exportDialog = document.querySelector('#export-dialog');
@@ -2197,12 +2194,7 @@ function updateWorkflow() {
   document.querySelector('#astro-confirm').disabled = activeJob;
   document.querySelectorAll('input[name="astro-recipe"]').forEach(input => { input.disabled = activeJob; });
   document.querySelector('#cancel-astro').disabled = state.acting || !activeJob;
-  // One button: Cancel while the job runs, Clear (hides the strip) once it has ended.
-  const jobButton = document.querySelector('#cancel-job');
-  const jobActive = JOB_ACTIVE.includes(state.job?.status);
-  jobButton.disabled = state.acting || !state.job;
-  jobButton.textContent = jobActive ? 'Cancel job' : 'Clear';
-  jobButton.className = jobActive ? 'danger' : 'secondary';
+  document.querySelector('#cancel-job').disabled = state.acting || !JOB_ACTIVE.includes(state.job?.status);
   document.querySelector('#reveal-astro').disabled = state.busy || !job;
   for (const kind of ['card', 'primary', 'mirror']) document.querySelector(`#browse-ingest-${kind}`).disabled = state.busy;
   document.querySelector('#reset-ingest-mirror').disabled = state.busy || !state.ingest.mirror;
