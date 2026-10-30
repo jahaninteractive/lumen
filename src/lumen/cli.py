@@ -134,6 +134,9 @@ def build_parser() -> argparse.ArgumentParser:
     merge = commands.add_parser("merge", help="merge bursts into the earliest one, e.g. long-exposure astro lights")
     merge.add_argument("group_ids", type=int, nargs="+")
     merge.add_argument("--json", action="store_true")
+    split = commands.add_parser("split", help="move one frame out of its burst into a burst of its own")
+    split.add_argument("photo_id", type=int)
+    split.add_argument("--json", action="store_true")
 
     clear = commands.add_parser("clear", help="clear the workspace with exact CLEAR confirmation")
     clear.add_argument("confirmation")
@@ -376,11 +379,14 @@ def main(argv: list[str] | None = None) -> int:
         _print(asdict(result) | {"output": str(result.output)}, args.json)
         return 0 if result.success else 2
 
-    if args.command in {"export", "remove", "clear", "merge", "cleared"}:
+    if args.command in {"export", "remove", "clear", "merge", "split", "cleared"}:
         try:
             with Library(settings) as library:
                 if args.command == "merge":
                     payload = library.merge_groups(args.group_ids)
+                    code = 0
+                elif args.command == "split":
+                    payload = library.split_photo(args.photo_id)
                     code = 0
                 elif args.command == "cleared":
                     payload = asdict(library.remove_cleared()) if args.remove else library.cleared_in_catalog()

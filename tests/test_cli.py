@@ -740,6 +740,13 @@ class ExportCleanupCliTests(unittest.TestCase):
         code, payload = self.run_command("merge", "1")
         self.assertEqual(2, code)
         self.assertIn("error", payload)
+        code, payload = self.run_command("split", "2")
+        self.assertEqual(0, code)
+        self.assertEqual((2, 1), (payload["photo_id"], payload["from_group_id"]))
+        with Library(self.settings) as library:
+            self.assertEqual(2, len(library.list_groups()))
+        code, payload = self.run_command("split", "2")
+        self.assertEqual((2, "photo 2 is already in a burst of its own"), (code, payload["error"]))
 
     def test_remove_unknown_group_returns_json_error(self):
         code, payload = self.run_command("remove", "99999")
