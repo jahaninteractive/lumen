@@ -42,6 +42,46 @@ class LibraryCoordinationTests(unittest.TestCase):
     def export(self, library):
         return library.export_jpegs(ExportRequest((self.photo_id,)))[0]
 
+    def test_model_calls_do_not_hold_the_mutation_lock(self):
+        for index in range(2):
+            image = Image.new("RGB", (120, 90), (index * 30, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+            image.save(self.root / f"b{index}.jpg", exif=exif)
+        with Library(self.settings) as library:
+            library.import_path(self.root)
+            group = next(group for group in library.list_groups() if len(group["photos"]) == 2)
+        group_id, other_id = group["id"], group["photos"][1]["id"]
+        started, release, done = threading.Event(), threading.Event(), threading.Event()
+
+        class SlowTagger:
+            model, role = "review-model", "review"
+            def critique_burst(self, frames):
+                started.set()
+                assert release.wait(5), "test released too late"
+                from lumen.omlx import BurstCritique
+                return BurstCritique(frame_id=frames[0][0], rationale="sharpest", confidence=0.9, raw_response="{}")
+
+        def critique():
+            with Library(self.settings) as library:
+                library.critique_burst(group_id, SlowTagger())
+
+        def decide():
+            with Library(self.settings) as library:
+                library.set_decision(other_id, "flag")
+            done.set()
+
+        worker = threading.Thread(target=critique)
+        worker.start()
+        self.assertTrue(started.wait(5))
+        decider = threading.Thread(target=decide)
+        decider.start()
+        decided = done.wait(2)
+        release.set()
+        worker.join(5)
+        decider.join(5)
+        self.assertTrue(decided, "a decision must not wait for the model")
+        with Library(self.settings) as library:
+            self.assertEqual("flag", library.catalog.get_photo(other_id).decision)
+
     def test_export_settings_events_and_sidecars_have_no_private_operation_token(self):
         with Library(self.settings) as library, patch("lumen.library.PipelineRegistry.darktable", side_effect=self.pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.runner):
             result = self.export(library)

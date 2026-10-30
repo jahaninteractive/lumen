@@ -368,6 +368,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         candidates = library.crop_candidates(photo_id)
                         photo = library.catalog.get_photo(photo_id)
                         active = library.catalog.get_crop(photo_id)
+                        review = library.latest_composition_review(photo_id, [candidate.id for candidate in candidates])
                     if photo is None:
                         raise ValueError(f"unknown photo ID: {photo_id}")
                     self._send_json({
@@ -375,6 +376,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         "preview_url": _preview_url(photo, active),
                         "candidates": [asdict(candidate) for candidate in candidates],
                         "active_crop": active.to_dict() if active else None,
+                        "review": review,
                         "source_width": candidates[0].pixel_box[2],
                         "source_height": candidates[0].pixel_box[3],
                     })
@@ -388,6 +390,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     develop = library.develop_for(item["photo"].id) if item else None
                     crop = library.catalog.get_crop(item["photo"].id) if item else None
                     location_typed = library.location_typed(item["photo"]) if item else False
+                    advice = library.latest_develop_advice(item["photo"].id) if item else None
                 if not item:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
@@ -400,7 +403,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 photo["preview_url"] = preview_url
                 photo["location_typed"] = location_typed  # only a position typed in Lumen can be edited
                 self._send_json({"photo": photo, "develop": develop and develop.to_dict(),
-                                 "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"]})
+                                 "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"],
+                                 "advice": advice})
                 return
             match = re.fullmatch(r"/full/(\d+)", path)
             if match:

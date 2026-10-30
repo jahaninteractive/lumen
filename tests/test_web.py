@@ -281,7 +281,7 @@ class WebTests(unittest.TestCase):
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         panel = by_id["ingest-panel"]
-        self.assertEqual(("tabpanel", "ingest-tab"), (panel["attrs"].get("role"), panel["attrs"].get("aria-labelledby")))
+        self.assertIn(by_id["add-panel"], panel["parents"], "Ingest is one source in the Add photos tab")
         for kind in ("card", "primary", "mirror"):
             browse = by_id[f"browse-ingest-{kind}"]
             self.assertEqual(("button", "button"), (browse["tag"], browse["attrs"].get("type")))
@@ -299,7 +299,9 @@ class WebTests(unittest.TestCase):
         self.assertIn("Do not format the card: ", javascript)
         self.assertNotRegex(javascript.lower(), r"safe to (format|erase|wipe)|card is safe")
         self.assertNotRegex(javascript, r"ingest[^\n]*\.innerHTML")
-        copy = " ".join(panel["text"].split())
+        fold = next(node for node in parser.nodes if node["tag"] == "details" and node["parents"][-1] is panel)
+        self.assertEqual("how", fold["attrs"].get("class"), "the explanation folds under How this works")
+        copy = " ".join(fold["text"].split())
         for text in ("Copy.", "Verify.", "Import.", "never writes to or erases it", "Every file verified on every destination."):
             self.assertIn(text, copy)
 
@@ -371,7 +373,7 @@ class WebTests(unittest.TestCase):
         for name in ("job-label", "job-progress", "job-status", "cancel-job"):
             self.assertIn(strip, by_id[name]["parents"])
             self.assertNotIn(by_id["main-content"], by_id[name]["parents"])
-        self.assertEqual(("button", "button", "Tag all untagged"), (by_id["tag-all"]["tag"], by_id["tag-all"]["attrs"].get("type"), by_id["tag-all"]["text"].strip()))
+        self.assertEqual(("button", "button", "Tag every untagged frame"), (by_id["tag-all"]["tag"], by_id["tag-all"]["attrs"].get("type"), by_id["tag-all"]["text"].strip()))
         self.assertEqual(("input", "checkbox"), (by_id["retag-all"]["tag"], by_id["retag-all"]["attrs"].get("type")))
         retag_label = next(node for node in parser.nodes if node["tag"] == "label" and node["attrs"].get("for") == "retag-all")
         self.assertEqual("Re-tag already tagged", retag_label["text"].strip())
@@ -381,6 +383,25 @@ class WebTests(unittest.TestCase):
         for word in ("finished", "failed", "cancelled", "interrupted"):
             self.assertIn(word, javascript)
         self.assertNotRegex(javascript, r"job[^\n]*\.innerHTML")
+
+    def test_footer_strip_holds_model_selects_availability_activity_and_jobs(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        footer = next(node for node in parser.nodes if node["tag"] == "footer")
+        header = next(node for node in parser.nodes if node["tag"] == "header")
+        for name in ("role-model-pair", "ai-availability", "ai-status", "job-strip"):
+            self.assertIn(footer, by_id[name]["parents"], name)
+            self.assertNotIn(header, by_id[name]["parents"], name)
+        order = [node["attrs"]["id"] for node in parser.nodes
+                 if node["attrs"].get("id") in {"role-model-pair", "ai-availability", "ai-status", "job-strip"}]
+        self.assertEqual(["role-model-pair", "ai-availability", "ai-status", "job-strip"], order)
+        self.assertIn("hidden", by_id["job-strip"]["attrs"])
+        self.assertEqual("quiet", by_id["ai-availability"]["attrs"].get("class"))
+
+    def test_javascript_header_reports_health_without_model_names(self):
+        self.run_javascript_cleanup_regression("status-health")
 
     def test_javascript_job_strip_polls_import_disables_actions_and_refreshes_once(self):
         self.run_javascript_cleanup_regression("job-strip")
@@ -781,17 +802,31 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"]]
-        self.assertEqual(["Ingest", "Import", "Review", "Astro", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
+        self.assertEqual(["Add photos", "Review", "Assist", "Astro", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for tab in tabs:
             self.assertEqual("button", tab["tag"])
-            export = tab["text"].strip() == "Export"  # Export stays the default tab wherever it sits
-            self.assertEqual(str(export).lower(), tab["attrs"]["aria-selected"])
-            self.assertEqual("0" if export else "-1", tab["attrs"].get("tabindex"))
+            default = tab["text"].strip() == "Add photos"  # the markup default; the first load folds it away when the catalog has frames
+            self.assertEqual(str(default).lower(), tab["attrs"]["aria-selected"])
+            self.assertEqual("0" if default else "-1", tab["attrs"].get("tabindex"))
             panel = by_id[tab["attrs"]["aria-controls"]]
             self.assertEqual("tabpanel", panel["attrs"].get("role"))
             self.assertEqual(tab["attrs"]["id"], panel["attrs"].get("aria-labelledby"))
-            self.assertEqual(not export, "hidden" in panel["attrs"])
+            self.assertEqual(not default, "hidden" in panel["attrs"])
+        assist_ids = ["assist-keepers", "tag-keepers", "redo-keepers", "tag-all", "retag-all", "vocabulary-panel", "write-digest", "digest-result"]
+        self.assertEqual(assist_ids, [node["attrs"]["id"] for node in parser.nodes if node["attrs"].get("id") in assist_ids], "Assist holds them in this order")
+        for name in assist_ids:
+            self.assertIn(by_id["assist-panel"], by_id[name]["parents"], f"{name} lives in the Assist tab")
+            self.assertNotIn(by_id["export-panel"], by_id[name]["parents"], f"{name} left the Export tab")
+        for name in ("ingest-panel", "import-panel"):
+            self.assertIn(by_id["add-panel"], by_id[name]["parents"])
+            self.assertNotIn("role", by_id[name]["attrs"], "the add-source radios, not the tablist, show these sections")
+        self.assertEqual(("fieldset", "segmented"), (by_id["add-source"]["tag"], by_id["add-source"]["attrs"].get("class")))
+        radios = [node for node in parser.nodes if node["attrs"].get("name") == "add-source"]
+        self.assertEqual([("ingest", False), ("import", True)], [(node["attrs"]["value"], "checked" in node["attrs"]) for node in radios])
+        for radio, label in zip(radios, ("Still on the memory card", "Already on a drive")):
+            self.assertTrue(any(node["tag"] == "label" and node["text"].strip() == label for node in radio["parents"]), label)
+        self.assertEqual((True, False), ("hidden" in by_id["ingest-panel"]["attrs"], "hidden" in by_id["import-panel"]["attrs"]))
         for node in parser.nodes:
             if node["tag"] == "button":
                 self.assertIn(node["attrs"].get("type"), {"button", "submit"})
@@ -1045,6 +1080,24 @@ class WebTests(unittest.TestCase):
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertIsNone(library.catalog.get_crop(1))
 
+    def test_crops_payload_carries_the_stored_review_only_while_its_candidate_exists(self):
+        class Tagger:
+            model = "local-vision"
+
+            def review_composition(self, original, candidates):
+                return CompositionReview(candidates[0][0], "The original keeps useful context.", 0.75)
+
+        code, crops = self.get_json("/api/photos/1/crops")
+        self.assertEqual(200, code, crops)
+        self.assertIsNone(crops["review"])
+        with patch("lumen.library.OmlxTagger", return_value=Tagger()), patch("lumen.library.get_server_status", return_value=REVIEW_LOADED):
+            self.assertEqual(200, self.post_json("/api/photos/1/composition-review", {})[0])
+        code, crops = self.get_json("/api/photos/1/crops")
+        self.assertEqual({"candidate_id": "crop-original", "rationale": "The original keeps useful context.",
+                          "confidence": 0.75}, crops["review"])
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertIsNone(library.latest_composition_review(1, ["nope"]))
+
     def test_composition_review_failure_is_json_and_preserves_active_crop(self):
         class BrokenTagger:
             model = "local-vision"
@@ -1099,6 +1152,26 @@ class WebTests(unittest.TestCase):
 
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertIsNone(library.develop_for(1), "a suggestion saves nothing")
+
+    def test_photo_payload_carries_the_last_develop_advice(self):
+        class Tagger:
+            model, role = "local-vision", "review"
+
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                return DevelopAdvice({"exposure_ev": 0.5}, "lift", '{"secret": 1}')
+
+        render = lambda source, destination, executable, **kwargs: (
+            Image.new("RGB", (64, 48), (90, 90, 90)).save(destination, format="JPEG"),
+            DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={},
+                          lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0))[1]
+        self.assertIsNone(self.get_json("/api/photos/1")[1]["advice"])
+        with patch("lumen.library.render_raw", side_effect=render), patch(
+                "lumen.library.OmlxTagger", return_value=Tagger()), patch(
+                "lumen.library.get_server_status", return_value=REVIEW_LOADED):
+            code, payload = self.post_json("/api/photos/1/develop/suggest", {"settings": {}, "feedback": None})
+        self.assertEqual(200, code, payload)
+        advice = self.get_json("/api/photos/1")[1]["advice"]
+        self.assertEqual({"settings": {"exposure_ev": 0.5}, "rationale": "lift"}, advice)
 
     def test_develop_suggest_failure_is_json_without_the_model_text(self):
         class BrokenTagger:
@@ -1266,10 +1339,9 @@ class WebTests(unittest.TestCase):
         self.assertEqual((["ice"], None), (vocab["blocked"], vocab["counts"].get("ice")))
         self.assertEqual(["bay"], self.get_json(f"/api/photos/{photo_id}")[1]["tags"]["data"]["subjects"])
 
-    def test_export_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
+    def test_assist_panel_has_keeper_tag_button_and_inspector_lists_keywords_with_add_remove(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
         self.assertIn('id="tag-keepers"', html)
-        self.assertIn('id="tag-keepers-availability"', html)
         js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
         self.assertIn("omlx_roles", js)
         self.assertIn("suggested-keywords", js)
@@ -1444,6 +1516,9 @@ class WebTests(unittest.TestCase):
     def test_javascript_astro_triage_excludes_only_after_confirmation_and_cue_is_text(self):
         self.run_javascript_cleanup_regression("astro-triage")
 
+    def test_javascript_advice_has_status_and_survives_leaving_the_frame(self):
+        self.run_javascript_cleanup_regression("advice-status")
+
     def test_javascript_burst_critique_shows_advice_and_only_use_this_pick_changes_the_pick(self):
         self.run_javascript_cleanup_regression("critique")
 
@@ -1597,11 +1672,12 @@ function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
 }
-const tabElements = ['ingest', 'import', 'review', 'astro', 'export', 'clear'].map(name => {
+const tabElements = ['add', 'review', 'assist', 'astro', 'export', 'clear'].map(name => {
   const tab = element('#' + name + '-tab');
   tab.id = name + '-tab';
   tab.setAttribute('aria-controls', name + '-panel');
-  tab.setAttribute('aria-selected', String(name === 'export'));
+  tab.setAttribute('aria-selected', String(name === 'add'));
+  element('#' + name + '-panel').hidden = name !== 'add';  // as the markup ships it
   return tab;
 });
 const frameTabElements = ['frame', 'crop', 'develop', 'exif'].map((name, index) => {
@@ -1616,6 +1692,8 @@ const presetRadios = ['full', 'share', 'web'].map((value, index) => Object.assig
 const webRadio = presetRadios[2];
 const recipes = ['tracked', 'untracked'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
 const nrModes = ['auto', 'off', 'manual'].map((value, index) => Object.assign(new Element(), { value, checked: index === 0 }));
+const addSources = ['ingest', 'import'].map(value => Object.assign(element('#add-source-' + value), { value, checked: value === 'import' }));
+element('#ingest-panel').hidden = true;  // as the markup ships it
 const document = {
   get activeElement() { return focused; },
   listeners: {},
@@ -1631,6 +1709,7 @@ const document = {
     if (selector === 'input[name="astro-recipe"]') return recipes;
     if (selector === 'input[name="export-preset"]') return presetRadios;
     if (selector === 'input[name="develop-nr-mode"]') return nrModes;
+    if (selector === 'input[name="add-source"]') return addSources;
     if (selector === '#astro-lights input') return element('#astro-lights').children.map(label => label.children[0]);
     if (selector === '[data-crop-action]') return [element('#primary-crops'), element('#alternative-crops')].flatMap(grid => grid.children.map(card => card.children.at(-1)));
     return byData(selector) || [];
@@ -1650,7 +1729,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -1668,7 +1747,7 @@ let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
-let groups = scenario === 'merge' || scenario === 'merge-batches' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'default-tab' ? [] : scenario === 'merge' || scenario === 'merge-batches' || scenario === 'rail-visibility' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
 if (scenario === 'export-watermark') Object.assign(stored, { 'lumen-watermark': '\u00a9 N. David', 'lumen-export-preset': 'web' });  // remembered from an earlier visit
 if (scenario === 'export-bad-preset') stored['lumen-export-preset'] = 'huge';
@@ -1774,7 +1853,7 @@ async function fetch(url, options = {}) {
   let ok = true;
   if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
   else if (url === '/api/status' && scenario === 'stale-server') payload = { omlx_live: { summary: 'Ready' }, stale: ['This server is running code older than the files on disk. Restart it with lumen serve, then reload this page.'], omlx_roles: { fast: { model: 'm', loaded: true }, review: { model: 'm', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
-  else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready' }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
+  else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready', online: true }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
     critiqueRequests.push([url, options.method]);
@@ -1910,6 +1989,7 @@ async function fetch(url, options = {}) {
   }
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
     develop: scenario === 'develop' && url.endsWith('/1') ? { exposure_ev: 0.5 } : null,
+    advice: scenario === 'advice-status' && url.endsWith('/1') ? { settings: { exposure_ev: 0.5 }, rationale: 'lift' } : null,
     photo: Object.assign({ format: 'ARW', offline: scenario === 'develop-offline' },
       (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null }),
@@ -1925,6 +2005,7 @@ async function fetch(url, options = {}) {
     if (deferCropLoads) return new Promise(resolve => pendingCropLoads.push(value => resolve({ ok: true, json: async () => value })));
     const id = Number(url.split('/')[3]);
     payload = { ...cropPayload(activeCrop?.photo_id && activeCrop.photo_id !== id ? null : activeCrop), photo_id: id };  // a drawn crop belongs to its own frame
+    if (scenario === 'advice-status') payload.review = { candidate_id: payload.candidates[0].id, rationale: 'tighter', confidence: 0.8 };
   }
   else if (/\/composition-review$/.test(url)) {
     compositionReviews.push(url);
@@ -2150,32 +2231,29 @@ const regression = `
     keeperOverride = 2;
     await load();
     const loaded = scenario === 'keywords';
-    assert.equal(element('#tag-keepers').textContent, 'Tag keepers with local AI (2 keepers)');
+    assert.equal(element('#tag-keepers').textContent, 'Tag keepers (2)');
     const state_ = loaded ? 'loaded' : 'not loaded';
-    assert.equal(element('#system-status').textContent, 'Ready · fast Qwen3-VL-8B-Instruct-4bit ' + state_ + ' · review Qwen3.8-27B-4bit ' + state_);
+    assert.equal(element('#system-status').textContent, 'Local AI online');
+    assert.equal(element('#ai-availability').textContent, loaded ? '' : 'Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX. Load it in oMLX, then reload this page.');
+    assert.equal(element('#frame-ai-availability').textContent, element('#ai-availability').textContent, 'the frame view repeats the one line');
     assert.equal(element('#system-status').getAttribute('data-stale'), undefined, 'a current server carries no warning');
     const aiTree = node => [node, ...(node.children || []).flatMap(aiTree)];
     if (!loaded) {
       assert.equal(element('#assist-keepers').disabled, true, 'the combined run waits for both models');
       for (const id of ['#tag-keepers', '#tag-all']) {
         assert.equal(element(id).disabled, true, id + ' waits for the fast model');
-        assert.ok(element(id + '-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX'));
       }
       await inspect(state.groups[0].photos[0]);
       const tagPhoto = aiTree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true');
       assert.equal(tagPhoto.disabled, true, 'the per-photo tag button waits for the fast model');
-      assert.ok(aiTree(element('#inspection')).some(node => node.id === 'tag-photo-availability' && node.textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded')));
+      assert.ok(!aiTree(element('#inspection')).some(node => node.id?.endsWith('-availability')), 'the frame-level line replaces per-block reasons');
       state.composition = { photo_id: state.selectedId };
       updateWorkflow();
       assert.equal(element('#ask-composition-ai').disabled, true, 'composition review waits for the review model');
-      assert.ok(element('#composition-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX'));
       return;
     }
     assert.equal(element('#tag-all').disabled, false);
-    assert.equal(element('#tag-all-availability').textContent, '');
-    assert.equal(element('#composition-availability').textContent, '');
     assert.equal(element('#tag-keepers').disabled, false);
-    assert.equal(element('#tag-keepers-availability').textContent, '');
     const loadsBefore = groupLoads;
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const list = id => tree(element('#inspection')).find(node => node.id === id);
@@ -2201,10 +2279,13 @@ const regression = `
     const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
     const tagging = tree(element('#inspection')).find(node => node.dataset?.tagPhoto === 'true').listeners.click();
     await new Promise(setImmediate);
-    assert.equal(control('reject').disabled, true, 'culling waits while the fast model holds the library');
+    assert.equal(state.busy, false, 'tagging one frame never sets busy');
+    assert.equal(control('reject').disabled, false, 'culling continues while the fast model answers');
+    assert.equal(tree(element('#inspection')).find(node => node.className === 'ai-task' && node.dataset.key === 'tag:1').textContent, 'Tags running…');
     pendingTags.shift()();
     await tagging;
     assert.equal(control('reject').disabled, false);
+    assert.equal(tree(element('#inspection')).find(node => node.className === 'ai-task' && node.dataset.key === 'tag:1').textContent, 'Tags ready');
     await element('#tag-keepers').listeners.click();
     assert.deepEqual(tagPosts, [{ scope: 'keepers' }]);
     assert.equal(element('#tag-keepers').disabled, true, 'one job at a time');
@@ -2288,16 +2369,52 @@ const regression = `
     await byId('save-caption').listeners.click();
     assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption/edit', body: { caption: 'Edited.', alt_text: 'Alt.' } });
     assert.ok(announcements.includes('Caption saved for photo-1.jpg'));
-    assert.equal(byId('ask-caption-ai').textContent, 'Write caption with local AI');
+    assert.equal(byId('ask-caption-ai').textContent, 'Draft a caption');
     assert.equal(byId('ask-caption-ai').disabled, false);
     await byId('ask-caption-ai').listeners.click();
     assert.deepEqual(captionPosts.at(-1), { url: '/api/photos/1/caption', body: {} });
     assert.deepEqual([caption.value, alt.value], ['Drafted.', 'Drafted alt.']);
     state.status.omlx_roles.review.loaded = false;
+    updateWorkflow();  // as a status refresh does
     renderInspector(state.groups[0].photos[0]);
     assert.equal(byId('ask-caption-ai').disabled, true);
-    assert.equal(byId('ask-caption-ai').getAttribute('aria-describedby'), 'caption-ai-availability');
-    assert.ok(byId('caption-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
+    assert.equal(byId('ask-caption-ai').getAttribute('aria-describedby'), 'frame-ai-availability');
+    assert.ok(byId('ask-caption-ai').className.split(' ').includes('ai'));
+    assert.ok(element('#frame-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'), 'the reason is said once, at the top of the frame panel');
+    return;
+  }
+  if (scenario === 'advice-status') {
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const byId = id => tree(element('#inspection')).find(node => node.id === id);
+    const control = value => tree(element('#inspection')).find(node => node.dataset?.decisionControl === value);
+    const taskLine = () => tree(byId('burst-critique')).find(node => node.className === 'ai-task');
+    const firstCandidateId = cropPayload().candidates[0].id;
+    const resolveCritique = () => pendingCritiques.shift()();  // the fake answers { ...storedCritique, rationale: 'Fresh look.' }
+    deferCritique = true;
+    await inspect(photoById(1));
+    const ask = byId('ask-burst-ai');
+    const pending = ask.listeners.click();  // not awaited: the model is "thinking"
+    assert.equal(state.busy, false, 'advice never sets busy');
+    assert.equal(taskLine().textContent, 'Burst pick running…');
+    assert.equal(control('reject').disabled, false, 'culling stays enabled');
+    await inspect(photoById(2));  // walk away
+    assert.equal(byId('ask-burst-ai').disabled, true, 'a re-rendered ask stays disabled while the model is running');
+    resolveCritique({ ...storedCritique, rationale: 'Fresh look.' });
+    await pending;
+    await inspect(photoById(1));  // come back
+    assert.ok(byId('burst-advice').textContent.includes('Fresh look.'));
+    assert.equal(taskLine().textContent, 'Burst pick ready');
+    assert.equal(byId('ask-burst-ai').disabled, false);
+    await loadComposition();
+    assert.equal(state.recommendedCropId, firstCandidateId, 'stored crop review is applied on load');
+    assert.ok(element('#composition-advice').textContent.includes('tighter'));
+    fillDevelop(photoById(1));
+    assert.equal(element('#develop-advice').textContent, 'lift');
+    assert.equal(element('#develop-use-advice').hidden, false);
+    await element('#develop-use-advice').listeners.click();
+    assert.equal(state.develop.fields.exposure_ev, 0.5);
+    assert.equal(element('#develop-use-advice').hidden, true, 'a parked suggestion hides the button');
     return;
   }
   if (scenario === 'critique') {
@@ -2306,7 +2423,7 @@ const regression = `
     const byId = id => tree(element('#inspection')).find(node => node.id === id);
     await inspect(state.groups[0].photos[0]);
     assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Best timing. (confidence 72%)');
-    assert.equal(byId('ask-burst-ai').textContent, 'Ask local AI which frame is best');
+    assert.equal(byId('ask-burst-ai').textContent, 'Pick the best frame');
     assert.equal(byId('ask-burst-ai').disabled, false);
     assert.deepEqual(picks, [], 'rendering stored advice never changes the pick');
     await inspect(state.groups[0].photos[1]);
@@ -2315,7 +2432,8 @@ const regression = `
     deferCritique = true;
     const asking = byId('ask-burst-ai').listeners.click();
     await new Promise(setImmediate);
-    assert.equal(control('reject').disabled, true, 'culling waits while the review model holds the library');
+    assert.equal(state.busy, false, 'a burst critique never sets busy');
+    assert.equal(control('reject').disabled, false, 'culling continues while the review model answers');
     assert.deepEqual([byId('ask-burst-ai').getAttribute('aria-busy'), byId('ask-burst-ai').textContent], ['true', 'Asking local AI…'], 'the button shows the wait where the status bar is hidden');
     pendingCritiques.shift()();
     await asking;
@@ -2346,13 +2464,14 @@ const regression = `
     state.status.omlx_roles.review.loaded = false;
     renderInspector(state.groups[0].photos[1]);
     assert.equal(byId('ask-burst-ai').disabled, true);
-    assert.ok(byId('burst-ai-availability').textContent.startsWith('Review model Qwen3.8-27B-4bit is not loaded in oMLX.'));
-    assert.equal(byId('ask-burst-ai').getAttribute('aria-describedby'), 'burst-ai-availability');
+    assert.equal(byId('burst-ai-availability'), undefined, 'the frame-level line replaces the per-block reason');
+    assert.equal(byId('ask-burst-ai').getAttribute('aria-describedby'), 'frame-ai-availability');
+    assert.ok(byId('ask-burst-ai').className.split(' ').includes('ai'));
     return;
   }
   if (scenario === 'vocabulary') {
     await load();
-    element('#review-tab').listeners.click();
+    element('#assist-tab').listeners.click();
     await new Promise(setImmediate);
     const rows = () => element('#vocabulary-list').children;
     assert.equal(rows().length, 2);
@@ -2388,7 +2507,6 @@ const regression = `
     assert.equal(rows()[0].children[0].loading, 'lazy');
     assert.equal(rows()[0].children[1].children[1].textContent, 'motion blur 84%, eyes closed 61%');
     assert.equal(element('#scan-rejects').disabled, false, 'the fast role is loaded');
-    assert.equal(element('#scan-rejects-availability').textContent, '');
     const typing = { key: 'x', target: Object.assign(document.createElement('input'), { parent: rows()[0] }), preventDefault() {} };
     await element('#reject-list').listeners.keydown(typing);
     assert.deepEqual(rejectPosts, [], 'X typed in a field is ignored');
@@ -2617,7 +2735,8 @@ const regression = `
     return;
   }
   if (scenario === 'frame-view') {
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'a remembered Compose tab falls back to Export');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true', 'a remembered Compose tab falls back to Add photos');
+    element('#loupe-export-options').hidden = false;  // as the markup ships it
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     let prevented = 0;
@@ -2657,6 +2776,13 @@ const regression = `
     assert.deepEqual(photoDetailRequests, ['/api/photos/1', '/api/photos/2']);
     assert.deepEqual(cropRequests, ['/api/photos/1/crops', '/api/photos/2/crops']);
     assert.equal(element('#loupe-heading').textContent, 'photo-2.jpg');
+    assert.equal(element('#loupe-export-options').hidden, false, 'the export options show on the Frame tab');
+    const inspected = tree(element('#inspection'));
+    const chooseBest = inspected.find(node => node.textContent === 'Choose as best');
+    const tagFrame = inspected.find(node => node.textContent === 'Tag this frame');
+    assert.ok(!chooseBest.className.split(' ').includes('secondary'), 'Choose as best is the primary action');
+    assert.deepEqual(['secondary', 'ai'].map(name => tagFrame.className.split(' ').includes(name)), [true, true], 'tagging is a secondary AI action');
+    assert.equal(tagFrame.getAttribute('aria-describedby'), 'frame-ai-availability');
     const exportButton = Object.assign(element('#loupe-export'), { tagName: 'BUTTON' });
     before = prevented;
     await key('Enter', exportButton, loupe);
@@ -2671,6 +2797,7 @@ const regression = `
     assert.deepEqual(exportPosts.at(-1), { scope: 'current', profile: null, preset: 'full', photo_id: 2 });
     assert.ok(element('#export-status').textContent.startsWith('Full resolution export complete: 1 saved'));
     assert.equal(element('#compose-status').textContent, element('#export-status').textContent, 'the export result shows in the frame view');
+    assert.equal(element('#announcer').textContent, element('#export-status').textContent, 'a Frame-tab export announces its result, since the Crop tab status is not on screen');
     await key('Escape', viewport, loupe);
     assert.equal(loupe.hidden, true);
     assert.equal(focused, card(2), 'closing returns focus to the frame last shown');
@@ -2704,7 +2831,7 @@ const regression = `
     return;
   }
   if (scenario === 'frame-tabs') {
-    element('#loupe-export-options').hidden = true;  // as the markup ships it
+    element('#loupe-export-options').hidden = false;  // as the markup ships it
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
@@ -2715,11 +2842,11 @@ const regression = `
     assert.equal(frameTab.getAttribute('aria-selected'), 'true', 'the frame view opens on Frame by default');
     assert.ok(!element('#frame-panel').hidden);
     const exportOptions = element('#loupe-export-options');
-    assert.equal(exportOptions.hidden, true, 'export options sit with the export buttons, which Frame lacks');
+    assert.equal(exportOptions.hidden, false, 'the one export button and its options serve every tab');
     assert.ok(!element('#inspection').children.some(node => node.tagName === 'H3' && node.textContent === 'photo-1.jpg'), 'the dialog heading carries the name, not the inspector');
     cropTab.listeners.click();
     assert.equal(cropTab.getAttribute('aria-selected'), 'true');
-    assert.equal(exportOptions.hidden, false, 'Crop exports this frame');
+    assert.equal(exportOptions.hidden, false, 'Crop keeps the export options');
     assert.equal(frameTab.getAttribute('aria-selected'), 'false');
     assert.equal(cropTab.tabIndex, 0);
     assert.equal(frameTab.tabIndex, -1);
@@ -2733,14 +2860,14 @@ const regression = `
     await key('End', frameTab, frameTab);
     assert.equal(exifTab.getAttribute('aria-selected'), 'true', 'End selects the last tab, EXIF');
     assert.equal(focused, exifTab);
-    assert.equal(exportOptions.hidden, true, 'EXIF exports nothing');
+    assert.equal(exportOptions.hidden, false, 'EXIF still offers the export');
     await new Promise(setImmediate);
     assert.deepEqual(exifRequests, ['/api/photos/1/exif'], 'EXIF is read when its tab opens');
     assert.deepEqual(element('#exif-fields').children.map(node => [node.tagName, node.textContent]), [['DT', 'Camera'], ['DD', 'ILCE-7CM2'], ['DT', 'ISO'], ['DD', '100']]);
     assert.equal(element('#exif-status').textContent, '');
     await key('ArrowLeft', exifTab, exifTab);
     assert.equal(developTabButton.getAttribute('aria-selected'), 'true', 'Develop sits just before EXIF');
-    assert.equal(exportOptions.hidden, false, 'Develop exports this frame');
+    assert.equal(exportOptions.hidden, false, 'Develop keeps the export options');
     await key('Home', developTabButton, developTabButton);
     assert.equal(frameTab.getAttribute('aria-selected'), 'true');
     await key('ArrowRight', frameTab, frameTab);
@@ -3019,7 +3146,7 @@ const regression = `
     dated.checked = false;
     dated.listeners.change();
     assert.equal(element('#export-dated-folder').checked, false, 'the dated-folder boxes stay in step');
-    await element('#develop-export').listeners.click();
+    await element('#loupe-export').listeners.click();
     await flush();
     assert.equal(exportPosts.at(-1).dated_folder, false, 'unchecking it exports loose into the JPEG folder');
     dated.checked = true;
@@ -3380,7 +3507,7 @@ const regression = `
     state.status.omlx_roles.fast.loaded = false;
     updateWorkflow();
     assert.equal(button.disabled, true);
-    assert.ok(element('#expand-search-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX.'));
+    assert.ok(element('#ai-availability').textContent.startsWith('Fast model Qwen3-VL-8B-Instruct-4bit is not loaded in oMLX.'));
     return;
   }
   if (scenario === 'find') {
@@ -3638,7 +3765,12 @@ const regression = `
   }
   if (scenario === 'ingest') {
     await load();
-    element('#ingest-tab').listeners.click();
+    element('#add-tab').listeners.click();
+    element('#add-source-ingest').checked = true; element('#add-source-import').checked = false;
+    element('#add-source-ingest').listeners.change();
+    assert.equal(element('#ingest-panel').hidden, false, 'the ingest radio shows its section');
+    assert.equal(element('#import-panel').hidden, true);
+    assert.equal(stored['lumen-add-source'], 'ingest', 'the source is remembered');
     assert.equal(element('#start-ingest').disabled, true, 'a card and a primary destination are required');
     await element('#browse-ingest-card').listeners.click();
     assert.equal(element('#ingest-card-path').textContent, '/Volumes/CARD');
@@ -3686,10 +3818,10 @@ const regression = `
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const cue = tree(element('#contact-sheet')).find(node => node.className === 'astro-cue');
     assert.equal(cue?.textContent, 'Looks like astro', 'the cue is text in the burst header');
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true', 'the cue never switches the tab');
     await inspect(state.groups[0].photos[0]);
     await new Promise(setImmediate);
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true', 'selecting an astro-looking burst keeps the tab');
     assert.deepEqual(triageRequests, ['/api/groups/1/triage']);
     const lights = document.querySelectorAll('#astro-lights input');
     const triageTexts = element('#astro-lights').children.map(label => label.children[2].textContent);
@@ -3709,7 +3841,7 @@ const regression = `
     assert.deepEqual(astroLights().excluded, [2]);
     assert.equal(element('#announcer').textContent, '1 light excluded');
     assert.equal(element('#exclude-flagged').textContent, 'Exclude flagged lights (0)');
-    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true');
     return;
   }
   if (scenario === 'resume') {
@@ -3973,8 +4105,27 @@ const regression = `
     return;
   }
   if (scenario === 'tabs-remembered') {
+    await new Promise(setImmediate);  // the startup load
     assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'a remembered tab is selected at startup');
     assert.equal(element('#review-panel').hidden, true);
+    assert.notEqual(element('#workflow-panels').hidden, true, 'a remembered tab wins over the folded default');
+    assert.deepEqual([element('#ingest-panel').hidden, element('#import-panel').hidden, element('#add-source-ingest').checked], [false, true, true], 'the remembered source is restored');
+    return;
+  }
+  if (scenario === 'default-tab' || scenario === 'default-tab-frames') {
+    await new Promise(setImmediate);  // the startup load
+    assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true');
+    assert.equal(stored['lumen-tab'], undefined, 'the default is not remembered as a choice');
+    if (scenario === 'default-tab') {
+      assert.equal(element('#workflow-panels').hidden, false, 'an empty catalog opens Add photos');
+      assert.equal(element('#add-panel').hidden, false);
+    } else {
+      assert.equal(element('#workflow-panels').hidden, true, 'a catalog with frames opens folded on the sheet');
+    }
+    await load();
+    element('#workflow-panels').hidden = false;
+    await load();
+    assert.equal(element('#workflow-panels').hidden, false, 'only the first load chooses');
     return;
   }
   if (scenario === 'keep-only') {
@@ -4046,13 +4197,21 @@ const regression = `
     assert.equal(state.selectedGroupId, 2);
     return;
   }
+  if (scenario === 'status-health') {
+    darktableReady = false;
+    await load();
+    const line = element('#system-status').textContent;
+    assert.equal(line, 'Local AI online · darktable-cli missing');
+    assert.ok(!line.includes('Qwen'), 'the header names no model');
+    return;
+  }
   if (scenario === 'stale-server') {
     await load();
     const line = element('#system-status');
     // Ahead of the tool summary: nothing else on this line can be acted on until the server
     // is restarted, and the failure it causes looks like anything but a stale server.
     assert.ok(line.textContent.startsWith('This server is running code older than the files on disk.'), line.textContent);
-    assert.ok(line.textContent.includes('Ready'), 'the tool summary is still there');
+    assert.ok(line.textContent.endsWith('Local AI offline'), 'the health summary is still there');
     assert.equal(line.getAttribute('data-stale'), '', 'and it is marked so it reads as a warning');
     assert.equal(document.querySelectorAll('.frame').length, 2, 'the sheet still renders');
     return;
@@ -4060,7 +4219,7 @@ const regression = `
   if (scenario === 'status-skew') {
     await load();
     assert.equal(document.querySelectorAll('.frame').length, 2, 'the sheet renders even when the status payload lacks the AI role block');
-    assert.ok(element('#system-status').textContent.includes('Ready'), element('#system-status').textContent);
+    assert.ok(element('#system-status').textContent.startsWith('Local AI offline · '), element('#system-status').textContent);
     assert.ok(element('#system-status').textContent.toLowerCase().includes('restart'), 'the status line says the server is older than the page');
     assert.equal(element('#tag-all').disabled, true, 'AI controls stay disabled without role status');
     return;
@@ -4090,7 +4249,7 @@ const regression = `
     keeperOverride = 2;
     await load();
     const button = element('#assist-keepers');
-    assert.equal(button.textContent, 'Run all local AI on keepers (2 keepers)');
+    assert.equal(button.textContent, 'Tag, scan and caption keepers (2)');
     assert.equal(button.disabled, false);
     await button.listeners.click();
     assert.deepEqual(assistPosts, [{ scope: 'keepers' }]);
@@ -4111,8 +4270,10 @@ const regression = `
   }
   if (scenario === 'import-tab') {
     await load();
-    element('#import-tab').listeners.click();
-    assert.equal(element('#import-panel').hidden, false, 'the Import tab shows its panel');
+    element('#add-tab').listeners.click();
+    element('#add-source-import').checked = true; element('#add-source-ingest').checked = false;
+    element('#add-source-import').listeners.change();
+    assert.equal(element('#import-panel').hidden, false, 'the import radio shows its section');
     assert.equal(element('#ingest-panel').hidden, true);
     element('#import-path').value = '/Volumes/Card';
     await element('#import-form').listeners.submit({ preventDefault() {}, currentTarget: element('#import-form') });
@@ -4326,7 +4487,7 @@ const regression = `
     assert.deepEqual(scrolled.at(-1), [element('#main-content'), { top: 0, behavior: 'auto' }]);
     assert.ok(element('#announcer').textContent.includes('workflow tabs'));
 
-    const exportTab = element('#export-tab');
+    const exportTab = element('#add-tab');  // the open tab
     element('#workflow-panels').hidden = false;
     exportTab.listeners.click();
     assert.equal(element('#workflow-panels').hidden, true, 'clicking the open tab folds the panel away');
@@ -4371,6 +4532,29 @@ const regression = `
     watchJob(importJob('running', 0.5)); watchJob(importJob('succeeded', 1, { result: { discovered: 1, imported: 1, updated: 0, skipped: 0, failed: 0 } }));
     await new Promise(setImmediate);
     assert.equal(clearedLoads, 3, 'other tabs do not count');
+    return;
+  }
+  if (scenario === 'rail-visibility') {
+    await load();
+    assert.equal(state.selectedGroupId, null);
+    assert.equal(element('#merge-count').hidden, true, 'nothing ticked: no merge count');
+    assert.equal(element('#merge-batches').hidden, true, 'nothing ticked: no merge button');
+    assert.equal(element('#jump-selected').hidden, true, 'no burst selected: no jump');
+    assert.ok(!element('#back-to-top').hidden, 'Back to top always applies');
+    assert.equal(element('#open-compare').hidden, true, 'nothing marked: no compare');
+    const boxes = document.querySelectorAll('.batch-select');
+    boxes[0].checked = true; boxes[0].listeners.change();
+    assert.equal(element('#merge-count').hidden, false);
+    assert.equal(element('#merge-batches').hidden, false, 'one ticked batch shows the merge button');
+    assert.equal(element('#merge-batches').disabled, true, 'but one batch is not a merge');
+    await document.querySelectorAll('.batch-button')[1].listeners.click();
+    assert.equal(element('#jump-selected').hidden, false, 'a selected burst shows Jump to selected');
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    await element('#contact-sheet').listeners.keydown({ key: 'c', metaKey: false, ctrlKey: false, altKey: false, target: card(state.selectedId), preventDefault() {}, stopPropagation() {} });
+    assert.equal(element('#open-compare').hidden, false, 'a marked frame shows Compare marked');
+    assert.equal(element('#open-compare').disabled, true, 'one marked frame cannot be compared');
+    boxes[0].checked = false; boxes[0].listeners.change();
+    assert.equal(element('#merge-batches').hidden, true, 'unticking hides it again');
     return;
   }
   if (scenario === 'merge-batches') {
@@ -4530,7 +4714,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         for name in ("filter-from", "filter-to", "filter-camera", "filter-tagged"):
             self.assertIn(rows[1], by_id[name]["parents"], f"{name} sits on the second row")
         heading = by_id["contact-heading"]["parents"][-1]
-        for name in ("tile-size", "refine-scope", "refine-previews", "open-compare", "shortcuts-button"):
+        for name in ("tile-size", "open-compare", "shortcuts-button"):
             self.assertIn(heading, by_id[name]["parents"], f"{name} sits in the heading row, apart from the filters")
         self.assertFalse(any(node["tag"] in {"details", "summary"} and form in node["parents"] for node in parser.nodes), "no folded section")
         self.assertFalse(any(node["tag"] == "button" and node["attrs"].get("type") == "submit" and form in node["parents"] for node in parser.nodes), "no Apply button")
@@ -4593,6 +4777,42 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertRegex(styles, r"#loupe\[open\] \{[^}]*grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\)")  # the viewport keeps two thirds
         self.run_javascript_cleanup_regression("frame-view")
 
+    def test_ai_buttons_share_grammar_and_one_availability_line(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        labels = {
+            "assist-keepers": "Tag, scan and caption keepers", "tag-keepers": "Tag keepers",
+            "tag-all": "Tag every untagged frame", "scan-rejects": "Scan keepers for problems",
+            "triage-astro": "Triage lights", "expand-search": "Expand search",
+            "ask-composition-ai": "Suggest a crop", "develop-ask": "Suggest settings",
+            "write-digest": "Write today's digest",
+        }
+        for name, label in labels.items():
+            node = by_id[name]
+            self.assertIn("ai", node["attrs"].get("class", "").split(), name)
+            line = "frame-ai-availability" if by_id["loupe"] in node["parents"] else "ai-availability"
+            self.assertEqual(line, node["attrs"].get("aria-describedby"), name)
+            self.assertEqual(label, " ".join(node["text"].split()).partition(" (")[0], name)
+        self.assertEqual("Tag keepers (0)", by_id["tag-keepers"]["text"].strip(), "the count is the bare number")
+        lines = {name for name in by_id if name.endswith("-availability")}
+        self.assertEqual({"ai-availability", "frame-ai-availability", "export-availability", "refine-availability", "astro-availability"}, lines)
+        panel = next(node for node in parser.nodes if "frame-panel" in node["attrs"].get("class", "").split())
+        first = next(node for node in parser.nodes if node["parents"] and node["parents"][-1] is panel)
+        self.assertEqual("frame-ai-availability", first["attrs"].get("id"), "the not-loaded line leads the frame panel")
+        self.assertNotIn("develop-export", by_id)
+        self.assertEqual(1, html.count('id="loupe-export"'))
+        export = by_id["loupe-export"]
+        self.assertIn(by_id["loupe"], export["parents"])
+        for tab_panel in ("frame-panel", "crop-panel", "develop-panel", "exif-panel"):
+            self.assertNotIn(by_id[tab_panel], export["parents"], "the export sits in the dialog footer, under every tab")
+        self.assertGreater(parser.nodes.index(export), parser.nodes.index(by_id["exif-panel"]))
+        self.assertNotIn("hidden", by_id["loupe-export-options"]["attrs"], "the options show on every frame tab")
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertIn('button.ai::before { content: "\u2726 "; color: var(--cyan); }', styles)
+        self.assertIn("button.ai:not(.secondary)::before { color: var(--black); }", styles)
+
     def test_javascript_frame_view_ignores_stale_frame_responses(self):
         self.run_javascript_cleanup_regression("frame-view-race")
 
@@ -4624,7 +4844,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         # The suggestion panel is not a develop control, so it sits above them all rather than in
         # their order: it is where a photographer who cannot read the histogram yet starts.
         self.assertEqual(["Where to start", "Brightness", "White Balance", "Contrast", "Sharpness",
-                          "Lens Correction", "Noise Reduction"], summaries, "IEDT's order, after the suggestion")
+                          "Lens Correction", "Noise Reduction", "How this works"], summaries, "IEDT's order, after the suggestion")
         # Every flag in DEVELOP_FLAGS needs a control, or the server accepts a setting the
         # panel cannot reach.
         for flag in DEVELOP_FLAGS:
@@ -4636,7 +4856,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(["auto", "off", "manual"], modes, "auto first: it is what an untouched frame is")
         self.assertIn(by_id["export-controls"], by_id["export-keep-original"]["parents"])
         self.assertIn(by_id["loupe"], by_id["loupe-keep-original"]["parents"])
-        self.assertNotIn(by_id["develop-panel"], by_id["loupe-keep-original"]["parents"])  # both frame-view exports honour it, so both tabs show it
+        self.assertNotIn(by_id["develop-panel"], by_id["loupe-keep-original"]["parents"])  # the frame view's one export honours it, so the dialog footer shows it
         for name in ("export-keep-original", "loupe-keep-original"):
             self.assertEqual("checkbox", by_id[name]["attrs"]["type"])
             label = next(node for node in parser.nodes if node["tag"] == "label" and node["attrs"].get("for") == name)
@@ -4666,9 +4886,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn(by_id["loupe"], tablist["parents"])
         for tab, panel, selected, contents in (
             ("frame-tab", "frame-panel", "true", ["inspection"]),
-            ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai", "loupe-export"]),
+            ("crop-tab", "crop-panel", "false", ["crop-lock", "primary-crops", "ask-composition-ai"]),
             ("develop-tab", "develop-panel", "false", ["develop-curve", "develop-curve-reset", "develop-exposure_ev", "develop-exposure_ev-value",
-                                                       "develop-exposure_ev-reset", "develop-reset-all", "develop-apply-group", "develop-export"]),
+                                                       "develop-exposure_ev-reset", "develop-reset-all", "develop-apply-group"]),
             ("exif-tab", "exif-panel", "false", ["exif-fields", "exif-status"]),
         ):
             self.assertIn(tablist, by_id[tab]["parents"])
@@ -4680,7 +4900,6 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertIn('<label for="crop-lock">Crop lock</label>', html, "the label matches the README")
         self.assertNotIn(by_id["crop-panel"], by_id["close-loupe"]["parents"])
         self.assertNotIn(by_id["frame-panel"], by_id["close-loupe"]["parents"])
-        self.assertIn("hidden", by_id["loupe-export-options"]["attrs"], "the Frame tab opens without export options")
         for name in ("loupe-keep-original", "loupe-dated-folder"):
             self.assertIn(by_id["loupe-export-options"], by_id[name]["parents"])
         self.run_javascript_cleanup_regression("frame-tabs")
@@ -4725,6 +4944,62 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
         self.assertRegex(styles, r"\.loupe-viewport\s*\{[^}]*overflow:\s*auto")
         self.assertRegex(styles, r"@media \(max-width: 680px\)\s*\{[^@]*\.compare-grid\s*\{\s*grid-template-columns:\s*1fr")
+
+    def test_panels_lead_with_one_line_and_fold_the_rest(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        leads = {
+            "add-panel": "Copy a memory card with verification, or add photos already on a drive. Originals are never moved, renamed or changed.",
+            "review-panel": "The fast model looks for technical failures in keepers. Nothing is rejected until you choose Reject.",
+            "assist-panel": "Tags, a problem scan and a caption for every keeper that lacks them. Already finished work is skipped.",
+            "astro-panel": "Stacks the selected batch with one reviewed Siril script. Camera originals are never changed.",
+            "export-panel": "sRGB JPEGs with camera EXIF, caption, keywords and rating. Only Full resolution keeps GPS.",
+            "clear-panel": "Camera originals and finished exports remain. Working files move to recoverable library trash.",
+        }
+        def children(parent):
+            return [node for node in parser.nodes if node["parents"] and node["parents"][-1] is parent]
+        def how(parent):
+            return [node for node in children(parent) if node["tag"] == "details" and node["attrs"].get("class") == "how"]
+        for panel_id, line in leads.items():
+            with self.subTest(panel=panel_id):
+                panel = by_id[panel_id]
+                kids = children(panel)
+                self.assertEqual(["h2", "p"], [node["tag"] for node in kids[:2]], "the heading, then the one line")
+                self.assertEqual(("lead", line), (kids[1]["attrs"].get("class"), " ".join(kids[1]["text"].split())))
+                # Review's old paragraph became its lead and a Shortcuts row, so nothing is left to fold.
+                # Add photos folds inside each of its two sources instead, beside that source's controls.
+                expected = 0 if panel_id in ("review-panel", "add-panel") else 1
+                folds = how(panel)
+                self.assertEqual(expected, len(folds))
+                if folds:
+                    self.assertIs(kids[2], folds[0], "the fold sits right under the line")
+        for section in ("ingest-panel", "import-panel"):
+            folds = how(by_id[section])
+            self.assertEqual(1, len(folds), section)
+            self.assertIs(children(by_id[section])[1], folds[0], "under the section's heading")
+        for fold in (node for node in parser.nodes if node["attrs"].get("class") == "how"):
+            summary = children(fold)[0]
+            self.assertEqual(("summary", "How this works"), (summary["tag"], summary["text"].strip()))
+        self.assertFalse([node for node in parser.nodes if "terms" in node["attrs"].get("class", "").split()], "the glossary is gone")
+        develop = [node for node in parser.nodes if node["attrs"].get("class") == "how" and by_id["develop-panel"] in node["parents"]]
+        self.assertEqual(1, len(develop), "one fold for the Develop panel's explanations")
+        text = " ".join(develop[0]["text"].split())
+        for sentence in ("A spike at either edge is clipping.", "Nothing is saved until you leave the tab",
+                         "frame's own neutral", "Sharpness is the decoder's own", "Auto leaves the file's own baseline alone.",
+                         "Apply gives every other frame in this burst"):
+            self.assertIn(sentence, text)
+        self.assertNotIn("nudge it with the arrow keys", html)
+        self.assertNotIn("to move between rows", html)
+        legend = [node for node in parser.nodes if by_id["shortcuts"] in node["parents"]]
+        rows = [(" ".join(node["text"].split())) for node in legend if node["tag"] in ("dt", "dd")]
+        for row in ("X K ↑ ↓", "In Review, with a row's button focused: reject, keep, previous or next row",
+                    "↑ ↓ ← → on a curve point", "Nudge the tone curve point"):
+            self.assertIn(row, rows)
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\.lead \{[^}]*color: var\(--muted\)")
+        self.assertRegex(styles, r"\.how summary[^{]*\{[^}]*min-height: 44px")
 
     def test_index_has_shortcuts_button_and_readable_legend_without_reserved_modifiers(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
@@ -4879,9 +5154,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertTrue(any(node["tag"] == "legend" and node["text"].strip() == "Show" for node in parser.nodes if by_id["filter-status"] in node["parents"]))
         self.assertEqual(["0", "1", "2", "3", "4", "5"], options("filter-rating"))
         buttons = {node["text"].strip(): node["attrs"].get("type") for node in parser.nodes if node["tag"] == "button" and form in node["parents"]}
-        self.assertEqual({"Reset": "button", "Expand with local AI": "button"}, buttons)
-        self.assertEqual("expand-search-availability", by_id["expand-search"]["attrs"].get("aria-describedby"))
-        self.assertIn(form, by_id["expand-search-availability"]["parents"])
+        self.assertEqual({"Reset": "button", "Expand search": "button"}, buttons)
+        self.assertEqual("ai-availability", by_id["expand-search"]["attrs"].get("aria-describedby"))
         more = by_id["show-more"]
         self.assertEqual(("button", "button"), (more["tag"], more["attrs"].get("type")))
         self.assertIn("hidden", more["attrs"])
@@ -4929,6 +5203,31 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_batch_rail_merges_selected_batches(self):
         self.run_javascript_cleanup_regression("merge-batches")
+
+    def test_javascript_rail_and_heading_controls_appear_only_when_they_apply(self):
+        self.run_javascript_cleanup_regression("rail-visibility")
+
+    def test_refine_previews_fold_under_the_filter_bar(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        fold = by_id["refine-fold"]
+        self.assertEqual("details", fold["tag"])
+        summary = next(node for node in parser.nodes if node["tag"] == "summary" and node["parents"][-1] is fold)
+        self.assertEqual("Refine previews", summary["text"].strip())
+        top = next(node for node in parser.nodes if "contact-top" in node["attrs"].get("class", "").split())
+        self.assertIs(top, fold["parents"][-1])
+        self.assertIs(top, by_id["filter-form"]["parents"][-1])
+        order = [node["attrs"].get("id") for node in parser.nodes if node["parents"] and node["parents"][-1] is top]
+        self.assertEqual(order.index("filter-form") + 1, order.index("refine-fold"), "the fold sits directly after the filter bar")
+        for name in ("refine-scope", "refine-previews", "refine-availability", "refine-status"):
+            self.assertIn(fold, by_id[name]["parents"], name)
+        view = next(node for node in parser.nodes if node["attrs"].get("class") == "view-controls")
+        self.assertEqual(["tile-size"], [node["attrs"]["id"] for node in parser.nodes if view in node["parents"] and node["tag"] in ("select", "button")])
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"#refine-fold summary[^{]*\{[^}]*min-height: 44px")
+        self.assertRegex(styles, r"\.rail-header button \{ width: 100%; \}")
 
     def test_javascript_cleanup_selection_follows_photo_after_group_refresh(self):
         for scenario in ("split", "merge", "missing"):
@@ -5058,6 +5357,11 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             self.assertIn(kind[:-1], browse["text"].lower())
             self.assertEqual("path", by_id[f"astro-{kind}-path"]["attrs"].get("class"))
             self.assertTrue(by_id[f"astro-{kind}-path"]["attrs"].get("aria-labelledby"))
+            row = browse["parents"][-1]
+            self.assertEqual(("div", "calibration-row"), (row["tag"], row["attrs"].get("class")), kind)
+            children = [node["attrs"].get("id") for node in parser.nodes if node["parents"] and node["parents"][-1] is row]
+            self.assertEqual([f"astro-{kind}-label", f"astro-{kind}-path", f"browse-astro-{kind}", f"reset-astro-{kind}"], children)
+        self.assertEqual(3, sum(node["attrs"].get("class") == "calibration-row" for node in parser.nodes))
         for name in ("prepare-astro", "run-astro", "cancel-astro", "reveal-astro"):
             self.assertEqual("button", by_id[name]["tag"])
             self.assertIn(panel, by_id[name]["parents"])
@@ -5116,29 +5420,31 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_assist_button_runs_one_job_over_keepers(self):
         self.run_javascript_cleanup_regression("assist")
 
-    def test_javascript_import_is_a_tab_beside_ingest(self):
+    def test_javascript_import_is_a_source_beside_ingest(self):
         self.run_javascript_cleanup_regression("import-tab")
 
     def test_javascript_import_sends_include_cleared_only_when_ticked(self):
         self.run_javascript_cleanup_regression("import-cleared")
 
-    def test_import_tab_and_export_tab_own_the_import_and_tag_controls(self):
+    def test_add_photos_tab_and_assist_tab_own_the_import_and_tag_controls(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         panel = by_id["import-panel"]
-        self.assertEqual(("tabpanel", "import-tab"), (panel["attrs"].get("role"), panel["attrs"].get("aria-labelledby")))
-        self.assertIn(panel, by_id["import-form"]["parents"], "the import form lives in the Import tab")
+        self.assertIn(by_id["add-panel"], panel["parents"], "Import is one source in the Add photos tab")
+        self.assertIn(panel, by_id["import-form"]["parents"], "the import form lives in the Import section")
         self.assertNotIn("import-dialog", by_id)
         self.assertNotIn("open-import", by_id, "the Import… button gave way to the tab")
+        fold = next(node for node in parser.nodes if node["tag"] == "details" and node["parents"][-1] is panel)
+        self.assertEqual("how", fold["attrs"].get("class"), "the explanation folds under How this works")
         for text in ("Nothing is copied, moved, or renamed", "Use Ingest first"):
-            self.assertIn(text, " ".join(panel["text"].split()))
+            self.assertIn(text, " ".join(fold["text"].split()))
         for text in ('<label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>',
                      "Frames you removed or cleared before are skipped unless ticked."):
             self.assertIn(text, html)
         for name in ("tag-all", "retag-all"):
-            self.assertIn(by_id["export-panel"], by_id[name]["parents"], f"{name} moved into the Export tab")
+            self.assertIn(by_id["assist-panel"], by_id[name]["parents"], f"{name} moved into the Assist tab")
 
     def test_javascript_network_failure_names_the_server_not_the_browser(self):
         self.run_javascript_cleanup_regression("network-error")
@@ -5211,6 +5517,10 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_choosing_a_tab_scrolls_its_panel_into_view(self):
         self.run_javascript_cleanup_regression("tabs")
         self.run_javascript_cleanup_regression("tabs-remembered")
+
+    def test_javascript_default_tab_follows_the_catalog_on_a_fresh_visit(self):
+        self.run_javascript_cleanup_regression("default-tab")
+        self.run_javascript_cleanup_regression("default-tab-frames")
 
     def test_frames_tab_row_and_caption_inputs_fit_the_sticky_layout(self):
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()

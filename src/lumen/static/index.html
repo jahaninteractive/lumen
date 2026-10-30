@@ -15,18 +15,7 @@
       <span class="subtitle">local RAW workbench</span>
     </div>
     <p id="system-status" role="status" aria-live="polite">Checking local tools…</p>
-    <span class="pair" id="role-model-pair" hidden><label for="review-model">Review model</label>
-    <select id="review-model" data-role="review"></select>
-    <label for="fast-model">Fast model</label>
-    <select id="fast-model" data-role="fast"></select></span>
   </header>
-
-  <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
-    <p id="job-label">No background job</p>
-    <progress id="job-progress" aria-labelledby="job-label" max="100" value="0"></progress>
-    <p id="job-status" role="status" aria-live="polite"></p>
-    <button type="button" id="cancel-job" class="danger" disabled>Cancel job</button>
-  </section>
 
   <div class="workspace">
     <nav aria-label="Photo batches" class="batch-rail">
@@ -34,12 +23,10 @@
         <h2>Batches</h2>
         <label for="find">Find</label>
         <input type="search" id="find" autocomplete="off" placeholder="penguin, blur, caption words…">
-        <p id="merge-count" class="quiet">0 batches selected</p>
-        <button type="button" id="merge-batches" class="secondary" disabled>Merge selected batches</button>
-        <button type="button" id="jump-selected" class="secondary">Jump to selected</button>
+        <p id="merge-count" class="quiet" hidden>0 batches selected</p>
+        <button type="button" id="merge-batches" class="secondary" hidden disabled>Merge selected batches</button>
+        <button type="button" id="jump-selected" class="secondary" hidden>Jump to selected</button>
         <button type="button" id="back-to-top" class="secondary">Back to top</button>
-        <button type="button" id="write-digest" class="secondary">Write today's digest</button>
-        <p id="digest-result" class="path"></p>
       </div>
       <div id="batch-list"><p class="quiet">No imported batches yet.</p></div>
     </nav>
@@ -48,42 +35,184 @@
       <div class="main-top">
       <div class="tab-row">
         <div class="tab-rail" role="tablist" aria-label="Workflow">
-          <button type="button" id="ingest-tab" role="tab" aria-controls="ingest-panel" aria-selected="false" tabindex="-1">Ingest</button>
-          <button type="button" id="import-tab" role="tab" aria-controls="import-panel" aria-selected="false" tabindex="-1">Import</button>
+          <button type="button" id="add-tab" role="tab" aria-controls="add-panel" aria-selected="true" tabindex="0">Add photos</button>
           <button type="button" id="review-tab" role="tab" aria-controls="review-panel" aria-selected="false" tabindex="-1">Review</button>
+          <button type="button" id="assist-tab" role="tab" aria-controls="assist-panel" aria-selected="false" tabindex="-1">Assist</button>
           <button type="button" id="astro-tab" role="tab" aria-controls="astro-panel" aria-selected="false" tabindex="-1">Astro</button>
-          <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="true" tabindex="0">Export</button>
+          <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
       </div>
       </div>
 
       <section id="workflow-panels" class="workflow" aria-label="Finish this shoot">
-        <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0">
-          <h2>Finish as JPEG</h2>
-          <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
-          <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
-          <dl class="terms" aria-label="What the words mean">
-            <dt>Flagged</dt><dd>You marked the frame to keep, with <kbd>F</kbd> or the Flag button. A flagged frame is always a keeper.</dd>
-            <dt>Unsorted</dt><dd>No decision yet: neither flagged nor rejected.</dd>
-            <dt>Tagged</dt><dd>The local AI has described the frame with keywords, using Tag keepers or Tag all below. Tags make it findable in search and go into the exported JPEG as keywords.</dd>
-          </dl>
+        <section id="add-panel" role="tabpanel" aria-labelledby="add-tab" tabindex="0">
+          <h2>Add photos</h2>
+          <p class="lead">Copy a memory card with verification, or add photos already on a drive. Originals are never moved, renamed or changed.</p>
+          <fieldset id="add-source" class="segmented">
+            <legend class="sr-only">Where are the photos?</legend>
+            <label for="add-source-ingest"><input type="radio" name="add-source" id="add-source-ingest" value="ingest"><span>Still on the memory card</span></label>
+            <label for="add-source-import"><input type="radio" name="add-source" id="add-source-import" value="import" checked><span>Already on a drive</span></label>
+          </fieldset>
+          <section id="ingest-panel" hidden>
+            <h2>Ingest: copy a memory card safely, then import it</h2>
+            <details class="how"><summary>How this works</summary>
+            <p>Use Ingest when the photos are still on the camera's card and that card is the only copy. Ingest does three things in order:</p>
+            <ol class="steps">
+              <li><strong>Copy.</strong> Every file on the card, videos included, is copied to your primary folder and, if you choose one, a mirror folder on a second drive.</li>
+              <li><strong>Verify.</strong> Each copy is read back from its drive and its SHA-256 checksum compared with the card's. A copy that does not match is reported, never trusted.</li>
+              <li><strong>Import.</strong> The verified photos in the primary folder are added to Lumen, exactly as Import would.</li>
+            </ol>
+            <p class="quiet">Lumen only reads the card; it never writes to or erases it. Hidden system files are skipped. Format the card in the camera only after the panel ends with "Every file verified on every destination."</p>
+            </details>
+            <fieldset id="ingest-controls">
+              <legend>Card and destinations</legend>
+              <p id="ingest-card-label">Memory card folder</p>
+              <p id="ingest-card-path" class="path" aria-labelledby="ingest-card-label">None</p>
+              <div class="button-row">
+                <button type="button" id="browse-ingest-card" class="secondary">Choose card…</button>
+              </div>
+              <p id="ingest-primary-label">Primary destination (imported into Lumen)</p>
+              <p id="ingest-primary-path" class="path" aria-labelledby="ingest-primary-label">None</p>
+              <div class="button-row">
+                <button type="button" id="browse-ingest-primary" class="secondary">Choose primary…</button>
+              </div>
+              <p id="ingest-mirror-label">Mirror destination (optional second copy)</p>
+              <p id="ingest-mirror-path" class="path" aria-labelledby="ingest-mirror-label">No mirror</p>
+              <div class="button-row">
+                <button type="button" id="browse-ingest-mirror" class="secondary">Choose mirror…</button>
+                <button type="button" id="reset-ingest-mirror" class="secondary" disabled>No mirror</button>
+              </div>
+            </fieldset>
+            <div class="button-row">
+              <button type="button" id="start-ingest" disabled>Start ingest</button>
+            </div>
+            <p id="ingest-counts"></p>
+            <p id="ingest-manifest-label">Manifest</p>
+            <p id="ingest-manifest" class="path" aria-labelledby="ingest-manifest-label">Appears when an ingest starts</p>
+            <p id="ingest-snapshot" class="quiet"></p>
+            <p id="ingest-verdict"></p>
+            <p id="ingest-status" role="status" aria-live="polite"></p>
+          </section>
+          <section id="import-panel">
+            <h2>Import: add photos that are already on a drive</h2>
+            <details class="how"><summary>How this works</summary>
+            <p>Use Import for photos already copied off the card and backed up: a folder on your Mac or an external drive, or a single photo. Lumen reads them where they are and adds them to the contact sheet. Nothing is copied, moved, or renamed; Lumen writes only previews and sidecars into its own library.</p>
+            <p class="quiet">The originals must stay reachable: if their drive is unplugged, the contact sheet still shows previews, but export and preview refinement need the drive plugged back in. Photos still on a memory card? Use Ingest first, so a verified copy exists before you format the card.</p>
+            </details>
+            <form id="import-form" class="import-bar">
+              <label for="import-path">Folder or photo path</label>
+              <div class="input-row">
+                <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
+                <button type="button" id="browse-path" class="secondary">Browse…</button>
+              </div>
+              <label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>
+              <p class="quiet">Frames you removed or cleared before are skipped unless ticked.</p>
+              <p id="import-status" role="status" aria-live="polite"></p>
+              <div class="button-row">
+                <button type="submit">Import originals</button>
+              </div>
+            </form>
+          </section>
+        </section>
+        <section id="review-panel" role="tabpanel" aria-labelledby="review-tab" tabindex="0" hidden>
+          <h2>Review suggested rejects</h2>
+          <p class="lead">The fast model looks for technical failures in keepers. Nothing is rejected until you choose Reject.</p>
           <div class="button-row">
-            <button type="button" id="assist-keepers" aria-describedby="assist-keepers-availability" disabled>Run all local AI on keepers (0 keepers)</button>
-            <button type="button" id="tag-keepers" class="secondary" aria-describedby="tag-keepers-availability" disabled>Tag keepers with local AI (0 keepers)</button>
+            <button type="button" id="scan-rejects" class="secondary ai" aria-describedby="ai-availability" disabled>Scan keepers for problems</button>
+            <button type="button" id="reject-all-shown" disabled>Reject all shown…</button>
+          </div>
+          <p id="review-count" role="status" aria-live="polite">0 suggested rejects</p>
+          <ul id="reject-list" aria-label="Suggested rejects"></ul>
+          <datalist id="vocabulary-words"></datalist>
+        </section>
+        <section id="assist-panel" role="tabpanel" aria-labelledby="assist-tab" tabindex="0" hidden>
+          <h2>Assist</h2>
+          <p class="lead">Tags, a problem scan and a caption for every keeper that lacks them. Already finished work is skipped.</p>
+          <details class="how"><summary>How this works</summary>
+          <p class="quiet">Run all: tags, a problem scan, and a caption for every keeper that lacks them. Already finished work is skipped, so run it again after more culling.</p>
+          <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the strip at the foot of the page.</p>
+          </details>
+          <div class="button-row">
+            <button type="button" id="assist-keepers" class="ai" aria-describedby="ai-availability" disabled>Tag, scan and caption keepers (0)</button>
+            <button type="button" id="tag-keepers" class="secondary ai" aria-describedby="ai-availability" disabled>Tag keepers (0)</button>
           </div>
           <label class="toggle" for="redo-keepers"><input type="checkbox" id="redo-keepers"> Redo finished work (captions you wrote are kept)</label>
-          <p class="quiet">Run all: tags, a problem scan, and a caption for every keeper that lacks them. Already finished work is skipped, so run it again after more culling.</p>
-          <p id="assist-keepers-availability" class="quiet"></p>
-          <p id="tag-keepers-availability" class="quiet"></p>
           <div class="tag-bar">
             <div class="input-row">
-              <button type="button" id="tag-all" class="secondary" aria-describedby="tag-all-availability">Tag all untagged</button>
+              <button type="button" id="tag-all" class="secondary ai" aria-describedby="ai-availability">Tag every untagged frame</button>
               <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
             </div>
-            <p id="tag-all-availability" class="quiet"></p>
-            <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the top.</p>
           </div>
+          <details id="vocabulary-panel"><summary>Learned keywords <span id="vocabulary-count" class="quiet"></span></summary>
+            <p class="quiet">Words the local models added to your vocabulary. Forget removes a word from every frame and stops it being learned again.</p>
+            <ul id="vocabulary-list" aria-label="Learned keywords"></ul>
+          </details>
+          <button type="button" id="write-digest" class="secondary ai" aria-describedby="ai-availability">Write today's digest</button>
+          <p id="digest-result" class="path"></p>
+        </section>
+        <section id="astro-panel" role="tabpanel" aria-labelledby="astro-tab" tabindex="0" hidden>
+          <h2>Stack a night-sky batch with Siril</h2>
+          <p class="lead">Stacks the selected batch with one reviewed Siril script. Camera originals are never changed.</p>
+          <details class="how"><summary>How this works</summary>
+          <p class="quiet">Lumen links the selected batch into its own library folder and runs one reviewed Siril script. Camera originals are never changed. Darks, flats, and biases are optional; missing sets only add a warning.</p>
+          <p class="quiet">Local AI triage is advice only. Flagged means cloud, not sky, trailing, or a cloud band; no light is unchecked until you confirm.</p>
+          </details>
+          <p id="astro-availability" class="quiet">Checking Siril…</p>
+          <fieldset id="astro-lights-group">
+            <legend>Lights to include <span id="astro-group-count" class="quiet">No batch selected</span></legend>
+            <div id="astro-lights" class="scope-options"></div>
+          </fieldset>
+          <div class="button-row">
+            <button type="button" id="triage-astro" class="secondary ai" aria-describedby="ai-availability" disabled>Triage lights</button>
+            <button type="button" id="exclude-flagged" class="secondary" aria-haspopup="dialog" disabled>Exclude flagged lights (0)</button>
+          </div>
+          <fieldset>
+            <legend>Calibration folders (optional)</legend>
+            <div class="calibration-row">
+              <p id="astro-darks-label">Dark frames</p>
+              <p id="astro-darks-path" class="path" aria-labelledby="astro-darks-label">None</p>
+              <button type="button" id="browse-astro-darks" class="secondary">Choose darks folder…</button>
+              <button type="button" id="reset-astro-darks" class="secondary" disabled>No darks</button>
+            </div>
+            <div class="calibration-row">
+              <p id="astro-flats-label">Flat frames</p>
+              <p id="astro-flats-path" class="path" aria-labelledby="astro-flats-label">None</p>
+              <button type="button" id="browse-astro-flats" class="secondary">Choose flats folder…</button>
+              <button type="button" id="reset-astro-flats" class="secondary" disabled>No flats</button>
+            </div>
+            <div class="calibration-row">
+              <p id="astro-biases-label">Bias frames</p>
+              <p id="astro-biases-path" class="path" aria-labelledby="astro-biases-label">None</p>
+              <button type="button" id="browse-astro-biases" class="secondary">Choose biases folder…</button>
+              <button type="button" id="reset-astro-biases" class="secondary" disabled>No biases</button>
+            </div>
+          </fieldset>
+          <fieldset id="astro-recipe"><legend>Recipe</legend><div class="scope-options"><label><input type="radio" name="astro-recipe" value="tracked" checked> Tracked (global star alignment)</label><label><input type="radio" name="astro-recipe" value="untracked"> Untracked wide-field (two-pass alignment, keeps the common area)</label></div></fieldset>
+          <div class="scope-options">
+            <label for="astro-confirm"><input type="checkbox" id="astro-confirm"> I confirm these lights are one astro sequence and Lumen may prepare a managed Siril stack</label>
+          </div>
+          <div class="button-row">
+            <button type="button" id="prepare-astro" disabled>Prepare stack</button>
+            <button type="button" id="run-astro" disabled>Run stack</button>
+            <button type="button" id="cancel-astro" class="danger" disabled>Cancel stack</button>
+            <button type="button" id="reveal-astro" class="secondary" disabled>Show job folder in Finder</button>
+          </div>
+          <p id="astro-summary"></p>
+          <ul id="astro-warnings" aria-label="Stacking warnings"></ul>
+          <p id="astro-progress-label">Stack progress</p>
+          <progress id="astro-progress" aria-labelledby="astro-progress-label" max="100" value="0"></progress>
+          <p id="astro-status" role="status" aria-live="polite"></p>
+          <div id="astro-paths" class="recovery" aria-label="Managed job files"></div>
+          <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
+        </section>
+        <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
+          <h2>Finish as JPEG</h2>
+          <p class="lead">sRGB JPEGs with camera EXIF, caption, keywords and rating. Only Full resolution keeps GPS.</p>
+          <details class="how"><summary>How this works</summary>
+          <p class="quiet">sRGB JPEGs with camera EXIF, caption, keywords, and rating. Choose Full resolution, Share, or Web size below; only Full resolution keeps GPS location. An optional watermark is drawn bottom-right on any size.</p>
+          <p>Keepers are frames that are not rejected and are either flagged or best in their burst. A single frame is best in its own burst, so it stays a keeper unless you reject it.</p>
+          </details>
           <fieldset id="export-controls">
             <legend>Choose what to export</legend>
             <div class="scope-options">
@@ -119,135 +248,14 @@
           <p id="export-status" role="status" aria-live="polite"></p>
           <ul id="export-results" aria-label="Export result paths"></ul>
         </section>
-        <section id="review-panel" role="tabpanel" aria-labelledby="review-tab" tabindex="0" hidden>
-          <h2>Review suggested rejects</h2>
-          <p class="quiet">The fast local model looks for technical failures in your keepers. Nothing is rejected until you choose Reject. With a row's button focused, press <kbd>X</kbd> to reject, <kbd>K</kbd> to keep, and <kbd>&uarr;</kbd> <kbd>&darr;</kbd> to move between rows.</p>
-          <div class="button-row">
-            <button type="button" id="scan-rejects" class="secondary" aria-describedby="scan-rejects-availability" disabled>Scan keepers for problems</button>
-            <button type="button" id="reject-all-shown" disabled>Reject all shown…</button>
-          </div>
-          <p id="scan-rejects-availability" class="quiet"></p>
-          <p id="review-count" role="status" aria-live="polite">0 suggested rejects</p>
-          <ul id="reject-list" aria-label="Suggested rejects"></ul>
-          <details id="vocabulary-panel"><summary>Learned keywords <span id="vocabulary-count" class="quiet"></span></summary>
-            <p class="quiet">Words the local models added to your vocabulary. Forget removes a word from every frame and stops it being learned again.</p>
-            <ul id="vocabulary-list" aria-label="Learned keywords"></ul>
-          </details>
-          <datalist id="vocabulary-words"></datalist>
-        </section>
-        <section id="astro-panel" role="tabpanel" aria-labelledby="astro-tab" tabindex="0" hidden>
-          <h2>Stack a night-sky batch with Siril</h2>
-          <p class="quiet">Lumen links the selected batch into its own library folder and runs one reviewed Siril script. Camera originals are never changed. Darks, flats, and biases are optional; missing sets only add a warning.</p>
-          <p id="astro-availability" class="quiet">Checking Siril…</p>
-          <fieldset id="astro-lights-group">
-            <legend>Lights to include <span id="astro-group-count" class="quiet">No batch selected</span></legend>
-            <div id="astro-lights" class="scope-options"></div>
-          </fieldset>
-          <p class="quiet">Local AI triage is advice only. Flagged means cloud, not sky, trailing, or a cloud band; no light is unchecked until you confirm.</p>
-          <div class="button-row">
-            <button type="button" id="triage-astro" class="secondary" aria-describedby="triage-astro-availability" disabled>Triage lights with local AI</button>
-            <button type="button" id="exclude-flagged" class="secondary" aria-haspopup="dialog" disabled>Exclude flagged lights (0)</button>
-          </div>
-          <p id="triage-astro-availability" class="quiet"></p>
-          <fieldset>
-            <legend>Calibration folders (optional)</legend>
-            <p id="astro-darks-label">Dark frames</p>
-            <p id="astro-darks-path" class="path" aria-labelledby="astro-darks-label">None</p>
-            <div class="button-row">
-              <button type="button" id="browse-astro-darks" class="secondary">Choose darks folder…</button>
-              <button type="button" id="reset-astro-darks" class="secondary" disabled>No darks</button>
-            </div>
-            <p id="astro-flats-label">Flat frames</p>
-            <p id="astro-flats-path" class="path" aria-labelledby="astro-flats-label">None</p>
-            <div class="button-row">
-              <button type="button" id="browse-astro-flats" class="secondary">Choose flats folder…</button>
-              <button type="button" id="reset-astro-flats" class="secondary" disabled>No flats</button>
-            </div>
-            <p id="astro-biases-label">Bias frames</p>
-            <p id="astro-biases-path" class="path" aria-labelledby="astro-biases-label">None</p>
-            <div class="button-row">
-              <button type="button" id="browse-astro-biases" class="secondary">Choose biases folder…</button>
-              <button type="button" id="reset-astro-biases" class="secondary" disabled>No biases</button>
-            </div>
-          </fieldset>
-          <fieldset id="astro-recipe"><legend>Recipe</legend><div class="scope-options"><label><input type="radio" name="astro-recipe" value="tracked" checked> Tracked (global star alignment)</label><label><input type="radio" name="astro-recipe" value="untracked"> Untracked wide-field (two-pass alignment, keeps the common area)</label></div></fieldset>
-          <div class="scope-options">
-            <label for="astro-confirm"><input type="checkbox" id="astro-confirm"> I confirm these lights are one astro sequence and Lumen may prepare a managed Siril stack</label>
-          </div>
-          <div class="button-row">
-            <button type="button" id="prepare-astro" disabled>Prepare stack</button>
-            <button type="button" id="run-astro" disabled>Run stack</button>
-            <button type="button" id="cancel-astro" class="danger" disabled>Cancel stack</button>
-            <button type="button" id="reveal-astro" class="secondary" disabled>Show job folder in Finder</button>
-          </div>
-          <p id="astro-summary"></p>
-          <ul id="astro-warnings" aria-label="Stacking warnings"></ul>
-          <p id="astro-progress-label">Stack progress</p>
-          <progress id="astro-progress" aria-labelledby="astro-progress-label" max="100" value="0"></progress>
-          <p id="astro-status" role="status" aria-live="polite"></p>
-          <div id="astro-paths" class="recovery" aria-label="Managed job files"></div>
-          <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
-        </section>
-        <section id="ingest-panel" role="tabpanel" aria-labelledby="ingest-tab" tabindex="0" hidden>
-          <h2>Ingest: copy a memory card safely, then import it</h2>
-          <p>Use Ingest when the photos are still on the camera's card and that card is the only copy. Ingest does three things in order:</p>
-          <ol class="steps">
-            <li><strong>Copy.</strong> Every file on the card, videos included, is copied to your primary folder and, if you choose one, a mirror folder on a second drive.</li>
-            <li><strong>Verify.</strong> Each copy is read back from its drive and its SHA-256 checksum compared with the card's. A copy that does not match is reported, never trusted.</li>
-            <li><strong>Import.</strong> The verified photos in the primary folder are added to Lumen, exactly as Import would.</li>
-          </ol>
-          <p class="quiet">Lumen only reads the card; it never writes to or erases it. Hidden system files are skipped. Format the card in the camera only after the panel ends with "Every file verified on every destination."</p>
-          <fieldset id="ingest-controls">
-            <legend>Card and destinations</legend>
-            <p id="ingest-card-label">Memory card folder</p>
-            <p id="ingest-card-path" class="path" aria-labelledby="ingest-card-label">None</p>
-            <div class="button-row">
-              <button type="button" id="browse-ingest-card" class="secondary">Choose card…</button>
-            </div>
-            <p id="ingest-primary-label">Primary destination (imported into Lumen)</p>
-            <p id="ingest-primary-path" class="path" aria-labelledby="ingest-primary-label">None</p>
-            <div class="button-row">
-              <button type="button" id="browse-ingest-primary" class="secondary">Choose primary…</button>
-            </div>
-            <p id="ingest-mirror-label">Mirror destination (optional second copy)</p>
-            <p id="ingest-mirror-path" class="path" aria-labelledby="ingest-mirror-label">No mirror</p>
-            <div class="button-row">
-              <button type="button" id="browse-ingest-mirror" class="secondary">Choose mirror…</button>
-              <button type="button" id="reset-ingest-mirror" class="secondary" disabled>No mirror</button>
-            </div>
-          </fieldset>
-          <div class="button-row">
-            <button type="button" id="start-ingest" disabled>Start ingest</button>
-          </div>
-          <p id="ingest-counts"></p>
-          <p id="ingest-manifest-label">Manifest</p>
-          <p id="ingest-manifest" class="path" aria-labelledby="ingest-manifest-label">Appears when an ingest starts</p>
-          <p id="ingest-snapshot" class="quiet"></p>
-          <p id="ingest-verdict"></p>
-          <p id="ingest-status" role="status" aria-live="polite"></p>
-        </section>
-        <section id="import-panel" role="tabpanel" aria-labelledby="import-tab" tabindex="0" hidden>
-          <h2>Import: add photos that are already on a drive</h2>
-          <p>Use Import for photos already copied off the card and backed up: a folder on your Mac or an external drive, or a single photo. Lumen reads them where they are and adds them to the contact sheet. Nothing is copied, moved, or renamed; Lumen writes only previews and sidecars into its own library.</p>
-          <p class="quiet">The originals must stay reachable: if their drive is unplugged, the contact sheet still shows previews, but export and preview refinement need the drive plugged back in. Photos still on a memory card? Use Ingest first, so a verified copy exists before you format the card.</p>
-          <form id="import-form" class="import-bar">
-            <label for="import-path">Folder or photo path</label>
-            <div class="input-row">
-              <input id="import-path" name="path" autocomplete="off" placeholder="/Volumes/Photos/2026-10-21" required>
-              <button type="button" id="browse-path" class="secondary">Browse…</button>
-            </div>
-            <label class="toggle" for="import-include-cleared"><input type="checkbox" id="import-include-cleared"> Include frames cleared in earlier sessions</label>
-            <p class="quiet">Frames you removed or cleared before are skipped unless ticked.</p>
-            <p id="import-status" role="status" aria-live="polite"></p>
-            <div class="button-row">
-              <button type="submit">Import originals</button>
-            </div>
-          </form>
-        </section>
 
         <section id="clear-panel" role="tabpanel" aria-labelledby="clear-tab" tabindex="0" hidden>
           <h2>Make room for the next shoot</h2>
+          <p class="lead">Camera originals and finished exports remain. Working files move to recoverable library trash.</p>
+          <details class="how"><summary>How this works</summary>
           <p class="quiet">Camera originals and completed exports remain. Lumen moves working files and a catalog snapshot into recoverable library trash.</p>
+          <p class="quiet">Frames whose content you removed or cleared in an earlier session. Removing them here is recoverable like any batch removal; a frame you re-imported on purpose with "Include frames cleared in earlier sessions" counts too.</p>
+          </details>
           <div class="cleanup-group">
             <h3>Selected batch</h3>
             <p id="group-cleanup-count">No batch selected · 0 frames</p>
@@ -256,7 +264,6 @@
           <div class="cleanup-group">
             <h3>Previously cleared frames</h3>
             <p id="cleared-count">Checking…</p>
-            <p class="quiet">Frames whose content you removed or cleared in an earlier session. Removing them here is recoverable like any batch removal; a frame you re-imported on purpose with "Include frames cleared in earlier sessions" counts too.</p>
             <button type="button" id="remove-cleared" class="danger" disabled>Remove previously cleared frames</button>
           </div>
           <div class="cleanup-group">
@@ -286,24 +293,15 @@
               <option value="medium" selected>Medium</option>
               <option value="large">Large</option>
             </select></span>
-            <span class="pair"><label for="refine-scope">Refine</label>
-            <select id="refine-scope" aria-describedby="refine-availability">
-              <option value="group">Selected burst</option>
-              <option value="filtered">Filtered frames</option>
-              <option value="all">Whole catalog</option>
-            </select></span>
-            <button type="button" id="refine-previews" class="secondary" aria-describedby="refine-availability" disabled>Refine previews</button>
           </span>
-          <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" disabled>Compare marked</button>
+          <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" hidden disabled>Compare marked</button>
           <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
         </div>
-        <p id="refine-availability" class="quiet refine-note"></p>
-        <p id="refine-status" class="refine-note"></p>
         <form id="filter-form" class="filter-form" aria-label="Filter frames">
           <div class="filter-row">
             <label for="filter-text" class="sr-only">Tag text</label>
             <input type="search" id="filter-text" autocomplete="off" placeholder="Search tags or place: fox, harbour…">
-            <button type="button" id="expand-search" class="secondary" aria-describedby="expand-search-availability">Expand with local AI</button>
+            <button type="button" id="expand-search" class="secondary ai" aria-describedby="ai-availability">Expand search</button>
             <fieldset id="filter-status" class="segmented">
               <legend class="sr-only">Show</legend>
               <label for="status-all"><input type="radio" name="filter-status" id="status-all" value="all" checked><span>All</span></label>
@@ -323,7 +321,6 @@
             </select></span>
             <button type="button" id="reset-filters" class="secondary">Reset</button>
           </div>
-          <p id="expand-search-availability" class="quiet"></p>
           <div class="filter-row">
             <span class="pair"><label for="filter-from">From</label><input type="date" id="filter-from"></span>
             <span class="pair"><label for="filter-to">To</label><input type="date" id="filter-to"></span>
@@ -332,6 +329,20 @@
             <label for="filter-export-failed" class="toggle"><input type="checkbox" id="filter-export-failed"> Export failed</label>
           </div>
         </form>
+        <details id="refine-fold">
+          <summary>Refine previews</summary>
+          <span class="refine-controls">
+            <span class="pair"><label for="refine-scope">Refine</label>
+            <select id="refine-scope" aria-describedby="refine-availability">
+              <option value="group">Selected burst</option>
+              <option value="filtered">Filtered frames</option>
+              <option value="all">Whole catalog</option>
+            </select></span>
+            <button type="button" id="refine-previews" class="secondary" aria-describedby="refine-availability" disabled>Refine previews</button>
+          </span>
+          <p id="refine-availability" class="quiet refine-note"></p>
+          <p id="refine-status" class="refine-note"></p>
+        </details>
         </div>
         <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>
         <button type="button" id="show-more" class="secondary" hidden>Show 200 more</button>
@@ -340,8 +351,19 @@
 
   </div>
 
-  <footer class="ai-bar" aria-label="Local AI activity">
+  <footer class="ai-bar" aria-label="Local AI">
+    <span class="pair" id="role-model-pair" hidden><label for="review-model">Review model</label>
+    <select id="review-model" data-role="review"></select>
+    <label for="fast-model">Fast model</label>
+    <select id="fast-model" data-role="fast"></select></span>
+    <p id="ai-availability" class="quiet"></p>
     <p id="ai-status" role="status" aria-live="polite">Local AI idle. Requests and their results are reported here.</p>
+    <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
+      <p id="job-label">No background job</p>
+      <progress id="job-progress" aria-labelledby="job-label" max="100" value="0"></progress>
+      <p id="job-status" role="status" aria-live="polite"></p>
+      <button type="button" id="cancel-job" class="danger" disabled>Cancel job</button>
+    </section>
   </footer>
 
   <dialog id="export-dialog" aria-labelledby="export-dialog-heading">
@@ -376,7 +398,9 @@
         <dt><kbd>Esc</kbd></dt><dd>Close compare or the frame view</dd>
         <dt><kbd>[</kbd> <kbd>]</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>Previous or next frame in the frame view; at full size the arrows pan instead</dd>
         <dt><kbd>Z</kbd></dt><dd>Full size on or off in the frame view</dd>
+        <dt><kbd>X</kbd> <kbd>K</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>In Review, with a row's button focused: reject, keep, previous or next row</dd>
         <dt>Drag</dt><dd>Draw a crop on the frame-view image; drag inside the outline to move it, hold Shift to draw a new one over it</dd>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> on a curve point</dt><dd>Nudge the tone curve point</dd>
       </dl>
       <button type="submit">Close</button>
     </form>
@@ -460,6 +484,7 @@
       </div>
     </div>
     <div class="frame-panel">
+      <p id="frame-ai-availability" class="quiet"></p>
       <div id="frame-tabs" class="tab-rail" role="tablist" aria-label="Frame view">
         <button type="button" id="frame-tab" role="tab" aria-controls="frame-panel" aria-selected="true" tabindex="0">Frame</button>
         <button type="button" id="crop-tab" role="tab" aria-controls="crop-panel" aria-selected="false" tabindex="-1">Crop</button>
@@ -483,9 +508,8 @@
         <p id="compose-empty" hidden></p>
         <div id="compose-workspace" hidden>
           <div class="button-row">
-            <button type="button" id="ask-composition-ai" class="secondary" aria-describedby="composition-availability">Ask local AI</button>
+            <button type="button" id="ask-composition-ai" class="secondary ai" aria-describedby="frame-ai-availability">Suggest a crop</button>
           </div>
-          <p id="composition-availability" class="quiet"></p>
           <p id="composition-advice" class="quiet"></p>
           <div id="primary-crops" class="crop-grid"></div>
           <details id="more-crop-shapes">
@@ -495,9 +519,7 @@
         </div>
         <p class="quiet">Compare safe crops. Choose Keep original or Use this crop; the RAW stays untouched.</p>
         <p id="compose-status" role="status" aria-live="polite"></p>
-        <div class="button-row">
-          <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
-        </div>
+        <p id="compose-task" class="ai-task" hidden></p>
       </section>
       <section id="develop-panel" role="tabpanel" aria-labelledby="develop-tab" hidden>
         <p id="develop-unavailable" hidden></p>
@@ -524,20 +546,19 @@
           <div class="button-row">
             <button type="button" id="develop-curve-reset" class="secondary">Reset the curve</button>
           </div>
-          <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping. Drag a curve point, or focus one and nudge it with the arrow keys.</p>
           <details id="develop-suggest" open>
             <summary>Where to start</summary>
+            <p id="develop-task" class="ai-task" hidden></p>
             <p id="develop-advice" class="quiet"></p>
             <div class="develop-row">
               <label for="develop-feedback">What to change</label>
               <input type="text" id="develop-feedback" maxlength="200" placeholder="too warm, lost the shadows…">
             </div>
             <div class="button-row">
-              <button type="button" id="develop-ask" class="secondary" aria-describedby="develop-suggest-availability">Suggest settings</button>
+              <button type="button" id="develop-ask" class="secondary ai" aria-describedby="frame-ai-availability">Suggest settings</button>
               <button type="button" id="develop-discard-advice" class="secondary">Discard the suggestion</button>
+              <button type="button" id="develop-use-advice" class="secondary" hidden>Park the handles here</button>
             </div>
-            <p id="develop-suggest-availability" class="quiet"></p>
-            <p class="quiet">The loaded local vision model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>
           </details>
           <details open>
             <summary>Brightness</summary>
@@ -562,7 +583,6 @@
               <input type="number" id="develop-tint-value" min="-150" max="150" step="1" placeholder="not set" aria-label="Tint">
               <button type="button" class="secondary" id="develop-tint-reset">Reset</button>
             </div>
-            <p class="quiet">The handles start at this frame's own neutral, which the camera and the light set. Until you move one, nothing is sent.</p>
           </details>
           <details>
             <summary>Contrast</summary>
@@ -587,7 +607,6 @@
               <input type="number" id="develop-clarity-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Clarity">
               <button type="button" class="secondary" id="develop-clarity-reset">Reset</button>
             </div>
-            <p class="quiet">Sharpness is the decoder's own, and arrives at full strength, so it only goes down. Clarity is separate: a wide, gentle local contrast that lifts texture. Sharpness works on single pixels, so choose Full size to judge it: at viewport size the change is averaged away.</p>
           </details>
           <details>
             <summary>Lens Correction</summary>
@@ -618,13 +637,18 @@
               <button type="button" class="secondary" id="develop-color_nr-reset">Reset</button>
             </div>
             </div>
-            <p class="quiet">Auto leaves the file's own baseline alone. Off asks for none at all. Manual sets both amounts by hand. Like sharpness, noise lives in single pixels: judge it at Full size.</p>
           </details>
-          <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own. Your RAW files never change.</p>
+          <details class="how"><summary>How this works</summary>
+            <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping.</p>
+            <p class="quiet">The loaded local vision model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>
+            <p class="quiet">The handles start at this frame's own neutral, which the camera and the light set. Until you move one, nothing is sent.</p>
+            <p class="quiet">Sharpness is the decoder's own, and arrives at full strength, so it only goes down. Clarity is separate: a wide, gentle local contrast that lifts texture. Sharpness works on single pixels, so choose Full size to judge it: at viewport size the change is averaged away.</p>
+            <p class="quiet">Auto leaves the file's own baseline alone. Off asks for none at all. Manual sets both amounts by hand. Like sharpness, noise lives in single pixels: judge it at Full size.</p>
+            <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own. Your RAW files never change.</p>
+          </details>
           <div class="button-row">
             <button type="button" id="develop-reset-all" class="secondary">Reset all</button>
             <button type="button" id="develop-apply-group" class="secondary">Apply to every frame in this burst</button>
-            <button type="button" id="develop-export" aria-describedby="export-availability">Export this frame</button>
           </div>
         </div>
         <p id="develop-status" role="status" aria-live="polite"></p>
@@ -634,7 +658,8 @@
         <p id="exif-status" class="quiet" role="status" aria-live="polite"></p>
       </section>
       <div class="button-row">
-        <span id="loupe-export-options" hidden>
+        <button type="button" id="loupe-export" aria-describedby="export-availability">Export this frame</button>
+        <span id="loupe-export-options">
           <label class="toggle" for="loupe-keep-original"><input type="checkbox" id="loupe-keep-original"> Also export the untouched version</label>
           <label class="toggle" for="loupe-dated-folder"><input type="checkbox" id="loupe-dated-folder" checked> Subfolder named for the capture date</label>
         </span>
