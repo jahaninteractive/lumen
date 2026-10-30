@@ -674,6 +674,19 @@ class Catalog:
                 self.connection.execute("DELETE FROM photo_groups WHERE id = ?", (group_id,))
         return self.group_photo_ids(target_id)
 
+    SPLIT_KEY = "split"  # merged_into for a frame kept in a burst of its own; regrouping never derives a key equal to it
+
+    def split_photo(self, photo_id: int) -> int:
+        """Mark `photo_id` to stay in a burst of its own and return the burst it leaves; regrouping does the move."""
+        row = self.connection.execute("SELECT group_id FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        if not row or row["group_id"] is None:
+            raise ValueError(f"photo {photo_id} is not in a group")
+        if len(self.group_photo_ids(int(row["group_id"]))) < 2:
+            raise ValueError(f"photo {photo_id} is already in a burst of its own")
+        self.connection.execute("UPDATE photos SET merged_into = ? WHERE id = ?", (self.SPLIT_KEY, photo_id))
+        self.connection.commit()
+        return int(row["group_id"])
+
     def list_group_ids(self) -> list[int]:
         return [int(row["id"]) for row in self.connection.execute("SELECT id FROM photo_groups ORDER BY id")]
 

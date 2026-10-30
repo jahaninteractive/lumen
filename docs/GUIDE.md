@@ -130,6 +130,8 @@ In the contact sheet, with a frame focused (**Shortcuts** lists these):
   both at 100 percent with panes that pan together.
 - `M` merges the batches ticked in the rail (the same as **Merge selected
   batches**); it works anywhere outside a text field.
+- `S` moves the focused frame out of its burst into one of its own. Like a
+  merge, the split survives re-importing the folder; merge the bursts to undo it.
 - `Enter` or `Space` opens the frame view (see below); `Esc` closes compare or the frame
   view.
 - In the frame view, `[` and `]` (or the Left and Right arrows) step to the

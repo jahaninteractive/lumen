@@ -640,6 +640,28 @@ class WebTests(unittest.TestCase):
     def test_javascript_inspector_shows_import_warnings(self):
         self.run_javascript_cleanup_regression("raw-warning")
 
+    def test_split_route_moves_one_frame_into_its_own_burst(self):
+        second = self.root / "second.jpg"
+        Image.new("RGB", (40, 30), "blue").save(second)
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            library.import_path(second)
+            library.merge_groups([group["id"] for group in library.list_groups()])
+            self.assertEqual(1, len(library.list_groups()))
+        for path, payload in (("/api/photos/2/split", {"photo_id": 2}), ("/api/photos/99999/split", {})):
+            with self.subTest(path=path, payload=payload):
+                code, result = self.post_json(path, payload)
+                self.assertEqual(400, code, result)
+                self.assertIn("error", result)
+                self.assertNotIn(str(self.root), result["error"])
+        code, result = self.post_json("/api/photos/2/split", {})
+        self.assertEqual(200, code, result)
+        self.assertEqual({"photo_id": 2, "group_id": result["group_id"], "from_group_id": 1}, result)
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            groups = library.list_groups()
+            self.assertEqual([[1], [2]], sorted([photo["id"] for photo in group["photos"]] for group in groups))
+        code, result = self.post_json("/api/photos/2/split", {})
+        self.assertEqual((400, "photo 2 is already in a burst of its own"), (code, result["error"]))
+
     def test_merge_route_validates_ids_and_merges_into_earliest_group(self):
         second = self.root / "second.jpg"
         Image.new("RGB", (40, 30), "blue").save(second)
@@ -767,7 +789,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
-            "/api/photos/1/develop/suggest", "/api/photos/1/location",
+            "/api/photos/1/develop/suggest", "/api/photos/1/location", "/api/photos/1/split",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -788,7 +810,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
-            "/api/photos/1/develop/suggest", "/api/photos/1/location",
+            "/api/photos/1/develop/suggest", "/api/photos/1/location", "/api/photos/1/split",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -1736,6 +1758,7 @@ const decisions = { 1: 'none', 2: 'none' };
 const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
 const picks = [];
+const splitPosts = [];
 const critiqueRequests = [];
 const captionPosts = [];
 const expandPosts = [];
@@ -1868,6 +1891,12 @@ async function fetch(url, options = {}) {
     const keepers = groups.reduce((count, item) => count + item.photos.filter(p => p.decision !== 'reject' && (p.decision === 'flag' || p.id === item.automatic_pick_id)).length, 0);
     const frames = groups.reduce((count, item) => count + item.photos.length, 0);
     payload = { groups, photo_count: groups.reduce((count, item) => count + item.frame_count, 0), rejected_count: groups.reduce((count, item) => count + item.rejected_count, 0), counts: { filtered: frames, total: frames }, cameras: ['ILCE-7M4:1', 'ILCE-7RV:2'], keeper_count: keeperOverride ?? keepers };
+  }
+  else if (/^\/api\/photos\/\d+\/split$/.test(url)) {
+    assert.deepEqual(JSON.parse(options.body), {}); splitPosts.push(url);
+    const id = Number(url.split('/')[3]);
+    groups = [group(1, groups[0].photos.map(item => item.id).filter(item => item !== id)), group(9, [id])];
+    payload = { photo_id: id, group_id: 9, from_group_id: 1 };
   }
   else if (/^\/api\/photos\/\d+\/pick$/.test(url)) { assert.deepEqual(JSON.parse(options.body), {}); picks.push(url); payload = { photo_id: Number(url.split('/')[3]), manual_pick: true }; }
   else if (url === '/api/jobs') payload = { jobs: resumeJobs };
@@ -2625,6 +2654,16 @@ const regression = `
     assert.equal(element('#shortcuts').hidden, false);
     element('#shortcuts').listeners.keydown({ key: 'Escape' });
     assert.equal(element('#shortcuts').hidden, true);
+    const splitLoads = groupLoads;
+    await key('s');
+    assert.deepEqual(splitPosts, ['/api/photos/' + state.focusedId + '/split']);
+    assert.equal(groupLoads, splitLoads + 1, 'a split reloads the bursts');
+    assert.deepEqual([state.selectedGroupId, state.selectedId], [9, state.focusedId], 'selection follows the split frame into its new burst');
+    assert.equal(focused, card(state.focusedId));
+    assert.ok(element('#announcer').textContent.includes('burst of its own'), element('#announcer').textContent);
+    await key('s');
+    assert.equal(splitPosts.length, 1, 'a frame already alone is not posted');
+    assert.ok(element('#announcer').textContent.includes('already'), element('#announcer').textContent);
     return;
   }
   if (scenario === 'compare' || scenario === 'loupe') {

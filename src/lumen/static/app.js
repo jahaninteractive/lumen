@@ -505,6 +505,30 @@ async function decide(photo, field, value, focusAfter = null) {
 
 // Keep one frame: pick it as best (which clears its own rejection), then reject every other unrejected frame of its burst.
 // ponytail: one POST per frame, in order; a mid-way failure leaves the burst partly rejected and is announced.
+// S: the frame leaves its burst for one of its own; the server regroups, so the sheet reloads and selection follows the frame.
+async function splitFrame(photo) {
+  if (state.cullingBlocked) return announce(cullingBlockedText());
+  const group = state.groups.find(item => item.photos.includes(photo));
+  if (!group) return;
+  if (group.photos.length < 2) return announce(`${photo.name} is already in a burst of its own`);
+  state.busy = true;
+  updateWorkflow();
+  try {
+    const result = await post(`/api/photos/${photo.id}/split`);
+    state.selectedId = photo.id;
+    state.selectedGroupId = result.group_id;
+    await load();
+    focusFrame(photo.id);
+    scrollToGroup(result.group_id);
+    announce(`${photo.name} moved to a burst of its own`);
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
 async function keepOnly(photo) {
   if (state.cullingBlocked) return announce(cullingBlockedText());
   const group = state.groups.find(item => item.photos.includes(photo));
@@ -1227,10 +1251,11 @@ function toggleCompare(photo) {
   announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
 }
 
-const CULLING_KEYS = { p: 'pick', r: 'keepOnly', x: 'reject', f: 'flag', u: 'clear', c: 'compare', z: 'full', Enter: 'loupe', ' ': 'loupe', Escape: 'close' };
+const CULLING_KEYS = { p: 'pick', r: 'keepOnly', s: 'split', x: 'reject', f: 'flag', u: 'clear', c: 'compare', z: 'full', Enter: 'loupe', ' ': 'loupe', Escape: 'close' };
 const CULLING_ACTIONS = {
   pick: photo => decide(photo, 'pick'),
   keepOnly,
+  split: splitFrame,
   reject: photo => decide(photo, 'decision', 'reject'),
   flag: photo => decide(photo, 'decision', 'flag'),
   clear: photo => decide(photo, 'decision', 'none'),

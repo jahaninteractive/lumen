@@ -1381,6 +1381,17 @@ class Library:
         return {"group_id": target, "merged_group_ids": sources, "photo_count": len(photo_ids), "automatic_pick_id": pick}
 
     @_coordinated
+    def split_photo(self, photo_id: int) -> dict:
+        """Give one frame a burst of its own; `Photo.merged_into` keeps it apart through automatic regrouping."""
+        if type(photo_id) is not int or photo_id <= 0:
+            raise ValueError("split needs a positive photo ID")
+        from_group = self.catalog.split_photo(photo_id)
+        self._regroup_and_write_sidecars()  # the pass an import runs, so the result is what the next re-import keeps
+        group_id = self.catalog.get_photo(photo_id).group_id
+        self.catalog.append_event(photo_id, "burst_split", {"group_id": group_id, "from_group_id": from_group})
+        return {"photo_id": photo_id, "group_id": group_id, "from_group_id": from_group}
+
+    @_coordinated
     def remove_group(self, group_id: int) -> CleanupResult:
         try:
             if type(group_id) is not int or group_id not in self.catalog.list_group_ids():

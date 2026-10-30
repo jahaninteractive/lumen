@@ -743,6 +743,35 @@ class LibraryTests(unittest.TestCase):
                 library.import_path(self.image_path)  # a later decoder fix clears the flag on reimport
             self.assertEqual([], library.get_photo(photo.id)["warnings"])
 
+    def test_split_photo_gives_one_frame_its_own_burst_and_survives_reimport(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            self.burst(library, raw=False)
+            (burst,) = library.list_groups()
+            ids = [photo["id"] for photo in burst["photos"]]
+            for bad in (0, "1", True, 99999):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    library.split_photo(bad)
+
+            result = library.split_photo(ids[1])
+
+            groups = library.list_groups()
+            self.assertEqual(2, len(groups))
+            alone = next(group for group in groups if [photo["id"] for photo in group["photos"]] == [ids[1]])
+            self.assertEqual({"photo_id": ids[1], "group_id": alone["id"], "from_group_id": burst["id"]}, result)
+            self.assertEqual(ids[1], alone["automatic_pick_id"])
+            self.assertEqual(sorted(ids[:1] + ids[2:]), sorted(photo["id"] for group in groups if group is not alone for photo in group["photos"]))
+            events = [event.details for event in library.catalog.events_for(ids[1]) if event.kind == "burst_split"]
+            self.assertEqual([{"group_id": alone["id"], "from_group_id": burst["id"]}], events)
+            with self.assertRaises(ValueError):
+                library.split_photo(ids[1])
+
+            library.import_path(self.source_dir)  # automatic regrouping must honour the split
+            after = library.list_groups()
+            self.assertEqual(sorted([[ids[1]], sorted(ids[:1] + ids[2:])]), sorted(sorted(photo["id"] for photo in group["photos"]) for group in after))
+
+            library.merge_groups([group["id"] for group in after])  # a merge undoes the split
+            self.assertEqual(1, len(library.list_groups()))
+
     def test_merge_groups_moves_photos_into_earliest_group_and_survives_reimport(self):
         for name in ("DSC0002.jpg", "DSC0003.jpg"):
             Image.new("RGB", (320, 240), (90, 90, 90)).save(self.source_dir / name, quality=95)

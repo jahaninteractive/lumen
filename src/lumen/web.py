@@ -915,6 +915,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         change = library.set_decision if field == "decision" else library.set_rating
                         self._send_json(change(int(match.group(1)), payload[field]))
                     return
+                match = re.fullmatch(r"/api/photos/(\d+)/split", path)
+                if match:
+                    if payload:
+                        raise ValueError("split requires an empty JSON object")
+                    with Library(settings) as library:
+                        self._send_json(library.split_photo(int(match.group(1))))
+                    return
                 match = re.fullmatch(r"/api/photos/(\d+)/pick", path)
                 if match:
                     photo_id = int(match.group(1))
