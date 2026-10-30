@@ -371,6 +371,8 @@ class WebTests(unittest.TestCase):
         for name in ("job-label", "job-progress", "job-status", "cancel-job"):
             self.assertIn(strip, by_id[name]["parents"])
             self.assertNotIn(by_id["main-content"], by_id[name]["parents"])
+        order = [node["attrs"]["id"] for node in parser.nodes if node["attrs"].get("id") in ("main-content", "job-strip", "ai-status")]
+        self.assertEqual(["main-content", "job-strip", "ai-status"], order, "the job strip sits at the bottom, above the AI bar")
         self.assertEqual(("button", "button", "Tag all untagged"), (by_id["tag-all"]["tag"], by_id["tag-all"]["attrs"].get("type"), by_id["tag-all"]["text"].strip()))
         self.assertEqual(("input", "checkbox"), (by_id["retag-all"]["tag"], by_id["retag-all"]["attrs"].get("type")))
         retag_label = next(node for node in parser.nodes if node["tag"] == "label" and node["attrs"].get("for") == "retag-all")
@@ -2037,7 +2039,7 @@ const regression = `
     assert.equal(element('#job-strip').hidden, false);
     assert.ok(element('#announcer').textContent.includes('Import'));
     for (const name of ['#import-form button[type="submit"]', '#browse-path', '#remove-group', '#browse-xmp']) assert.equal(element(name).disabled, true, name + ' is disabled during a job');
-    assert.equal(element('#cancel-job').disabled, false);
+    assert.deepEqual([element('#cancel-job').disabled, element('#cancel-job').textContent, element('#cancel-job').className], [false, 'Cancel job', 'danger']);
     assert.equal(element('#tag-all').disabled, true, 'tag-all is structural: one job at a time');
     assert.equal(state.cullingBlocked, false, 'culling continues while an import runs');
     assert.equal(element('#open-compare').disabled, true, 'compare still needs two marked frames');
@@ -2061,7 +2063,9 @@ const regression = `
     assert.ok(element('#announcer').textContent.includes('finished'));
     assert.equal(groupLoads, loadsBefore + 1, 'load() runs once when the job ends');
     assert.equal(element('#import-form button[type="submit"]').disabled, false);
-    assert.equal(element('#cancel-job').disabled, true);
+    assert.deepEqual([element('#cancel-job').disabled, element('#cancel-job').textContent, element('#cancel-job').className], [false, 'Clear', 'secondary'], 'a finished job offers Clear');
+    element('#cancel-job').listeners.click();
+    assert.equal(element('#job-strip').hidden, true, 'Clear hides the strip');
     importPolls = 0;
     resumeJobs = [jobPayload('queued', 0), importJob('queued', 0)];
     await load();

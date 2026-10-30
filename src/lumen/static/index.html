@@ -21,13 +21,6 @@
     <select id="fast-model" data-role="fast"></select></span>
   </header>
 
-  <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
-    <p id="job-label">No background job</p>
-    <progress id="job-progress" aria-labelledby="job-label" max="100" value="0"></progress>
-    <p id="job-status" role="status" aria-live="polite"></p>
-    <button type="button" id="cancel-job" class="danger" disabled>Cancel job</button>
-  </section>
-
   <div class="workspace">
     <nav aria-label="Photo batches" class="batch-rail">
       <div id="rail-header" class="rail-header">
@@ -82,7 +75,7 @@
               <label class="toggle" for="retag-all"><input type="checkbox" id="retag-all"> Re-tag already tagged</label>
             </div>
             <p id="tag-all-availability" class="quiet"></p>
-            <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the top.</p>
+            <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the job strip at the bottom.</p>
           </div>
           <fieldset id="export-controls">
             <legend>Choose what to export</legend>
@@ -339,6 +332,13 @@
     </main>
 
   </div>
+
+  <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
+    <p id="job-label">No background job</p>
+    <progress id="job-progress" aria-labelledby="job-label" max="100" value="0"></progress>
+    <p id="job-status" role="status" aria-live="polite"></p>
+    <button type="button" id="cancel-job" class="danger" disabled>Cancel job</button>
+  </section>
 
   <footer class="ai-bar" aria-label="Local AI activity">
     <p id="ai-status" role="status" aria-live="polite">Local AI idle. Requests and their results are reported here.</p>
