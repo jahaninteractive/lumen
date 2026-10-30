@@ -1366,7 +1366,7 @@ class WebTests(unittest.TestCase):
         js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
         start = js.index("function collapsePanel(")
         functions = js[start:js.index("// Add photos holds two sections")]
-        functions = functions[:functions.index("try {\n  selectTab.restore()")] + functions[functions.index("function chooseDefaultTab"):]
+        functions = functions[:functions.index("try {\n  const folded")] + functions[functions.index("function chooseDefaultTab"):]
         script = """
 const panel = { hidden: false };
 const document = { querySelector: () => panel };
@@ -1395,7 +1395,7 @@ console.log(JSON.stringify([panel.hidden, store]));
         self.assertEqual(svg, (Path(__file__).parent.parent / "src/lumen/static/mark.svg").read_text())
         js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
         self.assertIn("/static/mark.svg", js)
-        for phrase in ("Photos still on a memory card", "Photos already on a drive or folder", "Not sure?", "Don't show this again", "lumen-welcome-hidden"):
+        for phrase in ("Photos still on a memory card", "Photos already on a drive or folder", "Not sure?", "Don't show this again", "lumen-welcome-hidden", "Local AI", "scripts/bootstrap.sh"):
             self.assertIn(phrase, js)
         styles = (Path(__file__).parent.parent / "src/lumen/static/styles.css").read_text()
         self.assertIn(".first-run", styles)
@@ -1790,7 +1790,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'fold-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'fold-remembered' && key === 'lumen-panel-collapsed' ? '1' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -4192,6 +4192,13 @@ const regression = `
     assert.deepEqual([element('#ingest-panel').hidden, element('#import-panel').hidden, element('#add-source-ingest').checked], [false, true, true], 'the remembered source is restored');
     return;
   }
+  if (scenario === 'fold-remembered') {
+    await new Promise(setImmediate);  // the startup load
+    assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'the remembered tab is still selected');
+    assert.equal(element('#workflow-panels').hidden, true, 'a fold made before the reload survives it even with a remembered tab');
+    assert.equal(stored['lumen-panel-collapsed'], '1', 'the fold is still remembered after the restore');
+    return;
+  }
   if (scenario === 'default-tab' || scenario === 'default-tab-frames') {
     await new Promise(setImmediate);  // the startup load
     assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true');
@@ -5593,6 +5600,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_choosing_a_tab_scrolls_its_panel_into_view(self):
         self.run_javascript_cleanup_regression("tabs")
         self.run_javascript_cleanup_regression("tabs-remembered")
+        self.run_javascript_cleanup_regression("fold-remembered")
 
     def test_javascript_default_tab_follows_the_catalog_on_a_fresh_visit(self):
         self.run_javascript_cleanup_regression("default-tab")

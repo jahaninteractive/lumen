@@ -1454,6 +1454,17 @@ function firstRunCard() {
   const hint = document.createElement('p');
   hint.className = 'quiet';
   hint.textContent = 'Not sure? Ingest if the card is in the reader. Import if the photos are already backed up.';
+  const setup = document.createElement('dl');
+  setup.className = 'first-run-setup';
+  setup.setAttribute('aria-label', 'Local tools');
+  firstRunSetupRows(state.status || {}).forEach(([name, value, ok]) => {
+    const term = document.createElement('dt');
+    term.textContent = name;
+    const detail = document.createElement('dd');
+    detail.textContent = value;
+    detail.dataset.ok = String(ok);
+    setup.append(term, detail);
+  });
   const dismiss = document.createElement('label');
   dismiss.className = 'toggle first-run-dismiss';
   const box = document.createElement('input');
@@ -1464,8 +1475,26 @@ function firstRunCard() {
     announce('Welcome card hidden. Add photos is in the tabs above.');
   });
   dismiss.append(box, " Don't show this again");
-  card.append(mark, intro, choices, hint, dismiss);
+  card.append(mark, intro, choices, hint, setup, dismiss);
   return card;
+}
+
+// The same facts as the header and footer, spelled out once for someone setting up: [label, text, healthy].
+function firstRunSetupRows(status) {
+  const rows = [];
+  const live = status.omlx_live;
+  const roles = status.omlx_roles || {};
+  const role = name => roles[name] ? `${roles[name].model}${roles[name].loaded ? '' : ' (not loaded)'}` : 'unknown';
+  rows.push(live?.online
+    ? ['Local AI', `online · review ${role('review')} · fast ${role('fast')}`, Boolean(roles.review?.loaded && roles.fast?.loaded)]
+    : ['Local AI', 'offline. Start oMLX with a vision model loaded; culling, import and export work without it', false]);
+  const helper = status.raw_developer;
+  rows.push(['Raw developer', helper?.available ? 'ready' : 'missing. Run zsh scripts/bootstrap.sh to compile it; raw exports need it', helper?.available === true]);
+  Object.entries(status.tools || {}).filter(([name]) => name !== 'omlx' && name !== 'swiftc').forEach(([name, tool]) => {
+    const what = { exiftool: 'exports', 'darktable-cli': 'profile exports', 'siril-cli': 'astro stacking' }[name] || name;
+    rows.push([name, tool?.available ? `${tool.version || 'ready'}` : `missing. ${tool?.required ? 'Every export needs it' : `Needed only for ${what}`}`, tool?.available === true]);
+  });
+  return rows;
 }
 
 function showMore() {
@@ -2393,8 +2422,9 @@ function togglePanel() {
   announce(collapsed ? 'Workflow panel collapsed; the contact sheet has the space.' : 'Workflow panel shown.');
 }
 try {
+  const folded = localStorage.getItem('lumen-panel-collapsed') === '1';  // read first: restoring a tab shows its panel and would clear the fold
   selectTab.restore();  // before load(), so the first load fills the right panel; a removed tab stays on Add photos
-  if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
+  if (folded) collapsePanel(true);
 } catch { /* per-visit only */ }
 // A fresh visit (no remembered tab and no remembered fold) starts with the panel folded, so an empty catalog shows the
 // first-run card and a full one shows the sheet; Add photos is selected in the markup. A fold made before a reload stays.
