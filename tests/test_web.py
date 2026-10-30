@@ -1361,6 +1361,32 @@ class WebTests(unittest.TestCase):
         self.assertEqual((["ice"], None), (vocab["blocked"], vocab["counts"].get("ice")))
         self.assertEqual(["bay"], self.get_json(f"/api/photos/{photo_id}")[1]["tags"]["data"]["subjects"])
 
+    def test_fresh_visit_folds_the_panel_and_a_remembered_fold_survives_reload(self):
+        # chooseDefaultTab runs after the first load; it must never undo a fold the photographer made before refreshing.
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        start = js.index("function collapsePanel(")
+        functions = js[start:js.index("// Add photos holds two sections")]
+        functions = functions[:functions.index("try {\n  selectTab.restore()")] + functions[functions.index("function chooseDefaultTab"):]
+        script = """
+const panel = { hidden: false };
+const document = { querySelector: () => panel };
+const store = {};
+const localStorage = { getItem: key => store[key] ?? null, setItem: (key, value) => { store[key] = value; }, removeItem: key => { delete store[key]; } };
+const announce = () => {};
+""" + functions + """
+chooseDefaultTab(0);
+console.log(JSON.stringify([panel.hidden, store]));
+collapsePanel(true); chooseDefaultTab(0);
+console.log(JSON.stringify([panel.hidden, store]));
+delete store['lumen-panel-collapsed']; panel.hidden = false; store['lumen-tab'] = 'review-tab'; chooseDefaultTab(5);
+console.log(JSON.stringify([panel.hidden, store]));
+"""
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True)
+        self.assertEqual(
+            ['[true,{"lumen-panel-collapsed":"1"}]', '[true,{"lumen-panel-collapsed":"1"}]', '[false,{"lumen-tab":"review-tab"}]'],
+            result.stdout.split(),
+        )
+
     def test_first_run_card_offers_ingest_and_import_under_the_pixel_mark(self):
         response = urllib.request.urlopen(self.base + "/static/mark.svg", timeout=3)
         self.assertEqual("image/svg+xml", response.headers["Content-Type"])
@@ -1369,7 +1395,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(svg, (Path(__file__).parent.parent / "src/lumen/static/mark.svg").read_text())
         js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
         self.assertIn("/static/mark.svg", js)
-        for phrase in ("Photos still on a memory card", "Photos already on a drive or folder", "Not sure?"):
+        for phrase in ("Photos still on a memory card", "Photos already on a drive or folder", "Not sure?", "Don't show this again", "lumen-welcome-hidden"):
             self.assertIn(phrase, js)
         styles = (Path(__file__).parent.parent / "src/lumen/static/styles.css").read_text()
         self.assertIn(".first-run", styles)
@@ -4170,12 +4196,8 @@ const regression = `
     await new Promise(setImmediate);  // the startup load
     assert.equal(element('#add-tab').getAttribute('aria-selected'), 'true');
     assert.equal(stored['lumen-tab'], undefined, 'the default is not remembered as a choice');
-    if (scenario === 'default-tab') {
-      assert.equal(element('#workflow-panels').hidden, false, 'an empty catalog opens Add photos');
-      assert.equal(element('#add-panel').hidden, false);
-    } else {
-      assert.equal(element('#workflow-panels').hidden, true, 'a catalog with frames opens folded on the sheet');
-    }
+    assert.equal(element('#workflow-panels').hidden, true, scenario === 'default-tab' ? 'an empty catalog opens folded on the first-run card' : 'a catalog with frames opens folded on the sheet');
+    assert.equal(element('#add-panel').hidden, false, 'Add photos is the panel behind the fold');
     await load();
     element('#workflow-panels').hidden = false;
     await load();

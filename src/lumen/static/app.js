@@ -1406,6 +1406,14 @@ function renderGroups() {
 
 // An empty, unfiltered sheet shows the way in: each button opens Add photos on the matching source.
 function firstRunCard() {
+  let hidden = null;
+  try { hidden = localStorage.getItem('lumen-welcome-hidden'); } catch { /* per-visit only */ }
+  if (hidden === '1') {
+    const empty = document.createElement('p');
+    empty.className = 'quiet';
+    empty.textContent = 'Import a folder to build your first contact sheet.';
+    return empty;
+  }
   const card = document.createElement('section');
   card.className = 'first-run';
   card.setAttribute('aria-label', 'Get started');
@@ -1446,7 +1454,17 @@ function firstRunCard() {
   const hint = document.createElement('p');
   hint.className = 'quiet';
   hint.textContent = 'Not sure? Ingest if the card is in the reader. Import if the photos are already backed up.';
-  card.append(mark, intro, choices, hint);
+  const dismiss = document.createElement('label');
+  dismiss.className = 'toggle first-run-dismiss';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.addEventListener('change', () => {
+    try { localStorage.setItem('lumen-welcome-hidden', '1'); } catch { /* per-visit only */ }
+    renderGroups();
+    announce('Welcome card hidden. Add photos is in the tabs above.');
+  });
+  dismiss.append(box, " Don't show this again");
+  card.append(mark, intro, choices, hint, dismiss);
   return card;
 }
 
@@ -1566,7 +1584,7 @@ async function load() {
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
   state.keeperCount = groups.keeper_count;
-  if (!defaultTabChosen) { defaultTabChosen = true; chooseDefaultTab(state.photoCount); }
+  if (!defaultTabChosen) { defaultTabChosen = true; chooseDefaultTab(); }
   syncFilters(groups.cameras);
   const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId))
     || (state.selectedId === null ? state.groups.find(group => group.id === state.selectedGroupId) : undefined);
@@ -2378,11 +2396,12 @@ try {
   selectTab.restore();  // before load(), so the first load fills the right panel; a removed tab stays on Add photos
   if (localStorage.getItem('lumen-panel-collapsed') === '1') collapsePanel(true);
 } catch { /* per-visit only */ }
-// A fresh visit (no remembered tab) opens Add photos on an empty catalog and the folded panel otherwise; Add photos is selected in the markup.
-function chooseDefaultTab(photoCount) {
+// A fresh visit (no remembered tab and no remembered fold) starts with the panel folded, so an empty catalog shows the
+// first-run card and a full one shows the sheet; Add photos is selected in the markup. A fold made before a reload stays.
+function chooseDefaultTab() {
   let remembered = null;
-  try { remembered = localStorage.getItem('lumen-tab'); } catch { /* per-visit only */ }
-  if (remembered === null) collapsePanel(photoCount > 0);
+  try { remembered = localStorage.getItem('lumen-tab') ?? localStorage.getItem('lumen-panel-collapsed'); } catch { /* per-visit only */ }
+  if (remembered === null) collapsePanel(true);
 }
 // Add photos holds two sections; the radios, not the tablist, show one of them.
 const addSourceRadios = [...document.querySelectorAll('input[name="add-source"]')];
