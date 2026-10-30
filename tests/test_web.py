@@ -187,7 +187,7 @@ class WebTests(unittest.TestCase):
         self.assertIn(started["status"], ("queued", "running", "succeeded"))
         finished = self.wait_job(started["job_id"])
         self.assertEqual("succeeded", finished["status"])
-        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 0}, finished["result"])
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 0, "restored": 0}, finished["result"])
         self.assertEqual((2, 2, "DSC0001.jpg"), (finished["processed"], finished["total"], finished["label"]))
         code, listing = self.get_json("/api/jobs")
         self.assertEqual(200, code)

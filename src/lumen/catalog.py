@@ -713,6 +713,47 @@ class Catalog:
                                         ((fingerprint, cleared_at) for fingerprint in fingerprints))
             return self.connection.total_changes - before
 
+    def restore_work(self, photo_id: int, fingerprint: str, snapshot: Path) -> bool:
+        """Copy the photographer's work for `fingerprint` from a cleanup snapshot onto a freshly imported row: rating,
+        decision, manual pick, tags (caption and alt text live there), crop, develop settings, a typed place name and
+        a typed position (only when the new file carries no camera fix). Returns False when the snapshot lacks it."""
+        with closing(sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)) as source:
+            source.row_factory = sqlite3.Row
+            old = source.execute("SELECT * FROM photos WHERE fingerprint = ? ORDER BY id DESC LIMIT 1", (fingerprint,)).fetchone()
+            if old is None:
+                return False
+            events = [(row["kind"], json.loads(row["details_json"])) for row in source.execute(
+                "SELECT kind, details_json FROM provenance WHERE photo_id = ? AND kind IN "
+                "('location_set', 'place_resolved', 'place_edited') ORDER BY id", (old["id"],))]
+            rows = {table: source.execute(f"SELECT * FROM {table} WHERE photo_id = ?", (old["id"],)).fetchone()
+                    for table in ("tags", "photo_edits", "photo_develop")}
+        last = {kind: details for kind, details in events}  # newest of each kind wins
+        last_place = next((kind for kind, _ in reversed(events) if kind != "location_set"), None)
+        typed = last.get("location_set")
+        position_typed = typed is not None and (typed["latitude"], typed["longitude"]) == (old["latitude"], old["longitude"])
+        with self.connection:
+            self.connection.execute("UPDATE photos SET rating = ?, decision = ?, manual_pick = ? WHERE id = ?",
+                                    (old["rating"], old["decision"], old["manual_pick"], photo_id))
+            if last_place == "place_edited":
+                self.connection.execute("UPDATE photos SET place = ?, place_country = ? WHERE id = ?",
+                                        (old["place"], old["place_country"], photo_id))
+                self._insert_event(photo_id, "place_edited", last["place_edited"])
+            if position_typed:
+                fix = self.connection.execute("SELECT latitude FROM photos WHERE id = ?", (photo_id,)).fetchone()
+                if fix["latitude"] is None:
+                    self.connection.execute("UPDATE photos SET latitude = ?, longitude = ?, altitude = NULL WHERE id = ?",
+                                            (old["latitude"], old["longitude"], photo_id))
+                    self._insert_event(photo_id, "location_set", typed)
+            for table, row in rows.items():
+                if row is None:
+                    continue
+                values = dict(row) | {"photo_id": photo_id}
+                self.connection.execute(f"INSERT OR REPLACE INTO {table} ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+                                        tuple(values.values()))
+            self.connection.execute("DELETE FROM cleared_fingerprints WHERE fingerprint = ?", (fingerprint,))
+            self._insert_event(photo_id, "work_restored", {"snapshot": snapshot.parent.name, "source_fingerprint": fingerprint})
+        return True
+
     def cleared_fingerprints(self) -> set[str]:
         return {row["fingerprint"] for row in self.connection.execute("SELECT fingerprint FROM cleared_fingerprints")}
 

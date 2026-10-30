@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import sqlite3
 import subprocess
 import threading
@@ -2595,6 +2595,47 @@ class LibraryTests(unittest.TestCase):
         self.assertIn(str(cleared.resolve()), paths_after_include)
         self.assertIn(fingerprint, ledger)
 
+    def test_import_with_include_cleared_restores_the_work_from_the_newest_trash_snapshot(self):
+        from lumen.domain import CropRect, DevelopSettings, PhotoEdit
+        backup = self.root / "backup"
+        backup.mkdir()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.source_dir)
+            photo = library.catalog.list_photos()[0]
+            library.catalog.set_rating(photo.id, 4)
+            library.catalog.set_decision(photo.id, "flag")
+            library.catalog.set_manual_pick(photo.id)
+            library.catalog.save_tags(photo.id, {"description": "Lion at dusk", "subjects": ["lion"]}, "fast-model")
+            library.catalog.save_develop(photo.id, DevelopSettings({"exposure_ev": 0.5}), photo.fingerprint)
+            library.catalog.save_crop(PhotoEdit(
+                photo_id=photo.id, candidate_id="crop-0123456789abcdef", rect=CropRect(0.25, 0.1, 0.5, 0.8),
+                aspect="4:5", source_width=320, source_height=240, author="manual", rationale="Padded face",
+                selected_at=datetime.now(timezone.utc)))
+            library.set_location(photo.id, "-24.5 26.3", scope="frame")
+            library.set_place(photo.id, "Our camp", "South Africa", scope="frame", remember=False)
+            library.clear_workspace("CLEAR")
+            shutil.copy2(self.image_path, backup / "DSC0001.ARW.jpg")
+            self.assertEqual(1, library.import_path(backup).previously_cleared)
+            summary = library.import_path(backup, include_cleared=True)
+            restored = library.catalog.list_photos()[0]
+            crop = library.catalog.get_crop(restored.id)
+            develop = library.catalog.get_develop(restored.id)
+            tags = library.catalog.get_tags(restored.id)
+            typed = library.location_typed(restored)
+            ledger = library.catalog.cleared_fingerprints()
+            again = library.import_path(backup)
+
+        self.assertEqual((1, 1, 0), (summary.imported, summary.restored, summary.previously_cleared))
+        self.assertEqual((4, "flag", True, "Our camp", "South Africa", -24.5, 26.3),
+                         (restored.rating, restored.decision, restored.manual_pick, restored.place,
+                          restored.place_country, restored.latitude, restored.longitude))
+        self.assertTrue(typed)
+        self.assertEqual("crop-0123456789abcdef", crop.candidate_id)
+        self.assertEqual({"exposure_ev": 0.5}, develop.to_dict())
+        self.assertEqual("Lion at dusk", tags["data"]["description"])
+        self.assertEqual(set(), ledger)
+        self.assertEqual((0, 1, 0), (again.imported, again.updated, again.previously_cleared))
+
     def test_import_job_reports_previously_cleared_and_can_include_them(self):
         cleared = self.source_dir / "a.jpg"
         Image.new("RGB", (320, 240), (200, 40, 40)).save(cleared)
@@ -2604,11 +2645,11 @@ class LibraryTests(unittest.TestCase):
             rows = len(library.catalog.list_photos())
             included = self.run_job(library, library.start_import_job(self.source_dir, include_cleared=True))
 
-        self.assertEqual({"discovered": 2, "imported": 1, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 1},
-                         status["result"])
+        self.assertEqual({"discovered": 2, "imported": 1, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 1,
+                          "restored": 0}, status["result"])
         self.assertEqual(1, rows)
-        self.assertEqual({"discovered": 2, "imported": 1, "updated": 0, "skipped": 1, "failed": 0, "previously_cleared": 0},
-                         included["result"])
+        self.assertEqual({"discovered": 2, "imported": 1, "updated": 0, "skipped": 1, "failed": 0, "previously_cleared": 0,
+                          "restored": 0}, included["result"])
 
     def test_import_job_skips_cataloged_matching_photos_without_preview_work(self):
         second = self.source_dir / "DSC0002.jpg"
@@ -2630,7 +2671,7 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("import", status["kind"])
         self.assertEqual([added.resolve()], [call.args[1] for call in preview.call_args_list])
         self.assertEqual(1, measure.call_count)
-        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 2, "failed": 0, "previously_cleared": 0}, status["result"])
+        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 2, "failed": 0, "previously_cleared": 0, "restored": 0}, status["result"])
         self.assertEqual((3, 3), (status["processed"], status["total"]))
         self.assertEqual(3, len(photos))
         self.assertEqual(events_before, events_after)
@@ -2692,7 +2733,7 @@ class LibraryTests(unittest.TestCase):
             photo_count = library.photo_count()
 
         self.assertEqual("succeeded", status["status"])
-        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 1, "failed": 1, "previously_cleared": 0}, status["result"])
+        self.assertEqual({"discovered": 3, "imported": 1, "updated": 0, "skipped": 1, "failed": 1, "previously_cleared": 0, "restored": 0}, status["result"])
         self.assertEqual(prior, changed.fingerprint, "the row keeps its prior identity, never mismatched content")
         self.assertEqual("import_failed", failure.kind)
         self.assertIn("source changed during import", failure.details["error"])
@@ -2792,7 +2833,7 @@ class LibraryTests(unittest.TestCase):
             paths = [photo.path for photo in library.catalog.list_photos()]
 
         self.assertEqual("succeeded", status["status"])
-        self.assertEqual({"discovered": 3, "imported": 2, "updated": 0, "skipped": 1, "failed": 0, "previously_cleared": 0}, status["result"])
+        self.assertEqual({"discovered": 3, "imported": 2, "updated": 0, "skipped": 1, "failed": 0, "previously_cleared": 0, "restored": 0}, status["result"])
         self.assertEqual(3, len(paths))
         self.assertEqual(len(paths), len(set(paths)))
 

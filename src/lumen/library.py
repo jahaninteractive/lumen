@@ -104,6 +104,7 @@ class ImportSummary:
     errors: list[str] = field(default_factory=list)
     skipped: int = 0
     previously_cleared: int = 0
+    restored: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,11 +385,13 @@ class Library:
             if previous is None and fingerprint in cleared:
                 summary.previously_cleared += 1
                 return
-            self._import_one(source, fingerprint, job_id=job_id)
+            photo_id = self._import_one(source, fingerprint, job_id=job_id)
             if previous:
                 summary.updated += 1
             else:
                 summary.imported += 1
+                if fingerprint in self.catalog.cleared_fingerprints() and self._restore_cleared(photo_id, fingerprint):
+                    summary.restored += 1
         except (OSError, PreviewError, ValueError, subprocess.SubprocessError) as error:
             summary.failed += 1
             summary.errors.append(f"{source.name}: {error}")
@@ -427,7 +430,7 @@ class Library:
                 with worker._mutation():
                     worker._regroup_and_write_sidecars()
                 counts = {key: getattr(summary, key) for key in (
-                    "discovered", "imported", "updated", "skipped", "failed", "previously_cleared")}
+                    "discovered", "imported", "updated", "skipped", "failed", "previously_cleared", "restored")}
                 worker._write_job_files(job.id, {"kind": "import", "path": str(requested), "summary": counts})
 
         self._submit_job(runner, job, work)
@@ -2133,6 +2136,17 @@ class Library:
             if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
             if not (resolved := path.resolve()).is_relative_to(library_dir)
         )
+
+    def _restore_cleared(self, photo_id: int, fingerprint: str) -> bool:
+        """A frame cleared earlier and imported again on purpose gets its work back from the newest snapshot that
+        holds it, and leaves the cleared ledger so the next plain import keeps it."""
+        for path in sorted(self.settings.trash_dir.glob("*/catalog.sqlite3"), reverse=True):
+            try:
+                if self.catalog.restore_work(photo_id, fingerprint, path):
+                    return True
+            except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+                continue  # an unreadable snapshot is skipped, as seed_cleared_from_trash does
+        return False
 
     def _import_one(self, source: Path, fingerprint: str | None = None, *, job_id: int | None = None) -> int:
         fingerprint = fingerprint or fingerprint_file(source)

@@ -140,7 +140,7 @@ class CliTests(unittest.TestCase):
             missing_code, missing = self.run_json(root / "library", "import", str(root / "missing"))
 
         self.assertEqual((0, "succeeded", "import"), (code, first["status"], first["kind"]))
-        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 0}, first["result"])
+        self.assertEqual({"discovered": 2, "imported": 2, "updated": 0, "skipped": 0, "failed": 0, "previously_cleared": 0, "restored": 0}, first["result"])
         self.assertEqual((2, 2), (first["processed"], first["total"]))
         self.assertEqual((0, 2), (again_code, again["result"]["skipped"]))
         self.assertEqual(2, missing_code)

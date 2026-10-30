@@ -1790,7 +1790,7 @@ const JOB_NAMES = { import: 'Import', export: 'Export', develop_group: 'Apply de
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
   const result = job.result || {};
-  const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed${result.previously_cleared ? `, ${result.previously_cleared} previously cleared` : ''}.`
+  const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed${result.previously_cleared ? `, ${result.previously_cleared} previously cleared` : ''}${result.restored ? `, ${result.restored} restored with earlier work` : ''}.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'assist' && job.result ? ` ${result.tagged} tagged, ${result.reviewed} scanned (${result.suggested} suggested rejects), ${result.captioned} captioned, ${result.skipped} already done, ${result.failed} failed.`
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
