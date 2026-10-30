@@ -98,7 +98,7 @@ cleared in earlier sessions** under **Already on a drive** in Add photos or pass
 
 Import, ingest, tag-all, preview refinement, and astro stacks run as background
 jobs, one at a time. The web page shows progress in the footer strip at the
-bottom, under the AI activity line, with a **Cancel job** button. From the CLI:
+bottom, under the AI activity line, with a **Cancel job** button, which becomes **Clear** once the job has ended. From the CLI:
 
 ```sh
 uv run lumen jobs --json

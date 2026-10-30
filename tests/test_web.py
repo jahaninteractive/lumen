@@ -2118,7 +2118,7 @@ const regression = `
     assert.equal(element('#job-strip').hidden, false);
     assert.ok(element('#announcer').textContent.includes('Import'));
     for (const name of ['#import-form button[type="submit"]', '#browse-path', '#remove-group', '#browse-xmp']) assert.equal(element(name).disabled, true, name + ' is disabled during a job');
-    assert.equal(element('#cancel-job').disabled, false);
+    assert.deepEqual([element('#cancel-job').disabled, element('#cancel-job').textContent, element('#cancel-job').className], [false, 'Cancel job', 'danger']);
     assert.equal(element('#tag-all').disabled, true, 'tag-all is structural: one job at a time');
     assert.equal(state.cullingBlocked, false, 'culling continues while an import runs');
     assert.equal(element('#open-compare').disabled, true, 'compare still needs two marked frames');
@@ -2142,7 +2142,9 @@ const regression = `
     assert.ok(element('#announcer').textContent.includes('finished'));
     assert.equal(groupLoads, loadsBefore + 1, 'load() runs once when the job ends');
     assert.equal(element('#import-form button[type="submit"]').disabled, false);
-    assert.equal(element('#cancel-job').disabled, true);
+    assert.deepEqual([element('#cancel-job').disabled, element('#cancel-job').textContent, element('#cancel-job').className], [false, 'Clear', 'secondary'], 'a finished job offers Clear');
+    element('#cancel-job').listeners.click();
+    assert.equal(element('#job-strip').hidden, true, 'Clear hides the strip');
     importPolls = 0;
     resumeJobs = [jobPayload('queued', 0), importJob('queued', 0)];
     await load();
