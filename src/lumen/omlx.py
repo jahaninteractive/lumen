@@ -298,8 +298,10 @@ def _place_sentence(place: str | None) -> str:
 
 
 def _vocabulary_system(vocabulary: dict[str, list[str]]) -> str:
+    # "learned" stays out: those are the model's own earlier words, so they steer nothing, and the review model
+    # prefills this prefix on every request (oMLX cannot cache it for hybrid-attention models): 2.5 s per tag measured.
     return ("Keyword list by category: "
-            + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items())
+            + "; ".join(f"{name}: {', '.join(words)}" for name, words in vocabulary.items() if name != "learned")
             + ". Choose keywords from the list where one fits; add at most three others.")
 
 

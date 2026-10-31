@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from lumen.config import Settings
-from lumen.vocabulary import forget_keyword, learn_keywords, all_keywords, load_blocked, load_vocabulary, match_keywords
+from lumen.vocabulary import LEARNED_CAP, forget_keyword, learn_keywords, all_keywords, load_blocked, load_vocabulary, match_keywords
 
 
 class VocabularyTests(unittest.TestCase):
@@ -44,6 +44,20 @@ class VocabularyTests(unittest.TestCase):
             self.assertIn("lion", vocab["wildlife"])
             self.assertEqual([], learn_keywords(settings, {"learned": ["IMPALA"]}))
             self.assertEqual(1, json.loads(settings.vocabulary_path.read_text())["schema_version"])
+
+    def test_learned_words_are_capped_at_the_newest_and_deduplicated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = Settings(library_dir=Path(directory))
+            load_vocabulary(settings)
+            settings.vocabulary_path.write_text(json.dumps({"schema_version": 1, "categories": {"learned": ["night", "Night", "safari vehicle"]}}))
+            learn_keywords(settings, {"learned": [f"word{i}" for i in range(LEARNED_CAP)]})
+            learned = load_vocabulary(settings)["learned"]
+            self.assertEqual(LEARNED_CAP, len(learned), "the list is capped")
+            self.assertEqual(f"word{LEARNED_CAP - 1}", learned[-1], "the newest words are kept")
+            self.assertNotIn("night", learned, "the oldest fall off first")
+            self.assertEqual(len(learned), len({w.casefold() for w in learned}), "no casefolded duplicates survive a save")
+            learn_keywords(settings, {"wildlife": ["lion"]})
+            self.assertEqual(LEARNED_CAP, len(load_vocabulary(settings)["learned"]), "learning in another category leaves the cap alone")
 
     def test_forget_keyword_blocks_relearning(self):
         with tempfile.TemporaryDirectory() as directory:

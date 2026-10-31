@@ -7,6 +7,7 @@ from .config import Settings
 from .sidecars import SidecarWriter
 
 MAX_SUGGESTED = 3
+LEARNED_CAP = 30  # newest kept; the list is the model's own words and only grows otherwise
 
 
 def load_vocabulary(settings: Settings) -> dict[str, list[str]]:
@@ -76,6 +77,7 @@ def forget_keyword(settings: Settings, word: str) -> bool:
 def learn_keywords(settings: Settings, words_by_category: dict[str, list[str]]) -> list[str]:
     """Append words the model (or the photographer) used to <library>/vocabulary.json; returns the words actually added."""
     vocab = load_vocabulary(settings)
+    learned_before = list(vocab.get("learned", []))
     known = {word.casefold() for word in all_keywords(vocab)} | set(load_blocked(settings))
     added = []
     for category, words in words_by_category.items():
@@ -86,6 +88,10 @@ def learn_keywords(settings: Settings, words_by_category: dict[str, list[str]]) 
             vocab.setdefault(category, []).append(clean)
             known.add(clean.casefold())
             added.append(clean)
-    if added:
+    if "learned" in vocab:
+        seen: set[str] = set()
+        unique = [word for word in reversed(vocab["learned"]) if not (word.casefold() in seen or seen.add(word.casefold()))]
+        vocab["learned"] = unique[:LEARNED_CAP][::-1]
+    if added or vocab.get("learned", []) != learned_before:
         _save(settings, categories=vocab)
     return added

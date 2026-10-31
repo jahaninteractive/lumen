@@ -11,6 +11,7 @@ from PIL import Image
 
 import lumen.omlx as omlx
 from lumen.omlx import (
+    _vocabulary_system,
     AstroResponseError,
     BurstResponseError,
     CaptionResponseError,
@@ -312,6 +313,15 @@ class OmlxTests(unittest.TestCase):
         self.assertIn("Do not identify a person.", text)
         self.assertTrue(text.endswith(" Write the JSON compact on one line, no code fence."))
         self.assertEqual("fast", tagger.role)
+
+    def test_vocabulary_system_prefix_leaves_out_the_learned_words(self):
+        # Learned words are the model's own earlier answers, so they steer nothing, and on the review model the
+        # prefix is prefilled on every request (oMLX cannot cache it for hybrid-attention models): measured 2.5 s per tag.
+        system = _vocabulary_system({"wildlife": ["gentoo penguin"], "learned": ["arm", "sleeve"], "places": ["Saint Helena"]})
+        self.assertIn("wildlife: gentoo penguin", system)
+        self.assertIn("places: Saint Helena", system)
+        self.assertNotIn("learned", system)
+        self.assertNotIn("sleeve", system)
 
     def test_complete_sends_system_prefix_before_the_user_turn(self):
         tagger = OmlxTagger("http://127.0.0.1:8000", "fast-model", api_key="k")

@@ -116,8 +116,9 @@ From the `usage` block on single requests:
 
 The answer is 160 to 210 tokens of pretty-printed JSON (often inside a
 ```` ```json ```` fence), about 7 s at roughly 28 tokens per second. The
-vocabulary goes first as a system message (`_vocabulary_system`) and oMLX
-caches that prefix across a job, so it costs little.
+vocabulary goes first as a system message (`_vocabulary_system`). oMLX
+caches that prefix for the 8B but **not for the 27B** (measured 2026-10-31,
+see "27B knobs" below): on the 27B it costs about 2.6 s on every request.
 
 ### Shrinking the image and compacting the answer (4 fresh frames each)
 
@@ -136,6 +137,161 @@ known. Results: `tag-speed-by-size.json`.
 
 One at a time: 11.8 s per frame. Four at once: 9.1 to 9.5 s per frame. About
 20% more throughput; prefill seems to be compute-bound on this GPU.
+
+## Qwen2.5-VL-3B against Qwen3-VL-8B (2026-10-31)
+
+Question: could the 3B (2.9 GB on disk) serve an 8 GB Mac? Measured with
+`compare.py` on snapshot `20261028T092715Z-3inu821z` (safari frames: zebra,
+wildebeest, lions, elephant, a vehicle, a flower), 10 fresh frames per task,
+both models loaded, all of one model's calls before the other's. Results:
+`results/compare-Qwen2.5-VL-3B-vs-Qwen3-VL-8B.json`.
+
+| Task (frames) | 3B median s | 3B parsed | 8B median s | 8B parsed |
+|---------------|-------------|-----------|-------------|-----------|
+| tag (10) | 2.2 | 6/10 | 2.7 | 10/10 |
+| reject scan (10) | 0.9 | 6/10 | 1.4 | 10/10 |
+| astro triage (4) | 0.4 | 3/4 | 0.7 | 4/4 |
+| caption (6) | 0.5 | 6/6 | 1.0 | 6/6 |
+| burst critique (3) | 9.3 | 1/3 | 12.5 | 3/3 |
+| develop advice (4) | 2.9 | 0/4 | 3.5 | 4/4 |
+| composition (4) | 2.3 | 4/4 | 3.4 | 4/4 |
+
+Verdict: **not usable as a drop-in.** The speed gain is only 1.2 to 2x
+because image prefill dominates and both models see the same 1024-pixel
+image. The 3B does not follow the JSON contracts: it wraps objects in a
+fenced array (`[{...}]`), drops the top-level `confidence` key, pretty-prints
+despite the compact request, and on develop emits every control with
+`temperature_k: 2000` plus a null or malformed curve (one answer looped on
+`"0.0"` to the token limit). Where it parses, the answers are worse: burst
+critique picked the first frame every time and described it instead of
+comparing; the reject scan flagged `misfire` 0.99 on every frame with
+`suggest_reject` false; astro called a spotlit lioness `night_sky`; tagging
+listed lion, elephant and giraffe at 0.6 to 0.8 on a frame with no animal,
+and copied vocabulary into `technical` ("calm water" on a savanna). Captions
+were the one competent task, a sentence shorter than the 8B's and with alt
+text identical to the caption.
+
+Memory: oMLX RSS rose 2.5 GB after the 3B's block and a further 3 GB after
+the 8B's, with both resident. Neither is a measurement of the model alone on
+an 8 GB machine; that needs a run with one model loaded.
+
+Also seen in the 8B: `exposure_ev: -0.5` with a rationale that calls it a
+brighten on a median-9 frame (the sign error the prompt was rewritten to
+stop; 1 of 4 here), species at 0.02 to 0.1 on the no-animal frame, and two
+composition rationales saying the crop "is not provided" or "is identical to
+the original", which suggests the two-image prompt is not landing. Vision
+found no regions on any of the 4 composition frames, so each had only the
+original plus the centered fallback.
+
+If an 8 GB target matters: the lever is parser tolerance (accept a
+single-element array, default a missing `confidence`), which would recover
+most of the 3B's tag, reject and astro failures but none of its quality; or a
+3B-class model from the Qwen3-VL line, which has not been tried.
+
+## 27B knobs in oMLX, and why the vocabulary prefix is not cached (2026-10-31)
+
+The photographer's goal is the 27B's quality closer to the 8B's time, so the
+server-side levers oMLX 0.7.2 offers for `Qwen3.8-27B-4bit` were measured
+with the 27B loaded alone (8B unloaded), tagging 3 fresh safari frames per
+cell through `live_check.py` (offsets 400, 403, 406). Results:
+`results/27b-knobs.json`.
+
+| Cell | Per frame | Note |
+|------|-----------|------|
+| as shipped | 12.3, 11.2, 10.9 s | prompt 1355 tokens, 98 to 142 generated |
+| MTP speculative decode | 11.7, 9.7, 10.6 s | drafter `mlx-community/Qwen3.8-27B-MTP-4bit` (265 MB, now in `~/Models/mlx-community/`); accepted 75 to 79% of drafted tokens, 2.5 tokens per verify round, but a round costs about as much as 2.5 plain steps |
+| ANE prefill (`qwen35_ane_prefill_enabled`) | 16.8 (warm-up), 11.5, 11.9 s | neutral once warm |
+| int8 activations (`qwen35_oq_a8_enabled`) | refused | oMLX: needs M5-series Metal INT8 |
+
+Both knobs are back off; the drafter name stays in the 27B's oMLX settings
+with `vlm_mtp_enabled` false. Where the time goes (`max_tokens` 1, 27B):
+
+- A 690-token image prompt prefills in 4.0 to 5.1 s; text prefills at about
+  4.8 ms per token, so the vision encoder itself is under 1 s. Prefill is
+  compute-bound on the language model, which is why neither knob helped.
+- **The vocabulary system message (581 tokens) is prefilled on every 27B
+  request**: alone it costs 3.0 s the first time and 2.9 s the second;
+  system plus a fresh image costs 6.4 to 6.6 s, the sum of the two. On the
+  8B the same message costs 0.64 s once and 0.17 s after (log: `Prefix cache
+  restore ... cached=512`), and system plus image costs the same as image
+  alone (1.2 s).
+- Cause, from oMLX's `scheduler.py`: Qwen3.5-family models have recurrent
+  (GDN) layers whose state cannot be sliced, so the prefix cache can only
+  restore at a "boundary snapshot". Snapshots are taken per prefill chunk
+  (`prefill_step_size`, 2048, not exposed in settings) and at the end of
+  the request, so a 1355-token prompt gets one snapshot at its own end
+  (log: `storing 1348/1497 tokens ... 0 intermediate snapshots`) and the
+  next frame, which differs after token 581, matches nothing. Qwen3-VL (the
+  8B) is plain attention and restores at 256-token block boundaries.
+
+What this means for the 27B: about 2.6 of its 11 s per tag is the keyword
+list, and the `learned` section (100 words) is 53% of its characters, about
+1.5 s. Shortening that list, or capping how many learned words are sent to
+the review model, is the one lever left that is bigger than noise without
+changing the image size.
+
+Measured the same afternoon (27B, 3 fresh frames per cell, offsets 436 and
+439): the curated categories alone (`wildlife`, `scene`, `conditions`,
+`activity`, `places`; 1086 characters, prompt 1081 tokens) tagged in 9.3,
+9.5 and 10.5 s; the full list (2121 characters, 1355 tokens) in 12.4, 12.2
+and 11.8 s. Subjects, species and descriptions were as good without the
+learned words (kudu 0.98, African elephant 0.95 to 0.98; one frame listed
+"elephant" twice). The learned list in the photographer's library is 100 of
+the model's own earlier words with duplicates and junk ("arm", "sleeve",
+"bracelet", "phone", "table", "glass", "person (not identified)"), and
+`learn_keywords` has no cap, so it will keep growing.
+
+**Done the same day, in the tree:** `_vocabulary_system` leaves `learned`
+out of the prompt (it stays in the file for matching and the UI), and
+`learn_keywords` keeps the newest `LEARNED_CAP` (30) learned words without
+casefolded duplicates. Tests in `test_omlx` and `test_vocabulary`; suite 723
+warning-strict OK.
+
+### No keyword list at all (step 3, measured, declined)
+
+27B, alternating frames between the curated list (the code above) and no
+system message (species still requested), 5 frames per cell per set.
+Results: `results/vocab-none-vs-curated.json`.
+
+| Set | Cell | Median s | Words matching the curated vocabulary |
+|-----|------|----------|----------------------------------------|
+| safari | curated | 10.7 | 11 of 27 |
+| safari | none | 8.2 | 2 of 35 |
+| seabird | curated | 9.5 | 15 of 22 |
+| seabird | none | 7.7 | 5 of 26 |
+
+Another 2 s per frame, but the list is doing its job: with it the seabird
+frames come back as wandering albatross, black-browed albatross and southern
+giant petrel; without it the same birds are "gull", "bird", "Shearwater" and
+"Petrel", scenes become "outdoor" instead of "open ocean", and subjects fill
+with free text ("coffee table", "cushion", "backpack") that matches nothing.
+Keep the curated list. Residual oddities seen with it: "Kite" at 0.1 to 0.6
+on three frames (two seabirds, one dung beetle), and a species list on a
+distant herd at 0.6 and 0.4; both are gate material for step 7.
+
+## Smaller and other-family candidates (2026-10-31, not yet measured)
+
+The connection here is a slow satellite link (about 400 KB/s measured; a
+3 GB model is about 2 hours). Ask before queueing anything, one at a time,
+through oMLX's own downloader (`POST /admin/api/hf/download`), which resumes.
+Sizes are the `.safetensors` totals on `mlx-community`; all have a vision
+tower in `config.json`.
+
+| Model | Size | Why it is interesting |
+|-------|------|----------------------|
+| `Qwen3-VL-4B-Instruct-4bit` | 3.1 GB | the Qwen3-VL line's small model; follows the 8B's JSON contracts if anything does. `lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit` was downloading in oMLX at the time of writing; run `compare.py Qwen3-VL-4B-Instruct-MLX-4bit Qwen3-VL-8B-Instruct-4bit` with a fresh `LUMEN_BENCH_OFFSET` (41 or higher; 40 was used, and oMLX would answer repeats from cache) |
+| `gemma-4-e4b-it-4bit` | 5.1 GB | 8B-class alternative from another family |
+| `GLM-4.6V-Flash-4bit` | 7.1 GB | small vision model built for structured output |
+| `gemma-3-12b-it-qat-4bit` | 8.0 GB | between the 8B and the 27B |
+| `gemma-4-26b-a4b-it-4bit` | 15.3 GB | MoE, about 4B active: 27B-class quality at near-8B decode, same disk as the 27B |
+| `Qwen3-VL-30B-A3B-Instruct-4bit` | 18.3 GB | MoE from the line that already follows the contracts; plain attention, so the prefix cache would work |
+| `Qwen3.6-35B-A3B-4bit` | 20.4 GB | step 4's MoE; a Qwen3.5-family hybrid, so the prefix-cache limit above applies |
+| `gemma-3-27b-it-qat-4bit` | 16.8 GB | same class as the 27B, no size win |
+
+Not candidates: `Mistral-Small-3.2-24B` (same class, no vision win here),
+`Qwen3.8-Flash-Next-4bit` (111 GB). The MoE prefill is still proportional to
+the active path per token, so expect the gain on decode, not on the 7 s of
+image-and-vocabulary prefill.
 
 ## Traps found while measuring
 
@@ -203,7 +359,8 @@ In order of expected payoff for the effort:
    job runner would have to tag frames concurrently.
 
 Not worth retrying: `Qwen3.5-9B-4bit` (slower than the 8B, fails the develop
-shape), and the thinking toggle.
+shape), the thinking toggle, and on the 27B the MTP drafter and ANE prefill
+(both neutral, see "27B knobs").
 
 ## Scripts
 
@@ -220,7 +377,8 @@ Lumen's own `OmlxTagger`, write nothing to the library, and save into
 | `speed2.py <model>...` | tagging at 1616, 1024 and 768 pixels, with and without compact JSON |
 | `parallel.py` | 27B tagging one at a time against four at once |
 | `schema.py <model>...` | tagging plain against a JSON-schema `response_format`, 3 fresh frames per cell from `LUMEN_BENCH_OFFSET` (default 300) |
-| `live_check.py <model>...` | tagging through the unmodified tagger, 3 fresh frames per model from `LUMEN_BENCH_OFFSET` (default 100), for confirming an in-tree change |
+| `compare.py <model>...` | every task (tag, reject scan, astro triage, caption, burst, develop, composition) on the same fresh frames per model, all of one model before the next; skips frames with any model event in the snapshot catalog; records oMLX RSS and model disk size under `meta` |
+| `live_check.py <model>...` | tagging through the unmodified tagger, 3 fresh frames per model from `LUMEN_BENCH_OFFSET` (default 100), for confirming an in-tree change or an oMLX setting (it overwrites `results/live-check-1024.json`; copy it aside per cell) |
 
 `speed2.py` and `parallel.py` override `_image_content` and `_complete` in a
 subclass to change the image size and prompt without touching `src/`.

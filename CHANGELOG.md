@@ -7,6 +7,8 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 
 ## 0.2.0 (unreleased)
 
+The keyword list sent to the models leaves out the `learned` category (the model's own earlier words; the review model prefilled them on every request, about 2.5 s per tag), and learning now keeps the newest 30 learned words without duplicates.
+
 `scripts/bootstrap.sh` now installs: it `brew install`s a missing `uv` or
 ExifTool, starts the command-line tools installer, fetches GeoNames
 (`cities500`, `countryInfo.txt`, chosen country files), darktable 5.6.2 and

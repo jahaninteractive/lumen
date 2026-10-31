@@ -1,0 +1,264 @@
+{
+ "meta": {
+  "date": "2026-10-31",
+  "model": "Qwen3.8-27B-4bit loaded alone (8B unloaded), oMLX 0.7.2, live_check.py offsets 400/403/406, snapshot 20261028T092715.670121Z-3inu821z",
+  "settings": {
+   "baseline": "as shipped",
+   "mtp": "vlm_mtp_enabled with drafter mlx-community/Qwen3.8-27B-MTP-4bit (265 MB); log: accepted 72/96, 68/86, 74/94, 2.5 tokens per round, block 3",
+   "ane": "qwen35_ane_prefill_enabled (backend qwen, 224 procedures warmed 3 s at load); first frame after load 16.8 s is warm-up",
+   "oq_a8": "refused by oMLX: needs M5-series Metal INT8"
+  },
+  "prefill_split_max_tokens_1": [
+   {
+    "frame": "cbb3034782",
+    "image_prefill_s": 4.11,
+    "image_prompt_tokens": 690,
+    "text_prefill_s": 15.51,
+    "text_prompt_tokens": 3582
+   },
+   {
+    "frame": "cc237b590a",
+    "image_prefill_s": 4.01,
+    "image_prompt_tokens": 690,
+    "text_prefill_s": 17.83,
+    "text_prompt_tokens": 3692
+   },
+   {
+    "frame": "cc79c10c88",
+    "image_prefill_s": 4.05,
+    "image_prompt_tokens": 690,
+    "text_prefill_s": 17.76,
+    "text_prompt_tokens": 3692
+   },
+   {
+    "frame": "ccb2120680",
+    "image_prefill_s": 5.13,
+    "image_prompt_tokens": 690,
+    "text_prefill_s": 19.71,
+    "text_prompt_tokens": 3822
+   }
+  ],
+  "prefix_cache_max_tokens_1": {
+   "27B": {
+    "vocab_system_plus_text_1st": [
+     3.01,
+     581
+    ],
+    "vocab_system_plus_text_2nd": [
+     2.87,
+     581
+    ],
+    "vocab_system_plus_fresh_image": [
+     [
+      6.42,
+      1252
+     ],
+     [
+      6.55,
+      1252
+     ],
+     [
+      6.64,
+      1252
+     ]
+    ],
+    "log": "Using boundary cache snapshot ... storing 574/582 tokens (tail terminal, 0 intermediate snapshots); no 'Prefix cache restore' lines"
+   },
+   "8B": {
+    "vocab_system_plus_text": [
+     [
+      0.64,
+      581
+     ],
+     [
+      0.18,
+      583
+     ],
+     [
+      0.17,
+      581
+     ]
+    ],
+    "image_only": [
+     [
+      1.17,
+      686
+     ],
+     [
+      1.1,
+      686
+     ]
+    ],
+    "vocab_system_plus_fresh_image": [
+     [
+      1.21,
+      1253
+     ],
+     [
+      1.21,
+      1253
+     ]
+    ],
+    "log": "Prefix cache restore: source=paged cached=512 suffix=741 blocks=2"
+   }
+  }
+ },
+ "tag_cells": {
+  "baseline": [
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c789281740",
+    "seconds": 12.3,
+    "description": "A medium shot captures a group of antelopes, likely impalas, moving through dense, green bush vegetation in a savanna environment. The lighting is warm and directional, suggesting late afternoon or early morning, highlighting the animals' coats against the darker, shadowed foliage in the background.",
+    "subjects": [
+     "Impala",
+     "bush",
+     "vegetation"
+    ],
+    "species": [
+     {
+      "name": "Impala",
+      "confidence": 0.95
+     }
+    ]
+   },
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c815c65db1",
+    "seconds": 11.2,
+    "description": "A large African elephant stands on a dirt road in a grassy savanna at dusk, illuminated by a spotlight from a vehicle in the foreground.",
+    "subjects": [
+     "elephant",
+     "safari vehicle",
+     "road",
+     "grass"
+    ],
+    "species": [
+     {
+      "name": "African elephant",
+      "confidence": 0.98
+     }
+    ]
+   },
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c85d589eb9",
+    "seconds": 10.9,
+    "description": "A sunlit, sloping hillside covered in green grass, scattered shrubs, and small trees with a clear sky above.",
+    "subjects": [
+     "shrub",
+     "tree",
+     "grass",
+     "rock",
+     "hills"
+    ],
+    "species": []
+   }
+  ],
+  "mtp": [
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c8fe77a3b0",
+    "seconds": 11.7,
+    "description": "A large African elephant stands on a dirt road in a grassy savanna at dusk, illuminated by the headlights of a vehicle in the foreground.",
+    "subjects": [
+     "elephant",
+     "road",
+     "grass"
+    ],
+    "species": [
+     {
+      "name": "African elephant",
+      "confidence": 0.98
+     }
+    ]
+   },
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c9038ef62e",
+    "seconds": 9.7,
+    "description": "A close-up profile of a zebra standing in a grassy field, illuminated by warm, low-angle sunlight that highlights the texture of its mane and stripes.",
+    "subjects": [
+     "zebra"
+    ],
+    "species": [
+     {
+      "name": "zebra",
+      "confidence": 0.98
+     }
+    ]
+   },
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c91b76e9c0",
+    "seconds": 10.6,
+    "description": "A dark silhouette of a bird in flight against a pale, gradient sky, framed by silhouetted trees and shrubbery in the foreground and distant hills on the horizon.",
+    "subjects": [
+     "bird",
+     "tree",
+     "shrub",
+     "hills"
+    ],
+    "species": [
+     {
+      "name": "Kite",
+      "confidence": 0.6
+     }
+    ]
+   }
+  ],
+  "ane": [
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c9b6970a81",
+    "seconds": 16.8,
+    "description": "A medium shot of an African elephant with visible tusks foraging among dense green shrubbery and trees in a savanna environment.",
+    "subjects": [
+     "elephant",
+     "tree",
+     "shrub",
+     "grass"
+    ],
+    "species": [
+     {
+      "name": "African elephant",
+      "confidence": 0.98
+     }
+    ]
+   },
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "c9bc48ab58",
+    "seconds": 11.5,
+    "description": "A close-up, low-light photograph of a young African lion cub sitting in tall grass, illuminated by a spotlight against a dark background.",
+    "subjects": [
+     "African lion cub",
+     "grass"
+    ],
+    "species": [
+     {
+      "name": "African lion",
+      "confidence": 0.98
+     }
+    ]
+   },
+   {
+    "model": "Qwen3.8-27B-4bit",
+    "file": "ca705e47fa",
+    "seconds": 11.9,
+    "description": "A male lion with a full mane walks along a dirt path through low shrubbery at night, illuminated by a spotlight.",
+    "subjects": [
+     "lion",
+     "shrub",
+     "dirt path"
+    ],
+    "species": [
+     {
+      "name": "African lion",
+      "confidence": 0.98
+     }
+    ]
+   }
+  ]
+ }
+}

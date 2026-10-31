@@ -1,0 +1,506 @@
+{
+ "meta": {
+  "date": "2026-10-31",
+  "model": "Qwen3.8-27B-4bit loaded with the 8B idle",
+  "cells": "curated = current code (learned left out); none = no system message at all, species still requested"
+ },
+ "calls": [
+  {
+   "set": "safari",
+   "cell": "curated",
+   "file": "d975c13ada",
+   "s": 11.1,
+   "subjects": [
+    "rhinoceros",
+    "rhinoceros"
+   ],
+   "species": [
+    {
+     "name": "rhinoceros",
+     "confidence": 0.95
+    }
+   ],
+   "conditions": [
+    "bright",
+    "hazy"
+   ],
+   "scene": "savanna",
+   "vocab_hits": 1,
+   "words": 5,
+   "description": "Two rhinoceroses grazing in a grassy savanna landscape with scattered bushes and trees under a bright, hazy sky."
+  },
+  {
+   "set": "safari",
+   "cell": "none",
+   "file": "da41d4db01",
+   "s": 7.4,
+   "subjects": [
+    "lion cubs"
+   ],
+   "species": [
+    {
+     "name": "lion",
+     "confidence": 0.98
+    }
+   ],
+   "conditions": [
+    "night",
+    "artificial light"
+   ],
+   "scene": "wildlife",
+   "vocab_hits": 0,
+   "words": 4,
+   "description": "A group of four young lions walking through grassy vegetation at night, illuminated by a flash or spotlight."
+  },
+  {
+   "set": "safari",
+   "cell": "curated",
+   "file": "db6ddb715d",
+   "s": 9.3,
+   "subjects": [
+    "African lion"
+   ],
+   "species": [
+    {
+     "name": "African lion",
+     "confidence": 0.9
+    }
+   ],
+   "conditions": [
+    "night sky"
+   ],
+   "scene": "grassland",
+   "vocab_hits": 2,
+   "words": 3,
+   "description": "A blurry, low-light photograph of a large feline moving through tall, dry grass at night, illuminated by a flash or spotlight."
+  },
+  {
+   "set": "safari",
+   "cell": "none",
+   "file": "dc2f84e731",
+   "s": 8.2,
+   "subjects": [
+    "elephant"
+   ],
+   "species": [
+    {
+     "name": "African elephant",
+     "confidence": 0.98
+    }
+   ],
+   "conditions": [
+    "sunny",
+    "clear"
+   ],
+   "scene": "wildlife",
+   "vocab_hits": 2,
+   "words": 4,
+   "description": "An African elephant stands on a dirt path surrounded by green vegetation and rocks, with its trunk extended towards the ground."
+  },
+  {
+   "set": "safari",
+   "cell": "curated",
+   "file": "dc38f71e65",
+   "s": 10.7,
+   "subjects": [
+    "elephant",
+    "bush",
+    "tree"
+   ],
+   "species": [
+    {
+     "name": "African elephant",
+     "confidence": 0.98
+    }
+   ],
+   "conditions": [
+    "golden hour",
+    "clear"
+   ],
+   "scene": "savanna",
+   "vocab_hits": 3,
+   "words": 6,
+   "description": "A medium shot of an African elephant with visible tusks foraging among dense green bushes and trees in a savanna environment, illuminated by warm, low-angle sunlight."
+  },
+  {
+   "set": "safari",
+   "cell": "none",
+   "file": "dc3c721b6f",
+   "s": 10.1,
+   "subjects": [
+    "person",
+    "safari vehicle",
+    "backpack",
+    "hat",
+    "pole",
+    "savanna",
+    "hill",
+    "dirt road"
+   ],
+   "species": [],
+   "conditions": [
+    "clear sky",
+    "daylight",
+    "calm weather"
+   ],
+   "scene": "safari",
+   "vocab_hits": 0,
+   "words": 11,
+   "description": "A person is seated in a safari vehicle, facing away from the camera, observing the landscape. The individual is wearing a hat and a backpack, and is holding a long pole or stick. The vehicle is on a dirt road in a grassy savanna with scattered bushes and a distant hill under a clear sky."
+  },
+  {
+   "set": "safari",
+   "cell": "curated",
+   "file": "dc8b1b3936",
+   "s": 12.2,
+   "subjects": [
+    "grassland",
+    "herbivores",
+    "hills",
+    "sky"
+   ],
+   "species": [
+    {
+     "name": "African elephant",
+     "confidence": 0.6
+    },
+    {
+     "name": "rhinoceros",
+     "confidence": 0.4
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "hazy"
+   ],
+   "scene": "savanna",
+   "vocab_hits": 3,
+   "words": 8,
+   "description": "A wide, open grassland landscape with a herd of dark-colored animals grazing in the mid-ground, set against a backdrop of rolling, tree-covered hills under a pale, hazy sky."
+  },
+  {
+   "set": "safari",
+   "cell": "none",
+   "file": "dcd2978502",
+   "s": 7.7,
+   "subjects": [
+    "dung beetle",
+    "dung ball",
+    "dirt path",
+    "plants"
+   ],
+   "species": [
+    {
+     "name": "Dung beetle",
+     "confidence": 0.8
+    }
+   ],
+   "conditions": [
+    "dusk",
+    "dry"
+   ],
+   "scene": "outdoor",
+   "vocab_hits": 0,
+   "words": 7,
+   "description": "A dung beetle is rolling a large ball of dung across a dry, cracked dirt path, surrounded by sparse green vegetation."
+  },
+  {
+   "set": "safari",
+   "cell": "curated",
+   "file": "ddc630e3d5",
+   "s": 9.2,
+   "subjects": [
+    "dung beetle",
+    "dung ball",
+    "dry soil"
+   ],
+   "species": [
+    {
+     "name": "Kite",
+     "confidence": 0.1
+    }
+   ],
+   "conditions": [
+    "overcast"
+   ],
+   "scene": "beach",
+   "vocab_hits": 2,
+   "words": 5,
+   "description": "A dung beetle is shown from above, rolling a spherical ball of dung across dry, cracked, sandy soil."
+  },
+  {
+   "set": "safari",
+   "cell": "none",
+   "file": "de8973b500",
+   "s": 8.7,
+   "subjects": [
+    "sofa",
+    "armchair",
+    "coffee table",
+    "railing",
+    "thatched roof",
+    "cushion"
+   ],
+   "species": [],
+   "conditions": [
+    "bright",
+    "sunny",
+    "daylight"
+   ],
+   "scene": "outdoor",
+   "vocab_hits": 0,
+   "words": 9,
+   "description": "A spacious open-air lounge with a thatched roof, furnished with sofas, armchairs, and coffee tables, overlooking a lush green landscape."
+  },
+  {
+   "set": "seabird",
+   "cell": "curated",
+   "file": "ebec3edc9f",
+   "s": 9.5,
+   "subjects": [
+    "bird"
+   ],
+   "species": [
+    {
+     "name": "wandering albatross",
+     "confidence": 0.6
+    },
+    {
+     "name": "black-browed albatross",
+     "confidence": 0.4
+    }
+   ],
+   "conditions": [
+    "overcast"
+   ],
+   "scene": "sky",
+   "vocab_hits": 3,
+   "words": 4,
+   "description": "A large seabird in silhouette glides against a uniformly gray, overcast sky."
+  },
+  {
+   "set": "seabird",
+   "cell": "none",
+   "file": "e688cc8340",
+   "s": 9.3,
+   "subjects": [
+    "bird"
+   ],
+   "species": [
+    {
+     "name": "gull",
+     "confidence": 0.6
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "choppy water"
+   ],
+   "scene": "open water",
+   "vocab_hits": 1,
+   "words": 4,
+   "description": "A small bird is flying low over a choppy, open body of water with visible waves and white foam."
+  },
+  {
+   "set": "seabird",
+   "cell": "curated",
+   "file": "3120e0fed8",
+   "s": 8.3,
+   "subjects": [
+    "bird"
+   ],
+   "species": [
+    {
+     "name": "Kite",
+     "confidence": 0.4
+    }
+   ],
+   "conditions": [
+    "overcast"
+   ],
+   "scene": "sky",
+   "vocab_hits": 2,
+   "words": 3,
+   "description": "A single bird in flight, silhouetted against a uniformly overcast sky."
+  },
+  {
+   "set": "seabird",
+   "cell": "none",
+   "file": "1ee4d149ef",
+   "s": 6.9,
+   "subjects": [
+    "bird"
+   ],
+   "species": [
+    {
+     "name": "bird",
+     "confidence": 0.8
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "dim light"
+   ],
+   "scene": "outdoor",
+   "vocab_hits": 1,
+   "words": 4,
+   "description": "A bird in flight against a cloudy sky, captured in silhouette."
+  },
+  {
+   "set": "seabird",
+   "cell": "curated",
+   "file": "a041231828",
+   "s": 8.7,
+   "subjects": [
+    "bird"
+   ],
+   "species": [
+    {
+     "name": "Kite",
+     "confidence": 0.6
+    }
+   ],
+   "conditions": [
+    "overcast"
+   ],
+   "scene": "sky",
+   "vocab_hits": 2,
+   "words": 3,
+   "description": "A single bird in flight against a dark, overcast sky."
+  },
+  {
+   "set": "seabird",
+   "cell": "none",
+   "file": "2500a97ab4",
+   "s": 7.6,
+   "subjects": [
+    "bird"
+   ],
+   "species": [
+    {
+     "name": "Gull",
+     "confidence": 0.6
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "diffuse light"
+   ],
+   "scene": "outdoor",
+   "vocab_hits": 1,
+   "words": 4,
+   "description": "A single bird in flight against a vast, overcast sky."
+  },
+  {
+   "set": "seabird",
+   "cell": "curated",
+   "file": "d8b05dd1ab",
+   "s": 11.3,
+   "subjects": [
+    "wandering albatross",
+    "southern giant petrel"
+   ],
+   "species": [
+    {
+     "name": "wandering albatross",
+     "confidence": 0.85
+    },
+    {
+     "name": "southern giant petrel",
+     "confidence": 0.6
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "calm water"
+   ],
+   "scene": "sky",
+   "vocab_hits": 4,
+   "words": 6,
+   "description": "Two seabirds in flight against a vast, overcast sky; one is a white-bodied albatross with dark wings, the other a dark silhouette."
+  },
+  {
+   "set": "seabird",
+   "cell": "none",
+   "file": "606693163e",
+   "s": 7.7,
+   "subjects": [
+    "bird",
+    "sea",
+    "sky"
+   ],
+   "species": [
+    {
+     "name": "gull",
+     "confidence": 0.6
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "flat lighting",
+    "calm to moderate sea state"
+   ],
+   "scene": "open ocean",
+   "vocab_hits": 1,
+   "words": 7,
+   "description": "A solitary bird glides over a dark, choppy sea under a uniformly overcast gray sky."
+  },
+  {
+   "set": "seabird",
+   "cell": "curated",
+   "file": "a75c284c68",
+   "s": 10.0,
+   "subjects": [
+    "seabird",
+    "ocean"
+   ],
+   "species": [
+    {
+     "name": "wandering albatross",
+     "confidence": 0.6
+    },
+    {
+     "name": "black-browed albatross",
+     "confidence": 0.4
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "wind"
+   ],
+   "scene": "open ocean",
+   "vocab_hits": 4,
+   "words": 6,
+   "description": "A single seabird with long, dark wings and a white body glides low over a choppy, grey open ocean under an overcast sky."
+  },
+  {
+   "set": "seabird",
+   "cell": "none",
+   "file": "d8944b87dc",
+   "s": 10.6,
+   "subjects": [
+    "seabird",
+    "seabird"
+   ],
+   "species": [
+    {
+     "name": "Shearwater",
+     "confidence": 0.6
+    },
+    {
+     "name": "Petrel",
+     "confidence": 0.5
+    }
+   ],
+   "conditions": [
+    "overcast",
+    "windy",
+    "diffuse light"
+   ],
+   "scene": "open ocean",
+   "vocab_hits": 1,
+   "words": 7,
+   "description": "Two small dark seabirds are flying low over a choppy, dark blue-gray ocean surface. The water is textured with small waves and ripples, indicating windy conditions. The birds are in mid-flight, with one slightly ahead and to the right of the other. The overall scene is moody and overcast, with muted lighting."
+  }
+ ]
+}
