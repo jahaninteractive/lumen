@@ -108,6 +108,9 @@ class CliTests(unittest.TestCase):
             loaded_model = patch("lumen.library.get_server_status", return_value=live)  # tag reaches tagger_for before the lock
             loaded_model.start()
             self.addCleanup(loaded_model.stop)
+            darktable = patch("lumen.library.find_tool", return_value=Path("/opt/darktable-cli"))  # refine checks the tool before the lock
+            darktable.start()
+            self.addCleanup(darktable.stop)
             for args in (["import", str(root / "CARD")], ["tag", "--all"], ["refine-previews", "--all"],
                          ["ingest", str(root / "CARD"), "--to", str(root / "primary")]):
                 with self.subTest(command=args[0]):
