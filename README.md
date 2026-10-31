@@ -53,7 +53,7 @@ goes:
   full keyboard operation are part of the design, not an afterthought.
 
 It is a personal tool built for one photographer's workflow and shared as is
-under the [MIT License](LICENSE). Fixes are welcome; see
+by Jahan Interactive Pty Ltd under the [MIT License](LICENSE). Fixes are welcome; see
 [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md) for
 reporting anything sensitive. Versions are listed in [CHANGELOG.md](CHANGELOG.md).
 

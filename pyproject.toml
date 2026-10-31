@@ -7,6 +7,10 @@ name = "lumen-raw"
 version = "0.1.0"
 description = "Fully local, non-destructive RAW photography manager for Apple Silicon"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Nasir David" }]
+maintainers = [{ name = "Jahan Interactive Pty Ltd" }]
 requires-python = ">=3.12"
 dependencies = ["Pillow>=11,<13"]
 
