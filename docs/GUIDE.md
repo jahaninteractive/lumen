@@ -335,8 +335,11 @@ exports write it into the JPEG's GPS; Share and Web leave it out as usual.
 Names come from a local GeoNames index built from the `.txt` files in
 `vendor/data/geonames/` (or `LUMEN_GEONAMES_DIR`) into
 `<library>/cache/geonames.sqlite`; it rebuilds itself when those files change
-(the `.zip` archives beside them are ignored). The folder is not in Git, so
-download the files from <https://download.geonames.org/export/dump/>:
+(the `.zip` archives beside them are ignored). The folder is not in Git;
+`zsh scripts/bootstrap.sh` downloads the first two files below and asks for
+your country codes (or reads `LUMEN_GEONAMES_COUNTRIES="ZA AQ"`). Re-run it
+with a new code before a trip. By hand, the files come from
+<https://download.geonames.org/export/dump/>:
 
 - `countryInfo.txt`, which maps country codes to names (always needed);
 - `cities500.zip`, towns of 500+ people worldwide, unzipped to `cities500.txt`;
@@ -411,6 +414,13 @@ What to expect from each, measured on real frames (the tables are in
 The practical rule: tag a day with the 8B, then switch the **Fast model**
 dropdown to the 27B and re-tag the keepers with `--retag` when you want the
 fuller descriptions.
+
+`zsh scripts/bootstrap.sh` offers to install oMLX 0.7.2 into `/Applications`
+on macOS 15 or newer (open it once so it installs its `omlx` command), then
+offers both models into oMLX's `model_dir` from `~/.omlx/settings.json`, or
+`~/Models` before oMLX has written one. It shows the memory the Mac reports:
+the 8B defaults to yes, the 27B to yes only from 32 GB. A model folder that
+already holds `config.json` and weights is left alone.
 
 Start oMLX, then tag:
 

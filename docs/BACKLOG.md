@@ -2,6 +2,12 @@
 
 Deferred items with a known reason. Each entry says what, why it was deferred, and the trigger for picking it up. Keep `docs/HANDOFF.md` as the status ledger; this file only holds work nobody is doing yet.
 
+## From the 2026-10-31 assessment (`docs/ASSESSMENT.md`)
+
+- **Screenshots and a demo recording.** The README has no pictures; nobody installs to find out what a tool does. Needs a real cull on a loaded library and a 60 to 90 second screen recording. Trigger: the next trip's card, or any day with a few hundred frames imported.
+- **Sample ARW files as a release asset.** The quick start needs a Sony camera today. Needs one or two frames the photographer is happy to publish. Trigger: same as above.
+- **16 GB test.** The README says the fast model needs about 6 GB and 16 GB is the minimum, but it has only run on a 48 GB M4. Needs another machine; confirm or change the claim to "untested".
+
 ## From the 2026-10-23 UI volume review
 
 - **Whole-catalog payload.** `/api/groups` returns every photo of every burst on each `load()` (600 KB, 282 ms for 1001 frames; client render 23 ms). Paging is client-side only. Fine to ~5 k frames; add server paging keyed by burst when a real library crosses that or the fetch exceeds ~1 s.

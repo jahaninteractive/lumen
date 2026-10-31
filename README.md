@@ -59,22 +59,11 @@ reporting anything sensitive. Versions are listed in [CHANGELOG.md](CHANGELOG.md
 
 ## Install
 
-Prerequisites:
-
-1. macOS 13.5 or newer on an Apple Silicon Mac with at least 16 GB of memory.
-   Lumen was built and measured on a 48 GB M4; a 16 GB machine has not been
-   tested, but the fast model needs about 6 GB and nothing else in Lumen is
-   memory-hungry.
-2. oMLX installed with `Qwen3-VL-8B-Instruct-4bit` (fast, vision) loaded.
-   `Qwen3.8-27B-4bit` (review) is optional and wants about 16 GB more: with
-   only the 8B loaded, Lumen starts the review role on it too. `lumen doctor`
-   reports which roles are loaded (see [Local AI](docs/GUIDE.md#local-ai)).
-3. `uv`, ExifTool, and the Apple command-line developer tools:
-
-   ```sh
-   brew install uv exiftool
-   xcode-select --install
-   ```
+Prerequisites: macOS 13.5 or newer on an Apple Silicon Mac with at least 16 GB
+of memory (the AI features need macOS 15). Lumen was built and measured on a
+48 GB M4; a 16 GB machine has not been tested, but the fast model needs about
+6 GB and nothing else in Lumen is memory-hungry. Homebrew is needed only if
+`uv` or ExifTool is missing.
 
 From this project folder:
 
@@ -83,9 +72,32 @@ zsh scripts/bootstrap.sh
 uv run lumen doctor
 ```
 
-The bootstrap creates a private Python environment and compiles the small
-macOS Vision helper into `~/Pictures/Lumen Library/cache/bin`. Set
-`LUMEN_LIBRARY` before bootstrap if the library should live elsewhere.
+The bootstrap gets a fresh clone to a working `lumen doctor`, skipping anything
+already in place, so it is safe to re-run:
+
+1. checks the platform, `brew install`s `uv` and ExifTool if either is missing,
+   and starts the Apple command-line tools installer if they are not present
+   (re-run it when that dialog finishes);
+2. creates the private Python environment and compiles the two macOS helpers
+   into `~/Pictures/Lumen Library/cache/bin` (set `LUMEN_LIBRARY` first if the
+   library should live elsewhere);
+3. downloads GeoNames (`countryInfo.txt`, `readme.txt`, `cities500`) into
+   `vendor/data/geonames/` and asks which country files you want
+   (`LUMEN_GEONAMES_COUNTRIES="ZA AQ"` answers without asking);
+4. downloads darktable 5.6.2 and Siril 1.4.4, checks each disk image against a
+   pinned SHA-256, and copies the apps into `vendor/apps/`;
+5. on macOS 15 or newer, offers to copy oMLX 0.7.2 into `/Applications` (open
+   it once afterwards: it installs its `omlx` command), then offers the fast
+   model `Qwen3-VL-8B-Instruct-4bit` (6 GB) and the review model
+   `Qwen3.8-27B-4bit` (16 GB, offered by default from 32 GB of memory) into
+   oMLX's model folder, or `~/Models` before oMLX has settings.
+
+`--yes` accepts every default without asking (also the behaviour when stdin
+is not a terminal). `--no-download` does only the checks, the Python sync and
+the compiles: install `uv`, ExifTool and the
+command-line tools yourself (`brew install uv exiftool`, `xcode-select
+--install`) and fill `vendor/` by hand as below. The closing lines name
+anything that was skipped and how to get it later.
 
 ## The `vendor/` folder
 
@@ -106,6 +118,8 @@ doctor --json` prints the exact path each tool resolved to under `tools`.
 Installing into `/Applications` works too; add the bundle's `Contents/MacOS`
 folder to `PATH` if the installer does not. ExifTool is not vendored: it comes
 from Homebrew and is required.
+
+The bootstrap fills these. To do it by hand (`--no-download`):
 
 - **darktable** (optional, 5.6.2 verified): download the Apple Silicon disk
   image from <https://www.darktable.org/install/>, open it, and drag
@@ -200,15 +214,26 @@ user-session access to Apple's Vision model service.
   pretend-complete stubs.
 - The web server is local-only and has no authentication; do not modify it to
   bind to a LAN address without adding authentication and transport security.
-- Some API responses assume that loopback-only binding. `POST /api/export`
-  serialises its whole provenance record, which carries the source file's
-  SHA-256 fingerprint, the render command line, and absolute paths inside the
-  library and the configured profile. The browser never reads those fields, and
-  `_public_provenance` in `src/lumen/pipelines.py` already strips them from the
-  copy embedded in exported JPEGs, but the HTTP reply is unscrubbed. On
-  `127.0.0.1` that is disclosure to software the photographer already runs; on
-  a LAN or public address it hands library internals to anyone who can reach
-  the port. Treat `AGENTS.md`'s "do not expose source paths, fingerprints, API
-  keys, or raw model output in browser responses" as the rule to restore before
-  any change to where the server binds. Tracked in `docs/BACKLOG.md`.
 
+## How it was built
+
+Decisions were measured rather than guessed, and the measurements are in the
+docs so they can be re-run:
+
+- Model choice: three local vision models were timed and parsed on real
+  frames before two were kept ([docs/MODELS.md](docs/MODELS.md)). The model
+  that never returned develop settings in the required shape was dropped.
+- Raw rendering: Core Image skips raw sharpening below half scale, so previews
+  decode at native size and resample afterwards; a control whose two extremes
+  differed by 0.0001 in mean luminance is deliberately not exposed
+  ([AGENTS.md](AGENTS.md), Current tool state).
+- Export metadata: darktable only keeps the MakerNote because of a pinned
+  config flag, and IPTC is written by ExifTool because agency ingests still
+  read it; both were found by inspecting real exports.
+- Safety: originals are never written, the server binds to loopback only,
+  mutation routes check origin and strict JSON, and tests pin those rules.
+- Install: one script fetches every tool against a pinned hash; the manual
+  route stays documented for air-gapped machines.
+
+A frank assessment of where Lumen stands against commercial tools, and what
+is still missing, is in [docs/ASSESSMENT.md](docs/ASSESSMENT.md).

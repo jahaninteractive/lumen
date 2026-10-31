@@ -1,3 +1,4 @@
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -25,6 +26,24 @@ class ScriptTests(unittest.TestCase):
                 live,
                 rf'swiftc[^"]*"\$project_root/tools/{helper}\.swift"\s*\\?\s*-o\s*"\$native_bin/{helper}"',
             )
+
+    def test_bootstrap_parses_as_zsh(self):
+        result = subprocess.run(
+            ["zsh", "-n", "scripts/bootstrap.sh"], capture_output=True, text=True, timeout=30, check=False
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_bootstrap_pins_and_verifies_its_downloads(self):
+        script = Path("scripts/bootstrap.sh").read_text()
+        for needle in ("--no-download", "--yes", "darktable-5.6.2", "siril-1.4.4", "oMLX-0.7.2", "shasum -a 256"):
+            self.assertIn(needle, script)
+        pinned = re.findall(r'\n([a-z_]+_sha256)="([^"]*)"', script)
+        self.assertEqual(["darktable_sha256", "siril_sha256", "omlx_sequoia_sha256", "omlx_tahoe_sha256"], [n for n, _ in pinned])
+        for name, digest in pinned:
+            self.assertRegex(digest, r"^[0-9a-f]{64}$", name)
+        # The mounted disk image is detached from an EXIT trap, so a failed copy still unmounts it.
+        self.assertRegex(script, r"\ntrap detach_dmg EXIT")
+        self.assertRegex(script, r"detach_dmg\(\) \{[^}]*hdiutil detach")
 
     def test_web_ui_reports_live_omlx_health(self):
         script = Path("src/lumen/static/app.js").read_text()
