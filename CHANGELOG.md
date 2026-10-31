@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## Unreleased
+
+CI runs on `macos-15`: GitHub is browning out the `macos-14` image ahead of its retirement on 2026-11-02, which cancelled the 0.2.0 release run.
+
 ## 0.2.0 (2026-10-31)
 
 The keyword list sent to the models leaves out the `learned` category (the model's own earlier words; the review model prefilled them on every request, about 2.5 s per tag), and learning now keeps the newest 30 learned words without duplicates.
