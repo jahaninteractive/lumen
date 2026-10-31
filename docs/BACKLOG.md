@@ -94,3 +94,11 @@ that diff.
 Trigger: before the next change to this reply's shape, and mandatory before
 anyone binds the server anywhere but `127.0.0.1`. See the last bullet of
 "Safety and current limits" in `README.md`.
+
+## README and GUIDE screenshots (parked 2026-10-30)
+
+Goal: real screenshots in `docs/images/` wired into `README.md` and `docs/GUIDE.md` so the repo reads as a working tool, not a spec.
+
+- **Waiting on:** a set of South Georgia `.ARW` frames from the photographer (penguins, ice landscapes): a few bursts of 5-10 near-identical frames for culling and the burst picker, one or two GPS-tagged scenes for Places, one under-exposed or flat-sky frame for a Develop before/after. Nothing in the set should be unwelcome on a public GitHub page.
+- **Plan:** import into a scratch library, run tagging and one burst critique against the loaded oMLX model, then drive the UI with the headless Chromium + stdlib CDP harness (no new dependency) to capture the contact sheet, frame view with burst advice, Crop, Develop, EXIF, Places, and the first-run card. Type any place name or caption wording the photographer wants shown rather than leaving it to the model.
+- **Trigger:** the photographer drops a folder path in the chat.
