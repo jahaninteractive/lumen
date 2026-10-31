@@ -9,6 +9,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
+from . import __version__
 from .astro import RECIPES
 from .catalog import GroupFilters
 from .config import Settings
@@ -21,6 +22,7 @@ from .pipelines import PipelineRegistry
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lumen", description="Local, non-destructive RAW photography manager")
     parser.add_argument("--library", type=Path, help="catalog/cache directory (default: ~/Pictures/Lumen Library)")
+    parser.add_argument("--version", action="version", version=f"lumen {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     doctor = commands.add_parser("doctor", help="check local tools and model readiness")

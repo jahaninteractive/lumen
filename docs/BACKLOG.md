@@ -22,7 +22,7 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 
 ## Distribution: Homebrew tap + GitHub Release (planned 2026-10-26)
 
-Goal: a `brew install nasir/lumen/lumen` that pulls Lumen and its tools without an Apple Developer account. A signed DMG is the later step and needs a Developer ID (99 USD/yr) plus notarization; do this first.
+Goal: a `brew install jahaninteractive/lumen/lumen` that pulls Lumen and its tools without an Apple Developer account. A signed DMG is the later step and needs a Developer ID (99 USD/yr) plus notarization; do this first.
 
 What ships today and how it would move:
 
@@ -72,28 +72,6 @@ for every decoder.
 
 Trigger: wanting Sony-specific capture data (lens corrections, creative look,
 focus point) to survive into the JPEG.
-
-## Scrub the provenance record out of the export reply
-
-`POST /api/export` replies with `asdict(ExportResult)` (`src/lumen/web.py`),
-which serialises the nested `Artifact`: `source_fingerprint`,
-`output_fingerprint`, the absolute artifact `path`, and a `settings` dict
-holding the source fingerprint again, the absolute profile path, and the full
-render `command`. `AGENTS.md` forbids exposing source paths and fingerprints in
-browser responses, and `_public_provenance` (`src/lumen/pipelines.py`) is
-exactly the right scrubber — it is applied only to the record embedded in the
-exported JPEG, never to the HTTP reply.
-
-The front end reads only `success`, `output`, `photo_id` and `message`
-(`src/lumen/static/app.js`), so the fix is to stop serialising `artifact` at
-all, or to pass it through `_public_provenance` first. Predates the develop
-controls work, which changed what `command` contains but added no new field.
-Deferred from the `develop-controls` branch to keep an unrelated change out of
-that diff.
-
-Trigger: before the next change to this reply's shape, and mandatory before
-anyone binds the server anywhere but `127.0.0.1`. See the last bullet of
-"Safety and current limits" in `README.md`.
 
 ## README and GUIDE screenshots (parked 2026-10-30)
 

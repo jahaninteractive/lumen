@@ -428,9 +428,12 @@ class WebTests(unittest.TestCase):
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual(["photo-lumen.jpg", "photo-lumen-1.jpg"], [Path(artifact.path).name for artifact in library.catalog.list_artifacts()])
         self.assertEqual(first_bytes, Path(one["output"]).read_bytes())
-        self.assertEqual(one["output"], one["artifact"]["path"])
-        self.assertEqual(str(profile.resolve()), one["artifact"]["settings"]["profile"])
-        datetime.fromisoformat(one["artifact"]["created_at"])
+        # The reply carries only what the browser reads: no artifact record, so no source fingerprint,
+        # profile path or render command leaves the server (AGENTS.md: no source paths or fingerprints).
+        self.assertEqual({"photo_id", "success", "output", "message"}, set(one))
+        self.assertNotIn(str(profile.resolve()), json.dumps(first))
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertNotIn(library.catalog.list_artifacts()[0].source_fingerprint, json.dumps(first))
 
     def test_export_filtered_renders_the_frames_the_contact_sheet_filters_show(self):
         pipeline = DarktablePipeline("darktable-cli", self.root / "library" / "outputs")
@@ -519,8 +522,8 @@ class WebTests(unittest.TestCase):
             self.assertEqual(202, code, full)
             self.assertEqual("succeeded", self.wait_job(full["job_id"])["status"])
         self.assertEqual("photo-lumen-share.jpg", Path(share["results"][0]["output"]).name)
-        self.assertEqual("share", share["results"][0]["artifact"]["settings"]["preset"])
         with Library(Settings(library_dir=self.root / "library")) as library:
+            self.assertEqual("share", library.catalog.list_artifacts()[0].settings["preset"])
             full_artifact = library.catalog.list_artifacts()[-1]
         self.assertEqual(("photo-lumen.jpg", "full"), (Path(full_artifact.path).name, full_artifact.settings["preset"]))
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
@@ -560,7 +563,6 @@ class WebTests(unittest.TestCase):
             self.assertEqual(202, code, job)
             self.assertEqual("succeeded", self.wait_job(job["job_id"])["status"])
         self.assertEqual("photo-lumen-web.jpg", Path(current["results"][0]["output"]).name)
-        self.assertEqual(("web", True), (current["results"][0]["artifact"]["settings"]["preset"], current["results"][0]["artifact"]["settings"]["watermark"]))
         self.assertNotIn("N. David", json.dumps(current))
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual(("web", True), (library.catalog.list_artifacts()[-1].settings["preset"], library.catalog.list_artifacts()[-1].settings["watermark"]))

@@ -643,7 +643,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     with Library(settings) as library:
                         results = library.export_jpegs(ExportRequest((payload["photo_id"],), profile_path, preset, watermark, keep_original, dated_folder))
                     status = HTTPStatus.OK if all(result.success for result in results) else HTTPStatus.BAD_REQUEST
-                    self._send_json({"results": [asdict(result) for result in results]}, status=status)
+                    # Only what the browser reads. The Artifact record would carry the source
+                    # fingerprint, the profile path and the render command, which stay on the server.
+                    self._send_json({"results": [
+                        {"photo_id": result.photo_id, "success": result.success,
+                         "output": str(result.output) if result.output else None, "message": result.message}
+                        for result in results]}, status=status)
                     return
                 if path == "/api/groups/merge":
                     if payload.keys() != {"group_ids"}:

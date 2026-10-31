@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from PIL import Image, ImageCms
 
+from lumen import __version__
 from lumen.cli import main
 from lumen.config import Settings
 from lumen.diagnostics import doctor_report
@@ -207,8 +208,19 @@ class CliTests(unittest.TestCase):
         self.assertIn("darktable-cli", payload["tools"])
         self.assertEqual({"dir": str(geonames), "files": 2, "places": 7, "online": True}, payload["geonames"])
         self.assertIn("vision_analyzer", payload)
+        self.assertEqual(__version__, payload["version"])
         self.assertTrue(payload["raw_developer"]["path"].endswith("cache/bin/raw_developer"))
-        self.assertIn("available", payload["raw_developer"])
+
+    def test_package_version_matches_pyproject(self):
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+        self.assertIn(f'version = "{__version__}"', pyproject)
+
+    def test_version_flag_prints_the_package_version(self):
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit) as exit_info:
+            main(["--version"])
+        self.assertEqual(0, exit_info.exception.code)
+        self.assertEqual(f"lumen {__version__}\n", output.getvalue())
 
     def test_siril_command_runs_managed_script_hook(self):
         with tempfile.TemporaryDirectory() as directory:

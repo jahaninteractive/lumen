@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .config import Settings
 from .geonames import PlaceIndex
 from .omlx import ROLES, OmlxError, get_server_status
@@ -122,6 +123,7 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
             counts = index.ensure()
         geonames |= {"files": counts["files"], "places": counts["places"]}
     return {
+        "version": __version__,
         "library": str(settings.library_dir),
         "tools": tools,
         "vision_analyzer": {

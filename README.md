@@ -1,7 +1,6 @@
 # <img src="src/lumen/static/mark.svg" width="32" height="32" alt=""> Lumen
 
-Lumen is the program in this repository (`offline-raw-culler`); the Python
-package is `lumen-raw` and the command is `lumen`.
+The Python package is `lumen-raw` and the command is `lumen`.
 
 Lumen is a fully local, non-destructive RAW photography workbench for Apple
 Silicon Macs. It catalogs Sony `.ARW` files without moving or changing them,
@@ -53,7 +52,10 @@ goes:
 - **Accessible and keyboard-driven.** Native controls, live announcements, and
   full keyboard operation are part of the design, not an afterthought.
 
-It is a personal tool built for one photographer's workflow and shared as is.
+It is a personal tool built for one photographer's workflow and shared as is
+under the [MIT License](LICENSE). Fixes are welcome; see
+[CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md) for
+reporting anything sensitive. Versions are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 

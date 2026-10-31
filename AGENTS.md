@@ -11,11 +11,11 @@ The local HTTP server must remain loopback-only and mutation routes must retain 
 ## Working style
 
 - Keep AI vendor and model names out of tracked files and commit messages; this repo is shared and describes itself by what it does, not what built it. Refer to this file as `AGENTS.md`.
-- Keep changes small and reuse existing patterns; Pillow is the only runtime Python dependency.
+- Keep changes small and reuse existing patterns; Pillow is the only runtime Python dependency. Bump `__version__` in `src/lumen/__init__.py` and `pyproject.toml` together (a test pins them) and add a line to `CHANGELOG.md`.
 - Use red-green tests for behavior changes and run warning-strict tests.
 - Preserve the accessible native-control UI, keyboard tab behavior, live announcements, and charcoal/amber/cyan workbench.
 - Keep optional tools under `vendor/apps/`; that directory is intentionally ignored by Git.
-- This folder is not currently a Git repository. Do not initialize Git unless the user explicitly asks.
+- The repository is `jahaninteractive/lumen` on GitHub; `main` is the only long-lived branch and CI runs the test suite and `node --check` on every push and pull request.
 - The `.superpowers/` task snapshots and reviews are local audit material and are ignored by Git.
 
 ## Commands

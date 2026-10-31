@@ -1636,6 +1636,7 @@ async function load() {
   // it is dealt with.
   const stale = Array.isArray(status.stale) ? status.stale : [];
   systemStatus.textContent = [...stale, tools].join(' · ');
+  document.querySelector('#app-version').textContent = status.version ? `v${status.version}` : '';
   if (stale.length) systemStatus.setAttribute('data-stale', '');
   else systemStatus.removeAttribute('data-stale');
   syncRoleModels(status);
