@@ -56,7 +56,7 @@ def rss_mb():
     return round(int(subprocess.run(["ps", "-o", "rss=", "-p", pid[0]], capture_output=True, text=True).stdout) / 1024) if pid else None
 
 def du(m):
-    return subprocess.run(["du", "-sh", f"/Users/nasir/Models/mlx-community/{m}"], capture_output=True, text=True).stdout.split("\t")[0]
+    return subprocess.run(["du", "-sh", next(iter(Path("/Users/nasir/Models").glob(f"*/{m}")), m)], capture_output=True, text=True).stdout.split("\t")[0]
 
 meta = {"snapshot": SNAP.name, "offset": off, "stride": stride, "fresh_previews": len(fresh), "raws_available": raws_ok,
         "usage": "not recorded: OmlxTagger._complete returns only the message text",

@@ -1,0 +1,1447 @@
+{
+ "meta": {
+  "snapshot": "20261028T092715.670121Z-3inu821z",
+  "offset": 41,
+  "stride": 28,
+  "fresh_previews": 324,
+  "raws_available": true,
+  "usage": "not recorded: OmlxTagger._complete returns only the message text",
+  "frames": {
+   "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg": 234,
+   "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg": 289,
+   "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg": 5,
+   "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg": 366,
+   "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg": 504,
+   "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg": 465,
+   "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg": 88,
+   "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg": 294,
+   "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg": 474,
+   "e869f65a6627ffa76360849df4ddb90e9108f9dcf9811d7b5b46c934aa4de46e.jpg": 185
+  },
+  "astro_frames": [
+   "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg",
+   "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg"
+  ],
+  "bursts": [
+   [
+    27,
+    28,
+    29
+   ],
+   [
+    388,
+    389,
+    390
+   ],
+   [
+    508,
+    509,
+    510
+   ]
+  ],
+  "develop_frames": [
+   "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg"
+  ],
+  "composition": {
+   "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg": [
+    [
+     "crop-original",
+     "original",
+     "native"
+    ],
+    [
+     "crop-1e61831d9fd7eec4",
+     "centered-fallback",
+     "3:2"
+    ]
+   ],
+   "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg": [
+    [
+     "crop-original",
+     "original",
+     "native"
+    ],
+    [
+     "crop-1e61831d9fd7eec4",
+     "centered-fallback",
+     "3:2"
+    ]
+   ],
+   "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg": [
+    [
+     "crop-original",
+     "original",
+     "native"
+    ],
+    [
+     "crop-1e61831d9fd7eec4",
+     "centered-fallback",
+     "3:2"
+    ]
+   ],
+   "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg": [
+    [
+     "crop-original",
+     "original",
+     "native"
+    ],
+    [
+     "crop-1e61831d9fd7eec4",
+     "centered-fallback",
+     "3:2"
+    ]
+   ]
+  },
+  "model_size_on_disk": {
+   "Qwen3-VL-4B-Instruct-MLX-4bit": "2.9G",
+   "Qwen3-VL-8B-Instruct-4bit": "5.4G"
+  },
+  "omlx_rss_mb": {
+   "before": 3484,
+   "after Qwen3-VL-4B-Instruct-MLX-4bit": 7559,
+   "after Qwen3-VL-8B-Instruct-4bit": 8237
+  },
+  "median_seconds": {
+   "Qwen3-VL-4B-Instruct-MLX-4bit": {
+    "tag": 1.4449999999999998,
+    "rejects": 0.835,
+    "astro": 0.49,
+    "caption": 0.655,
+    "burst": 7.96,
+    "develop": 2.63,
+    "composition": 2.38
+   },
+   "Qwen3-VL-8B-Instruct-4bit": {
+    "tag": 2.4699999999999998,
+    "rejects": 1.4,
+    "astro": 0.72,
+    "caption": 0.98,
+    "burst": 3.14,
+    "develop": 3.325,
+    "composition": 3.2750000000000004
+   }
+  },
+  "parse_ok": {
+   "Qwen3-VL-4B-Instruct-MLX-4bit": {
+    "tag": "10/10",
+    "rejects": "10/10",
+    "astro": "4/4",
+    "caption": "6/6",
+    "burst": "3/3",
+    "develop": "1/4",
+    "composition": "4/4"
+   },
+   "Qwen3-VL-8B-Instruct-4bit": {
+    "tag": "10/10",
+    "rejects": "10/10",
+    "astro": "4/4",
+    "caption": "6/6",
+    "burst": "3/3",
+    "develop": "4/4",
+    "composition": "4/4"
+   }
+  }
+ },
+ "calls": [
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 2.18,
+   "ok": true,
+   "description": "A zebra stands prominently in a grassy savanna, surrounded by wildebeest, with a backdrop of rolling green hills under an overcast sky.",
+   "subjects": [
+    "zebra",
+    "wildebeest"
+   ],
+   "scene": "savanna",
+   "species": [
+    {
+     "name": "Equus quagga",
+     "confidence": 0.95
+    },
+    {
+     "name": "Connochaetes taurinus",
+     "confidence": 0.92
+    }
+   ],
+   "confidence": 0.85,
+   "technical": [
+    "focus on zebra",
+    "exposure balanced",
+    "no motion blur"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 1.49,
+   "ok": true,
+   "description": "Two rhinoceroses, one adult and one juvenile, are walking through tall grass in a savanna-like environment with sparse shrubs and a dry tree in the background under bright, golden-hour lighting.",
+   "subjects": [
+    "rhinoceros"
+   ],
+   "scene": "grassland",
+   "species": [
+    {
+     "name": "Rhinoceros",
+     "confidence": 0.98
+    }
+   ],
+   "confidence": 0.95,
+   "technical": [
+    "natural lighting",
+    "soft focus",
+    "no motion blur"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 1.92,
+   "ok": true,
+   "description": "A safari vehicle drives along a dirt road through a savanna landscape at dusk, with a driver visible from behind wearing a hat and carrying a backpack.",
+   "subjects": [
+    "driver",
+    "safari vehicle",
+    "dirt road",
+    "savanna"
+   ],
+   "scene": "Madikwe Game Reserve",
+   "species": [
+    {
+     "name": "African elephant",
+     "confidence": 0.1
+    },
+    {
+     "name": "African lion",
+     "confidence": 0.1
+    },
+    {
+     "name": "giraffe",
+     "confidence": 0.1
+    },
+    {
+     "name": "spotted hyena",
+     "confidence": 0.1
+    },
+    {
+     "name": "African glossy starling",
+     "confidence": 0.1
+    },
+    {
+     "name": "African golden jackal",
+     "confidence": 0.1
+    }
+   ],
+   "confidence": 0.85,
+   "technical": [
+    "motion blur",
+    "dusk lighting",
+    "low-angle perspective"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 1.21,
+   "ok": true,
+   "description": "A blurry, hazy landscape with a gradient from light gray to dark green, suggesting a foggy, low-visibility environment.",
+   "subjects": [],
+   "scene": "ice",
+   "species": [],
+   "confidence": 0.7,
+   "technical": [
+    "blurry",
+    "low visibility",
+    "no sharp focus"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 1.33,
+   "ok": true,
+   "description": "A nighttime photograph of two animals partially concealed in tall grass, illuminated by a flashlight, with motion blur indicating movement.",
+   "subjects": [
+    "African lion"
+   ],
+   "scene": "beach",
+   "species": [
+    {
+     "name": "African lion",
+     "confidence": 0.9
+    }
+   ],
+   "confidence": 0.7,
+   "technical": [
+    "motion blur",
+    "low light",
+    "focus on subject"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 1.35,
+   "ok": true,
+   "description": "A young lion cub sits in tall grass under artificial light at night, illuminated by a spotlight with deep shadows surrounding it.",
+   "subjects": [
+    "lion"
+   ],
+   "scene": "grassland",
+   "species": [
+    {
+     "name": "African lion",
+     "confidence": 0.99
+    }
+   ],
+   "confidence": 0.9,
+   "technical": [
+    "artificial lighting",
+    "low light",
+    "motionless subject"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg",
+   "seconds": 1.73,
+   "ok": true,
+   "description": "A vast, dry savanna landscape with sparse vegetation and a prominent hill in the distance under a hazy sky.",
+   "subjects": [
+    "mountain",
+    "grassland",
+    "bush"
+   ],
+   "scene": "mountain",
+   "species": [
+    {
+     "name": "African elephant",
+     "confidence": 0.1
+    },
+    {
+     "name": "African lion",
+     "confidence": 0.1
+    },
+    {
+     "name": "spotted hyena",
+     "confidence": 0.1
+    },
+    {
+     "name": "giraffe",
+     "confidence": 0.1
+    },
+    {
+     "name": "African glossy starling",
+     "confidence": 0.1
+    }
+   ],
+   "confidence": 0.8,
+   "technical": [
+    "static",
+    "even lighting",
+    "low contrast"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 1.42,
+   "ok": true,
+   "description": "Two rhinoceroses are grazing in a grassy savanna with sparse shrubs under a bright, clear sky.",
+   "subjects": [
+    "rhinoceros"
+   ],
+   "scene": "grassland",
+   "species": [
+    {
+     "name": "Rhinoceros",
+     "confidence": 0.95
+    }
+   ],
+   "confidence": 0.9,
+   "technical": [
+    "focus on animals",
+    "exposure balanced",
+    "no motion blur"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg",
+   "seconds": 1.38,
+   "ok": true,
+   "description": "A lioness is walking through tall grass at night, her shadow cast long behind her, illuminated by artificial light.",
+   "subjects": [
+    "lioness"
+   ],
+   "scene": "grassland",
+   "species": [
+    {
+     "name": "Panthera leo",
+     "confidence": 0.99
+    }
+   ],
+   "confidence": 0.9,
+   "technical": [
+    "low light",
+    "motion blur",
+    "long exposure"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "tag",
+   "frame": "e869f65a6627ffa76360849df4ddb90e9108f9dcf9811d7b5b46c934aa4de46e.jpg",
+   "seconds": 1.47,
+   "ok": true,
+   "description": "An elephant is seen from behind, walking through a dry, rocky area with dense green vegetation under bright sunlight, with a rustic structure visible in the background.",
+   "subjects": [
+    "elephant"
+   ],
+   "scene": "beach",
+   "species": [
+    {
+     "name": "elephant",
+     "confidence": 0.99
+    }
+   ],
+   "confidence": 0.9,
+   "technical": [
+    "focus on elephant",
+    "exposure bright",
+    "motion none"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 0.77,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.98
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 0.76,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.98
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 0.87,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "motion_blur",
+     "confidence": 0.9
+    }
+   ],
+   "suggest_reject": false,
+   "confidence": 0.85
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 0.85,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "out_of_focus",
+     "confidence": 0.98
+    }
+   ],
+   "suggest_reject": false,
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 1.07,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "motion_blur",
+     "confidence": 0.8
+    },
+    {
+     "kind": "out_of_focus",
+     "confidence": 0.7
+    },
+    {
+     "kind": "severely_under_exposed",
+     "confidence": 0.9
+    }
+   ],
+   "suggest_reject": true,
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 0.82,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "out_of_focus",
+     "confidence": 0.7
+    }
+   ],
+   "suggest_reject": false,
+   "confidence": 0.8
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg",
+   "seconds": 0.86,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "out_of_focus",
+     "confidence": 0.7
+    }
+   ],
+   "suggest_reject": true,
+   "confidence": 0.8
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 0.74,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.98
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg",
+   "seconds": 0.92,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "severely_under_exposed",
+     "confidence": 0.95
+    }
+   ],
+   "suggest_reject": true,
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "rejects",
+   "frame": "e869f65a6627ffa76360849df4ddb90e9108f9dcf9811d7b5b46c934aa4de46e.jpg",
+   "seconds": 0.75,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.98
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "astro",
+   "frame": "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg",
+   "seconds": 0.48,
+   "ok": true,
+   "sky": "not_sky",
+   "issues": [
+    "trailing"
+   ],
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "astro",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 0.5,
+   "ok": true,
+   "sky": "night_sky",
+   "issues": [
+    "trailing",
+    "haze"
+   ],
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "astro",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 0.48,
+   "ok": true,
+   "sky": "not_sky",
+   "issues": [
+    "haze"
+   ],
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "astro",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 0.52,
+   "ok": true,
+   "sky": "not_sky",
+   "issues": [
+    "haze",
+    "light_pollution"
+   ],
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "caption",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 0.65,
+   "ok": true,
+   "caption": "A zebra stands alert in a grassy plain, surrounded by grazing wildebeest, with rolling green hills in the background.",
+   "alt_text": "A zebra and wildebeest grazing in a grassy savanna with hills in the distance."
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "caption",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 0.69,
+   "ok": true,
+   "caption": "Two rhinoceroses, one larger and one smaller, walk through tall grass in a savanna-like landscape with scattered shrubs and trees.",
+   "alt_text": "Two rhinoceroses, one adult and one juvenile, walking through green grass with bushes and trees in the background."
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "caption",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 0.62,
+   "ok": true,
+   "caption": "Driver navigates a dirt road through grassy terrain at dusk, with vehicle interior and dashboard visible.",
+   "alt_text": "Person in safari vehicle on dirt road, wearing hat and carrying backpack, driving through grassy landscape at dusk."
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "caption",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 0.66,
+   "ok": true,
+   "caption": "A blurred, hazy landscape with a gradient from light gray to dark green, suggesting fog or mist obscuring the view.",
+   "alt_text": "Blurred image of a foggy landscape with a gradient from light gray to dark green."
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "caption",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 0.57,
+   "ok": true,
+   "caption": "Two animals partially hidden in tall grass at night, illuminated by a flashlight.",
+   "alt_text": "Two animals in tall grass at night, lit by a flashlight, blending into the dark surroundings."
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "caption",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 0.67,
+   "ok": true,
+   "caption": "A young lion cub sits in tall grass at night, illuminated by a spotlight, with a calm, watchful expression.",
+   "alt_text": "A lion cub sits in tall grass at night, illuminated by a spotlight, with a calm, watchful expression."
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "burst",
+   "frame": [
+    27,
+    28,
+    29
+   ],
+   "seconds": 8.33,
+   "ok": true,
+   "frame_id": "27",
+   "rationale": "Frame 27 shows the most consistent and clear depiction of the zebras' poses and expressions across the scene. The framing is stable, and while slightly blurry, it maintains the same composition as the other frames. No distracting elements are present, and the timing appears consistent with the\u2026",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "burst",
+   "frame": [
+    388,
+    389,
+    390
+   ],
+   "seconds": 7.96,
+   "ok": true,
+   "frame_id": "388",
+   "rationale": "Frame 388 shows the most detailed and sharp depiction of the elephant, with clear visibility of its features and the surrounding environment. The lighting and composition are balanced, offering a clear view of the elephant's pose and the landscape. The other frames are blurrier, with less defined\u2026",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "burst",
+   "frame": [
+    508,
+    509,
+    510
+   ],
+   "seconds": 7.94,
+   "ok": true,
+   "frame_id": "509",
+   "rationale": "Frame 509 shows a more dynamic pose with a lioness standing on the log, suggesting active movement. The framing is tighter on the interaction, and the lighting highlights the action. Less distracting elements compared to other frames.",
+   "confidence": 0.9
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "develop",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 2.68,
+   "ok": false,
+   "error": "oMLX proposed develop settings Lumen cannot apply: develop curve y must be from 0 through 1",
+   "raw": "{\n  \"settings\": {\n    \"exposure_ev\": 0.5,\n    \"contrast\": 0.3,\n    \"clarity\": 0.6,\n    \"curve\": [\n      [0, 20],\n      [0.25, 35],\n      [0.5, 50],\n      [0.75, 65],\n      [1, 75]\n    ]\n  },\n  \"rationale\": \"The histogram median at 45 indicates a slightly underexposed scene, with a balanced distribution but leaning toward shadows. Increasing exposure by 0.5 stops brightens the image, bringing the median closer to 50. The curve gently lifts midtones and highlights to enhance detail in the grassy foreground and zebras. Contrast +0.3 adds depth to the zebras\u2019 stripes and the wildebeest herd. Clari"
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "develop",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 2.83,
+   "ok": false,
+   "error": "oMLX proposed develop settings Lumen cannot apply: develop curve y must be from 0 through 1",
+   "raw": "{\n  \"settings\": {\n    \"exposure_ev\": 0.5,\n    \"contrast\": 0.3,\n    \"clarity\": 0.6,\n    \"curve\": [\n      [0, 30],\n      [0.25, 40],\n      [0.5, 50],\n      [0.75, 60],\n      [1, 70]\n    ]\n  },\n  \"rationale\": \"The histogram shows a strong skew toward dark tones (median at 44), indicating underexposure. Increasing exposure_ev by 0.5 brightens the image to balance the histogram. The curve gently lifts midtones to reveal detail in the rhinos' bodies and grass. Contrast 0.3 adds subtle depth to the scene\u2019s textures. Clarity 0.6 enhances natural detail without over-processing. These adjustments align "
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "develop",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 2.58,
+   "ok": false,
+   "error": "oMLX proposed develop settings Lumen cannot apply: develop curve y must be from 0 through 1",
+   "raw": "{\n  \"settings\": {\n    \"exposure_ev\": 0.5,\n    \"contrast\": 0.3,\n    \"clarity\": 0.6,\n    \"curve\": [\n      [0, 20],\n      [0.25, 30],\n      [0.5, 40],\n      [0.75, 50],\n      [1, 60]\n    ]\n  },\n  \"rationale\": \"The histogram shows a strong skew toward dark tones (median at 31), indicating underexposure. Increasing exposure by 0.5 stops brightens the image, bringing the median closer to 50. The curve gently lifts midtones to balance shadows and highlights. Contrast +0.3 enhances detail in the midrange, while clarity +0.6 subtly sharpens textures without over-processing. These adjustments align with"
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "develop",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 2.35,
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5,
+    "contrast": 0.3,
+    "luminance_nr": 0.7,
+    "color_nr": 0.5,
+    "clarity": 0.2
+   },
+   "rationale": "The histogram median at 38 indicates the image is underexposed, needing +0.5 EV to brighten the midtones. The scene\u2019s soft, foggy nature suggests a muted, low-contrast environment, so increasing contrast slightly (0.3) will add definition. Noise reduction (0.7 luminance and 0.5 color) is beneficial for the grainy texture. Clarity (0.2) subtly enhances texture without over-sharpening. No lens correction is needed as no distortion is visible."
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "composition",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 2.44,
+   "ok": true,
+   "candidate_id": "crop-original",
+   "rationale": "The original photograph maintains the full context of the scene, including the dark background and surrounding grass, which are essential for conveying the nocturnal, wild setting. The crop candidates, including the one labeled 1e61831d9fd7eec4, appear to be zoomed-in versions that lose the surrounding environment, reducing visual balance and context. The original image retains headroom and lead room, allowing the viewer to understand the spatial relationship between the subjects and their\u2026",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "composition",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 2.43,
+   "ok": true,
+   "candidate_id": "crop-original",
+   "rationale": "The original photograph offers superior visual balance, with the lion cub centered and well-lit against the dark background, emphasizing its form and expression. It provides ample headroom and lead room, allowing the subject to appear natural and uncluttered. The crop candidate (1e61831d9fd7eec4) is visually similar but slightly cropped, reducing headroom and creating a tighter, less balanced composition. The original retains more contextual depth and avoids distracting edges, making it the\u2026",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "composition",
+   "frame": "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg",
+   "seconds": 2.33,
+   "ok": true,
+   "candidate_id": "crop-original",
+   "rationale": "The original photograph offers superior visual balance, with a natural horizon line and a well-distributed foreground, midground, and background. It emphasizes the landscape\u2019s scale and the mountain\u2019s prominence without distracting elements. The crop candidate (1e61831d9fd7eec4) appears identical to the original, suggesting it is the same image or a mislabeled duplicate. No significant improvement in headroom, lead room, or context is present in the candidate. Therefore, the original retains\u2026",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-4B-Instruct-MLX-4bit",
+   "task": "composition",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 2.25,
+   "ok": true,
+   "candidate_id": "crop-original",
+   "rationale": "The original photograph offers superior visual balance, with the two rhinos positioned naturally within the frame, emphasizing their interaction and the expansive savanna context. It provides ample headroom and lead room, allowing the viewer to appreciate the environment. The crop candidate (1e61831d9fd7eec4) appears to be a zoomed-in version that sacrifices context and headroom, creating a tighter, less balanced composition. The original retains the full environmental narrative and avoids\u2026",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 3.24,
+   "ok": true,
+   "description": "A zebra stands prominently in a grassy savanna with a herd of wildebeest grazing in the background, set against a backdrop of rolling green hills under an overcast sky.",
+   "subjects": [
+    "zebra",
+    "wildebeest"
+   ],
+   "scene": "savanna",
+   "species": [
+    {
+     "name": "zebra",
+     "confidence": 0.99
+    },
+    {
+     "name": "wildebeest",
+     "confidence": 0.98
+    }
+   ],
+   "confidence": 0.98,
+   "technical": [
+    "shallow depth of field",
+    "moderate exposure",
+    "some motion blur on moving animals"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 2.59,
+   "ok": true,
+   "description": "Two rhinos grazing in a grassy savanna at dawn.",
+   "subjects": [
+    "rhinoceros"
+   ],
+   "scene": "savanna",
+   "species": [
+    {
+     "name": "rhinoceros",
+     "confidence": 0.99
+    }
+   ],
+   "confidence": 0.98,
+   "technical": [
+    "shallow depth of field",
+    "sunlight backlighting",
+    "motion blur on grass"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 2.85,
+   "ok": true,
+   "description": "A safari vehicle drives along a dirt road at dusk through savanna vegetation.",
+   "subjects": [
+    "vehicle",
+    "driver"
+   ],
+   "scene": "savanna",
+   "species": [
+    {
+     "name": "African golden jackal",
+     "confidence": 0.3
+    },
+    {
+     "name": "African glossy starling",
+     "confidence": 0.2
+    },
+    {
+     "name": "African lion",
+     "confidence": 0.1
+    },
+    {
+     "name": "spotted hyena",
+     "confidence": 0.1
+    }
+   ],
+   "confidence": 0.98,
+   "technical": [
+    "motion blur",
+    "dusk lighting",
+    "shallow depth of field"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 2.35,
+   "ok": true,
+   "description": "A hazy, low-contrast image showing a foggy landscape with a gradient from pale gray sky to darker greenish ground.",
+   "subjects": [],
+   "scene": "beach",
+   "species": [],
+   "confidence": 0.8,
+   "technical": [
+    "blurry",
+    "low contrast",
+    "overexposed sky"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 2.33,
+   "ok": true,
+   "description": "Nighttime photo of a lion partially obscured by tall grass, illuminated by a flashlight.",
+   "subjects": [
+    "lion"
+   ],
+   "scene": "grassland",
+   "species": [
+    {
+     "name": "African lion",
+     "confidence": 0.95
+    }
+   ],
+   "confidence": 0.9,
+   "technical": [
+    "flashlight illumination",
+    "motion blur",
+    "low light"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 2.39,
+   "ok": true,
+   "description": "A young African lion cub sits alert in tall grass at night, illuminated by a flashlight.",
+   "subjects": [
+    "African lion"
+   ],
+   "scene": "grass",
+   "species": [
+    {
+     "name": "African lion",
+     "confidence": 0.98
+    }
+   ],
+   "confidence": 0.98,
+   "technical": [
+    "flashlight illumination",
+    "low light",
+    "motion blur on grass"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg",
+   "seconds": 3.55,
+   "ok": true,
+   "description": "A wide, dry savanna with scattered shrubs and a prominent hill in the distance under a hazy sky.",
+   "subjects": [
+    "African glossy starling",
+    "African golden jackal",
+    "African elephant",
+    "giraffe",
+    "African lion",
+    "spotted hyena"
+   ],
+   "scene": "savanna",
+   "species": [
+    {
+     "name": "African glossy starling",
+     "confidence": 0.3
+    },
+    {
+     "name": "African golden jackal",
+     "confidence": 0.2
+    },
+    {
+     "name": "African elephant",
+     "confidence": 0.1
+    },
+    {
+     "name": "giraffe",
+     "confidence": 0.1
+    },
+    {
+     "name": "African lion",
+     "confidence": 0.1
+    },
+    {
+     "name": "spotted hyena",
+     "confidence": 0.1
+    }
+   ],
+   "confidence": 0.9,
+   "technical": [
+    "soft focus",
+    "hazy",
+    "low contrast"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 2.55,
+   "ok": true,
+   "description": "Two rhinos grazing in a grassy savanna under bright daylight.",
+   "subjects": [
+    "rhinoceros"
+   ],
+   "scene": "savanna",
+   "species": [
+    {
+     "name": "rhinoceros",
+     "confidence": 0.99
+    }
+   ],
+   "confidence": 0.98,
+   "technical": [
+    "shallow depth of field",
+    "sunlit",
+    "motion blur on grass"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg",
+   "seconds": 2.37,
+   "ok": true,
+   "description": "A lioness walks away at night in a grassy, dimly lit environment.",
+   "subjects": [
+    "lioness"
+   ],
+   "scene": "grassland",
+   "species": [
+    {
+     "name": "African lion",
+     "confidence": 0.99
+    }
+   ],
+   "confidence": 0.98,
+   "technical": [
+    "low light",
+    "motion blur",
+    "shallow depth of field"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "tag",
+   "frame": "e869f65a6627ffa76360849df4ddb90e9108f9dcf9811d7b5b46c934aa4de46e.jpg",
+   "seconds": 2.39,
+   "ok": true,
+   "description": "An African elephant walks through a dry, bushy landscape near a building.",
+   "subjects": [
+    "African elephant"
+   ],
+   "scene": "beach",
+   "species": [
+    {
+     "name": "African elephant",
+     "confidence": 0.99
+    }
+   ],
+   "confidence": 0.98,
+   "technical": [
+    "shallow depth of field",
+    "motion blur on foreground"
+   ]
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 1.42,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 1.33,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 1.45,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "motion_blur",
+     "confidence": 0.85
+    }
+   ],
+   "suggest_reject": false,
+   "confidence": 0.9
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 1.51,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "out_of_focus",
+     "confidence": 0.98
+    }
+   ],
+   "suggest_reject": false,
+   "confidence": 0.98
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 1.5,
+   "ok": true,
+   "problems": [
+    {
+     "kind": "motion_blur",
+     "confidence": 0.85
+    }
+   ],
+   "suggest_reject": false,
+   "confidence": 0.85
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 1.39,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg",
+   "seconds": 1.34,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 1.39,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg",
+   "seconds": 1.41,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "rejects",
+   "frame": "e869f65a6627ffa76360849df4ddb90e9108f9dcf9811d7b5b46c934aa4de46e.jpg",
+   "seconds": 1.3,
+   "ok": true,
+   "problems": [],
+   "suggest_reject": false,
+   "confidence": 0.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "astro",
+   "frame": "cd797e68ecd0fe9c681cd6f1ce43deff19327dc1f270b8b78fe14743dcadedc8.jpg",
+   "seconds": 0.73,
+   "ok": true,
+   "sky": "not_sky",
+   "issues": [],
+   "confidence": 1.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "astro",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 0.7,
+   "ok": true,
+   "sky": "night_sky",
+   "issues": [],
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "astro",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 0.78,
+   "ok": true,
+   "sky": "twilight",
+   "issues": [
+    "haze"
+   ],
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "astro",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 0.71,
+   "ok": true,
+   "sky": "not_sky",
+   "issues": [],
+   "confidence": 1.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "caption",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 1.03,
+   "ok": true,
+   "caption": "A zebra stands alert among grazing wildebeest in a grassy savanna with distant hills.",
+   "alt_text": "A zebra and herd of wildebeest grazing in a grassy field with hills in the background."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "caption",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 0.95,
+   "ok": true,
+   "caption": "Two rhinos graze peacefully in a sunlit savanna, surrounded by tall grass and scattered shrubs.",
+   "alt_text": "Two rhinos standing in tall grass with trees in the background."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "caption",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 1.03,
+   "ok": true,
+   "caption": "Driver navigates a dirt road through savanna at dawn, surrounded by shrubbery and open landscape.",
+   "alt_text": "View from inside a safari vehicle, showing a driver in uniform on a dirt road through grassy terrain."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "caption",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 0.95,
+   "ok": true,
+   "caption": "Foggy landscape with muted tones, blending sky and earth in soft, hazy gradients.",
+   "alt_text": "Blurry image of fog-covered ground with indistinct horizon and pale sky."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "caption",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 0.91,
+   "ok": true,
+   "caption": "Nighttime wildlife photo showing lions partially hidden in tall grass under artificial light.",
+   "alt_text": "Two lions resting in tall grass at night, illuminated by a spotlight."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "caption",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 1.01,
+   "ok": true,
+   "caption": "Young lion cub rests in tall grass under night light, alert and watchful in the wild.",
+   "alt_text": "Young lion cub sitting in tall grass at night, illuminated by a light source."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "burst",
+   "frame": [
+    27,
+    28,
+    29
+   ],
+   "seconds": 2.28,
+   "ok": true,
+   "frame_id": "28",
+   "rationale": "Frame 28 shows the most stable and clear image. Zebras are well-defined, no motion blur, and the framing is balanced without distracting elements like the first frame's ghosting.",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "burst",
+   "frame": [
+    388,
+    389,
+    390
+   ],
+   "seconds": 3.14,
+   "ok": true,
+   "frame_id": "388",
+   "rationale": "Frame 388 is sharpest, clearly showing the elephant's form and the vehicle's steering wheel. Other frames are blurred due to motion.",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "burst",
+   "frame": [
+    508,
+    509,
+    510
+   ],
+   "seconds": 4.34,
+   "ok": true,
+   "frame_id": "509",
+   "rationale": "Frame 509 best captures the group's dynamic: one cub stands alert on the log, others interact nearby, showing natural poses and expressions under the spotlight. Framing is balanced, with minimal distracting elements.",
+   "confidence": 0.9
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "develop",
+   "frame": "26323fc983ca4489e1dece451903b356da9f404ffaf95787fddb60e150dd72d9.jpg",
+   "seconds": 2.89,
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.3,
+    "contrast": 0.2,
+    "sharpness": 0.3
+   },
+   "rationale": "Histogram median at 45 suggests slightly underexposed scene; +0.3 EV brightens it toward balance. Contrast 0.2 adds subtle separation without over-sharpening. Sharpness 0.3 enhances grass and zebra detail while avoiding noise. Color and temperature unchanged as scene\u2019s natural tones suit the savanna."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "develop",
+   "frame": "3bff96c845d9faadcde1fafc51130bf097460a6da8aafe4b5fd046fe3026f1b7.jpg",
+   "seconds": 3.76,
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.3,
+    "temperature_k": 5500,
+    "tint": 10,
+    "contrast": 0.7,
+    "sharpness": 0.6,
+    "luminance_nr": 0.4,
+    "color_nr": 0.3,
+    "clarity": 0.4
+   },
+   "rationale": "Histogram median at 44 is slightly dark; +0.3 EV brightens it. Skin tones are cool (B 31), so +10 tint adds warmth. Contrast 0.7 enhances skin texture without crushing shadows. Sharpness 0.6 brings out grass detail. Luminance NR 0.4 and color NR 0.3 reduce noise while preserving detail. Clarity 0.4 boosts mid-tones for better definition."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "develop",
+   "frame": "536fe1ff5d428755608c4400658cd168a946dcca9ab42bb605b8f9c0224f7877.jpg",
+   "seconds": 2.63,
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5
+   },
+   "rationale": "Histogram median at 31 is dark; raising exposure_ev to 0.5 brightens midtones. Scene has low contrast and blown highlights (11% white), so avoid further brightening. Adjustments preserve detail in shadows while reducing overexposure in sky."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "develop",
+   "frame": "60928326be6e1dc5bae5999055b553c5031d16d6acf74e3e1a08d6dda62f0a98.jpg",
+   "seconds": 4.75,
+   "ok": true,
+   "settings": {
+    "exposure_ev": 0.5,
+    "temperature_k": 5000,
+    "tint": 20,
+    "contrast": 0.6,
+    "sharpness": 0.3,
+    "luminance_nr": 0.4,
+    "color_nr": 0.3,
+    "clarity": 0.2,
+    "curve": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.1
+     ],
+     [
+      0.5,
+      0.5
+     ],
+     [
+      0.8,
+      0.7
+     ],
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "rationale": "Histogram median at 38 suggests underexposure; +0.5 EV brightens midtones. Cool tones (R 48, G 53, B 53) need warmer 5000K to balance. +20 tint adds subtle green. Contrast 0.6 lifts shadows without crushing blacks. Sharpness 0.3 enhances texture. Luminance NR 0.4 reduces noise in midtones. Color NR 0.3 preserves subtle hues. Clarity 0.2 boosts midtone detail. Curve gently brightens shadows and midtones to lift the foggy look."
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "composition",
+   "frame": "786a0e6a42f9fd1775d7b0a9e35ec3b76b0581b6ab63edc43b85c7c8439ad9c7.jpg",
+   "seconds": 3.86,
+   "ok": true,
+   "candidate_id": "crop-original",
+   "rationale": "The original crop maintains the full context of the scene, including the surrounding grass and the dark background, which enhances the sense of a nocturnal wildlife encounter. It preserves visual balance by keeping the subjects centered and avoids cropping into distracting edges or removing crucial environmental context that adds to the photo's authenticity.",
+   "confidence": 0.95
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "composition",
+   "frame": "8a26c3fc9f3d98886a793a9302031152e5317cf2335ca1266bfc8e974f2e8aaa.jpg",
+   "seconds": 3.09,
+   "ok": true,
+   "candidate_id": "crop-original",
+   "rationale": "The original crop best preserves the visual balance and context. It includes the full subject, natural grassy environment, and maintains a natural composition without distracting edges or cropping the subject's headroom or lead room.",
+   "confidence": 1.0
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "composition",
+   "frame": "9ea7f69b9366abe7f0c4dbfb8307336693ab46175a025067afd2492c43461e9a.jpg",
+   "seconds": 3.35,
+   "ok": true,
+   "candidate_id": "crop-1e61831d9fd7eec4",
+   "rationale": "The crop better frames the scene, removing distracting foreground clutter and emphasizing the central hill and distant mountains. It improves visual balance by reducing foreground dominance and providing more context without cropping the key subject.",
+   "confidence": 0.85
+  },
+  {
+   "model": "Qwen3-VL-8B-Instruct-4bit",
+   "task": "composition",
+   "frame": "bba58e6452811e204aaba74c768c3d05f1448c63e7e0b22c29e5013a8010fb16.jpg",
+   "seconds": 3.2,
+   "ok": true,
+   "candidate_id": "crop-1e61831d9fd7eec4",
+   "rationale": "The crop better frames the rhinos, removing distracting foreground grass and offering more headroom. It enhances visual balance by centering the subjects and preserving context without cutting off critical elements.",
+   "confidence": 0.95
+  }
+ ]
+}

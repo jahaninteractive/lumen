@@ -20,6 +20,40 @@ Models on this Mac (48 GB M4, oMLX 0.7.2, all 4-bit MLX):
 | `Qwen3.5-9B-4bit` | 5.6 GB | tested and rejected (see below) |
 | `Qwen3.6-35B-A3B-8bit` | 96 KB | download never finished; untested |
 
+## Conclusion (2026-10-31, agreed with the photographer)
+
+**Keep the current pair: `Qwen3-VL-8B-Instruct-4bit` fast, `Qwen3.8-27B-4bit`
+review.** The question above has its answer: the 27B's accuracy at near-8B cost
+cannot be had on this machine and oMLX 0.7.2, and the reason is now measured.
+
+- The 27B's time is prefill. About 4.8 ms per token, and oMLX cannot reuse the
+  cached keyword prefix on a hybrid-attention model (snapshots only per 2048
+  token chunk and at request end). The one real win was dropping the 100
+  self-generated `learned` words from the prompt: a tag went from about 12 s
+  to about 9.5 s with the same answers (`68007e3`). Dropping the whole list
+  saves 2 s more and loses species names, so it stays.
+- Nothing server-side helps: the MTP drafter and ANE prefill were neutral,
+  int8 activations need an M5, structured output costs a third.
+- Nothing smaller replaces the 8B. The 3B breaks every JSON contract; the 4B
+  keeps them but wrongly suggests reject on 3 of 10 frames, invents astro
+  issues and fails develop validation. Both gain under 2x because image prefill
+  dominates. The 8B already restores the keyword prefix from cache.
+- No more downloads for this question on the satellite link. The other-family
+  candidates are listed below with sizes; the only one with plausible upside
+  over the 27B is `gemma-4-26b-a4b-it-4bit` (15.3 GB), for an idle night if the
+  photographer ever wants it.
+
+What would reopen this: an oMLX release that snapshots hybrid-model caches per
+block (restores the prefix cache on the 27B, worth 2 to 3 s a request), or a
+move to an M5.
+
+Next effort goes to step 7, the species confidence gate: a prompt and parser
+change, no download, and both models need it (the 8B listed six species on an
+empty hill, the 27B a kite on three frames without one). It is in
+`docs/BACKLOG.md`.
+
+---
+
 ## What is already done (on `main`)
 
 - `af20533`: the **Review model** dropdown in the page header. `lumen serve`
@@ -188,6 +222,61 @@ single-element array, default a missing `confidence`), which would recover
 most of the 3B's tag, reject and astro failures but none of its quality; or a
 3B-class model from the Qwen3-VL line, which has not been tried.
 
+## Qwen3-VL-4B against Qwen3-VL-8B (2026-10-31)
+
+Same question for the Qwen3-VL line's own small model
+(`lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit`, 2.9 GB on disk).
+Same snapshot and script, `LUMEN_BENCH_OFFSET=41` (10 fresh frames: zebra
+and wildebeest, two rhino pairs, a vehicle at dusk, a fogged frame, three
+spotlit lions at night, an empty hill, an elephant by a building). Results:
+`results/compare-Qwen3-VL-4B-vs-Qwen3-VL-8B.json`.
+
+| Task (frames) | 4B median s | 4B parsed | 8B median s | 8B parsed |
+|---------------|-------------|-----------|-------------|-----------|
+| tag (10) | 1.4 | 10/10 | 2.5 | 10/10 |
+| reject scan (10) | 0.8 | 10/10 | 1.4 | 10/10 |
+| astro triage (4) | 0.5 | 4/4 | 0.7 | 4/4 |
+| caption (6) | 0.7 | 6/6 | 1.0 | 6/6 |
+| burst critique (3) | 8.0 | 3/3 | 3.1 | 3/3 |
+| develop advice (4) | 2.6 | 1/4 | 3.3 | 4/4 |
+| composition (4) | 2.4 | 4/4 | 3.3 | 4/4 |
+
+Verdict: **better than the 3B, still not a fast-role replacement.** It
+follows the JSON contracts the 3B broke, and tags and captions are as good as
+the 8B's (it answers Latin binomials, `Equus quagga`, `Panthera leo`, where
+the vocabulary has common names, so fewer vocabulary hits). The gain is 1.4 to
+1.8x on the single-image tasks because image prefill dominates, as before.
+Where it loses:
+
+- Reject scan, its main job in the fast role: `suggest_reject: true` on 3 of
+  10, all wrong. Two spotlit night lions called `severely_under_exposed` at
+  0.9 to 0.95, and a sharp landscape `out_of_focus` 0.7. The 8B rejected
+  none of the 10 and flagged the same motion blur and fogged frame as
+  problems without a reject.
+- Astro triage invents issues: `trailing` on a walking lioness, `haze` and
+  `light_pollution` on a lion cub; the 8B listed none.
+- Develop advice: 3 of 4 answers write the curve in 0 to 100 (`[0, 20]`,
+  `[1, 75]`) and fail validation; every answer is the same `+0.5 EV,
+  contrast 0.3, clarity 0.6` whatever the histogram.
+- Burst critique is 2.5x slower than the 8B (8.0 against 3.1 s) on the three
+  full-size frames, and its rationale describes the chosen frame instead of
+  comparing. Picks agree on 2 of 3 (it took the frame the 8B called ghosted).
+- Composition picks the original 4 of 4; the 8B took the crop on the two
+  frames where it removed foreground clutter.
+
+Memory: oMLX RSS rose 4.1 GB after the 4B's block and 0.7 GB more after the
+8B's (already warm). The 4B at rest is about 4 GB, which still does not fit
+an 8 GB Mac beside the system and the browser.
+
+Also seen in the 8B: `confidence: 0.0` on every clean reject answer (7 of 10;
+the parser accepts it, the UI shows nothing for it), and on the empty-hill
+frame it put six vocabulary species into `subjects` at 0.1 to 0.6 with no
+animal present: the same gate material as the 27B's "Kite" (step 7).
+
+Removed afterwards: the 4.4 MB stub `~/Models/mlx-community/Qwen3-VL-4B-Instruct-4bit`
+left by a cancelled download, which oMLX listed as a model with no weights.
+
+---
 ## 27B knobs in oMLX, and why the vocabulary prefix is not cached (2026-10-31)
 
 The photographer's goal is the 27B's quality closer to the 8B's time, so the
@@ -269,7 +358,7 @@ Keep the curated list. Residual oddities seen with it: "Kite" at 0.1 to 0.6
 on three frames (two seabirds, one dung beetle), and a species list on a
 distant herd at 0.6 and 0.4; both are gate material for step 7.
 
-## Smaller and other-family candidates (2026-10-31, not yet measured)
+## Smaller and other-family candidates (2026-10-31; only the 4B measured)
 
 The connection here is a slow satellite link (about 400 KB/s measured; a
 3 GB model is about 2 hours). Ask before queueing anything, one at a time,
@@ -279,7 +368,7 @@ tower in `config.json`.
 
 | Model | Size | Why it is interesting |
 |-------|------|----------------------|
-| `Qwen3-VL-4B-Instruct-4bit` | 3.1 GB | the Qwen3-VL line's small model; follows the 8B's JSON contracts if anything does. `lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit` was downloading in oMLX at the time of writing; run `compare.py Qwen3-VL-4B-Instruct-MLX-4bit Qwen3-VL-8B-Instruct-4bit` with a fresh `LUMEN_BENCH_OFFSET` (41 or higher; 40 was used, and oMLX would answer repeats from cache) |
+| `Qwen3-VL-4B-Instruct-4bit` | 3.1 GB | measured above as the lmstudio-community copy: contracts hold, reject scan over-rejects, not a replacement |
 | `gemma-4-e4b-it-4bit` | 5.1 GB | 8B-class alternative from another family |
 | `GLM-4.6V-Flash-4bit` | 7.1 GB | small vision model built for structured output |
 | `gemma-3-12b-it-qat-4bit` | 8.0 GB | between the 8B and the 27B |
@@ -328,7 +417,7 @@ In order of expected payoff for the effort:
    Settings field it rebinds; the two-model choice is captured at startup so
    a switch cannot shrink it). The header has a **Fast model** select next to
    **Review model**. Fast still starts on the 8B.
-4. **Try the MoE model.** `Qwen3.6-35B-A3B` is a mixture of experts with
+4. **Declined (see Conclusion): the MoE model.** `Qwen3.6-35B-A3B` is a mixture of experts with
    about 3B active parameters per token, so it could decode near the 8B's
    speed with better quality. The 8-bit download (about 35 GB) is incomplete
    and too large to share 48 GB with the others; look for a 4-bit build (about
