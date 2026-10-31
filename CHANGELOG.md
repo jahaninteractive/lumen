@@ -5,7 +5,7 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-10-31)
 
 The keyword list sent to the models leaves out the `learned` category (the model's own earlier words; the review model prefilled them on every request, about 2.5 s per tag), and learning now keeps the newest 30 learned words without duplicates.
 
@@ -19,7 +19,7 @@ The README gains a "How it was built" section and drops a limit that the
 export reply no longer has; `docs/ASSESSMENT.md` records where Lumen stands
 against commercial tools and what is still missing.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (never tagged; folded into 0.2.0)
 
 First public version. Catalogs Sony `.ARW` files in place, groups bursts with
 an explained best-shot proposal, previews, crops and develops through Core
