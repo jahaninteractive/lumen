@@ -370,6 +370,15 @@ class OverpassTests(unittest.TestCase):
         self.assertEqual(("park", "Madikwe"), (park["properties"]["kind"], park["properties"]["name"]))
         self.assertEqual(["lake", "road", "park"], [f.kind for f in parse_geojson(json.dumps(collection))])
 
+    def test_closed_road_stays_a_line_and_relation_without_outers_is_skipped(self):
+        ring = [{"lat": -24.7, "lon": 26.2}, {"lat": -24.7, "lon": 26.3}, {"lat": -24.7, "lon": 26.2}]
+        collection = overpass_to_geojson({"elements": [
+            {"type": "way", "tags": {"highway": "track"}, "geometry": ring},
+            {"type": "relation", "tags": {"boundary": "protected_area"}, "members": [
+                {"type": "way", "role": "inner", "geometry": ring}, {"type": "way", "role": "outer"}]},
+        ]})
+        self.assertEqual(["LineString"], [feature["geometry"]["type"] for feature in collection["features"]])
+
     def test_fetch_region_posts_the_query_and_writes_the_file(self):
         requests = []
 
@@ -384,8 +393,11 @@ class OverpassTests(unittest.TestCase):
             self.assertEqual(3, len(json.loads(path.read_text())["features"]))
             self.assertEqual(["madikwe.geojson"], [p.name for p in out.iterdir()])
         request, timeout = requests[0]
-        self.assertEqual(("https://overpass-api.de/api/interpreter", "POST", "Lumen", 120.0),
-                         (request.full_url, request.get_method(), request.get_header("User-agent"), timeout))
+        self.assertEqual(("https://overpass-api.de/api/interpreter", "POST", 120.0),
+                         (request.full_url, request.get_method(), timeout))
+        agent = request.get_header("User-agent")
+        self.assertTrue(agent.startswith("Lumen/"))
+        self.assertIn("https://github.com/jahaninteractive/lumen", agent)
         query = parse_qs(request.data.decode())["data"][0]
         self.assertIn("out geom", query)
         self.assertIn("(-24.95,26.05,-24.55,26.55)", query)
@@ -421,6 +433,15 @@ class OverpassTests(unittest.TestCase):
             for opener, message in cases:
                 with self.assertRaisesRegex(RuntimeError, message):
                     fetch_region("madikwe", (-24.95, 26.05, -24.55, 26.55), Path(directory), opener=opener)
+            self.assertEqual([], list(Path(directory).iterdir()))
+
+    def test_fetch_region_refuses_an_overpass_runtime_error_remark(self):
+        body = json.dumps({"remark": "runtime error: Query timed out in \"query\" at line 1 after 91 seconds.",
+                           "elements": OVERPASS["elements"][:1]}).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "Overpass answered runtime error: Query timed out"):
+                fetch_region("madikwe", (-24.95, 26.05, -24.55, 26.55), Path(directory),
+                             opener=lambda request, timeout: FakeResponse(body))
             self.assertEqual([], list(Path(directory).iterdir()))
 
 

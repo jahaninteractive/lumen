@@ -391,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
                        "features": len(json.loads(path.read_text(encoding="utf-8"))["features"])}
             code = 0
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
-            payload, code = {"error": str(error)}, 2
+            payload, code = {"error": public_message(str(error))}, 2
         _print(payload, args.json)
         return code
 

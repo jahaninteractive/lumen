@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
+from . import __version__
+
 GPX_NS = "{http://www.topografix.com/GPX/1/1}"
 # Below these zooms a kind is clutter (every road in a country at once); kinds not listed always draw.
 KIND_MIN_ZOOM = {"road": 6, "place": 5, "river": 3, "lake": 3}
@@ -410,8 +412,8 @@ class MapIndex:
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 # Overpass is a shared public service; a bigger box is a country-sized query it will time out on anyway.
 MAX_REGION_SQUARE_DEGREES = 4
-# A closed way with one of these tags is an area; any other closed way (a ring road) stays a line.
-AREA_TAGS = ("natural", "boundary", "leisure")
+# Overpass's front end refuses generic agents and OSM policy asks clients to name the app and a contact.
+OVERPASS_USER_AGENT = f"Lumen/{__version__} (+https://github.com/jahaninteractive/lumen)"
 
 
 def overpass_query(south: float, west: float, north: float, east: float) -> str:
@@ -442,6 +444,7 @@ def overpass_to_geojson(payload: dict) -> dict:
             line = _overpass_line(element.get("geometry"))
             if len(line) < 2:
                 continue
+            # A closed water, boundary or leisure way is an area; any other closed way (a ring road) stays a line.
             area = line[0] == line[-1] and (tags.get("natural") == "water" or "boundary" in tags or "leisure" in tags)
             geometry = {"type": "Polygon", "coordinates": [line]} if area else {"type": "LineString", "coordinates": line}
         elif element.get("type") == "relation":
@@ -470,7 +473,7 @@ def fetch_region(name: str, bbox: tuple[float, float, float, float], out_dir: Pa
     if not stem:
         raise ValueError("region name required")
     request = urllib.request.Request(OVERPASS_URL, data=urlencode({"data": overpass_query(*bbox)}).encode(),
-                                     headers={"User-Agent": "Lumen"}, method="POST")
+                                     headers={"User-Agent": OVERPASS_USER_AGENT}, method="POST")
     try:
         with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
             status = getattr(response, "status", None) or response.getcode()
@@ -481,12 +484,22 @@ def fetch_region(name: str, bbox: tuple[float, float, float, float], out_dir: Pa
     except urllib.error.URLError as error:
         raise RuntimeError(f"Overpass answered {error.reason}") from None
     except OSError as error:  # a timeout or reset during the read is not wrapped in URLError
-        raise RuntimeError(f"Overpass answered {error.strerror or error or 'timed out'}") from None
+        raise RuntimeError(f"Overpass answered {error.strerror or str(error) or 'timed out'}") from None
     if status != 200:
         raise RuntimeError(f"Overpass answered {status}")
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Overpass answered something other than a JSON object")
+    remark = str(payload.get("remark", ""))
+    if "error" in remark.lower():  # a query timeout or memory limit arrives as a 200 with partial elements
+        raise RuntimeError(f"Overpass answered {remark}")
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"{stem}.geojson"
     partial = target.with_name(target.name + ".part")
-    partial.write_text(json.dumps(overpass_to_geojson(json.loads(body))), encoding="utf-8")
-    partial.replace(target)
+    try:
+        partial.write_text(json.dumps(overpass_to_geojson(payload)), encoding="utf-8")
+        partial.replace(target)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
     return target
