@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Gets a fresh clone to a working `lumen doctor`: checks the platform, installs
 # uv and exiftool with Homebrew, syncs Python, compiles the native helpers, and
-# fetches GeoNames, darktable, Siril, oMLX and the two models. Anything already
+# fetches GeoNames, the Natural Earth map, darktable, Siril, oMLX and the two models. Anything already
 # present is reported as ready and skipped, so re-running is safe.
 #
 #   zsh scripts/bootstrap.sh                 ask before each optional download
@@ -49,6 +49,15 @@ omlx_release="https://github.com/jundot/omlx/releases/download/v0.7.2"
 omlx_sequoia_sha256="86e50d13ecbdf8531a5e39684619b0b0a609ec06e1c1fab866daa74e0e47b32e"
 omlx_tahoe_sha256="0ceddaf7a8901d440bc88acb3e033b294ad4d1b45b57d02fb73833c839d270b9"
 geonames_url="https://download.geonames.org/export/dump/"
+natural_earth_url="https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/"
+natural_earth_layers=(
+  ne_10m_coastline.geojson 6f75ae0e0de157b14946e2255eb1f5486d9a13819032e26d4610852d296788f6
+  ne_10m_admin_0_boundary_lines_land.geojson 74d9c16229c095fde65943a9919e337682f044bcebccb120764f38edf3b70f4a
+  ne_10m_rivers_lake_centerlines.geojson bb854a900ecbd3b408df46d5e16e3e0f974ba55993f9d8b5c26e855273c0905a
+  ne_10m_lakes.geojson 2d036f53dedec578001c5c30c2959ee7d4eebc1306900fa4367c49929ec8f2d9
+  ne_10m_roads.geojson 66a0c7b438e92fd124822cc5921cfa11042f48c294ade5e0f03f2c6640fd0248
+  ne_10m_populated_places_simple.geojson fd3fa867a320cbd5c5b6bb5bc550afeec2939fb2cef688e508007282a55ac42f
+)
 fast_model="mlx-community/Qwen3-VL-8B-Instruct-4bit"
 review_model="mlx-community/Qwen3.8-27B-4bit"
 
@@ -178,7 +187,7 @@ CLANG_MODULE_CACHE_PATH="$module_cache" swiftc -O \
   -o "$native_bin/raw_developer"
 
 if (( no_download )); then
-  skipped+=("Downloads (--no-download): GeoNames, darktable, Siril, oMLX and models; run zsh scripts/bootstrap.sh without it to fetch them")
+  skipped+=("Downloads (--no-download): GeoNames, Natural Earth map, darktable, Siril, oMLX and models; run zsh scripts/bootstrap.sh without it to fetch them")
 else
   # 5. GeoNames
   geonames_dir="$project_root/vendor/data/geonames"
@@ -211,6 +220,21 @@ else
     fi
   done
   [[ -z "${countries// /}" ]] && skipped+=("GeoNames country files: none chosen; re-run with LUMEN_GEONAMES_COUNTRIES=\"ZA AQ\" for full place detail")
+
+  # 5b. Natural Earth base map
+  map_dir="$project_root/vendor/data/map"
+  if ask "Download the Natural Earth base map for the Map tab (about 80 MB) into vendor/data/map? [Y/n]" Y; then
+    mkdir -p "$map_dir"
+    for name sha in "${natural_earth_layers[@]}"; do
+      if fetch "$natural_earth_url$name" "$map_dir/$name"; then
+        verify_sha256 "$map_dir/$name" "$sha"
+      else
+        skipped+=("Map layer $name: download failed; re-run scripts/bootstrap.sh, it resumes")
+      fi
+    done
+  else
+    skipped+=("Map layers: not downloaded; re-run scripts/bootstrap.sh and answer yes")
+  fi
 
   # 6. darktable
   apps="$project_root/vendor/apps"

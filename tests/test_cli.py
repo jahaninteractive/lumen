@@ -195,6 +195,14 @@ class CliTests(unittest.TestCase):
         self.assertIn("error", missing)
         self.assertNotIn(str(root), json.dumps(jobs))
 
+    def test_settings_read_map_dir_from_the_environment(self):
+        with patch.dict(os.environ, {"LUMEN_MAP_DIR": "/tmp/maps"}):
+            settings = Settings.from_environment()
+        self.assertEqual(Path("/tmp/maps"), settings.map_dir)
+        self.assertEqual(settings.library_dir / "cache" / "map.sqlite", settings.map_index_path)
+        self.assertEqual(settings.library_dir / "map" / "overlays", settings.map_overlays_dir)
+        self.assertIsNone(Settings(library_dir=Path("/x")).map_dir)
+
     def test_doctor_reports_required_and_optional_capabilities(self):
         with tempfile.TemporaryDirectory() as directory:
             geonames = Path(directory) / "geonames"

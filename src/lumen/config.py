@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_GEONAMES_DIR = Path(__file__).resolve().parents[2] / "vendor" / "data" / "geonames"
+DEFAULT_MAP_DIR = Path(__file__).resolve().parents[2] / "vendor" / "data" / "map"
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +18,7 @@ class Settings:
     omlx_review_model: str | None = None
     near_duplicate_distance: int = 12
     geonames_dir: Path | None = None  # set by from_environment; None means no place index
+    map_dir: Path | None = None  # set by from_environment; None means no base map layers
     geocode_online: bool = False  # opt-in: send coordinates to Nominatim when the local index has no close place
 
     @classmethod
@@ -37,6 +39,7 @@ class Settings:
             omlx_review_model=os.environ.get("LUMEN_OMLX_REVIEW_MODEL") or None,
             near_duplicate_distance=distance,
             geonames_dir=Path(os.environ.get("LUMEN_GEONAMES_DIR", str(DEFAULT_GEONAMES_DIR))).expanduser(),
+            map_dir=Path(os.environ.get("LUMEN_MAP_DIR", str(DEFAULT_MAP_DIR))).expanduser(),
             geocode_online=os.environ.get("LUMEN_GEOCODE_ONLINE", "").strip().lower() in {"1", "true", "yes"},
         )
 
@@ -85,6 +88,18 @@ class Settings:
         return self.cache_dir / "geonames.sqlite"
 
     @property
+    def map_index_path(self) -> Path:
+        return self.cache_dir / "map.sqlite"
+
+    @property
+    def map_regions_dir(self) -> Path:
+        return self.library_dir / "map" / "regions"
+
+    @property
+    def map_overlays_dir(self) -> Path:
+        return self.library_dir / "map" / "overlays"
+
+    @property
     def trash_dir(self) -> Path:
         return self.library_dir / "trash"
 
@@ -97,6 +112,7 @@ class Settings:
         return self.cache_dir / "bin" / "raw_developer"
 
     def ensure_directories(self) -> None:
-        for path in (self.library_dir, self.preview_dir, self.sidecar_dir, self.output_dir, self.cache_dir, self.trash_dir):
+        for path in (self.library_dir, self.preview_dir, self.sidecar_dir, self.output_dir, self.cache_dir, self.trash_dir,
+                     self.map_regions_dir, self.map_overlays_dir):
             path.mkdir(parents=True, exist_ok=True)
 
