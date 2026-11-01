@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 GPX_NS = "{http://www.topografix.com/GPX/1/1}"
 # Below these zooms a kind is clutter (every road in a country at once); kinds not listed always draw.
@@ -56,22 +56,40 @@ def _positions(coordinates):
 
 
 def _rounded(coordinates):
-    if coordinates and isinstance(coordinates[0], (int, float)):
+    """Rounded copy of a GeoJSON coordinate array; TypeError when it is not nested lists of numbers."""
+    if not isinstance(coordinates, list) or not coordinates:
+        raise TypeError("coordinates must be non-empty lists")
+    if isinstance(coordinates[0], (int, float)):
         return [round(float(value), 5) for value in coordinates]
     return [_rounded(part) for part in coordinates]
 
 
 def _gpx_time(text: str) -> datetime:
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    return datetime.fromisoformat(text)
+    """UTC-aware whatever the file wrote: Z, an offset (converted), or no designator (GPX times are UTC)."""
+    try:
+        moment = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        raise ValueError(f"unreadable time {text!r}") from None
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def _lat_lon(element: ET.Element) -> tuple[float, float]:
+    try:
+        return float(element.get("lat")), float(element.get("lon"))
+    except (TypeError, ValueError):
+        raise ValueError(f"{element.tag.removeprefix(GPX_NS)} without a readable lat/lon") from None
 
 
 def parse_gpx(text: str) -> tuple[list[Feature], list[TrackPoint]]:
     """Tracks and routes as one LineString each (segments joined), waypoints as Points, plus every timed track
     point in time order across all tracks and segments. Untimed points still draw but cannot date a photo, so they
     are left out of the points. Raises ValueError for anything that is not GPX 1.1."""
-    root = ET.fromstring(text)
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        raise ValueError("not a GPX 1.1 document") from None
     if root.tag != GPX_NS + "gpx":
         raise ValueError("not a GPX 1.1 document")
     features: list[Feature] = []
@@ -81,21 +99,36 @@ def parse_gpx(text: str) -> tuple[list[Feature], list[TrackPoint]]:
     for number, (line, vertices) in enumerate(lines, start=1):
         coordinates = []
         for vertex in vertices:
-            lat, lon = float(vertex.get("lat")), float(vertex.get("lon"))
+            lat, lon = _lat_lon(vertex)
             coordinates.append([lon, lat])
             when = vertex.findtext(GPX_NS + "time")
             if line.tag == GPX_NS + "trk" and when:
-                ele = vertex.findtext(GPX_NS + "ele")
-                points.append(TrackPoint(_gpx_time(when.strip()), lat, lon, float(ele) if ele else None))
+                points.append(TrackPoint(_gpx_time(when.strip()), lat, lon, _ele(vertex)))
         if len(coordinates) >= 2:
             name = line.findtext(GPX_NS + "name") or f"Track {number}"
             features.append(Feature("track", name, 0, {"type": "LineString", "coordinates": _rounded(coordinates)}))
     for wpt in root.iter(GPX_NS + "wpt"):
-        position = [float(wpt.get("lon")), float(wpt.get("lat"))]
+        lat, lon = _lat_lon(wpt)
+        position = [lon, lat]
         name = wpt.findtext(GPX_NS + "name") or ""
         features.append(Feature("waypoint", name, 0, {"type": "Point", "coordinates": _rounded(position)}))
     points.sort(key=lambda point: point.time)
     return features, points
+
+
+def _ele(vertex: ET.Element) -> float | None:
+    text = vertex.findtext(GPX_NS + "ele")
+    try:
+        return float(text) if text else None
+    except ValueError:
+        raise ValueError(f"unreadable elevation {text!r}") from None
+
+
+def _rank(value) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def _kind(properties: dict, source_name: str) -> str:
@@ -118,22 +151,28 @@ def _kind(properties: dict, source_name: str) -> str:
 def parse_geojson(text: str, *, source_name: str = "") -> list[Feature]:
     """Features of a FeatureCollection, kinded by an explicit `kind` property, then the Natural Earth file name,
     then OSM-style tags, else "other". Features without coordinates are skipped. Raises ValueError for anything
-    that is not a FeatureCollection."""
+    that is not a FeatureCollection. A malformed feature is skipped so one bad record cannot sink a layer file."""
     data = json.loads(text)
     if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
         raise ValueError("not a GeoJSON FeatureCollection")
     features = []
     for item in data.get("features") or []:
-        geometry = item.get("geometry") or {}
-        if not geometry.get("coordinates"):
+        if not isinstance(item, dict):
             continue
-        properties = item.get("properties") or {}
-        rank = int(properties["scalerank"]) if properties.get("scalerank") is not None else 0
+        geometry = item.get("geometry")
+        properties = item.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        if not isinstance(geometry, dict) or not isinstance(geometry.get("type"), str):
+            continue
+        try:
+            coordinates = _rounded(geometry.get("coordinates"))
+        except (TypeError, ValueError, IndexError, OverflowError):
+            continue
         features.append(Feature(
             _kind(properties, source_name),
             str(properties.get("name") or ""),
-            rank,
-            {"type": geometry["type"], "coordinates": _rounded(geometry["coordinates"])},
+            _rank(properties.get("scalerank")),
+            {"type": geometry["type"], "coordinates": coordinates},
         ))
     return features
 

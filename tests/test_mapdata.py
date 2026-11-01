@@ -78,6 +78,27 @@ class GpxTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "^not a GPX 1.1 document$"):
                 parse_gpx(text)
 
+    def test_gpx_times_are_utc_whatever_the_designator(self):
+        text = HEADER + """<trk><trkseg>
+<trkpt lat="1" lon="2"><time>2026-10-20T05:34:00+02:00</time></trkpt>
+<trkpt lat="1.1" lon="2.1"><time>2026-10-20T03:35:00</time></trkpt>
+</trkseg></trk></gpx>"""
+        _, points = parse_gpx(text)
+        self.assertEqual([p.time for p in points], [
+            datetime(2026, 10, 20, 3, 34, tzinfo=timezone.utc), datetime(2026, 10, 20, 3, 35, tzinfo=timezone.utc)])
+        self.assertTrue(all(p.time.tzinfo is timezone.utc for p in points))
+
+    def test_gpx_malformed_input_raises_value_error(self):
+        cases = {
+            "this is not xml <": "^not a GPX 1.1 document$",
+            HEADER + '<trk><trkseg><trkpt lat="1"/></trkseg></trk></gpx>': "^trkpt without a readable lat/lon$",
+            HEADER + '<trk><trkseg><trkpt lat="1" lon="2"><time>yesterday</time></trkpt></trkseg></trk></gpx>':
+                "^unreadable time 'yesterday'$",
+        }
+        for text, message in cases.items():
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                parse_gpx(text)
+
 
 class GeoJsonTests(unittest.TestCase):
     def test_geojson_kinds_by_property_filename_and_tags(self):
@@ -94,6 +115,23 @@ class GeoJsonTests(unittest.TestCase):
         self.assertEqual(parse_geojson(json.dumps(untagged))[0].kind, "other")
         with self.assertRaisesRegex(ValueError, "^not a GeoJSON FeatureCollection$"):
             parse_geojson(json.dumps(FEATURES["features"][0]))
+
+    def test_geojson_skips_malformed_features(self):
+        good = FEATURES["features"][2]
+        collection = {"type": "FeatureCollection", "features": [
+            good,
+            "not a feature",
+            {"type": "Feature", "properties": {}, "geometry": {"coordinates": [1, 2]}},
+            {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": ["a"]}},
+        ]}
+        self.assertEqual([f.name for f in parse_geojson(json.dumps(collection))], ["Cape Town"])
+
+    def test_geojson_scalerank_falls_back_to_zero(self):
+        ranks = [{"scalerank": "3.0"}, {"scalerank": "high"}, {"scalerank": None}, {}]
+        collection = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": props, "geometry": {"type": "Point", "coordinates": [0, 0]}}
+            for props in ranks]}
+        self.assertEqual([f.rank for f in parse_geojson(json.dumps(collection))], [3, 0, 0, 0])
 
     def test_decimate_keeps_ends_and_drops_close_vertices(self):
         coords = [[0, 0], [0.01, 0], [0.2, 0], [0.21, 0.05], [0.21, 0.3], [0.22, 0.3]]
