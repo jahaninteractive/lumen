@@ -3172,17 +3172,14 @@ function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = nul
 const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   collapsePanel(false);  // choosing a tab always shows its panel
   const main = document.querySelector('#main-content');
-  main.scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
+  // The map stage grows from nothing once its panel shows. Safari abandons a smooth scroll when the content
+  // above it changes size, and a plain scrollTo issued while that animation is in flight loses to it, so the
+  // Map tab jumps instantly instead, with the top asserted once more after the map has sized and drawn.
+  main.scrollTo({ top: 0, behavior: tab.id === 'map-tab' ? 'auto' : scrollMotion() });  // the panel sits above the sheet
   if (tab.id === 'review-tab') loadRejectSuggestions();
   if (tab.id === 'assist-tab') loadVocabulary();
   if (tab.id === 'clear-tab') loadCleared();
-  if (tab.id === 'map-tab') {
-    // The map stage grows from nothing once its panel shows; browser scroll anchoring keeps the sheet the
-    // photographer was looking at in place by scrolling back down, so the top is asserted again after layout.
-    const top = () => main.scrollTo({ top: 0 });
-    window.requestAnimationFrame(() => window.requestAnimationFrame(top));
-    loadMap().finally(top);
-  }
+  if (tab.id === 'map-tab') loadMap().finally(() => main.scrollTo({ top: 0, behavior: 'auto' }));
 }, () => togglePanel());  // clicking the open tab again folds the panel away, and back
 
 function collapsePanel(collapsed) {
