@@ -1,8 +1,11 @@
 import json
+import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 
-from lumen.mapdata import KIND_MIN_ZOOM, Feature, TrackPoint, decimate, parse_geojson, parse_gpx, pixel_degrees
+from lumen.mapdata import KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, decimate, parse_geojson, parse_gpx, pixel_degrees
 
 HEADER = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="test">\n'
 
@@ -148,6 +151,112 @@ class GeoJsonTests(unittest.TestCase):
         self.assertEqual(KIND_MIN_ZOOM, {"road": 6, "place": 5, "river": 3, "lake": 3})
         self.assertEqual(pixel_degrees(0), 360 / 256)
         self.assertEqual(pixel_degrees(2), 360 / 1024)
+
+
+# A dense wiggle near Madikwe: 200 vertices 0.001 degrees apart, so low zooms keep far fewer of them.
+WIGGLE = [[26.2 + i * 0.001, -24.8 + (i % 2) * 0.0005] for i in range(200)]
+LAYER = {
+    "type": "FeatureCollection",
+    "features": [
+        {"type": "Feature", "properties": {"kind": "border", "name": "Wiggle"},
+         "geometry": {"type": "LineString", "coordinates": WIGGLE}},
+        {"type": "Feature", "properties": {"kind": "road", "name": "R49"},
+         "geometry": {"type": "LineString", "coordinates": [[26.1, -24.7], [26.3, -24.7]]}},
+        {"type": "Feature", "properties": {"kind": "park", "name": "Madikwe"},
+         "geometry": {"type": "Polygon", "coordinates": [[[26.1, -24.9], [26.4, -24.9], [26.4, -24.6], [26.1, -24.9]]]}},
+        {"type": "Feature", "properties": {"kind": "place", "name": "Cape Town"},
+         "geometry": {"type": "Point", "coordinates": [18.42, -33.92]}},
+        {"type": "Feature", "properties": {"kind": "island", "name": "Taveuni"},
+         "geometry": {"type": "Point", "coordinates": [179.5, -16.8]}},
+    ],
+}
+MADIKWE = (-24.95, -24.55, 26.05, 26.55)
+
+
+class MapIndexTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.base = self.root / "base"
+        self.overlays = self.root / "overlays"
+        self.base.mkdir()
+        self.overlays.mkdir()
+        (self.base / "layer.geojson").write_text(json.dumps(LAYER))
+        (self.overlays / "tuesday.gpx").write_text(TRACK_GPX)
+        (self.overlays / "untimed.gpx").write_text(UNTIMED_GPX)
+        self.index = MapIndex(self.root / "map.sqlite", [self.base, self.root / "missing", self.overlays])
+        self.addCleanup(self.index.close)
+
+    def test_ensure_indexes_sources_once_and_reparses_only_changes(self):
+        first = self.index.ensure()
+        self.assertEqual(first["sources"], 3)
+        self.assertEqual(first["features"], len(LAYER["features"]) + 2 + 2)
+        self.assertEqual(sorted(first["reparsed"]), ["base/layer.geojson", "overlays/tuesday.gpx", "overlays/untimed.gpx"])
+        self.assertEqual(first["failed"], [])
+        self.assertEqual(self.index.ensure()["reparsed"], [])
+        track = self.overlays / "tuesday.gpx"
+        stat = track.stat()
+        os.utime(track, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+        self.assertEqual(self.index.ensure()["reparsed"], ["overlays/tuesday.gpx"])
+        track.unlink()
+        after = self.index.ensure()
+        self.assertEqual((after["sources"], after["features"], after["reparsed"]), (2, len(LAYER["features"]) + 2, []))
+        self.assertEqual([f["name"] for f in self.index.query(-25, -24, 26, 27, zoom=12) if f["kind"] == "track"], [])
+
+    def test_ensure_records_a_broken_file_and_keeps_going(self):
+        (self.base / "broken.gpx").write_text("<nope/>")
+        result = self.index.ensure()
+        self.assertEqual(result["failed"], ["base/broken.gpx"])
+        self.assertEqual(result["sources"], 4)
+        broken = [s for s in self.index.summaries() if s["name"] == "base/broken.gpx"]
+        self.assertEqual(broken, [{"name": "base/broken.gpx", "summary": {"error": "not a GPX 1.1 document"}}])
+
+    def test_same_file_name_in_two_folders_does_not_collide(self):
+        (self.overlays / "layer.geojson").write_text(json.dumps(LAYER))
+        names = [s["name"] for s in (self.index.ensure(), self.index.summaries())[1]]
+        self.assertIn("base/layer.geojson", names)
+        self.assertIn("overlays/layer.geojson", names)
+        self.assertFalse(any(str(self.root) in name for name in names))
+
+    def test_query_returns_only_intersecting_features_without_paths(self):
+        self.index.ensure()
+        features = self.index.query(*MADIKWE, zoom=12)
+        self.assertEqual({f["name"] for f in features}, {"Wiggle", "R49", "Madikwe", "Tuesday morning "})
+        for feature in features:
+            self.assertEqual(set(feature), {"kind", "name", "rank", "geometry"})
+
+    def test_query_drops_roads_below_their_zoom(self):
+        self.index.ensure()
+        self.assertIn("R49", [f["name"] for f in self.index.query(*MADIKWE, zoom=KIND_MIN_ZOOM["road"])])
+        self.assertNotIn("R49", [f["name"] for f in self.index.query(*MADIKWE, zoom=KIND_MIN_ZOOM["road"] - 1)])
+
+    def test_query_decimates_at_low_zoom(self):
+        self.index.ensure()
+
+        def vertices(zoom):
+            return len(next(f for f in self.index.query(*MADIKWE, zoom=zoom) if f["name"] == "Wiggle")["geometry"]["coordinates"])
+
+        self.assertEqual(vertices(12), len(WIGGLE))
+        self.assertLess(vertices(2), vertices(12))
+        self.assertEqual(vertices(2), 2)
+
+    def test_query_handles_a_viewport_across_the_antimeridian(self):
+        self.index.ensure()
+        names = [f["name"] for f in self.index.query(-20, -10, 170, -170, zoom=8)]
+        self.assertEqual(names, ["Taveuni"])
+        self.assertEqual([f["name"] for f in self.index.query(-20, -10, 170, 175, zoom=8)], [])
+
+    def test_summaries_report_track_counts_and_span(self):
+        self.index.ensure()
+        summaries = {s["name"]: s["summary"] for s in self.index.summaries()}
+        self.assertEqual(summaries["overlays/tuesday.gpx"], {
+            "features": 2, "tracks": 1, "waypoints": 1,
+            "span": ["2026-10-20T03:34:14.393000+00:00", "2026-10-20T05:34:20.793000+00:00"],
+        })
+        self.assertEqual(summaries["overlays/untimed.gpx"], {"features": 2, "tracks": 2, "waypoints": 0, "span": None})
+        self.assertEqual(summaries["base/layer.geojson"],
+                         {"features": len(LAYER["features"]), "tracks": 0, "waypoints": 0, "span": None})
 
 
 if __name__ == "__main__":

@@ -4,9 +4,11 @@ that decide what is worth drawing at a zoom level."""
 from __future__ import annotations
 
 import json
+import sqlite3
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 GPX_NS = "{http://www.topografix.com/GPX/1/1}"
 # Below these zooms a kind is clutter (every road in a country at once); kinds not listed always draw.
@@ -21,6 +23,16 @@ NE_FILE_KINDS = (
     ("populated_places", "place"),
 )
 PARK_BOUNDARIES = frozenset({"protected_area", "national_park"})
+# Stored source names are "<tag>/<file name>", the tag being the folder's place in MapIndex's source_dirs, so the
+# same file name in two folders never collides and no directory reaches the index or the browser.
+SOURCE_TAGS = ("base", "regions", "overlays")
+MAP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sources(path TEXT PRIMARY KEY, size INTEGER, mtime_ns INTEGER, summary TEXT);
+CREATE TABLE IF NOT EXISTS features(id INTEGER PRIMARY KEY, source TEXT, kind TEXT, name TEXT, rank INTEGER,
+    geometry TEXT);
+CREATE INDEX IF NOT EXISTS features_source ON features(source);
+CREATE VIRTUAL TABLE IF NOT EXISTS features_rtree USING rtree(id, min_lat, max_lat, min_lon, max_lon);
+"""
 
 
 @dataclass(frozen=True)
@@ -194,3 +206,134 @@ def decimate(coords: list[list[float]], step: float) -> list[list[float]]:
 def pixel_degrees(zoom: float) -> float:
     """Degrees of longitude one 256-pixel-tile pixel spans at `zoom`."""
     return 360 / (256 * 2 ** zoom)
+
+
+def _decimated(geometry: dict, step: float) -> dict:
+    kind, coordinates = geometry["type"], geometry["coordinates"]
+    if kind == "LineString":
+        coordinates = decimate(coordinates, step)
+    elif kind in ("Polygon", "MultiLineString"):
+        coordinates = [decimate(part, step) for part in coordinates]
+    elif kind == "MultiPolygon":
+        coordinates = [[decimate(ring, step) for ring in polygon] for polygon in coordinates]
+    return {"type": kind, "coordinates": coordinates}
+
+
+def _parse_source(path: Path) -> tuple[list[Feature], dict]:
+    """Features of one layer file plus its summary; ValueError when the file is unreadable as its type."""
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".gpx":
+        features, points = parse_gpx(text)
+        span = [points[0].time.isoformat(), points[-1].time.isoformat()] if points else None
+    else:
+        features, span = parse_geojson(text, source_name=path.name), None
+    return features, {
+        "features": len(features),
+        "tracks": sum(f.kind == "track" for f in features),
+        "waypoints": sum(f.kind == "waypoint" for f in features),
+        "span": span,
+    }
+
+
+class MapIndex:
+    """SQLite index over the GeoJSON and GPX files in `source_dirs`, reparsing a file only when it changes."""
+
+    def __init__(self, index_path: Path, source_dirs: list[Path]):
+        self.index_path = Path(index_path)
+        self.source_dirs = [Path(d) for d in source_dirs]
+        self._connection: sqlite3.Connection | None = None
+
+    def __enter__(self) -> "MapIndex":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        if self._connection is None:
+            self.index_path.parent.mkdir(parents=True, exist_ok=True)
+            self._connection = sqlite3.connect(self.index_path)
+            self._connection.executescript(MAP_SCHEMA)
+        return self._connection
+
+    def _source_files(self) -> dict[str, Path]:
+        files = {}
+        for tag, folder in zip(SOURCE_TAGS, self.source_dirs):
+            if folder.is_dir():
+                for path in sorted([*folder.glob("*.geojson"), *folder.glob("*.gpx")]):
+                    files[f"{tag}/{path.name}"] = path
+        return files
+
+    def _forget(self, name: str) -> None:
+        db = self._db
+        db.execute("DELETE FROM features_rtree WHERE id IN (SELECT id FROM features WHERE source = ?)", (name,))
+        db.execute("DELETE FROM features WHERE source = ?", (name,))
+        db.execute("DELETE FROM sources WHERE path = ?", (name,))
+
+    def _load(self, name: str, path: Path, stat) -> bool:
+        """Indexes one file; a file that fails to parse is still recorded, with its error as the summary."""
+        try:
+            features, summary = _parse_source(path)
+        except (ValueError, UnicodeDecodeError) as error:
+            features, summary = [], {"error": str(error)}
+        db = self._db
+        db.execute("INSERT INTO sources(path, size, mtime_ns, summary) VALUES (?, ?, ?, ?)",
+                   (name, stat.st_size, stat.st_mtime_ns, json.dumps(summary)))
+        for feature in features:
+            row = db.execute("INSERT INTO features(source, kind, name, rank, geometry) VALUES (?, ?, ?, ?, ?)",
+                             (name, feature.kind, feature.name, feature.rank, json.dumps(feature.geometry)))
+            db.execute("INSERT INTO features_rtree VALUES (?, ?, ?, ?, ?)", (row.lastrowid, *feature.bbox))
+        return "error" not in summary
+
+    def ensure(self) -> dict:
+        files = self._source_files()
+        db = self._db
+        stored = {path: (size, mtime) for path, size, mtime in db.execute("SELECT path, size, mtime_ns FROM sources")}
+        reparsed, failed = [], []
+        with db:
+            for name in stored.keys() - files.keys():
+                self._forget(name)
+            for name, path in files.items():
+                stat = path.stat()
+                if stored.get(name) == (stat.st_size, stat.st_mtime_ns):
+                    continue
+                self._forget(name)
+                reparsed.append(name)
+                if not self._load(name, path, stat):
+                    failed.append(name)
+        return {
+            "sources": db.execute("SELECT COUNT(*) FROM sources").fetchone()[0],
+            "features": db.execute("SELECT COUNT(*) FROM features").fetchone()[0],
+            "reparsed": reparsed,
+            "failed": failed,
+        }
+
+    def query(self, min_lat: float, max_lat: float, min_lon: float, max_lon: float, *, zoom: float) -> list[dict]:
+        """Features drawable at `zoom` that intersect the viewport, decimated to about one vertex per pixel.
+        `min_lon > max_lon` is a viewport across 180 degrees."""
+        spans = [(min_lon, max_lon)] if min_lon <= max_lon else [(min_lon, 180.0), (-180.0, max_lon)]
+        step = pixel_degrees(zoom)
+        seen, found = set(), []
+        for west, east in spans:
+            rows = self._db.execute(
+                "SELECT f.id, f.kind, f.name, f.rank, f.geometry FROM features_rtree r JOIN features f ON f.id = r.id "
+                "WHERE r.max_lat >= ? AND r.min_lat <= ? AND r.max_lon >= ? AND r.min_lon <= ? ORDER BY f.id",
+                (min_lat, max_lat, west, east),
+            )
+            for row_id, kind, name, rank, geometry in rows:
+                if row_id in seen or KIND_MIN_ZOOM.get(kind, 0) > zoom:
+                    continue
+                seen.add(row_id)
+                found.append({"kind": kind, "name": name, "rank": rank,
+                              "geometry": _decimated(json.loads(geometry), step)})
+        return found
+
+    def summaries(self) -> list[dict]:
+        return [{"name": path, "summary": json.loads(summary)}
+                for path, summary in self._db.execute("SELECT path, summary FROM sources ORDER BY path")]
