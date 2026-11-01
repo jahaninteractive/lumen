@@ -198,9 +198,9 @@ class WebTests(unittest.TestCase):
         with web._MAP_BUILD_LOCK:
             self.assertEqual((200, {"building": True}), self.get_json("/api/map/features?bbox=-35,17,-32,20&zoom=8"))
 
-    def test_map_photos_with_no_fixes_is_empty(self):
-        self.assertEqual((200, {"photos": [], "count": 0}), self.get_json("/api/map/photos"))
-        self.assertEqual((200, {"photos": [], "count": 0}), self.get_json("/api/map/photos?show_rejected=1"))
+    def test_map_photos_with_no_fixes_counts_the_unfixed_frame(self):
+        self.assertEqual((200, {"photos": [], "count": 0, "unfixed": 1}), self.get_json("/api/map/photos"))
+        self.assertEqual((200, {"photos": [], "count": 0, "unfixed": 1}), self.get_json("/api/map/photos?show_rejected=1"))
         self.assertEqual(400, self.get_json("/api/map/photos?bogus=1")[0])
 
     def test_map_overlay_round_trip_and_cross_origin_refusal(self):
@@ -245,16 +245,20 @@ class WebTests(unittest.TestCase):
         self.assertEqual(400, self.post_json("/api/map/overlays/walk.gpx/geotag", {k: v for k, v in good.items() if k != "replace"})[0])
         self.assertEqual((400, {"error": "unknown overlay"}), self.post_json("/api/map/overlays/missing.gpx/geotag", good))
         self.assertEqual(200, self.post_json("/api/map/overlays/walk.gpx/geotag", good | {"offset": None, "query": "show_rejected=1"})[0])
+        self.assertEqual((400, {"error": "run the preview first so the clock offset is shown"}),
+                         self.post_json("/api/map/overlays/walk.gpx/geotag", good | {"offset": None, "dry_run": False}))
 
     def test_map_responses_carry_no_paths(self):
         self.write_base_map()
         self.post_json("/api/map/overlays", {"name": "walk.gpx", "text": self.MAP_GPX})
         (self.root / "library" / "map" / "overlays" / "broken.gpx").write_text("<html/>")
+        (self.root / "library" / "map" / "overlays" / "dir.gpx").mkdir()
         payloads = [self.get_json("/api/map/features?bbox=-90,-180,90,180&zoom=20")[1], self.get_json("/api/map/overlays")[1],
                     self.get_json("/api/map/photos?show_rejected=1")[1],
                     self.post_json("/api/map/overlays/walk.gpx/geotag", {"query": "", "offset": "+02:00", "max_gap_minutes": 10,
                                                                          "dry_run": True, "replace": False})[1]]
-        self.assertEqual(2, len(payloads[1]["overlays"]))
+        self.assertEqual(3, len(payloads[1]["overlays"]))
+        self.assertIn("error", next(o for o in payloads[1]["overlays"] if o["name"] == "dir.gpx"))
         for payload in payloads:
             text = json.dumps(payload)
             self.assertNotIn(str(self.root), text)
@@ -979,7 +983,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual("tabpanel", by_id["map-panel"]["attrs"].get("role"))
         self.assertEqual(("canvas", "img"), (by_id["map-canvas"]["tag"], by_id["map-canvas"]["attrs"].get("role")))
         self.assertEqual("status", by_id["map-status"]["attrs"].get("role"))
-        for name in ("map-canvas", "map-status", "map-overlays", "map-overlay-file", "map-geotag-form", "map-frames"):
+        for name in ("map-canvas", "map-status", "map-overlays", "map-overlay-file", "map-unfixed", "map-geotag-form", "map-frames"):
             self.assertIn(by_id["map-panel"], by_id[name]["parents"])
 
     def test_refine_route_scope_validation_and_unavailable_darktable_reason(self):

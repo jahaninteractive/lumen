@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import urllib.error
+from unittest import mock
 from urllib.parse import parse_qs
 
 from lumen.mapdata import (KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, decimate, fetch_region, overpass_query,
@@ -130,8 +131,17 @@ class GeoJsonTests(unittest.TestCase):
             "not a feature",
             {"type": "Feature", "properties": {}, "geometry": {"coordinates": [1, 2]}},
             {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": ["a"]}},
+            {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [26.1]}},
+            {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [float("nan"), 1]}},
+            {"type": "Feature", "properties": {}, "geometry": {"type": "LineString", "coordinates": [[1, 2], [3]]}},
+            {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[]]}},
         ]}
         self.assertEqual([f.name for f in parse_geojson(json.dumps(collection))], ["Cape Town"])
+
+    def test_gpx_refuses_a_non_finite_position(self):
+        text = HEADER + '<wpt lat="nan" lon="2"/></gpx>'
+        with self.assertRaisesRegex(ValueError, "^wpt without a readable lat/lon$"):
+            parse_gpx(text)
 
     def test_geojson_scalerank_falls_back_to_zero(self):
         ranks = [{"scalerank": "3.0"}, {"scalerank": "high"}, {"scalerank": None}, {}]
@@ -303,9 +313,23 @@ class MapIndexTests(unittest.TestCase):
 
     def test_ensure_records_an_unreadable_file_as_failed(self):
         (self.base / "folder.geojson").mkdir()
+        (self.overlays / "dir.gpx").mkdir()
         result = self.index.ensure()
-        self.assertEqual(result["failed"], ["base/folder.geojson"])
-        self.assertIn("error", {s["name"]: s["summary"] for s in self.index.summaries()}["base/folder.geojson"])
+        self.assertEqual(sorted(result["failed"]), ["base/folder.geojson", "overlays/dir.gpx"])
+        error = {s["name"]: s["summary"] for s in self.index.summaries()}["overlays/dir.gpx"]["error"]
+        self.assertTrue(error)
+        self.assertNotIn("/", error)
+
+    def test_ensure_records_a_feature_that_cannot_be_boxed_and_keeps_going(self):
+        for coordinates in ([26.1], [[]]):
+            bad = Feature("other", "", 0, {"type": "Point", "coordinates": coordinates})
+            with self.subTest(coordinates=coordinates), \
+                    mock.patch("lumen.mapdata._parse_source", return_value=([bad], {"features": 1})):
+                (self.overlays / "bad.gpx").write_text(str(coordinates))
+                result = self.index.ensure()
+                self.assertIn("overlays/bad.gpx", result["failed"])
+                summary = {s["name"]: s["summary"] for s in self.index.summaries()}["overlays/bad.gpx"]
+                self.assertIn("error", summary)
 
     def test_summaries_report_track_counts_and_span(self):
         self.index.ensure()

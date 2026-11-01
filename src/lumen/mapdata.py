@@ -5,6 +5,7 @@ photographer runs `lumen map-region`; the web server never calls it."""
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import urllib.error
 import urllib.request
@@ -77,11 +78,15 @@ def _positions(coordinates):
 
 
 def _rounded(coordinates):
-    """Rounded copy of a GeoJSON coordinate array; TypeError when it is not nested lists of numbers."""
+    """Rounded copy of a GeoJSON coordinate array; TypeError when it is not nested lists of positions, each at
+    least two finite numbers."""
     if not isinstance(coordinates, list) or not coordinates:
         raise TypeError("coordinates must be non-empty lists")
     if isinstance(coordinates[0], (int, float)):
-        return [round(float(value), 5) for value in coordinates]
+        values = [float(value) for value in coordinates]
+        if len(values) < 2 or not all(map(math.isfinite, values)):
+            raise TypeError("a position needs two finite numbers")
+        return [round(value, 5) for value in values]
     return [_rounded(part) for part in coordinates]
 
 
@@ -98,9 +103,12 @@ def _gpx_time(text: str) -> datetime:
 
 def _lat_lon(element: ET.Element) -> tuple[float, float]:
     try:
-        return float(element.get("lat")), float(element.get("lon"))
+        lat, lon = float(element.get("lat")), float(element.get("lon"))
     except (TypeError, ValueError):
-        raise ValueError(f"{element.tag.removeprefix(GPX_NS)} without a readable lat/lon") from None
+        lat = lon = math.nan
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        raise ValueError(f"{element.tag.removeprefix(GPX_NS)} without a readable lat/lon")
+    return lat, lon
 
 
 def parse_gpx(text: str) -> tuple[list[Feature], list[TrackPoint]]:
@@ -343,15 +351,18 @@ class MapIndex:
         """Indexes one file; a file that fails to parse is still recorded, with its error as the summary."""
         try:
             features, summary = _parse_source(path)
-        except (ValueError, UnicodeDecodeError, OSError) as error:
-            features, summary = [], {"error": str(error)}
+            boxes = [feature.bbox for feature in features]
+        except OSError as error:  # its str() names the absolute path, which must not reach the browser
+            features, boxes, summary = [], [], {"error": error.strerror or type(error).__name__}
+        except (ValueError, UnicodeDecodeError, IndexError, TypeError) as error:
+            features, boxes, summary = [], [], {"error": str(error)}
         db = self._db
         db.execute("INSERT INTO sources(path, size, mtime_ns, summary) VALUES (?, ?, ?, ?)",
                    (name, stat.st_size, stat.st_mtime_ns, json.dumps(summary)))
-        for feature in features:
+        for feature, box in zip(features, boxes):
             row = db.execute("INSERT INTO features(source, kind, name, rank, geometry) VALUES (?, ?, ?, ?, ?)",
                              (name, feature.kind, feature.name, feature.rank, json.dumps(feature.geometry)))
-            db.execute("INSERT INTO features_rtree VALUES (?, ?, ?, ?, ?)", (row.lastrowid, *feature.bbox))
+            db.execute("INSERT INTO features_rtree VALUES (?, ?, ?, ?, ?)", (row.lastrowid, *box))
         return "error" not in summary
 
     def ensure(self) -> dict:

@@ -2374,7 +2374,7 @@ const MAP_MAX_LAT = 85.0511;
 const MAP_ZOOM = { min: 1, max: 18 };
 const mapImages = new Map();  // photo id -> Image, so a thumb loads once
 state.map = { zoom: 2, center: { lat: 20, lon: 0 }, photos: [], features: [], overlays: [], selected: null, scope: 'shown',
-  focus: null, fitPending: false, hits: [], framesKey: '', drag: null, featureRequest: 0, building: false };
+  unfixed: 0, focus: null, fitPending: false, hits: [], framesKey: '', drag: null, featureRequest: 0, building: false };
 
 const worldSize = zoom => 256 * 2 ** zoom;
 function project(lat, lon, zoom) {
@@ -2447,6 +2447,7 @@ async function loadMap(refit = true) {
       request('/api/map/overlays'),
     ]);
     state.map.photos = photos.photos;
+    state.map.unfixed = photos.unfixed;
     state.map.overlays = overlays.overlays;
   } catch (error) {
     mapStatus.textContent = error.message;
@@ -2742,6 +2743,7 @@ async function openMapFrame(photoId, invoker = mapCanvas) {
       return announce(error.message);
     }
     if (!photoById(photoId)) return announce(`The contact sheet now shows ${day}, but that frame is not on it.`);
+    announce(`Review now shows ${day} so the frame can open.`);
   }
   openLoupe(photoId);
   if (openView) viewReturn = invoker;
@@ -2848,7 +2850,7 @@ function renderOverlays() {
     const detail = document.createElement('span');
     detail.className = 'quiet';
     detail.textContent = overlay.error ? ` unreadable: ${overlay.error}`
-      : ` ${plural(overlay.tracks, 'track')}, ${plural(overlay.waypoints, 'waypoint')}${overlay.span ? `, ${overlay.span.map(time => new Date(time).toLocaleString()).join(' to ')}` : ''}`;
+      : ` ${plural(overlay.tracks, 'track')}, ${plural(overlay.waypoints, 'waypoint')}${overlay.span ? `, ${overlay.span.map(time => new Date(time).toLocaleString()).join(' to ')}` : ''}${overlay.tracks && !overlay.span ? ', no times, cannot place frames' : ''}`;
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'secondary';
@@ -2895,6 +2897,9 @@ const geotagField = id => document.querySelector(`#map-geotag-${id}`);
 function renderGeotag() {
   const timed = state.map.overlays.filter(overlay => overlay.span);
   document.querySelector('#map-geotag').hidden = !timed.length;
+  const unfixed = document.querySelector('#map-unfixed');
+  unfixed.hidden = !state.map.unfixed;
+  unfixed.textContent = `${state.map.unfixed === 1 ? '1 frame has' : `${state.map.unfixed} frames have`} no position.${timed.length ? '' : ' Add a GPX track to place them.'}`;
   const select = geotagField('track');
   const current = select.value;
   select.replaceChildren(...timed.map(overlay => new Option(overlay.name, overlay.name)));

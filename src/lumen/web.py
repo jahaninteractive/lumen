@@ -347,8 +347,9 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         if path == "/api/map/overlays":
                             self._send_json({"overlays": library.list_overlays()})
                         else:
-                            photos = library.map_photos(parse_group_filters(urlparse(self.path).query))
-                            self._send_json({"photos": photos, "count": len(photos)})
+                            frames = library.map_photos(parse_group_filters(urlparse(self.path).query))
+                            self._send_json({"photos": frames["photos"], "count": len(frames["photos"]),
+                                             "unfixed": frames["unfixed"]})
                 except (ValueError, OSError) as error:
                     self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -579,6 +580,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("max_gap_minutes must be a whole number from 1 to 120")
                     if not isinstance(payload["dry_run"], bool) or not isinstance(payload["replace"], bool):
                         raise ValueError("dry_run and replace must be true or false")
+                    if payload["offset"] is None and not payload["dry_run"]:
+                        raise ValueError("run the preview first so the clock offset is shown")
                     filters = parse_group_filters(payload["query"].removeprefix("?"))
                     with Library(settings) as library:
                         self._send_json(library.geotag_from_track(

@@ -3657,6 +3657,12 @@ class LibraryTests(unittest.TestCase):
             features = library.map_features(-35, -32, 17, 20, zoom=8)["features"]
             self.assertEqual(["track"] * 3, [feature["kind"] for feature in features], "one track per overlay copy")
 
+    def test_add_overlay_leaves_no_part_file_when_the_write_fails(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            with patch.object(Path, "replace", side_effect=OSError("disk full")), self.assertRaises(OSError):
+                library.add_overlay("walk.gpx", self.MAP_GPX)
+            self.assertEqual([], list(library.settings.map_overlays_dir.iterdir()))
+
     def test_overlay_names_are_sanitised(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
             self.assertEqual("x.gpx", library.add_overlay("../../x.gpx", self.MAP_GPX)["name"])
@@ -3681,10 +3687,13 @@ class LibraryTests(unittest.TestCase):
         library.set_decision(photos["d2"], "reject")
         self.assertEqual([{"id": photos["d0"], "latitude": -33.5, "longitude": 18.5, "captured_at": "2026-10-22T08:00:00",
                            "place": None, "decision": "none", "rating": 0, "thumb_url": f"/thumb/{photos['d0']}"}],
-                         library.map_photos(None))
-        self.assertEqual([photos["d0"], photos["d2"]],
-                         [photo["id"] for photo in library.map_photos(GroupFilters(show_rejected=True))])
-        self.assertEqual([photos["d2"]], [photo["id"] for photo in library.map_photos(GroupFilters(decision="reject"))])
+                         library.map_photos(None)["photos"])
+        self.assertEqual(1, library.map_photos(None)["unfixed"], "d1 has no fix; the rejected d2 is hidden")
+        everything = library.map_photos(GroupFilters(show_rejected=True))
+        self.assertEqual([photos["d0"], photos["d2"]], [photo["id"] for photo in everything["photos"]])
+        self.assertEqual(1, everything["unfixed"])
+        rejects = library.map_photos(GroupFilters(decision="reject"))
+        self.assertEqual(([photos["d2"]], 0), ([photo["id"] for photo in rejects["photos"]], rejects["unfixed"]))
 
     def test_geotag_dry_run_counts_and_writes_nothing(self):
         library, photos = self._map_library({"d0": "2026:10:22 08:00:05", "d1": "2026:10:22 08:05:00",
@@ -3740,7 +3749,7 @@ class LibraryTests(unittest.TestCase):
 
     def test_geotag_rejects_bad_offset_and_untimed_tracks(self):
         library, _ = self._map_library({"d0": "2026:10:22 08:00:05"})
-        for offset in ("2", "+2:00", "02:00", "+02:00 "):
+        for offset in ("2", "+2:00", "02:00", "+02:00 ", "+15:00", "+02:60"):
             with self.subTest(offset=offset), self.assertRaisesRegex(ValueError, "^offset must look like \\+02:00$"):
                 library.geotag_from_track("walk.gpx", filters=None, offset=offset)
         library.add_overlay("plan.gpx", self.MAP_GPX.replace("<time>", "<desc>").replace("</time>", "</desc>"))

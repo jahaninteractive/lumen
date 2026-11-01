@@ -1,8 +1,10 @@
 #!/bin/zsh
 # Gets a fresh clone to a working `lumen doctor`: checks the platform, installs
 # uv and exiftool with Homebrew, syncs Python, compiles the native helpers, and
-# fetches GeoNames, the Natural Earth map, darktable, Siril, oMLX and the two models. Anything already
-# present is reported as ready and skipped, so re-running is safe.
+# fetches GeoNames, the Natural Earth map, darktable, Siril, oMLX and the two
+# models. Anything already present is reported as ready and skipped, so
+# re-running is safe. Park, road and water detail for one area is not fetched
+# here: run `uv run lumen map-region` for that.
 #
 #   zsh scripts/bootstrap.sh                 ask before each optional download
 #   zsh scripts/bootstrap.sh --yes           accept every default (also when stdin is not a terminal)

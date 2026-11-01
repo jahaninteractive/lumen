@@ -48,7 +48,7 @@ DEVELOP_ADVICE_LONG_EDGE = 1024  # all the vision model needs; it is not judging
 NEARBY_PLACE_KM = 5.0  # fixes this close share one name: a drifting boat's bursts are all the same spot
 NEARBY_PLACE_RANGE = (1.0, 20.0)  # the photographer's radius; the slider's own bounds
 OVERLAY_SUFFIXES = (".gpx", ".geojson")
-CLOCK_OFFSET = re.compile(r"[+-]\d\d:\d\d")
+CLOCK_OFFSET = re.compile(r"[+-](0\d|1[0-4]):[0-5]\d")
 
 _MUTATION_LOCKS = {}
 _MUTATION_GUARD = threading.Lock()
@@ -326,13 +326,15 @@ class Library:
             index.ensure()
             return {"features": index.query(min_lat, max_lat, min_lon, max_lon, zoom=zoom)}
 
-    def map_photos(self, filters: GroupFilters | None) -> list[dict]:
-        """Frames with a fix matching the filters; no filters is the contact sheet's default view (rejects hidden)."""
-        return [{"id": photo.id, "latitude": photo.latitude, "longitude": photo.longitude,
-                 "captured_at": photo.captured_at.isoformat() if photo.captured_at else None, "place": photo.place,
-                 "decision": photo.decision, "rating": photo.rating, "thumb_url": f"/thumb/{photo.id}"}
-                for photo in self.catalog.list_photos(filters or GroupFilters())
-                if photo.latitude is not None and photo.longitude is not None]
+    def map_photos(self, filters: GroupFilters | None) -> dict:
+        """Frames with a fix matching the filters, and how many matching frames have none; no filters is the contact
+        sheet's default view (rejects hidden)."""
+        matched = self.catalog.list_photos(filters or GroupFilters())
+        photos = [{"id": photo.id, "latitude": photo.latitude, "longitude": photo.longitude,
+                   "captured_at": photo.captured_at.isoformat() if photo.captured_at else None, "place": photo.place,
+                   "decision": photo.decision, "rating": photo.rating, "thumb_url": f"/thumb/{photo.id}"}
+                  for photo in matched if photo.latitude is not None and photo.longitude is not None]
+        return {"photos": photos, "unfixed": len(matched) - len(photos)}
 
     def list_overlays(self) -> list[dict]:
         with self._mutation():
@@ -364,8 +366,12 @@ class Library:
         while target.exists():
             target, number = folder / f"{clean.stem}-{number}{suffix}", number + 1
         partial = target.with_name(target.name + ".part")
-        partial.write_text(text, encoding="utf-8")
-        partial.replace(target)
+        try:
+            partial.write_text(text, encoding="utf-8")
+            partial.replace(target)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
         return next(overlay for overlay in self.list_overlays() if overlay["name"] == target.name)
 
     @_coordinated
