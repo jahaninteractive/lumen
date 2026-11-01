@@ -122,6 +122,7 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         with PlaceIndex(geonames_dir, settings.geonames_index_path) as index:
             counts = index.ensure()
         geonames |= {"files": counts["files"], "places": counts["places"]}
+    map_dir = settings.map_dir
     return {
         "version": __version__,
         "library": str(settings.library_dir),
@@ -148,6 +149,8 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         "omlx_live": live_report,
         "omlx_roles": roles,
         "geonames": geonames,
+        "map": {"dir": str(map_dir) if map_dir else None,
+                "layers": len(list(map_dir.glob("*.geojson"))) if map_dir and map_dir.is_dir() else 0},
     }
 
 

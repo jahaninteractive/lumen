@@ -224,8 +224,12 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             geonames = Path(directory) / "geonames"
             write_geonames_fixture(geonames)
+            maps = Path(directory) / "map"
+            maps.mkdir()
+            (maps / "coastline.geojson").write_text('{"type": "FeatureCollection", "features": []}')
             output = io.StringIO()
-            with patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(geonames), "LUMEN_GEOCODE_ONLINE": "Yes"}), \
+            with patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(geonames), "LUMEN_GEOCODE_ONLINE": "Yes",
+                                         "LUMEN_MAP_DIR": str(maps)}), \
                     redirect_stdout(output):
                 code = main(["--library", str(Path(directory) / "library"), "doctor", "--json"])
 
@@ -235,6 +239,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("exiftool", payload["tools"])
         self.assertIn("darktable-cli", payload["tools"])
         self.assertEqual({"dir": str(geonames), "files": 2, "places": 7, "online": True}, payload["geonames"])
+        self.assertEqual({"dir": str(maps), "layers": 1}, payload["map"])
         self.assertIn("vision_analyzer", payload)
         self.assertEqual(__version__, payload["version"])
         self.assertTrue(payload["raw_developer"]["path"].endswith("cache/bin/raw_developer"))
@@ -278,6 +283,7 @@ class CliTests(unittest.TestCase):
 
         self.assertNotIn("--vision-test", report["omlx_model"]["recommendation"])
         self.assertEqual({"dir": None, "files": 0, "places": 0, "online": False}, report["geonames"])
+        self.assertEqual({"dir": None, "layers": 0}, report["map"])
 
     def test_doctor_distinguishes_loaded_model_from_lumen_target(self):
         missing = ToolStatus(name="tool", available=False, path=None, version=None)
