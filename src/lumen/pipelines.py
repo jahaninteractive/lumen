@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 from xml.etree import ElementTree
 
-from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps, JpegImagePlugin
 
 from .previews import fingerprint_file
 from .rawdevelop import render_raw
@@ -106,7 +106,10 @@ class JpegExportResult(PipelineResult):
 # Apple's Core Image raw pipeline (the native raw developer) decodes every raw this library holds, including the
 # Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
 RAW_EXTENSIONS = frozenset({".arw"})
-DECODERS = frozenset({"darktable", "coreimage"})
+# A camera JPEG is already finished by the body: it is published as-is (one re-encode at the preset's quality for
+# the crop, resize, metadata and provenance every export carries) without any renderer in between.
+CAMERA_JPEG_EXTENSIONS = frozenset({".jpg", ".jpeg"})
+DECODERS = frozenset({"darktable", "coreimage", "camera"})
 # A full-size export render keeps the budget the macOS decoder had; the interactive preview keeps the shorter
 # default in `rawdevelop`, so a slow export never makes the Develop tab feel hung.
 EXPORT_RENDER_TIMEOUT_SECONDS = 600
@@ -161,9 +164,12 @@ class DarktablePipeline:
                 + (f"-{stem_suffix}" if stem_suffix else ""))
         destination = directory / f"{stem}.jpg"
         reserved = {path.resolve() for path in reserved_paths or ()}
-        # A profile keeps the darktable route reachable; a non-raw has to take it, since the raw developer only
-        # decodes raws. Everything else — every raw in this library — renders through the raw developer.
-        decoder = "darktable" if profile is not None or source.suffix.lower() not in RAW_EXTENSIONS else "coreimage"
+        # A profile keeps the darktable route reachable; a camera JPEG needs no renderer at all; any other non-raw
+        # has to take darktable, since the raw developer only decodes raws. Everything else — every raw in this
+        # library — renders through the raw developer.
+        suffix = source.suffix.lower()
+        decoder = ("darktable" if profile is not None or (suffix not in RAW_EXTENSIONS and suffix not in CAMERA_JPEG_EXTENSIONS)
+                   else "camera" if suffix in CAMERA_JPEG_EXTENSIONS else "coreimage")
         if decoder not in DECODERS:  # Provenance has to name the renderer; a new route declares itself here.
             raise ValueError(f"unknown export decoder: {decoder!r}")
         settings = {
@@ -199,6 +205,8 @@ class DarktablePipeline:
                     raise ValueError("the raw developer is missing; run scripts/bootstrap.sh to build it")
                 version = runner(["/usr/bin/sw_vers", "-productVersion"], capture_output=True, text=True, timeout=30, check=False)
                 settings["tool_version"] = f"macOS {version.stdout.strip() or 'unknown'} Core Image"
+            elif decoder == "camera":
+                settings["tool_version"] = f"Pillow {Image.__version__}"
             else:
                 version = runner([self.executable, "--version"], capture_output=True, text=True, timeout=30, check=False)
                 if version.returncode != 0:
@@ -216,6 +224,8 @@ class DarktablePipeline:
                     render_raw(staged_source, render, Path(self.raw_developer), settings=develop,
                                timeout=EXPORT_RENDER_TIMEOUT_SECONDS, runner=runner)
                     rendered = PipelineResult(True, 0, render, (str(self.raw_developer),), "")
+                elif decoder == "camera":
+                    rendered = PipelineResult(True, 0, staged_source, (), "")
                 else:
                     rendered = self.run(staged_source, render, profile, runner=runner)
                 command = rendered.command
@@ -246,9 +256,23 @@ class DarktablePipeline:
                     exif[40094] = (";".join(effective_keywords) + "\0").encode("utf-16le")
                     effective_rating = rating if rating is not None else descriptive.get("rating", source_exif.get(18246, 0))
                     exif[18246] = max(0, effective_rating)  # EXIF Rating is unsigned; a rejected frame's -1 lives in the XMP.
+                    # A full export of a camera JPEG with nothing to draw is lossless: the body's bytes are published
+                    # as they are and every tag Lumen adds goes in through exiftool below. Share and web are size
+                    # budgets, and a crop or watermark has to re-encode once, at the camera's own tables.
+                    lossless = decoder == "camera" and options["long_edge"] is None and crop is None and not watermark
+                    if lossless:
+                        settings["quality"] = "lossless"
+                    encoding: dict[str, object] = {"quality": options["quality"]}
+                    if decoder == "camera" and options["long_edge"] is None:
+                        encoding = {"qtables": opened.quantization, "subsampling": JpegImagePlugin.get_sampling(opened)}
                     image = ImageOps.exif_transpose(opened).convert("RGB")
                     if icc := opened.info.get("icc_profile"):
                         image = ImageCms.profileToProfile(image, ImageCms.ImageCmsProfile(io.BytesIO(icc)), ImageCms.createProfile("sRGB"), outputMode="RGB")
+                    elif decoder == "camera":
+                        # A camera JPEG carries no profile: an EXIF ColorSpace of sRGB, or none at all (sRGB by the JPEG
+                        # convention every viewer applies), needs no conversion; "uncalibrated" is a body set to AdobeRGB.
+                        if source_exif.get_ifd(34665).get(40961, 1) != 1:
+                            raise ValueError("the camera JPEG is not sRGB (AdobeRGB or uncalibrated); set the body to sRGB or export the raw")
                     else:
                         raise ValueError(f"{decoder} render has no ICC profile; cannot guarantee sRGB")
                     if crop is not None:
@@ -264,13 +288,23 @@ class DarktablePipeline:
                     capture[40962], capture[40963] = image.size  # After any crop and resize.
                     exif[34665] = capture
                     temporary = work / "finished.jpg"
-                    image.save(temporary, format="JPEG", quality=options["quality"],
-                               exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(),
-                               xmp=SidecarWriter._xmp(
-                                   effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
-                                   develop=develop, alt_text=alt_text,
-                                   place=place, country=country,  # A place name travels with every preset; GPS does not.
-                               ).encode("utf-8"))
+                    xmp = SidecarWriter._xmp(
+                        effective_description, effective_keywords, rating=effective_rating, provenance=_public_provenance(settings), crop=crop,
+                        develop=develop, alt_text=alt_text,
+                        place=place, country=country,  # A place name travels with every preset; GPS does not.
+                    ).encode("utf-8")
+                    if lossless:
+                        shutil.copyfile(staged_source, temporary)
+                        # exiftool wants the packet from <x:xmpmeta>; Pillow embeds the XML declaration without complaint.
+                        (work / "lumen.xmp").write_bytes(xmp.split(b"?>", 1)[1].lstrip() if xmp.startswith(b"<?xml") else xmp)
+                        tags = [f"-EXIF:ImageDescription={effective_description}", f"-XPKeywords={';'.join(effective_keywords)}",
+                                f"-IFD0:Rating={effective_rating}", f"-XMP<={work / 'lumen.xmp'}"]
+                        if 34853 in exif and 34853 not in source_exif:  # a typed position; the camera's own fix is already in the file
+                            tags += [f"-GPSLatitude={gps[0]}", f"-GPSLatitudeRef={gps[0]}", f"-GPSLongitude={gps[1]}", f"-GPSLongitudeRef={gps[1]}"]
+                    else:
+                        tags = []
+                        image.save(temporary, format="JPEG", **encoding,
+                                   exif=exif, icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes(), xmp=xmp)
                 # Both of these need exiftool: Core Image's render carries no MakerNote at all, so the
                 # transplant reads the original (exiftool rebases its absolute offsets), and Pillow cannot
                 # write IPTC IIM, which Photo Mechanic and agency ingests still read instead of XMP.
@@ -281,7 +315,8 @@ class DarktablePipeline:
                 iptc += [f"-IPTC:Keywords={keyword}" for keyword in effective_keywords]
                 if iptc:  # Declares the values above as UTF-8; IIM defaults to Latin-1 without it.
                     iptc.insert(0, "-IPTC:CodedCharacterSet=UTF8")
-                copied = runner([exiftool, "-q", "-overwrite_original", "-TagsFromFile", str(staged_source), "-MakerNotes",
+                # Lumen's own tags go before -TagsFromFile: after it, exiftool reads "-XMP<=" as a copy redirection.
+                copied = runner([exiftool, "-q", "-overwrite_original", *tags, "-TagsFromFile", str(staged_source), "-MakerNotes",
                                  *iptc, str(temporary)],
                                 capture_output=True, text=True, timeout=120, check=False)
                 if copied.returncode != 0:

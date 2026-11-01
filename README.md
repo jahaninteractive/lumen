@@ -3,7 +3,7 @@
 The Python package is `lumen-raw` and the command is `lumen`.
 
 Lumen is a fully local, non-destructive RAW photography workbench for Apple
-Silicon Macs. It catalogs Sony `.ARW` files without moving or changing them,
+Silicon Macs. It catalogs Sony `.ARW` files (and the camera's own JPEGs) without moving or changing them,
 extracts previews, groups bursts, explains a best-shot choice, optionally tags
 previews through oMLX, writes portable sidecars, checks astrophotography frames,
 and hands exports to local tools such as darktable.
@@ -43,6 +43,8 @@ goes:
   every byte is verified before I am told it is safe to format.
 - **Easy export.** One click from a kept frame to a full-resolution JPEG for
   print, a 2048 px version for sharing, or a web version with a watermark.
+  Shoot JPEG in the body instead and the full export is the camera's own file,
+  byte for byte, with the caption and keywords written in.
 - **AI where there is no internet.** Lodges, ships, and field camps have no or
   painfully slow connections, and I do not want my frames uploaded anywhere.
   Tagging, caption drafts, problem scans, burst critique, and day digests run

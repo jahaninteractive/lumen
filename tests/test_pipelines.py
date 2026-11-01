@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image, ImageCms
+from PIL import Image, ImageCms, JpegImagePlugin
 
 from lumen.pipelines import DarktablePipeline, PipelineRegistry, SirilPipeline, validate_watermark
 from lumen.rawdevelop import DevelopRender
@@ -137,7 +137,103 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn(b"<lumen:develop>", image.info["xmp"])
                 self.assertIn(b"exposure_ev", image.info["xmp"])
 
-    def test_export_renders_a_non_raw_through_darktable(self):
+    def test_export_publishes_a_camera_jpeg_without_a_renderer(self):
+        """A camera JPEG is already finished: the camera's own pixels are the render, declared sRGB by EXIF
+        with no ICC profile, as a Sony body writes them. Nothing but exiftool may run."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exif = Image.Exif()
+            exif[271], exif[272] = "Sony", "ILCE-7CM2"
+            exif[34665] = {36867: "2026:11:01 06:57:00", 40961: 1}
+            exif[34853] = {1: "S", 2: (50.0, 36.0, 51.69), 3: "W", 4: (70.0, 0.0, 0.0)}
+            for name in ("DSC04639.JPG", "DSC04640.jpeg"):
+                with self.subTest(name=name):
+                    source = root / name
+                    Image.new("RGB", (80, 60), "red").save(source, format="JPEG", quality=95, exif=exif.tobytes())
+
+                    def runner(command, **kwargs):
+                        self.assertTrue(command[0].endswith("exiftool"), f"nothing but exiftool may run: {command}")
+                        return subprocess.CompletedProcess(command, 0, "", "")
+
+                    with patch("lumen.pipelines.render_raw", side_effect=AssertionError("a camera JPEG needs no renderer")):
+                        result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(source, runner=runner)
+                    self.assertTrue(result.success, result.message)
+                    self.assertEqual("camera", result.settings["decoder"])
+                    self.assertEqual([], result.settings["command"])
+                    self.assertEqual(f"Pillow {Image.__version__}", result.settings["tool_version"])
+                    with Image.open(result.output) as saved:
+                        self.assertEqual((80, 60), saved.size)
+                        self.assertEqual("ILCE-7CM2", saved.getexif()[272])
+                        self.assertIn(34853, saved.getexif(), "the camera's GPS survives the full preset")
+            untagged = root / "untagged.jpg"  # no EXIF at all: sRGB by the JPEG convention every viewer applies
+            Image.new("RGB", (80, 60), "red").save(untagged, format="JPEG")
+            self.assertTrue(DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(untagged, runner=runner).success)
+            exif[34665] = {40961: 0xFFFF}  # a body set to AdobeRGB declares "uncalibrated"
+            adobe = root / "adobe.jpg"
+            Image.new("RGB", (80, 60), "red").save(adobe, format="JPEG", exif=exif.tobytes())
+            refused = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(adobe, runner=runner)
+            self.assertFalse(refused.success)
+            self.assertIn("not sRGB", refused.message)
+
+    def test_full_export_of_a_camera_jpeg_keeps_the_camera_quantization_and_subsampling(self):
+        """A Sony body writes its JPEG at about quality 100 with 4:2:2 chroma; the full preset's 92 / 4:2:0 would throw
+        that away. Only the full preset keeps the camera's tables: share and web are size budgets."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC04639.JPG"
+            exif = Image.Exif()
+            exif[34665] = {40961: 1}
+            Image.new("RGB", (80, 60), "red").save(source, format="JPEG", quality=97, subsampling=0, exif=exif.tobytes())
+            runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", "")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            full = pipeline.export_jpeg(source, runner=runner)
+            share = pipeline.export_jpeg(source, preset="share", runner=runner)
+            self.assertTrue(full.success and share.success, (full.message, share.message))
+            with Image.open(source) as camera, Image.open(full.output) as kept, Image.open(share.output) as budgeted:
+                self.assertEqual(camera.quantization, kept.quantization)
+                self.assertEqual(JpegImagePlugin.get_sampling(camera), JpegImagePlugin.get_sampling(kept))
+                self.assertNotEqual(camera.quantization, budgeted.quantization)
+
+    def test_full_export_of_an_uncropped_camera_jpeg_is_lossless(self):
+        """Full preset, no crop, no watermark: the camera's entropy-coded data is published as-is and every piece
+        of metadata Lumen adds goes in through exiftool, so the pixels never pass through a decoder."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC04639.JPG"
+            exif = Image.Exif()
+            exif[274] = 6  # the body's rotation tag stays, since nothing transposes the pixels
+            exif[34665] = {40961: 1}
+            Image.new("RGB", (80, 60), "red").save(source, format="JPEG", quality=97, exif=exif.tobytes())
+            commands = []
+
+            packets = []
+
+            def runner(command, **kwargs):
+                commands.append(command)
+                packets.extend(Path(arg[6:]).read_text() for arg in command if arg.startswith("-XMP<="))
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            result = pipeline.export_jpeg(source, description="A caption", keywords=["sony"], rating=4, runner=runner)
+            self.assertTrue(result.success, result.message)
+            self.assertEqual(source.read_bytes(), result.output.read_bytes(), "the camera's bytes, before exiftool")
+            self.assertEqual("lossless", result.settings["quality"])
+            transplant = commands[-1]
+            self.assertIn("-MakerNotes", transplant)
+            self.assertIn("-EXIF:ImageDescription=A caption", transplant)
+            self.assertIn("-XPKeywords=sony", transplant)
+            self.assertIn("-IFD0:Rating=4", transplant)
+            self.assertIn("-IPTC:Caption-Abstract=A caption", transplant)
+            self.assertEqual(1, len(packets), transplant)
+            self.assertIn("A caption", packets[0])
+            self.assertTrue(packets[0].startswith("<x:xmpmeta"), "exiftool rejects a packet led by an XML declaration")
+            for cropped in (dict(crop={"left": 0, "top": 0, "width": .5, "height": .5}), dict(preset="share"), dict(watermark="x")):
+                with self.subTest(**cropped):
+                    again = pipeline.export_jpeg(source, runner=runner, **cropped)
+                    self.assertTrue(again.success, again.message)
+                    self.assertNotEqual(source.read_bytes(), again.output.read_bytes())
+
+    def test_export_renders_other_non_raws_through_darktable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
 
@@ -150,7 +246,7 @@ class PipelineTests(unittest.TestCase):
                                                        icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            for name in ("DSC1.jpg", "DSC2.jpeg", "DSC3.png", "DSC4.tif", "DSC5.tiff", "DSC6.heic"):
+            for name in ("DSC3.png", "DSC4.tif", "DSC5.tiff", "DSC6.heic"):
                 with self.subTest(name=name):
                     source = root / name
                     source.write_bytes(b"not a raw")
@@ -243,7 +339,7 @@ class PipelineTests(unittest.TestCase):
           </rdf:RDF></x:xmpmeta>'''
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
@@ -311,7 +407,7 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_export_preserves_metadata_and_original_with_collision_suffix(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"original RAW")
             adjacent = source.with_suffix(".jpg.xmp")
             adjacent.write_text("must not be implicitly adopted")
@@ -330,7 +426,7 @@ class PipelineTests(unittest.TestCase):
                     # The second export passes no caption or keywords, so only the prefix is common; the
                     # IPTC arguments have their own test.
                     self.assertEqual(["/usr/bin/exiftool", "-q", "-overwrite_original",
-                                      "-TagsFromFile", str(work / "source" / "source.jpg"), "-MakerNotes"], command[:6])
+                                      "-TagsFromFile", str(work / "source" / "source.tif"), "-MakerNotes"], command[:6])
                     self.assertEqual(str(work / "finished.jpg"), command[-1])
                     self.assertTrue(Path(command[-1]).is_file())
                     return subprocess.CompletedProcess(command, 0, "", "")
@@ -404,7 +500,7 @@ class PipelineTests(unittest.TestCase):
         Pillow cannot write IPTC IIM at all, so the caption and keywords ride along on the same call."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             commands = []
@@ -428,7 +524,7 @@ class PipelineTests(unittest.TestCase):
             work = Path(copy[-1]).parent
             self.assertEqual([
                 "/usr/bin/exiftool", "-q", "-overwrite_original",
-                "-TagsFromFile", str(work / "source" / "source.jpg"), "-MakerNotes",
+                "-TagsFromFile", str(work / "source" / "source.tif"), "-MakerNotes",
                 "-IPTC:CodedCharacterSet=UTF8", "-IPTC:Caption-Abstract=A red bird \u2014 overcast",
                 "-IPTC:Keywords=bird", "-IPTC:Keywords=sky", str(work / "finished.jpg"),
             ], copy)
@@ -436,7 +532,7 @@ class PipelineTests(unittest.TestCase):
     def test_export_without_caption_or_keywords_writes_no_iptc_block(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             commands = []
@@ -462,7 +558,7 @@ class PipelineTests(unittest.TestCase):
         for exiftool, outcome in (("/usr/bin/exiftool", 1), (None, None)):
             with self.subTest(exiftool=exiftool), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                source = root / "source.jpg"
+                source = root / "source.tif"
                 source.write_bytes(b"raw")
                 pipeline = DarktablePipeline("darktable-cli", root / "outputs")
                 def render(command, **kwargs):
@@ -483,7 +579,7 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_export_runner_failure_leaves_no_final_or_temporary_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             def fail(command, **kwargs):
@@ -501,7 +597,7 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_export_applies_normalized_crop(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             def render(command, **kwargs):
                 if command[1:] == ["--version"]:
@@ -518,7 +614,7 @@ class PipelineTests(unittest.TestCase):
     def test_jpeg_crop_uses_exact_full_resolution_pixels_and_keeps_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw source")
             before = source.read_bytes()
             def render(command, **kwargs):
@@ -566,7 +662,7 @@ class PipelineTests(unittest.TestCase):
     def test_share_preset_resizes_render_to_2048_long_edge_at_quality_85_without_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, description="A red bird", keywords=["bird", "travel"], rating=4, preset="share",
@@ -597,7 +693,7 @@ class PipelineTests(unittest.TestCase):
     def test_full_preset_is_unchanged_and_keeps_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             default = pipeline.export_jpeg(source, runner=self.preset_render((2400, 1600)))
@@ -625,7 +721,7 @@ class PipelineTests(unittest.TestCase):
             return completed
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             full = pipeline.export_jpeg(source, gps=(-33.92, 18.42), runner=bare)
@@ -646,7 +742,7 @@ class PipelineTests(unittest.TestCase):
     def test_web_preset_resizes_to_1600_long_edge_at_quality_82_without_gps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, preset="web", runner=self.preset_render((4000, 2600)))
@@ -663,7 +759,7 @@ class PipelineTests(unittest.TestCase):
             image.paste((128, 128, 128), (0, 0, *image.size))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, preset="web", watermark="\u00a9 N. David", runner=self.preset_render((2000, 1200), paint=grey))
@@ -696,7 +792,7 @@ class PipelineTests(unittest.TestCase):
     def test_share_filenames_use_share_suffix_and_collision_numbering(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             pipeline = DarktablePipeline("darktable-cli", root / "outputs")
             jpeg = (root / "outputs" / "jpeg").resolve()
@@ -716,7 +812,7 @@ class PipelineTests(unittest.TestCase):
             image.paste((0, 255, 0), (1250, 0, 3750, 2500))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = root / "source.jpg"
+            source = root / "source.tif"
             source.write_bytes(b"raw")
             result = DarktablePipeline("darktable-cli", root / "outputs").export_jpeg(
                 source, crop={"left": .25, "top": 0, "width": .5, "height": 1}, preset="share",
@@ -733,7 +829,7 @@ class PipelineTests(unittest.TestCase):
         for icc in (None, b"invalid ICC"):
             with self.subTest(icc=icc), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                source = root / "source.jpg"
+                source = root / "source.tif"
                 source.write_bytes(b"raw")
                 def render(command, **kwargs):
                     if command[1:] == ["--version"]:
@@ -756,7 +852,7 @@ class PipelineTests(unittest.TestCase):
             (outputs / "jpeg").symlink_to(outside, target_is_directory=True)
             pipeline = DarktablePipeline("darktable-cli", outputs)
             with self.assertRaises(ValueError):
-                pipeline.export_jpeg(root / "source.jpg")
+                pipeline.export_jpeg(root / "source.tif")
             self.assertEqual([], list(outside.iterdir()))
 
     def test_missing_tools_are_reported_as_unavailable(self):

@@ -21,7 +21,7 @@ RAW/JPEG folder
     ├─ oMLX loopback (fast + review roles) ── tags, suggested rejects,
     │      critique, captions, digests, triage, composition advice
     ├─ vocabulary.json (photographer-owned, learns from tags)
-    ├─ managed JPEG exports ── darktable-cli (crop applied at export)
+    ├─ managed JPEG exports ── raw developer / darktable-cli / camera JPEG as-is (crop applied at export)
     └─ managed astro stacks ── jobs table + one worker ── siril-cli
 ```
 

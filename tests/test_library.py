@@ -357,7 +357,7 @@ class LibraryTests(unittest.TestCase):
 
     def test_export_applies_and_records_the_active_crop_everywhere(self):
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "large.jpg"
+            source = Path(directory) / "large.tif"
             Image.new("RGB", (4000, 3000), "gray").save(source)
             before = source.read_bytes()
             regions = SubjectRegions(4000, 3000, (RegionObservation(.4, .25, .1, .2),), ())
@@ -1078,8 +1078,10 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual([], list(library.settings.trash_dir.iterdir()))
 
     def test_export_without_catalog_tags_keeps_rendered_xmp_description_and_keywords(self):
+        rendered = self.source_dir / "rendered.tif"
+        Image.new("RGB", (30, 20), "blue").save(rendered)
         with Library(Settings(library_dir=self.library_dir)) as library:
-            library.import_path(self.image_path)
+            library.import_path(rendered)
             photo_id = library.catalog.list_photos()[0].id
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             def render(command, **kwargs):
@@ -1255,10 +1257,11 @@ class LibraryTests(unittest.TestCase):
             self.assertTrue(Path(artifact.path).is_file())
             self.assertEqual("jpeg", artifact.kind)
             self.assertEqual(photo.fingerprint, artifact.source_fingerprint)
-            self.assertEqual(92, artifact.settings["quality"])
+            self.assertEqual("lossless", artifact.settings["quality"], "a full export of a camera JPEG is the camera's bytes")
             self.assertEqual("sRGB", artifact.settings["color_space"])
             self.assertTrue(artifact.settings["include_gps"])
-            self.assertEqual("darktable 5.2", artifact.settings["tool_version"])
+            self.assertEqual(("camera", f"Pillow {Image.__version__}", []),
+                             (artifact.settings["decoder"], artifact.settings["tool_version"], artifact.settings["command"]))
             self.assertEqual(64, len(artifact.output_fingerprint))
             sidecar = json.loads(next(library.settings.sidecar_dir.glob("*.lumen.json")).read_text())
             self.assertEqual(artifact.path, sidecar["artifacts"][0]["path"])
@@ -1353,8 +1356,10 @@ class LibraryTests(unittest.TestCase):
             def caption(self, preview, *, place=None):
                 return Caption("Penguins porpoise beside the zodiac.", "Three penguins leaping from grey water.", '{"c":1}')
 
+        rendered = self.source_dir / "rendered.tif"  # the darktable route, so Pillow writes the tags the test reads
+        Image.new("RGB", (30, 20), "blue").save(rendered)
         with Library(Settings(library_dir=self.library_dir)) as library:
-            library.import_path(self.image_path)
+            library.import_path(rendered)
             photo = library.catalog.list_photos()[0]
             library.catalog.save_tags(photo.id, {"description": "Original description", "subjects": ["ice"]}, "fast-model")
             result = library.caption_photo(photo.id, FakeTagger())
@@ -1459,9 +1464,8 @@ class LibraryTests(unittest.TestCase):
             ids = tuple(photo.id for photo in library.catalog.list_photos())
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             def runner(command, **kwargs):
-                if command[1:] != ["--version"] and Path(command[1]).name == "DSC0001.jpg":
-                    Path(command[-8]).write_bytes(b"partial")
-                    return subprocess.CompletedProcess(command, 3, "", "bad render")
+                if command[0].endswith("exiftool") and any(Path(arg).name == "DSC0001.jpg" for arg in command):
+                    return subprocess.CompletedProcess(command, 3, "", "bad transplant")
                 return self.export_runner(command, **kwargs)
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=runner):
                 results = library.export_jpegs(library_module.ExportRequest(ids, None))
@@ -1502,8 +1506,8 @@ class LibraryTests(unittest.TestCase):
             ids = tuple(photo.id for photo in library.catalog.list_photos())
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             def runner(command, **kwargs):
-                if command[1:] != ["--version"] and Path(command[1]).name == "DSC0001.jpg":
-                    return subprocess.CompletedProcess(command, 3, "", "bad render")
+                if command[0].endswith("exiftool") and any(Path(arg).name == "DSC0001.jpg" for arg in command):
+                    return subprocess.CompletedProcess(command, 3, "", "bad transplant")
                 return self.export_runner(command, **kwargs)
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=runner):
                 with self.assertRaises(ValueError):  # validated before any job row exists
@@ -1853,7 +1857,8 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(["rating_changed"], [event.kind for event in library.catalog.events_for(best) if event.kind.endswith("_changed")])
             pipeline = DarktablePipeline("darktable-cli", library.settings.output_dir)
             with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.export_runner):
-                results = library.export_jpegs(library_module.ExportRequest(tuple(library.keeper_ids()) + (single,), None))
+                # Share re-encodes, so Pillow writes the tags read below; a full export of a JPEG leaves them to exiftool.
+                results = library.export_jpegs(library_module.ExportRequest(tuple(library.keeper_ids()) + (single,), None, "share"))
             self.assertTrue(all(result.success for result in results), [result.message for result in results])
             ratings = {}
             for result in results:

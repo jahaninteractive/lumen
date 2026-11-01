@@ -276,6 +276,12 @@ def full_size_for(source: Path, cache_dir: Path, fingerprint: str) -> Path | Non
     if target.is_file():  # served even when the original's volume is unplugged
         return target
     source.stat()  # an unreadable original with no cached copy raises OSError for the caller
+    if source.suffix.lower() in {".jpg", ".jpeg"}:  # a camera JPEG is its own full-size image
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
+            shutil.copyfileobj(source.open("rb"), temporary)
+        Path(temporary.name).replace(target)
+        return target
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return None

@@ -7,6 +7,8 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 
 ## Unreleased
 
+Camera JPEGs are first-class sources. Shoot JPEG in the body and the file is published as the camera made it: export skips every renderer (decoder `camera`): a full export with no crop or watermark is lossless (the camera's bytes, `quality: "lossless"`, with Lumen's EXIF, XMP and IPTC written by exiftool), a cropped or watermarked full export re-encodes once at the camera's own quantization tables and chroma subsampling instead of quality 92 / 4:2:0, and an untagged or sRGB-tagged JPEG needs no ICC profile (a body set to AdobeRGB is refused by name). The full-size view of a JPEG is the file itself rather than its small embedded preview. Version 0.2.1.
+
 CI runs on `macos-15`: GitHub is browning out the `macos-14` image ahead of its retirement on 2026-11-02, which cancelled the 0.2.0 release run.
 
 ## 0.2.0 (2026-10-31)

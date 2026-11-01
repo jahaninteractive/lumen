@@ -597,8 +597,8 @@ class WebTests(unittest.TestCase):
             library.import_path(second)
         pipeline = DarktablePipeline("darktable-cli", self.root / "library" / "outputs")
         def render(command, **kwargs):
-            if command[1:] != ["--version"] and Path(command[1]).name == "photo.jpg":
-                return subprocess.CompletedProcess(command, 3, "", "bad render")
+            if command[0].endswith("exiftool") and any(Path(arg).name == "photo.jpg" for arg in command):
+                return subprocess.CompletedProcess(command, 3, "", "bad transplant")
             return self.render(command, **kwargs)
         with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
             "lumen.pipelines.subprocess.run", side_effect=render
@@ -5697,6 +5697,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_full_route_serves_cached_embedded_jpeg_or_404(self):
         buffer = BytesIO()
         Image.new("RGB", (640, 427), "blue").save(buffer, "JPEG")
+        Image.new("RGB", (60, 40), "green").save(self.root / "embedded.tif")
 
         def run(command, **kwargs):
             return subprocess.CompletedProcess(command, 0, buffer.getvalue() if "-JpgFromRaw" in command else b"", b"")
@@ -5709,18 +5710,23 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
                 with error:
                     return error.code, error.headers["Content-Type"], error.read()
 
-        gone = self.root / "gone.jpg"
+        gone = self.root / "gone.tif"
         Image.new("RGB", (60, 40), "red").save(gone)
         with Library(Settings(library_dir=self.root / "library")) as library:
             library.import_path(gone)
             gone_photo = max(library.catalog.list_photos(), key=lambda photo: photo.id)
             gone_id = gone_photo.id
+            library.import_path(self.root / "embedded.tif")
+            embedded_id = max(library.catalog.list_photos(), key=lambda photo: photo.id).id
         gone.unlink()
         with patch("lumen.previews.shutil.which", return_value=None):
-            self.assertEqual(404, status("/full/1?v=x")[0])
+            self.assertEqual(404, status(f"/full/{embedded_id}?v=x")[0], "an embedded preview needs exiftool")
+            code, kind, body = status("/full/1?v=x")
+            self.assertEqual((200, "image/jpeg"), (code, kind), "a camera JPEG is its own full-size image")
+            self.assertEqual((self.root / "photo.jpg").read_bytes(), body)
         with patch("lumen.previews.shutil.which", return_value="exiftool"), \
                 patch("lumen.previews.subprocess.run", side_effect=run):
-            code, kind, body = status("/full/1?v=x")
+            code, kind, body = status(f"/full/{embedded_id}?v=x")
             self.assertEqual((200, "image/jpeg"), (code, kind))
             self.assertEqual((640, 427), Image.open(BytesIO(body)).size)
             code, _, body = status(f"/full/{gone_id}")

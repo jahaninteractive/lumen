@@ -84,7 +84,7 @@ class LibraryCoordinationTests(unittest.TestCase):
 
     def test_export_settings_events_and_sidecars_have_no_private_operation_token(self):
         with Library(self.settings) as library, patch("lumen.library.PipelineRegistry.darktable", side_effect=self.pipeline), patch("lumen.pipelines.subprocess.run", side_effect=self.runner):
-            result = self.export(library)
+            result = library.export_jpegs(ExportRequest((self.photo_id,), None, "share"))[0]  # re-encoded, so Pillow writes the XMP read below
             self.assertTrue(result.success, result.message)
             self.assertNotIn("operation_id", result.artifact.settings)
             event = next(event for event in library.catalog.events_for(self.photo_id) if event.kind == "exported")

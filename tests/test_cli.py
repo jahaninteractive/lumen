@@ -672,8 +672,8 @@ class ExportCleanupCliTests(unittest.TestCase):
             library.import_path(second)
         pipeline = DarktablePipeline("darktable-cli", self.settings.output_dir)
         def render(command, **kwargs):
-            if command[1:] != ["--version"] and Path(command[1]).name == "photo.jpg":
-                return subprocess.CompletedProcess(command, 3, "", "bad render")
+            if command[0].endswith("exiftool") and any(Path(arg).name == "photo.jpg" for arg in command):
+                return subprocess.CompletedProcess(command, 3, "", "bad transplant")
             return self.render(command, **kwargs)
         with patch("lumen.library.PipelineRegistry.darktable", return_value=pipeline), patch(
             "lumen.pipelines.subprocess.run", side_effect=render

@@ -6,7 +6,11 @@ first run are in the [README](../README.md).
 
 ## What is working
 
-- Recursive `.ARW`, JPEG, PNG, TIFF, and HEIC import.
+- Recursive `.ARW`, JPEG, PNG, TIFF, and HEIC import. A JPEG straight from
+  the camera is a first-class source: shoot JPEG in the body for its own
+  rendering (Creative Look, lens corrections, noise handling) and cull, crop,
+  tag, and export it as usual; only the Develop tab, which drives the raw
+  decoder, stays raw-only.
 - Embedded Sony RAW preview extraction through ExifTool, with `sips` and
   darktable fallbacks.
 - Deterministic 2-second burst grouping by camera and capture time.
@@ -41,7 +45,7 @@ first run are in the [README](../README.md).
   on the sheet and are baked into exported JPEGs.
 - SQLite catalog plus atomic JSON and XMP sidecars under the Lumen library.
 - sRGB JPEG export for the current photo, all keepers, or the frames the contact sheet filters show, with Full (quality 92,
-  full resolution), Share (2048 px), and Web (1600 px) presets, optional
+  full resolution; lossless for a camera JPEG), Share (2048 px), and Web (1600 px) presets, optional
   watermark and darktable XMP profile; the keepers export runs as a cancellable
   background job with a progress dialog. Each frame lands in a subfolder named
   for the date it was taken, and every export carries the camera's MakerNote
@@ -156,7 +160,8 @@ preview refinement, or a stack runs.
 
 Press `Enter` or `Space` on a focused frame to open it in a dialog over the sheet. The
 image fills two thirds of the dialog, fitted so the whole frame shows; **Full
-size** (`Z`) swaps in the largest JPEG the camera embedded in the raw at 1:1
+size** (`Z`) swaps in the largest JPEG the camera embedded in the raw (or the
+camera JPEG itself, when that is the source) at 1:1
 pixels for a sharpness check, and the button names the real pixel size. `[`
 and `]`, or the Left and Right arrows, step through the sheet without closing;
 at full size, when the image is wider than the view, the arrows pan it instead
@@ -535,6 +540,17 @@ original (the renderers write none of their own) and writes the description and
 keywords as IPTC IIM `Caption-Abstract` and `Keywords` in UTF-8, which agency
 ingests and Photo Mechanic read in preference to XMP. `exiftool` is therefore
 required for every export, raw or not.
+
+A camera JPEG never passes through a renderer. **Full resolution** with no
+crop and no watermark is lossless: the file's own bytes are the export and the
+caption, keywords, rating, place, and Lumen's export record go in through
+`exiftool`, so the pixels are exactly what the camera wrote (the export record
+says `lossless` in place of a quality). A crop or watermark means one
+re-encode, at the camera's own quantization tables and chroma subsampling
+rather than quality 92; Share and Web use their usual sizes and qualities. A
+body set to AdobeRGB is refused by name, since the export promises sRGB; set
+the body to sRGB or shoot raw. PNG, TIFF, and HEIC sources still render
+through darktable.
 **Watermark text** (optional, up to 80 characters) is drawn bottom-right. The
 browser remembers the preset and the watermark.
 

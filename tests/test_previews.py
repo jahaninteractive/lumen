@@ -305,6 +305,18 @@ class PreviewTests(unittest.TestCase):
             with patch("lumen.previews.shutil.which", return_value=None):
                 self.assertIsNone(full_size_for(source, cache, "jkl"))
 
+    def test_full_size_for_a_camera_jpeg_is_the_file_itself_cached_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC00001.JPG"
+            Image.new("RGB", (640, 427), "blue").save(source, "JPEG", quality=95)
+            cache = root / "full"
+            with patch("lumen.previews.subprocess.run", side_effect=AssertionError("a camera JPEG needs no exiftool")):
+                target = full_size_for(source, cache, "abc")
+                self.assertEqual(cache / "abc.jpg", target)
+                self.assertEqual(source.read_bytes(), target.read_bytes(), "the camera's own pixels, not a re-encode")
+                self.assertEqual(target, full_size_for(root / "missing.JPG", cache, "abc"), "a cached copy outlives an unplugged volume")
+
     def test_prune_removes_full_size_images_no_photo_carries(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
