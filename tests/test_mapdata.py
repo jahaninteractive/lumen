@@ -2,10 +2,11 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from lumen.mapdata import KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, decimate, parse_geojson, parse_gpx, pixel_degrees
+from lumen.mapdata import (KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, decimate, parse_geojson, parse_gpx, pixel_degrees,
+                           position_at)
 
 HEADER = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="test">\n'
 
@@ -171,6 +172,24 @@ LAYER = {
     ],
 }
 MADIKWE = (-24.95, -24.55, 26.05, 26.55)
+
+
+class PositionAtTests(unittest.TestCase):
+    def test_interpolates_inside_a_gap_and_snaps_to_the_nearest_point_outside_it(self):
+        at = lambda minute, second=0: datetime(2026, 10, 22, 6, minute, second, tzinfo=timezone.utc)
+        points = [TrackPoint(at(0), -33.0, 18.0, 10.0), TrackPoint(at(0, 10), -33.1, 18.2, 20.0),
+                  TrackPoint(at(30), -34.0, 19.0, None)]
+        gap = timedelta(minutes=10)
+        lat, lon, ele = position_at(points, at(0, 5), gap)
+        self.assertEqual((-33.05, 18.1, 15.0), (round(lat, 6), round(lon, 6), ele))
+        self.assertEqual((-33.1, 18.2, 20.0), position_at(points, at(5), gap), "past the segment: its last point")
+        self.assertIsNone(position_at(points, at(15), gap), "in the gap, more than ten minutes from either end")
+        self.assertEqual((-34.0, 19.0, None), position_at(points, at(30), gap))
+        self.assertEqual((-33.0, 18.0, 10.0), position_at(points, at(0) - timedelta(minutes=9), gap))
+        self.assertIsNone(position_at(points, at(41), gap))
+        self.assertIsNone(position_at([], at(0), gap))
+        lat, lon, ele = position_at(points, at(15, 5), timedelta(hours=1))
+        self.assertIsNone(ele, "one end without an elevation gives none")
 
 
 class MapIndexTests(unittest.TestCase):

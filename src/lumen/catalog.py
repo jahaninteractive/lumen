@@ -302,8 +302,12 @@ class Catalog:
         self.connection.execute("UPDATE photos SET place = ?, place_country = ? WHERE id = ?", (place, country, photo_id))
         self.connection.commit()
 
-    def list_photos(self) -> list[Photo]:
-        rows = self.connection.execute("SELECT * FROM photos ORDER BY id").fetchall()
+    def list_photos(self, filters: GroupFilters | None = None) -> list[Photo]:
+        """Every photo, or (with filters) those matching them, ungrouped frames included."""
+        where, params = filters.where() if filters else ("1", [])
+        rows = self.connection.execute(
+            f"SELECT p.* FROM photos p LEFT JOIN photo_groups g ON g.id = p.group_id WHERE {where} ORDER BY p.id", params
+        ).fetchall()
         return [self._photo_from_row(row) for row in rows]
 
     def photo_count(self) -> int:

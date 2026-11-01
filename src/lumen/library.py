@@ -5,6 +5,7 @@ import re
 import fcntl
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -12,7 +13,7 @@ import threading
 from collections.abc import Sequence
 from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from .domain import (MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artif
                      Photo, PhotoEdit)
 from .geonames import Place, PlaceIndex, distance_km, online_lookup, parse_position
 from . import ingest
+from .mapdata import MapIndex, parse_geojson, parse_gpx, position_at
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .jobs import LocalJobRunner
 from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, DevelopAdvice, OmlxError,
@@ -45,6 +47,8 @@ from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywo
 DEVELOP_ADVICE_LONG_EDGE = 1024  # all the vision model needs; it is not judging single pixels
 NEARBY_PLACE_KM = 5.0  # fixes this close share one name: a drifting boat's bursts are all the same spot
 NEARBY_PLACE_RANGE = (1.0, 20.0)  # the photographer's radius; the slider's own bounds
+OVERLAY_SUFFIXES = (".gpx", ".geojson")
+CLOCK_OFFSET = re.compile(r"[+-]\d\d:\d\d")
 
 _MUTATION_LOCKS = {}
 _MUTATION_GUARD = threading.Lock()
@@ -168,6 +172,7 @@ class Library:
         self._runner: LocalJobRunner | None = job_runner
         self._owns_runner = job_runner is None
         self._places: PlaceIndex | None = None
+        self._map_index: MapIndex | None = None
 
     @property
     def job_runner(self) -> LocalJobRunner:
@@ -184,6 +189,8 @@ class Library:
         finally:
             if self._places is not None:
                 self._places.close()
+            if self._map_index is not None:
+                self._map_index.close()
             self.catalog.close()
 
     @property
@@ -296,6 +303,128 @@ class Library:
             return False
         last = next((event for event in reversed(self.catalog.events_for(photo.id)) if event.kind == "location_set"), None)
         return last is not None and (last.details["latitude"], last.details["longitude"]) == (photo.latitude, photo.longitude)
+
+    # Map
+
+    @property
+    def map_index(self) -> MapIndex | None:
+        """The index over the base map, region and overlay folders, opened on first use; None while there is nothing
+        to draw. Source tags are positional, so a missing base map keeps its slot as a folder that never exists."""
+        if self._map_index is None:
+            s = self.settings
+            folders = [s.map_dir or s.cache_dir / "no-base-map", s.map_regions_dir, s.map_overlays_dir]
+            if s.map_dir is None and not any(folder.is_dir() and any(folder.iterdir()) for folder in folders[1:]):
+                return None
+            self._map_index = MapIndex(s.map_index_path, folders)
+        return self._map_index
+
+    def map_features(self, min_lat: float, max_lat: float, min_lon: float, max_lon: float, *, zoom: float) -> dict:
+        with self._mutation():
+            index = self.map_index
+            if index is None:
+                return {"features": []}
+            index.ensure()
+            return {"features": index.query(min_lat, max_lat, min_lon, max_lon, zoom=zoom)}
+
+    def map_photos(self, filters: GroupFilters | None) -> list[dict]:
+        """Frames with a fix matching the filters; no filters is the contact sheet's default view (rejects hidden)."""
+        return [{"id": photo.id, "latitude": photo.latitude, "longitude": photo.longitude,
+                 "captured_at": photo.captured_at.isoformat() if photo.captured_at else None, "place": photo.place,
+                 "decision": photo.decision, "rating": photo.rating, "thumb_url": f"/thumb/{photo.id}"}
+                for photo in self.catalog.list_photos(filters or GroupFilters())
+                if photo.latitude is not None and photo.longitude is not None]
+
+    def list_overlays(self) -> list[dict]:
+        with self._mutation():
+            index = self.map_index
+            if index is None:
+                return []
+            index.ensure()
+            return [{"name": entry["name"].removeprefix("overlays/")} | entry["summary"]
+                    for entry in index.summaries() if entry["name"].startswith("overlays/")]
+
+    def _overlay_path(self, name: str) -> Path:
+        folder = self.settings.map_overlays_dir.resolve()
+        path = (folder / name).resolve()
+        if path.parent != folder or not path.is_file():
+            raise ValueError("unknown overlay")
+        return path
+
+    @_coordinated
+    def add_overlay(self, name: str, text: str) -> dict:
+        """Copies a GPX or GeoJSON file the photographer chose into the overlays folder, validated first and
+        renamed `-2`, `-3` rather than replacing one already there."""
+        clean = Path(Path(name).name.lstrip("."))
+        suffix = clean.suffix.lower()
+        if suffix not in OVERLAY_SUFFIXES or not clean.stem:
+            raise ValueError("overlay must be a .gpx or .geojson file")
+        parse_gpx(text) if suffix == ".gpx" else parse_geojson(text, source_name=clean.name)
+        folder = self.settings.map_overlays_dir
+        target, number = folder / f"{clean.stem}{suffix}", 2
+        while target.exists():
+            target, number = folder / f"{clean.stem}-{number}{suffix}", number + 1
+        partial = target.with_name(target.name + ".part")
+        partial.write_text(text, encoding="utf-8")
+        partial.replace(target)
+        return next(overlay for overlay in self.list_overlays() if overlay["name"] == target.name)
+
+    @_coordinated
+    def remove_overlay(self, name: str) -> None:
+        self._overlay_path(name).unlink()
+        if self.map_index is not None:
+            self.map_index.ensure()
+
+    @_coordinated
+    def geotag_from_track(self, name: str, *, filters: GroupFilters | None, offset: str | None,
+                          max_gap_minutes: int = 10, dry_run: bool = True, replace: bool = False) -> dict:
+        """Positions frames without a fix (and, with `replace`, typed ones) from an overlay's timed track points.
+        `offset` is the camera clock's zone, so a frame's UTC time is its capture time minus it. A camera fix is
+        never touched."""
+        if offset is not None and not CLOCK_OFFSET.fullmatch(offset):
+            raise ValueError("offset must look like +02:00")
+        _, points = parse_gpx(self._overlay_path(name).read_text(encoding="utf-8"))
+        if not points:
+            raise ValueError("track has no timestamps")
+        matched = [photo for photo in self.catalog.list_photos(filters or GroupFilters()) if photo.captured_at]
+        candidates = [photo for photo in matched if photo.latitude is None or (replace and self.location_typed(photo))]
+        offset = offset or self.default_clock_offset(candidates)
+        sign = -1 if offset[0] == "-" else 1
+        shift = sign * timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        placed = []
+        for photo in candidates:
+            when = photo.captured_at.replace(tzinfo=timezone.utc) - shift
+            position = position_at(points, when, timedelta(minutes=max_gap_minutes))
+            if position is None:
+                continue
+            placed.append(photo.id)
+            if not dry_run:
+                self._place_from_track(photo, *position, overlay=name)
+        return {"offset": offset, "placed": len(placed), "out_of_span": len(candidates) - len(placed),
+                "skipped": len(matched) - len(candidates), "photo_ids": placed, "dry_run": dry_run}
+
+    def _place_from_track(self, photo: Photo, latitude: float, longitude: float, altitude: float | None, *, overlay: str) -> None:
+        """The write sequence of set_location, with the track's elevation."""
+        self.catalog.update_location(photo.id, latitude=latitude, longitude=longitude, altitude=altitude)
+        self.catalog.append_event(photo.id, "location_set", {"latitude": latitude, "longitude": longitude,
+                                                             "scope": "track", "overlay": overlay})
+        if not photo.place or self._last_event(photo.id, ("place_resolved", "place_edited")) == "place_resolved":
+            self._resolve_place(photo.id, latitude, longitude)
+        self._write_sidecar(photo.id)
+
+    def default_clock_offset(self, photos: list[Photo]) -> str:
+        """The camera's own zone from the first readable frame's OffsetTimeOriginal, else this Mac's current zone."""
+        exiftool = shutil.which("exiftool")
+        first = next((photo for photo in photos if Path(photo.path).is_file()), None)
+        if exiftool and first:
+            try:
+                answer = subprocess.run([exiftool, "-s3", "-OffsetTimeOriginal", first.path],
+                                        capture_output=True, text=True, timeout=30).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                answer = ""
+            if CLOCK_OFFSET.fullmatch(answer):
+                return answer
+        minutes = round(datetime.now().astimezone().utcoffset().total_seconds() / 60)
+        return f"{'-' if minutes < 0 else '+'}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
 
     def _last_event(self, photo_id: int, kinds: tuple[str, ...]) -> str | None:
         return next((event.kind for event in reversed(self.catalog.events_for(photo_id)) if event.kind in kinds), None)

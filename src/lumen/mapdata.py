@@ -6,8 +6,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import xml.etree.ElementTree as ET
+from bisect import bisect_left
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 GPX_NS = "{http://www.topografix.com/GPX/1/1}"
@@ -128,6 +129,23 @@ def parse_gpx(text: str) -> tuple[list[Feature], list[TrackPoint]]:
         features.append(Feature("waypoint", name, 0, {"type": "Point", "coordinates": _rounded(position)}))
     points.sort(key=lambda point: point.time)
     return features, points
+
+
+def position_at(points: list[TrackPoint], when: datetime, max_gap: timedelta) -> tuple[float, float, float | None] | None:
+    """(lat, lon, ele) of the time-sorted track at `when`: interpolated between the bracketing points when they are
+    less than `max_gap` apart, else the nearer point when it is within `max_gap`, else None. Elevation is
+    interpolated only when both points carry one."""
+    index = bisect_left(points, when, key=lambda point: point.time)
+    before = points[index - 1] if index else None
+    after = points[index] if index < len(points) else None
+    if before and after and after.time - before.time < max_gap:
+        share = (when - before.time) / (after.time - before.time)
+        ele = None if before.ele is None or after.ele is None else before.ele + (after.ele - before.ele) * share
+        return (before.lat + (after.lat - before.lat) * share, before.lon + (after.lon - before.lon) * share, ele)
+    nearest = min((p for p in (before, after) if p), key=lambda point: abs(point.time - when), default=None)
+    if nearest is None or abs(nearest.time - when) > max_gap:
+        return None
+    return nearest.lat, nearest.lon, nearest.ele
 
 
 def _ele(vertex: ET.Element) -> float | None:

@@ -3622,5 +3622,145 @@ class LibraryTests(unittest.TestCase):
                 library.suggest_develop(photo_id, FailingTagger(), settings=DevelopSettings({}))
 
 
+    MAP_GPX = ('<?xml version="1.0" encoding="UTF-8"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1"><trk><name>Walk</name>'
+               '<trkseg><trkpt lat="-33.0" lon="18.0"><ele>10</ele><time>2026-10-22T06:00:00Z</time></trkpt>'
+               '<trkpt lat="-33.1" lon="18.2"><ele>20</ele><time>2026-10-22T06:00:10Z</time></trkpt></trkseg>'
+               '<trkseg><trkpt lat="-34.0" lon="19.0"><time>2026-10-22T07:00:00Z</time></trkpt></trkseg></trk></gpx>')
+
+    def _map_library(self, stamps: dict[str, str]) -> tuple[Library, dict[str, int]]:
+        """A library of JPEGs shot at camera-local `stamps`, with the map GPX saved as overlay walk.gpx."""
+        self.image_path.unlink()
+        for name, stamp in stamps.items():
+            exif = Image.Exif(); exif[36867] = stamp
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg", exif=exif)
+        library = Library(Settings(library_dir=self.library_dir))
+        self.addCleanup(library.close)
+        library.import_path(self.source_dir)
+        (library.settings.map_overlays_dir / "walk.gpx").write_text(self.MAP_GPX)
+        return library, {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+
+    def test_add_overlay_copies_validates_and_lists(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            self.assertEqual([], library.list_overlays())
+            added = library.add_overlay("walk.gpx", self.MAP_GPX)
+            self.assertEqual({"name": "walk.gpx", "features": 1, "tracks": 1, "waypoints": 0,
+                              "span": ["2026-10-22T06:00:00+00:00", "2026-10-22T07:00:00+00:00"]}, added)
+            self.assertEqual("walk-2.gpx", library.add_overlay("walk.gpx", self.MAP_GPX)["name"])
+            self.assertEqual("Dunes.gpx", library.add_overlay("Dunes.GPX", self.MAP_GPX)["name"])
+            self.assertEqual(["Dunes.gpx", "walk-2.gpx", "walk.gpx"], sorted(o["name"] for o in library.list_overlays()))
+            self.assertEqual(self.MAP_GPX, (library.settings.map_overlays_dir / "walk.gpx").read_text())
+            for name, text, message in (("notes.txt", self.MAP_GPX, "overlay must be a .gpx or .geojson file"),
+                                        ("bad.gpx", "<html/>", "GPX"), ("bad.geojson", "{}", "FeatureCollection")):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
+                    library.add_overlay(name, text)
+            self.assertEqual(3, len(list(library.settings.map_overlays_dir.iterdir())), "nothing half written")
+            features = library.map_features(-35, -32, 17, 20, zoom=8)["features"]
+            self.assertEqual(["track"] * 3, [feature["kind"] for feature in features], "one track per overlay copy")
+
+    def test_overlay_names_are_sanitised(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            self.assertEqual("x.gpx", library.add_overlay("../../x.gpx", self.MAP_GPX)["name"])
+            self.assertEqual("hidden.gpx", library.add_overlay(".hidden.gpx", self.MAP_GPX)["name"])
+            self.assertEqual(["hidden.gpx", "x.gpx"], sorted(path.name for path in library.settings.map_overlays_dir.iterdir()))
+            self.assertFalse((self.library_dir.parent / "x.gpx").exists())
+
+    def test_remove_overlay_refuses_paths(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.add_overlay("walk.gpx", self.MAP_GPX)
+            for name in ("../../catalog.sqlite3", "../overlays/../../catalog.sqlite3", "missing.gpx", ""):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "^unknown overlay$"):
+                    library.remove_overlay(name)
+            self.assertTrue(library.settings.database_path.is_file())
+            library.remove_overlay("walk.gpx")
+            self.assertEqual([], library.list_overlays())
+
+    def test_map_photos_omits_frames_without_a_fix_and_paths(self):
+        library, photos = self._map_library({"d0": "2026:10:22 08:00:00", "d1": "2026:10:22 08:00:01", "d2": "2026:10:22 08:00:02"})
+        library.catalog.update_location(photos["d0"], latitude=-33.5, longitude=18.5, altitude=None)
+        library.catalog.update_location(photos["d2"], latitude=-34.5, longitude=19.5, altitude=None)
+        library.set_decision(photos["d2"], "reject")
+        self.assertEqual([{"id": photos["d0"], "latitude": -33.5, "longitude": 18.5, "captured_at": "2026-10-22T08:00:00",
+                           "place": None, "decision": "none", "rating": 0, "thumb_url": f"/thumb/{photos['d0']}"}],
+                         library.map_photos(None))
+        self.assertEqual([photos["d0"], photos["d2"]],
+                         [photo["id"] for photo in library.map_photos(GroupFilters(show_rejected=True))])
+        self.assertEqual([photos["d2"]], [photo["id"] for photo in library.map_photos(GroupFilters(decision="reject"))])
+
+    def test_geotag_dry_run_counts_and_writes_nothing(self):
+        library, photos = self._map_library({"d0": "2026:10:22 08:00:05", "d1": "2026:10:22 08:05:00",
+                                             "d2": "2026:10:22 08:30:00", "d3": "2026:10:23 08:00:00"})
+        library.catalog.update_location(photos["d3"], latitude=1.0, longitude=2.0, altitude=None)
+        result = library.geotag_from_track("walk.gpx", filters=None, offset="+02:00")
+        self.assertEqual({"offset": "+02:00", "placed": 2, "out_of_span": 1, "skipped": 1,
+                          "photo_ids": [photos["d0"], photos["d1"]], "dry_run": True}, result)
+        self.assertEqual([None, None, None], [library.catalog.get_photo(photos[n]).latitude for n in ("d0", "d1", "d2")])
+        self.assertFalse(any(event.kind == "location_set" for n in photos for event in library.catalog.events_for(photos[n])))
+
+    def test_geotag_places_frames_by_interpolation_and_resolves_place(self):
+        library, photos = self._map_library({"d0": "2026:10:22 08:00:05", "d1": "2026:10:22 09:00:00"})
+        with patch.object(Library, "_resolve_place") as resolve:
+            result = library.geotag_from_track("walk.gpx", filters=None, offset="+02:00", dry_run=False)
+        self.assertEqual(2, result["placed"])
+        self.assertFalse(result["dry_run"])
+        midway = library.catalog.get_photo(photos["d0"])
+        self.assertAlmostEqual(-33.05, midway.latitude)
+        self.assertAlmostEqual(18.1, midway.longitude)
+        self.assertAlmostEqual(15.0, midway.altitude)
+        self.assertIsNone(library.catalog.get_photo(photos["d1"]).altitude, "the matched point has no elevation")
+        self.assertTrue(library.location_typed(midway))
+        event = [event for event in library.catalog.events_for(photos["d0"]) if event.kind == "location_set"][-1]
+        self.assertEqual({"scope": "track", "overlay": "walk.gpx"}, {key: event.details[key] for key in ("scope", "overlay")})
+        self.assertEqual(sorted([photos["d0"], photos["d1"]]), sorted(call.args[0] for call in resolve.call_args_list))
+
+    def test_geotag_skips_frames_in_a_segment_gap(self):
+        library, photos = self._map_library({"d0": "2026:10:22 08:05:00", "d1": "2026:10:22 08:30:00", "d2": "2026:10:22 08:52:00"})
+        with patch.object(Library, "_resolve_place"):
+            result = library.geotag_from_track("walk.gpx", filters=None, offset="+02:00", dry_run=False)
+        self.assertEqual([photos["d0"], photos["d2"]], result["photo_ids"])
+        self.assertEqual(1, result["out_of_span"])
+        self.assertEqual((-33.1, 18.2), (library.catalog.get_photo(photos["d0"]).latitude, library.catalog.get_photo(photos["d0"]).longitude),
+                         "five minutes after the segment's last point: that point, not a line across the gap")
+        self.assertIsNone(library.catalog.get_photo(photos["d1"]).latitude)
+        self.assertEqual(-34.0, library.catalog.get_photo(photos["d2"]).latitude)
+        wide = library.geotag_from_track("walk.gpx", filters=None, offset="+02:00", max_gap_minutes=60, replace=True)
+        self.assertIn(photos["d1"], wide["photo_ids"], "a wider gap allowance interpolates across it")
+
+    def test_geotag_never_touches_a_camera_fix_and_replaces_typed_only_when_asked(self):
+        library, photos = self._map_library({"d0": "2026:10:22 08:00:05", "d1": "2026:10:22 08:00:06"})
+        library.catalog.update_location(photos["d0"], latitude=-62.0, longitude=-58.0, altitude=None)
+        with patch.object(Library, "_resolve_place"):
+            library.set_location(photos["d1"], "-1, 1", scope="frame")
+            kept = library.geotag_from_track("walk.gpx", filters=None, offset="+02:00", dry_run=False)
+            self.assertEqual((0, 2), (kept["placed"], kept["skipped"]))
+            self.assertEqual(-1.0, library.catalog.get_photo(photos["d1"]).latitude)
+            replaced = library.geotag_from_track("walk.gpx", filters=None, offset="+02:00", dry_run=False, replace=True)
+        self.assertEqual([photos["d1"]], replaced["photo_ids"])
+        self.assertNotEqual(-1.0, library.catalog.get_photo(photos["d1"]).latitude)
+        self.assertEqual((-62.0, -58.0), (library.catalog.get_photo(photos["d0"]).latitude, library.catalog.get_photo(photos["d0"]).longitude))
+
+    def test_geotag_rejects_bad_offset_and_untimed_tracks(self):
+        library, _ = self._map_library({"d0": "2026:10:22 08:00:05"})
+        for offset in ("2", "+2:00", "02:00", "+02:00 "):
+            with self.subTest(offset=offset), self.assertRaisesRegex(ValueError, "^offset must look like \\+02:00$"):
+                library.geotag_from_track("walk.gpx", filters=None, offset=offset)
+        library.add_overlay("plan.gpx", self.MAP_GPX.replace("<time>", "<desc>").replace("</time>", "</desc>"))
+        with self.assertRaisesRegex(ValueError, "^track has no timestamps$"):
+            library.geotag_from_track("plan.gpx", filters=None, offset="+02:00")
+        with self.assertRaisesRegex(ValueError, "^unknown overlay$"):
+            library.geotag_from_track("../catalog.sqlite3", filters=None, offset="+02:00")
+
+    def test_default_clock_offset_falls_back_to_the_local_zone(self):
+        library, photos = self._map_library({"d0": "2026:10:22 08:00:05"})
+        frames = library.catalog.list_photos()
+        with patch("shutil.which", return_value=None), patch("subprocess.run") as run:
+            self.assertRegex(library.default_clock_offset(frames), r"^[+-]\d\d:\d\d$")
+        run.assert_not_called()
+        answer = subprocess.CompletedProcess([], 0, stdout="+05:30\n", stderr="")
+        with patch("shutil.which", return_value="/usr/local/bin/exiftool"), patch("subprocess.run", return_value=answer) as run:
+            self.assertEqual("+05:30", library.default_clock_offset(frames))
+        self.assertEqual(["/usr/local/bin/exiftool", "-s3", "-OffsetTimeOriginal", frames[0].path], run.call_args.args[0])
+        with patch("shutil.which", return_value=None):
+            self.assertRegex(library.geotag_from_track("walk.gpx", filters=None, offset=None)["offset"], r"^[+-]\d\d:\d\d$")
+
 if __name__ == "__main__":
     unittest.main()
