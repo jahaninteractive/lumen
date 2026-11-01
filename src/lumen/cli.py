@@ -181,6 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _id_list(value: str) -> tuple[int, ...]:
+    return tuple(int(item) for item in value.split(","))
+
+
 def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--from", dest="date_from", metavar="YYYY-MM-DD", help="captured on or after this date")
     parser.add_argument("--to", dest="date_to", metavar="YYYY-MM-DD", help="captured on or before this date")
@@ -192,7 +196,7 @@ def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--export-failed", dest="export_failed_only", action="store_true", help="only frames whose last export failed")
     parser.add_argument("--text", help="match tag descriptions or subjects")
     parser.add_argument("--show-rejected", action="store_true")
-    parser.add_argument("--ids", type=lambda value: tuple(int(item) for item in value.split(",")), metavar="ID,ID",
+    parser.add_argument("--ids", type=_id_list, metavar="ID,ID",
                         help="only these frames (at most 200)")
 
 

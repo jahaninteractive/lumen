@@ -3746,6 +3746,21 @@ class LibraryTests(unittest.TestCase):
                              "the newest snapshot's row wins, preview and all")
             self.assertIsNone(library.cleared_thumb(self._cleared_key("f" * 16)))
 
+    def test_map_cleared_scans_the_trash_once_until_a_snapshot_is_added(self):
+        settings = Settings(library_dir=self.library_dir)
+        with Library(settings) as library:
+            self._trash_snapshot(library, "20261020T080000Z-1", {"f" * 16: (-33.0, 1, True)})
+        with patch.object(library_module, "_scan_trash", wraps=library_module._scan_trash) as scan:
+            for _ in range(2):
+                with Library(settings) as library:
+                    self.assertEqual(1, len(library.map_cleared()))
+                    self.assertIsNotNone(library.cleared_thumb(self._cleared_key("f" * 16)))
+            self.assertEqual(1, scan.call_count, "two libraries over the same trash scan it once")
+            with Library(settings) as library:
+                self._trash_snapshot(library, "20261025T080000Z-1", {"g" * 16: (-34.0, 1, False)})
+                self.assertEqual(2, len(library.map_cleared()))
+            self.assertEqual(2, scan.call_count, "a new snapshot invalidates the cache")
+
     def test_map_cleared_skips_frames_back_in_the_catalog(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
             library.import_path(self.image_path)
