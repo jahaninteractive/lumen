@@ -26,6 +26,8 @@ PARK_BOUNDARIES = frozenset({"protected_area", "national_park"})
 # Stored source names are "<tag>/<file name>", the tag being the folder's place in MapIndex's source_dirs, so the
 # same file name in two folders never collides and no directory reaches the index or the browser.
 SOURCE_TAGS = ("base", "regions", "overlays")
+# Lines are clipped to the viewport grown by this fraction of its size on each side, so a small pan has edges.
+VIEWPORT_PAD = 0.1
 MAP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources(path TEXT PRIMARY KEY, size INTEGER, mtime_ns INTEGER, summary TEXT);
 CREATE TABLE IF NOT EXISTS features(id INTEGER PRIMARY KEY, source TEXT, kind TEXT, name TEXT, rank INTEGER,
@@ -208,15 +210,52 @@ def pixel_degrees(zoom: float) -> float:
     return 360 / (256 * 2 ** zoom)
 
 
-def _decimated(geometry: dict, step: float) -> dict:
+def _segment_hits(a: list[float], b: list[float], box: tuple[float, float, float, float]) -> bool:
+    min_lat, max_lat, west, east = box
+    return (min(a[0], b[0]) <= east and max(a[0], b[0]) >= west
+            and min(a[1], b[1]) <= max_lat and max(a[1], b[1]) >= min_lat)
+
+
+def _clip(coords: list[list[float]], box: tuple[float, float, float, float]) -> list[list[list[float]]]:
+    """Runs of the line whose segments touch `box`, so a coastline 4,000 km long ships only the stretch on screen.
+    A segment counts when its bounding box touches, which keeps the first vertex outside at each end of a run. The
+    line is split where it leaves the box and comes back, so no straight chord is drawn across the viewport."""
+    runs, run = [], []
+    for a, b in zip(coords, coords[1:]):
+        if _segment_hits(a, b, box):
+            if not run:
+                run = [a]
+            run.append(b)
+        elif run:
+            runs.append(run)
+            run = []
+    if run:
+        runs.append(run)
+    return runs
+
+
+def _drawn(geometry: dict, step: float, box: tuple[float, float, float, float]) -> dict | None:
+    """Geometry clipped to `box` (lines only: clipping a ring distorts its fill) and decimated by `step`; None when
+    no part of a line touches the box. A clipped line can come back as a MultiLineString."""
     kind, coordinates = geometry["type"], geometry["coordinates"]
-    if kind == "LineString":
-        coordinates = decimate(coordinates, step)
-    elif kind in ("Polygon", "MultiLineString"):
-        coordinates = [decimate(part, step) for part in coordinates]
+    if kind in ("LineString", "MultiLineString"):
+        parts = [coordinates] if kind == "LineString" else coordinates
+        runs = [decimate(run, step) for part in parts for run in _clip(part, box)]
+        if not runs:
+            return None
+        return {"type": "LineString", "coordinates": runs[0]} if len(runs) == 1 else \
+            {"type": "MultiLineString", "coordinates": runs}
+    if kind == "Polygon":
+        coordinates = [decimate(ring, step) for ring in coordinates]
     elif kind == "MultiPolygon":
         coordinates = [[decimate(ring, step) for ring in polygon] for polygon in coordinates]
     return {"type": kind, "coordinates": coordinates}
+
+
+def _padded(box: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    min_lat, max_lat, west, east = box
+    lat_pad, lon_pad = (max_lat - min_lat) * VIEWPORT_PAD, (east - west) * VIEWPORT_PAD
+    return min_lat - lat_pad, max_lat + lat_pad, west - lon_pad, east + lon_pad
 
 
 def _parse_source(path: Path) -> tuple[list[Feature], dict]:
@@ -280,7 +319,7 @@ class MapIndex:
         """Indexes one file; a file that fails to parse is still recorded, with its error as the summary."""
         try:
             features, summary = _parse_source(path)
-        except (ValueError, UnicodeDecodeError) as error:
+        except (ValueError, UnicodeDecodeError, OSError) as error:
             features, summary = [], {"error": str(error)}
         db = self._db
         db.execute("INSERT INTO sources(path, size, mtime_ns, summary) VALUES (?, ?, ?, ?)",
@@ -300,7 +339,10 @@ class MapIndex:
             for name in stored.keys() - files.keys():
                 self._forget(name)
             for name, path in files.items():
-                stat = path.stat()
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue  # vanished between the listing and now; the next ensure() drops its rows
                 if stored.get(name) == (stat.st_size, stat.st_mtime_ns):
                     continue
                 self._forget(name)
@@ -321,17 +363,19 @@ class MapIndex:
         step = pixel_degrees(zoom)
         seen, found = set(), []
         for west, east in spans:
+            box = (min_lat, max_lat, west, east)
             rows = self._db.execute(
                 "SELECT f.id, f.kind, f.name, f.rank, f.geometry FROM features_rtree r JOIN features f ON f.id = r.id "
                 "WHERE r.max_lat >= ? AND r.min_lat <= ? AND r.max_lon >= ? AND r.min_lon <= ? ORDER BY f.id",
-                (min_lat, max_lat, west, east),
+                box,
             )
             for row_id, kind, name, rank, geometry in rows:
                 if row_id in seen or KIND_MIN_ZOOM.get(kind, 0) > zoom:
                     continue
                 seen.add(row_id)
-                found.append({"kind": kind, "name": name, "rank": rank,
-                              "geometry": _decimated(json.loads(geometry), step)})
+                drawn = _drawn(json.loads(geometry), step, _padded(box))
+                if drawn is not None:
+                    found.append({"kind": kind, "name": name, "rank": rank, "geometry": drawn})
         return found
 
     def summaries(self) -> list[dict]:

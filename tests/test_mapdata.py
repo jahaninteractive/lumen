@@ -247,6 +247,44 @@ class MapIndexTests(unittest.TestCase):
         self.assertEqual(names, ["Taveuni"])
         self.assertEqual([f["name"] for f in self.index.query(-20, -10, 170, 175, zoom=8)], [])
 
+    def test_query_clips_long_lines_to_the_viewport(self):
+        # 10,000 vertices from lon 0 to 50 along lat -24.7, so about 200 fall in Madikwe's half-degree box.
+        coast = [[i * 0.005, -24.7] for i in range(10_000)]
+        ring = [[round(26.2 + i * 0.01, 5), round(-24.8 + (i % 2) * 0.01, 5)] for i in range(20)] + [[26.2, -24.8]]
+        layer = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"kind": "coastline", "name": "Coast"},
+             "geometry": {"type": "LineString", "coordinates": coast}},
+            {"type": "Feature", "properties": {"kind": "park", "name": "Ring"},
+             "geometry": {"type": "Polygon", "coordinates": [ring]}},
+        ]}
+        (self.base / "coast.geojson").write_text(json.dumps(layer))
+        self.index.ensure()
+        features = {f["name"]: f["geometry"] for f in self.index.query(-24.8, -24.6, 26.2, 26.4, zoom=9)}
+        clipped = features["Coast"]["coordinates"]
+        self.assertEqual(features["Coast"]["type"], "LineString")
+        self.assertLess(len(clipped), 200)
+        self.assertIn([26.3, -24.7], clipped)
+        self.assertLessEqual(clipped[0][0], 26.2 - 0.02)  # the padded box keeps an edge beyond the viewport
+        self.assertLess(clipped[-1][0], 26.5)
+        self.assertEqual(features["Ring"]["coordinates"], [ring])  # rings are never clipped
+
+    def test_query_splits_a_line_that_leaves_and_reenters_the_viewport(self):
+        hook = [[26.0, -24.7], [26.3, -24.7], [26.6, -24.7], [26.6, -20.0], [26.4, -20.0], [26.4, -24.75], [26.2, -24.75]]
+        layer = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"kind": "border", "name": "Hook"},
+             "geometry": {"type": "LineString", "coordinates": hook}}]}
+        (self.base / "hook.geojson").write_text(json.dumps(layer))
+        self.index.ensure()
+        hooked = next(f for f in self.index.query(-24.8, -24.6, 26.2, 26.45, zoom=12) if f["name"] == "Hook")
+        self.assertEqual(hooked["geometry"]["type"], "MultiLineString")
+        self.assertEqual(len(hooked["geometry"]["coordinates"]), 2)
+
+    def test_ensure_records_an_unreadable_file_as_failed(self):
+        (self.base / "folder.geojson").mkdir()
+        result = self.index.ensure()
+        self.assertEqual(result["failed"], ["base/folder.geojson"])
+        self.assertIn("error", {s["name"]: s["summary"] for s in self.index.summaries()}["base/folder.geojson"])
+
     def test_summaries_report_track_counts_and_span(self):
         self.index.ensure()
         summaries = {s["name"]: s["summary"] for s in self.index.summaries()}
