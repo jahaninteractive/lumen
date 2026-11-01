@@ -2662,6 +2662,7 @@ function paintMap() {
       const best = state.map.zoom >= MAP_THUMB_ZOOM ? [...cluster.photos].sort(byFanOrder)[0] : null;
       const image = best ? thumbFor(best) : null;
       let count = { x: cluster.x, y: cluster.y };
+      let hitRadius = radius;
       if (image) {
         const scale = 48 / Math.max(image.naturalWidth, image.naturalHeight);
         const [w, h] = [image.naturalWidth * scale, image.naturalHeight * scale];
@@ -2672,6 +2673,7 @@ function paintMap() {
         context.strokeRect(cluster.x - w / 2, cluster.y - h / 2, w, h);
         context.setLineDash([]);
         count = { x: cluster.x + w / 2, y: cluster.y - h / 2 };
+        hitRadius = Math.hypot(w, h) / 2;  // the whole thumb answers a click
         context.fillStyle = mapColour('amber');
         context.beginPath();
         context.arc(count.x, count.y, Math.max(9, context.measureText(String(cluster.photos.length)).width / 2 + 4), 0, 2 * Math.PI);
@@ -2686,7 +2688,7 @@ function paintMap() {
       context.textAlign = 'center';
       context.fillText(String(cluster.photos.length), count.x, count.y);
       context.textAlign = 'start';
-      state.map.hits.push({ ...cluster, radius });
+      state.map.hits.push({ ...cluster, radius: hitRadius });
       continue;
     }
     const [photo] = cluster.photos;
