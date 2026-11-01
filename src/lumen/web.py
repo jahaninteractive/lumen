@@ -12,7 +12,7 @@ from dataclasses import asdict, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlsplit
 
 from .astro import RECIPES
 from .catalog import GroupFilters
@@ -39,6 +39,27 @@ STATIC_FILES = {
 DEVELOP_FEEDBACK_MAX = 200  # one short correction ("too warm"), matching the field's maxlength
 
 _FLAG_FILTERS = {"keepers_only", "tagged_only", "export_failed_only", "show_rejected"}
+OVERLAY_TEXT_MAX = 20_000_000  # characters; the request body limit leaves room for JSON escaping
+_MAP_BUILD_LOCK = threading.Lock()  # one index build at a time; other viewport requests answer {"building": true}
+_GEOTAG_FIELDS = {"query", "offset", "max_gap_minutes", "dry_run", "replace"}
+
+
+def _parse_bbox(query: str) -> tuple[tuple[float, float, float, float], float]:
+    """`bbox=S,W,N,E&zoom=Z` as ((S, N, W, E), zoom); W > E is a viewport across 180 degrees."""
+    values = parse_qs(query)
+    try:
+        south, west, north, east = (float(part) for part in values["bbox"][0].split(","))
+    except (KeyError, ValueError):
+        raise ValueError("bbox must be S,W,N,E in degrees") from None
+    if not (-90 <= south < north <= 90 and -180 <= west <= 180 and -180 <= east <= 180):  # also refuses nan
+        raise ValueError("bbox must be S,W,N,E in degrees")
+    try:
+        zoom = float(values["zoom"][0])
+    except (KeyError, ValueError):
+        zoom = -1.0
+    if not 0 <= zoom <= 20:
+        raise ValueError("zoom must be between 0 and 20")
+    return (south, north, west, east), zoom
 
 
 def _preview_url(photo, crop) -> str:
@@ -303,6 +324,34 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 except (ValueError, OSError) as error:
                     self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
                 return
+            if path == "/api/map/features":
+                try:
+                    box, zoom = _parse_bbox(urlparse(self.path).query)
+                except ValueError as error:
+                    self._send_json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                if not _MAP_BUILD_LOCK.acquire(blocking=False):
+                    self._send_json({"building": True})
+                    return
+                try:
+                    with Library(settings) as library:
+                        self._send_json(library.map_features(*box, zoom=zoom))
+                except (ValueError, OSError) as error:
+                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                finally:
+                    _MAP_BUILD_LOCK.release()
+                return
+            if path in {"/api/map/photos", "/api/map/overlays"}:
+                try:
+                    with Library(settings) as library:
+                        if path == "/api/map/overlays":
+                            self._send_json({"overlays": library.list_overlays()})
+                        else:
+                            photos = library.map_photos(parse_group_filters(urlparse(self.path).query))
+                            self._send_json({"photos": photos, "count": len(photos)})
+                except (ValueError, OSError) as error:
+                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                return
             if path == "/api/vocabulary":
                 try:
                     with Library(settings) as library:
@@ -478,6 +527,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             if not self._trusted_mutation():
                 self._send_json({"error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
                 return
+            if overlay := re.fullmatch(r"/api/map/overlays/([^/]+)", path):
+                name = unquote(overlay.group(1))
+                try:
+                    with Library(settings) as library:
+                        library.remove_overlay(name)
+                except ValueError as error:
+                    self._send_json({"error": str(error)}, status=HTTPStatus.NOT_FOUND)
+                    return
+                except OSError as error:
+                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json({"removed": name})
+                return
             match = re.fullmatch(r"/api/photos/(\d+)/develop", path)
             if not match:
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -496,7 +558,33 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_json({"error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
                 return
             try:
-                payload = self._read_json()
+                payload = self._read_json(limit=25_000_000 if path == "/api/map/overlays" else 1_000_000)
+                if path == "/api/map/overlays":
+                    if payload.keys() != {"name", "text"} or not isinstance(payload["name"], str) or not isinstance(payload["text"], str):
+                        raise ValueError("overlay requires a name and text")
+                    if len(payload["text"]) > OVERLAY_TEXT_MAX:
+                        raise ValueError("overlay larger than 20 MB")
+                    with Library(settings) as library:
+                        self._send_json(library.add_overlay(payload["name"], payload["text"]), status=HTTPStatus.CREATED)
+                    return
+                if overlay := re.fullmatch(r"/api/map/overlays/([^/]+)/geotag", path):
+                    if payload.keys() != _GEOTAG_FIELDS:
+                        raise ValueError(f"geotag requires {', '.join(sorted(_GEOTAG_FIELDS))}")
+                    if not isinstance(payload["query"], str):
+                        raise ValueError("query must be a string")
+                    if payload["offset"] is not None and not isinstance(payload["offset"], str):
+                        raise ValueError("offset must be a string or null")
+                    gap = payload["max_gap_minutes"]
+                    if isinstance(gap, bool) or not isinstance(gap, int) or not 1 <= gap <= 120:
+                        raise ValueError("max_gap_minutes must be a whole number from 1 to 120")
+                    if not isinstance(payload["dry_run"], bool) or not isinstance(payload["replace"], bool):
+                        raise ValueError("dry_run and replace must be true or false")
+                    filters = parse_group_filters(payload["query"].removeprefix("?"))
+                    with Library(settings) as library:
+                        self._send_json(library.geotag_from_track(
+                            unquote(overlay.group(1)), filters=filters, offset=payload["offset"], max_gap_minutes=gap,
+                            dry_run=payload["dry_run"], replace=payload["replace"]))
+                    return
                 if path == "/api/browse":
                     selected = choose_macos_folder()
                     self._send_json({"path": selected, "cancelled": selected is None})
@@ -962,7 +1050,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if isinstance(error, RuntimeError) and "another heavy job" in str(error):
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
-                job_route = path.startswith(("/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist",
+                job_route = path.startswith(("/api/map/", "/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist",
                                              "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/")) or re.search(r"/develop(/|$)", path)
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
@@ -1021,9 +1109,9 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 return False
             return True
 
-        def _read_json(self) -> dict:
+        def _read_json(self, limit: int = 1_000_000) -> dict:
             length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > 1_000_000:
+            if length < 1 or length > limit:
                 raise ValueError("invalid request size")
             value = json.loads(self.rfile.read(length))
             if not isinstance(value, dict):

@@ -72,7 +72,7 @@ class WebTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        settings = Settings(library_dir=self.root / "library")
+        settings = Settings(library_dir=self.root / "library", map_dir=self.root / "map")
         source = self.root / "photo.jpg"
         Image.new("RGB", (120, 90), (80, 100, 120)).save(source)
         with Library(settings) as library:
@@ -156,6 +156,110 @@ class WebTests(unittest.TestCase):
                 return payload
             self.assertLess(time.monotonic(), deadline, f"job stayed {payload['status']}")
             time.sleep(0.05)
+
+    MAP_GPX = ('<?xml version="1.0" encoding="UTF-8"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1"><trk><name>Walk</name>'
+               '<trkseg><trkpt lat="-33.0" lon="18.0"><time>2026-10-22T06:00:00Z</time></trkpt>'
+               '<trkpt lat="-33.1" lon="18.2"><time>2026-10-22T06:00:10Z</time></trkpt></trkseg></trk></gpx>')
+
+    def delete_json(self, path, headers=None):
+        try:
+            response = urllib.request.urlopen(urllib.request.Request(self.base + path, headers=headers or {}, method="DELETE"), timeout=3)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            body = response.read()
+            return response.code, json.loads(body) if "application/json" in response.headers.get("Content-Type", "") else None
+
+    def write_base_map(self):
+        folder = self.root / "map"
+        folder.mkdir(exist_ok=True)
+        line = lambda coords: {"type": "Feature", "properties": {"kind": "coastline"}, "geometry": {"type": "LineString", "coordinates": coords}}
+        (folder / "coast.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+            line([[18.0, -34.0], [18.5, -33.5]]), line([[150.0, 10.0], [151.0, 11.0]])]}))
+
+    def test_map_features_returns_viewport_features_only(self):
+        self.write_base_map()
+        code, payload = self.get_json("/api/map/features?bbox=-35,17,-32,20&zoom=8")
+        self.assertEqual(200, code, payload)
+        self.assertEqual(["coastline"], [feature["kind"] for feature in payload["features"]])
+        self.assertEqual({"features": []}, self.get_json("/api/map/features?bbox=40,0,50,10&zoom=8")[1])
+
+    def test_map_features_rejects_bad_bbox(self):
+        for query in ("bbox=-32,17,-35,20&zoom=8", "bbox=-35,17,-32&zoom=8", "bbox=-95,17,-32,20&zoom=8",
+                      "bbox=-35,17,-32,190&zoom=8", "bbox=a,b,c,d&zoom=8", "bbox=nan,17,-32,20&zoom=8", "zoom=8"):
+            with self.subTest(query=query):
+                self.assertEqual((400, {"error": "bbox must be S,W,N,E in degrees"}), self.get_json(f"/api/map/features?{query}"))
+        for zoom in ("21", "-1", "x", "nan", ""):
+            with self.subTest(zoom=zoom):
+                self.assertEqual(400, self.get_json(f"/api/map/features?bbox=-35,17,-32,20&zoom={zoom}")[0])
+
+    def test_map_features_answers_building_while_another_request_builds(self):
+        from lumen import web
+        with web._MAP_BUILD_LOCK:
+            self.assertEqual((200, {"building": True}), self.get_json("/api/map/features?bbox=-35,17,-32,20&zoom=8"))
+
+    def test_map_photos_with_no_fixes_is_empty(self):
+        self.assertEqual((200, {"photos": [], "count": 0}), self.get_json("/api/map/photos"))
+        self.assertEqual((200, {"photos": [], "count": 0}), self.get_json("/api/map/photos?show_rejected=1"))
+        self.assertEqual(400, self.get_json("/api/map/photos?bogus=1")[0])
+
+    def test_map_overlay_round_trip_and_cross_origin_refusal(self):
+        body = {"name": "walk.gpx", "text": self.MAP_GPX}
+        self.assertEqual(403, self.post_json("/api/map/overlays", body, headers={"Origin": "http://evil"})[0])
+        self.assertEqual((200, {"overlays": []}), self.get_json("/api/map/overlays"))
+        code, added = self.post_json("/api/map/overlays", body)
+        self.assertEqual(201, code, added)
+        self.assertEqual("walk.gpx", added["name"])
+        self.assertEqual(["walk.gpx"], [overlay["name"] for overlay in self.get_json("/api/map/overlays")[1]["overlays"]])
+        for bad in ({"name": "walk.gpx"}, {"name": 1, "text": self.MAP_GPX}, {"name": "walk.gpx", "text": None},
+                    {"name": "walk.gpx", "text": self.MAP_GPX, "extra": 1}, {"name": "notes.txt", "text": self.MAP_GPX}):
+            with self.subTest(bad=bad):
+                self.assertEqual(400, self.post_json("/api/map/overlays", bad)[0])
+        self.assertEqual(403, self.delete_json("/api/map/overlays/walk.gpx", headers={"Origin": "http://evil"})[0])
+        self.assertEqual((404, {"error": "unknown overlay"}), self.delete_json("/api/map/overlays/..%2Fx"))
+        self.assertEqual((404, {"error": "unknown overlay"}), self.delete_json("/api/map/overlays/missing.gpx"))
+        self.assertEqual((200, {"removed": "walk.gpx"}), self.delete_json("/api/map/overlays/walk.gpx"))
+        self.assertEqual((200, {"overlays": []}), self.get_json("/api/map/overlays"))
+
+    def test_map_overlay_rejects_oversized_text(self):
+        code, payload = self.post_json("/api/map/overlays", {"name": "big.gpx", "text": " " * 20_000_001})
+        self.assertEqual((400, {"error": "overlay larger than 20 MB"}), (code, payload))
+
+    def test_geotag_route_validates_and_returns_counts(self):
+        self.assertEqual(201, self.post_json("/api/map/overlays", {"name": "walk.gpx", "text": self.MAP_GPX})[0])
+        good = {"query": "", "offset": "+02:00", "max_gap_minutes": 10, "dry_run": True, "replace": False}
+        code, result = self.post_json("/api/map/overlays/walk.gpx/geotag", good)
+        self.assertEqual(200, code, result)
+        self.assertEqual({"offset", "placed", "out_of_span", "skipped", "photo_ids", "dry_run"}, result.keys())
+        self.assertEqual(("+02:00", True, 0), (result["offset"], result["dry_run"], result["placed"]))
+        self.assertEqual(403, self.post_json("/api/map/overlays/walk.gpx/geotag", good, headers={"Origin": "http://evil"})[0])
+        for change, message in (({"offset": "2"}, "offset must look like +02:00"), ({"max_gap_minutes": 0}, None),
+                                ({"max_gap_minutes": 121}, None), ({"max_gap_minutes": True}, None), ({"max_gap_minutes": 1.5}, None),
+                                ({"dry_run": 1}, None), ({"replace": "no"}, None), ({"query": None}, None), ({"offset": 2}, None),
+                                ({"query": "bogus=1"}, "invalid filter: bogus")):
+            with self.subTest(change=change):
+                code, payload = self.post_json("/api/map/overlays/walk.gpx/geotag", good | change)
+                self.assertEqual(400, code, payload)
+                if message:
+                    self.assertEqual(message, payload["error"])
+        self.assertEqual(400, self.post_json("/api/map/overlays/walk.gpx/geotag", {k: v for k, v in good.items() if k != "replace"})[0])
+        self.assertEqual((400, {"error": "unknown overlay"}), self.post_json("/api/map/overlays/missing.gpx/geotag", good))
+        self.assertEqual(200, self.post_json("/api/map/overlays/walk.gpx/geotag", good | {"offset": None, "query": "show_rejected=1"})[0])
+
+    def test_map_responses_carry_no_paths(self):
+        self.write_base_map()
+        self.post_json("/api/map/overlays", {"name": "walk.gpx", "text": self.MAP_GPX})
+        (self.root / "library" / "map" / "overlays" / "broken.gpx").write_text("<html/>")
+        payloads = [self.get_json("/api/map/features?bbox=-90,-180,90,180&zoom=20")[1], self.get_json("/api/map/overlays")[1],
+                    self.get_json("/api/map/photos?show_rejected=1")[1],
+                    self.post_json("/api/map/overlays/walk.gpx/geotag", {"query": "", "offset": "+02:00", "max_gap_minutes": 10,
+                                                                         "dry_run": True, "replace": False})[1]]
+        self.assertEqual(2, len(payloads[1]["overlays"]))
+        for payload in payloads:
+            text = json.dumps(payload)
+            self.assertNotIn(str(self.root), text)
+            self.assertNotIn("/Users", text)
+            self.assertNotIn("/private", text)
 
     def test_import_include_cleared_must_be_a_bool_and_reaches_the_job(self):
         Image.new("RGB", (60, 40), (90, 20, 20)).save(self.root / "DSC0009.jpg")
