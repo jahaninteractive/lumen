@@ -105,7 +105,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .batch-rail h2 { margin-top: 0; font-size: 1rem; }
 .rail-header { position: sticky; top: 0; z-index: 1; display: grid; gap: .5rem; padding: 1.25rem 1.25rem .75rem; border-bottom: 1px solid var(--line); background: var(--charcoal); }
 .rail-header h2, .rail-header p { margin: 0; }
-main { min-width: 0; }
+main { min-width: 0; overflow-anchor: none; }  /* a panel that grows above the sheet must not drag the scroll back down with it */
 .main-top { position: sticky; top: 0; z-index: 1; background: var(--black); }
 .tab-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding-right: 1.25rem; border-bottom: 1px solid var(--line); }
 .tab-row .tab-rail { flex: 1 1 auto; border-bottom: 0; }

@@ -3176,9 +3176,13 @@ const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   if (tab.id === 'review-tab') loadRejectSuggestions();
   if (tab.id === 'assist-tab') loadVocabulary();
   if (tab.id === 'clear-tab') loadCleared();
-  // The map canvas grows from nothing once its panel shows, and that layout jump cuts the smooth scroll short
-  // in Safari, so the top is asserted again once the map has sized and drawn.
-  if (tab.id === 'map-tab') loadMap().finally(() => main.scrollTo({ top: 0 }));
+  if (tab.id === 'map-tab') {
+    // The map stage grows from nothing once its panel shows; browser scroll anchoring keeps the sheet the
+    // photographer was looking at in place by scrolling back down, so the top is asserted again after layout.
+    const top = () => main.scrollTo({ top: 0 });
+    window.requestAnimationFrame(() => window.requestAnimationFrame(top));
+    loadMap().finally(top);
+  }
 }, () => togglePanel());  // clicking the open tab again folds the panel away, and back
 
 function collapsePanel(collapsed) {
