@@ -58,3 +58,12 @@ Pillow only runtime dependency (`sqlite3`, `xml.etree`, `json`, `urllib`, `math`
 ## Left to the builder
 
 Zoom thresholds per layer; decimation algorithm; the exact clustering radius; the request shape for overlay upload; how "Shown frames" borrows the Review filter; thumbnail size on the map; canvas hit-testing; how the frame dialog's "Show on map" hands over its centre; test fixture content.
+
+## Round 2 (2026-11-01, after first use): cluster pop-out and earlier imports
+
+Decided in chat after the photographer loaded two game drives. Frames shot at one sighting share coordinates, so a cluster ("33", "7") never separates however far the map is zoomed, and the thumbs never appear. And frames from earlier imports, cleared from the catalog, are still wanted on the map.
+
+8. **Cluster pop-out.** Clicking a cluster fans its frames out into a ring of thumbs around the cluster's point, at most 12 (chosen by flag, then rating, then time), each a real frame hit (click opens it, Enter from the frames-in-view list too). The ring carries one native button, "Show all n in Review", which sets the Review filter to exactly those frames (new `ids` group filter, comma-separated photo ids, at most 200) and selects the Review tab. Clicking elsewhere, zooming or panning folds the ring. Double-click still zooms. Thumbs for lone frames appear from zoom 9 instead of 11.
+9. **Earlier imports.** A third Frames choice, "Everything ever imported", adds frames from every `<library>/trash/*/catalog.sqlite3` snapshot that carry a fix: deduplicated by fingerprint (newest snapshot wins), minus fingerprints in the live catalog. They draw as hollow cyan dots and cluster with the rest; their thumbs come from the trashed preview (`trash/<stamp>/files/previews/<fingerprint>.jpg`) through the existing `thumbnail_for`, served at `GET /thumb/cleared/<key>` where `key` is an opaque 16-hex digest of the fingerprint (the fingerprint itself never reaches the browser). A click shows a small card beside the dot (thumb, capture time, place, decision and rating, and the hint "Import its folder again with Include cleared to work on it"); it is not in the catalog, so no frame dialog. The response is `cleared` on `GET /api/map/photos?include_cleared=1`, with `key` in place of `id`.
+
+Non-goals this round: a "bring back" button (re-import already restores work by fingerprint); an export-time thumbnail store (the trash keeps the preview already, never pruned); showing cleared frames on the contact sheet.
