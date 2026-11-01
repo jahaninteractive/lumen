@@ -10,7 +10,13 @@ first run are in the [README](../README.md).
   the camera is a first-class source: shoot JPEG in the body for its own
   rendering (Creative Look, lens corrections, noise handling) and cull, crop,
   tag, and export it as usual; only the Develop tab, which drives the raw
-  decoder, stays raw-only.
+  decoder, stays raw-only. "Camera JPEG" means the Sony body's own file,
+  which carries no colour profile and is taken as sRGB; a JPEG the body wrote
+  in AdobeRGB is refused at export. Phone photos should come in as **HEIC**
+  (in Photos, File > Export > Export Unmodified Original): the HEIC keeps its
+  Display P3 profile and exports through darktable, which converts it to sRGB.
+  A JPEG exported from Photos carries the same Display P3 colour but can lack
+  the profile, and Lumen then refuses it as "not sRGB" rather than guess.
 - Embedded Sony RAW preview extraction through ExifTool, with `sips` and
   darktable fallbacks.
 - Deterministic 2-second burst grouping by camera and capture time.
