@@ -3171,11 +3171,14 @@ function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = nul
 
 const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   collapsePanel(false);  // choosing a tab always shows its panel
-  document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
+  const main = document.querySelector('#main-content');
+  main.scrollTo({ top: 0, behavior: scrollMotion() });  // the panel sits above the sheet
   if (tab.id === 'review-tab') loadRejectSuggestions();
   if (tab.id === 'assist-tab') loadVocabulary();
   if (tab.id === 'clear-tab') loadCleared();
-  if (tab.id === 'map-tab') loadMap();
+  // The map canvas grows from nothing once its panel shows, and that layout jump cuts the smooth scroll short
+  // in Safari, so the top is asserted again once the map has sized and drawn.
+  if (tab.id === 'map-tab') loadMap().finally(() => main.scrollTo({ top: 0 }));
 }, () => togglePanel());  // clicking the open tab again folds the panel away, and back
 
 function collapsePanel(collapsed) {
