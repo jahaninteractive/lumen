@@ -2437,7 +2437,8 @@ function viewBox() {
 }
 const kmPerPixel = () => 360 / worldSize(state.map.zoom) * Math.cos(state.map.center.lat * Math.PI / 180) * 111.32;
 
-async function loadMap() {
+// refit false keeps the centre and zoom, as after a geotag or a filter change made from the map.
+async function loadMap(refit = true) {
   const scope = document.querySelector('input[name="map-scope"]:checked')?.value || 'shown';
   state.map.scope = scope;
   try {
@@ -2449,10 +2450,16 @@ async function loadMap() {
     state.map.overlays = overlays.overlays;
   } catch (error) {
     mapStatus.textContent = error.message;
+    state.map.focus = null;
     return;
   }
+  if (!state.map.building) mapStatus.textContent = '';
   renderOverlays();
   renderGeotag();
+  if (!refit) {
+    drawMap();
+    return loadFeatures();
+  }
   state.map.fitPending = true;
   await fitMap();
 }
@@ -2686,20 +2693,28 @@ function drawScale() {
 }
 
 // The screen-reader path to the same frames: one button per frame drawn on its own.
+// A selection change only moves aria-current, so the focused button survives it.
 function renderFramesInView(photos) {
-  const key = photos.map(photo => `${photo.id}${photo.id === state.map.selected ? '*' : ''}`).join(',');
-  if (key === state.map.framesKey) return;
-  state.map.framesKey = key;
   const list = document.querySelector('#map-frames');
+  const key = photos.map(photo => photo.id).join(',');
+  if (key === state.map.framesKey) {
+    list.querySelectorAll('button').forEach(button => {
+      if (Number(button.dataset.id) === state.map.selected) button.setAttribute('aria-current', 'true');
+      else button.removeAttribute('aria-current');
+    });
+    return;
+  }
+  state.map.framesKey = key;
   list.replaceChildren(...photos.map(photo => {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary';
+    button.dataset.id = photo.id;
     const when = photo.captured_at ? new Date(photo.captured_at).toLocaleString() : 'No capture time';
     button.textContent = `${photo.place || 'Unnamed place'} · ${when}`;
     if (photo.id === state.map.selected) button.setAttribute('aria-current', 'true');
-    button.addEventListener('click', () => openMapFrame(photo.id));
+    button.addEventListener('click', () => openMapFrame(photo.id, button));
     item.append(button);
     return item;
   }));
@@ -2711,11 +2726,25 @@ function renderFramesInView(photos) {
   }
 }
 
-function openMapFrame(photoId) {
+// A frame the contact sheet does not hold narrows the Review filter to its capture day (and to rejects, for a reject),
+// so the loupe can open it; the map keeps its view. Closing the loupe returns focus to whatever opened it here.
+async function openMapFrame(photoId, invoker = mapCanvas) {
   state.map.selected = photoId;
   drawMap();
-  if (!photoById(photoId)) return announce('That frame is not on the contact sheet; change the Review filters to show it.');
+  if (!photoById(photoId)) {
+    const photo = state.map.photos.find(item => item.id === photoId);
+    if (!photo?.captured_at) return announce('That frame has no capture date, so the contact sheet cannot be filtered to it.');
+    const day = photo.captured_at.slice(0, 10);
+    try {
+      await applyFilters(new URLSearchParams({ date_from: day, date_to: day, ...(photo.decision === 'reject' ? { decision: 'reject' } : {}) }).toString());
+      await loadMap(false);
+    } catch (error) {
+      return announce(error.message);
+    }
+    if (!photoById(photoId)) return announce(`The contact sheet now shows ${day}, but that frame is not on it.`);
+  }
   openLoupe(photoId);
+  if (openView) viewReturn = invoker;
 }
 
 function zoomAbout(x, y, zoom) {
@@ -2872,17 +2901,21 @@ function renderGeotag() {
   if (timed.some(overlay => overlay.name === current)) select.value = current;
   if (timed.length) scheduleGeotagPreview();
 }
-function geotagBody(dryRun) {
+function geotagBody(dryRun) {  // the form follows the map's Frames radio
   const gap = Number(geotagField('gap').value);
   if (!Number.isInteger(gap) || gap < 1 || gap > 120) throw new Error('Max gap must be a whole number of minutes from 1 to 120.');
   const offset = geotagField('offset');
   if (!offset.checkValidity()) throw new Error('Camera clock offset must look like +02:00.');
-  return { query: location.search.slice(1), offset: offset.value.trim() || null, max_gap_minutes: gap, dry_run: dryRun,
+  return { query: state.map.scope === 'shown' ? location.search.slice(1) : '', offset: offset.value.trim() || null, max_gap_minutes: gap, dry_run: dryRun,
     replace: geotagField('replace').checked };
 }
-async function geotag(dryRun) {
-  const result = await post(`/api/map/overlays/${encodeURIComponent(geotagField('track').value)}/geotag`, geotagBody(dryRun));
-  geotagField('offset').value = result.offset;
+// Each call takes a ticket; only the newest writes the server's offset back, and only over the value it sent.
+let geotagRequest = 0;
+async function geotag(dryRun, ticket = ++geotagRequest) {
+  const body = geotagBody(dryRun);
+  const result = await post(`/api/map/overlays/${encodeURIComponent(geotagField('track').value)}/geotag`, body);
+  const offset = geotagField('offset');
+  if (ticket === geotagRequest && offset.value.trim() === (body.offset ?? '')) offset.value = result.offset;
   return result;
 }
 let geotagTimer = null;
@@ -2890,15 +2923,18 @@ function scheduleGeotagPreview() {
   window.clearTimeout(geotagTimer);
   geotagTimer = window.setTimeout(async () => {
     const preview = geotagField('preview');
+    const ticket = ++geotagRequest;
     try {
-      const result = await geotag(true);
-      preview.textContent = `${plural(result.placed, 'frame')} would be placed, ${result.out_of_span} outside the track`;
-    } catch (error) { preview.textContent = error.message; }
+      const result = await geotag(true, ticket);
+      if (ticket === geotagRequest) preview.textContent = `${plural(result.placed, 'frame')} would be placed, ${result.out_of_span} outside the track`;
+    } catch (error) {
+      if (ticket === geotagRequest) preview.textContent = error.message;
+    }
   }, 300);
 }
 
 wireMapInput();
-document.querySelectorAll('input[name="map-scope"]').forEach(radio => radio.addEventListener('change', loadMap));
+document.querySelectorAll('input[name="map-scope"]').forEach(radio => radio.addEventListener('change', () => loadMap()));
 document.querySelector('#map-overlay-file').addEventListener('change', async event => {
   await addOverlayFiles([...event.target.files]);
   event.target.value = '';
@@ -2914,13 +2950,11 @@ mapPanel.addEventListener('drop', event => {
 document.querySelector('#map-geotag-form').addEventListener('submit', async event => {
   event.preventDefault();
   const track = geotagField('track').value;
+  window.clearTimeout(geotagTimer);
   try {
-    const result = await geotag(false);
+    const result = await geotag(false);  // its ticket outdates any dry run still in flight
     announce(`Placed ${plural(result.placed, 'frame')} on ${track}; ${result.out_of_span} fell outside the track.`);
-    const photos = await request(`/api/map/photos${state.map.scope === 'shown' ? location.search : ''}`);
-    state.map.photos = photos.photos;
-    drawMap();
-    scheduleGeotagPreview();
+    await loadMap(false);  // reloads the frames and schedules a fresh preview
   } catch (error) { announce(error.message); }
 });
 
@@ -3155,11 +3189,13 @@ const paneMetrics = new Map();
 let comparing = [];  // photo ids shown left, right
 let openView = null;
 let viewOrigin = null;
+let viewReturn = null;  // an element outside the sheet (the map) that gets focus back when the view closes
 let syncing = null;  // the viewport whose scroll we just set; its echo is ignored
 
 function showView(dialog) {
   openView = dialog;
   viewOrigin = state.focusedId;
+  viewReturn = null;
   if (dialog.showModal) dialog.showModal();
   else dialog.hidden = false;
 }
@@ -3172,7 +3208,11 @@ function closeView() {
   comparing = [];
   if (dialog.close) dialog.close();
   else dialog.hidden = true;
-  focusFrame(viewOrigin);
+  const back = viewReturn;
+  viewReturn = null;
+  const rebuilt = back?.dataset.id && document.querySelector(`#map-frames button[data-id="${back.dataset.id}"]`);  // the list re-rendered meanwhile
+  if (back) (back.isConnected ? back : rebuilt || mapCanvas).focus();
+  else focusFrame(viewOrigin);
 }
 
 // Scale 1 of the stored preview in both compare panes, so zoom matches; preview_url carries the version query.
