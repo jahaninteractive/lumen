@@ -97,3 +97,9 @@ Goal: real screenshots in `docs/images/` wired into `README.md` and `docs/GUIDE.
 - **Waiting on:** a set of South Georgia `.ARW` frames from the photographer (penguins, ice landscapes): a few bursts of 5-10 near-identical frames for culling and the burst picker, one or two GPS-tagged scenes for Places, one under-exposed or flat-sky frame for a Develop before/after. Nothing in the set should be unwelcome on a public GitHub page.
 - **Plan:** import into a scratch library, run tagging and one burst critique against the loaded oMLX model, then drive the UI with the headless Chromium + stdlib CDP harness (no new dependency) to capture the contact sheet, frame view with burst advice, Crop, Develop, EXIF, Places, and the first-run card. Type any place name or caption wording the photographer wants shown rather than leaving it to the model.
 - **Trigger:** the photographer drops a folder path in the chat.
+
+## Map: cleared thumbs and trash snapshot reads
+
+Thumbs of cleared frames (`/thumb/cleared/<key>`) live in `<library>/cache/thumbs/`, so the next cleanup prunes them and the map rebuilds each from the trashed preview on demand. Trigger: the map is visibly slow to show cleared thumbs after a cleanup.
+
+The trash scan opens each `trash/*/catalog.sqlite3` with `mode=ro`; `immutable=1` would also skip SQLite's locking and journal checks. Trigger: a `-wal` or `-shm` file ever appears in the trash.

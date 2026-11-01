@@ -2450,7 +2450,7 @@ async function loadMap(refit = true) {
   foldMap();
   try {
     const [photos, overlays] = await Promise.all([
-      request(`/api/map/photos${{ shown: location.search, ever: '?include_cleared=1' }[scope] || ''}`),
+      request(`/api/map/photos${{ shown: location.search, ever: '?include_cleared=1&show_rejected=1' }[scope] || ''}`),
       request('/api/map/overlays'),
     ]);
     state.map.photos = [...photos.photos, ...photos.cleared.map(frame => ({ ...frame, cleared: true }))];
@@ -2687,7 +2687,9 @@ function drawFrame(context, photo, at, withThumb) {
     const [w, h] = [image.naturalWidth * scale, image.naturalHeight * scale];
     context.drawImage(image, at.x - w / 2, at.y - h / 2, w, h);
     context.strokeStyle = colour;
+    if (photo.cleared) context.setLineDash([4, 3]);  // a cleared thumb is framed dashed, as its dot is hollow
     context.strokeRect(at.x - w / 2, at.y - h / 2, w, h);
+    context.setLineDash([]);
     return { x: at.x, y: at.y, photos: [photo], radius: 24 };
   }
   context.beginPath();
@@ -2712,7 +2714,7 @@ function paintFan(context) {
   }
   const centre = toScreen(fan.at.lat, fan.at.lon);
   const shown = fan.members.slice(0, MAP_FAN_SIZE);
-  const radius = Math.max(56, MAP_FAN_SIZE * shown.length / 2);
+  const radius = Math.max(56, 8 * shown.length);  // 96 px at 12: slots about 50 px apart, so 48 px thumbs do not overlap
   const hits = shown.map((photo, index) => {
     const angle = -Math.PI / 2 + 2 * Math.PI * index / shown.length;
     const slot = { x: centre.x + radius * Math.cos(angle), y: centre.y + radius * Math.sin(angle) };
@@ -2750,6 +2752,7 @@ function fanOut(hit) {
   announce(`${plural(hit.photos.length, 'frame')} fanned out${live < hit.photos.length ? `, ${hit.photos.length - live} cleared` : ''}; they are in Frames in view.`);
 }
 function foldMap() {  // pan, zoom, a new scope or a click on empty map closes the fan and the card
+  if (mapCard.contains(document.activeElement)) mapCanvas.focus();
   state.map.fan = null;
   mapShowAll.hidden = true;
   mapCard.hidden = true;
@@ -2917,7 +2920,8 @@ function wireMapInput() {
   }, { passive: false });
   mapCanvas.addEventListener('dblclick', event => {
     const point = offset(event);
-    if (!mapHit(point.x, point.y)) zoomAbout(point.x, point.y, state.map.zoom + 1);
+    const hit = mapHit(point.x, point.y);  // empty map or a cluster zooms; a lone frame or a ring slot has opened already
+    if (!hit || hit.photos.length > 1) zoomAbout(point.x, point.y, state.map.zoom + (hit ? 2 : 1));
   });
   mapCanvas.addEventListener('keydown', event => {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -2927,7 +2931,7 @@ function wireMapInput() {
     else if (event.key === '+' || event.key === '=') zoomAbout(width / 2, height / 2, state.map.zoom + 1);
     else if (event.key === '-') zoomAbout(width / 2, height / 2, state.map.zoom - 1);
     else if (event.key === '0') fitMap();
-    else if (event.key === 'Escape' && state.map.fan) {
+    else if (event.key === 'Escape' && (state.map.fan || !mapCard.hidden)) {
       foldMap();
       drawMap();
     } else if (event.key === 'Enter') {
@@ -3055,6 +3059,7 @@ mapShowAll.addEventListener('click', async () => {
     return announce(error.message);
   }
   selectTab(document.querySelector('#review-tab'));
+  announce(`Review shows the ${plural(ids.length, 'frame')} from the map; Reset clears it.`);
 });
 document.querySelector('#map-card-close').addEventListener('click', closeMapCard);
 mapCard.addEventListener('keydown', event => {
