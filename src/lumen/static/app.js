@@ -2376,6 +2376,10 @@ const mapShowAll = document.querySelector('#map-show-all');
 const mapCard = document.querySelector('#map-card');
 const MAP_THUMB_ZOOM = 9;  // lone frames draw as thumbs from here in
 const MAP_FAN_SIZE = 12;
+// Best first wherever a cluster's frames are shown: rejects last, then flagged, rating desc, time.
+const byFanOrder = (a, b) => (a.decision === 'reject') - (b.decision === 'reject')
+  || (b.decision === 'flag') - (a.decision === 'flag') || (b.rating || 0) - (a.rating || 0)
+  || (a.captured_at || '~').localeCompare(b.captured_at || '~');
 const mapImages = new Map();  // photo id (or cleared key) -> Image, so a thumb loads once
 // Cleared frames from the trash sit in photos too, with `cleared: true` and `key` in place of `id`.
 state.map = { zoom: 2, center: { lat: 20, lon: 0 }, photos: [], features: [], overlays: [], selected: null, scope: 'shown',
@@ -2653,13 +2657,34 @@ function paintMap() {
   for (const cluster of clusters) {
     if (cluster.photos.length > 1) {
       const radius = Math.min(22, 10 + 3 * Math.log2(cluster.photos.length));
-      context.fillStyle = cluster.photos.some(photo => photo.id === state.map.selected) ? mapColour('amber') : mapColour('cyan');
-      context.beginPath();
-      context.arc(cluster.x, cluster.y, radius, 0, 2 * Math.PI);
-      context.fill();
+      const colour = cluster.photos.some(photo => photo.id === state.map.selected) ? mapColour('amber') : mapColour('cyan');
+      // From thumb zoom a cluster shows its best frame with the count as a corner badge; the disc until it loads.
+      const best = state.map.zoom >= MAP_THUMB_ZOOM ? [...cluster.photos].sort(byFanOrder)[0] : null;
+      const image = best ? thumbFor(best) : null;
+      let count = { x: cluster.x, y: cluster.y };
+      if (image) {
+        const scale = 48 / Math.max(image.naturalWidth, image.naturalHeight);
+        const [w, h] = [image.naturalWidth * scale, image.naturalHeight * scale];
+        context.drawImage(image, cluster.x - w / 2, cluster.y - h / 2, w, h);
+        context.strokeStyle = colour;
+        context.lineWidth = 2;
+        if (best.cleared) context.setLineDash([4, 3]);
+        context.strokeRect(cluster.x - w / 2, cluster.y - h / 2, w, h);
+        context.setLineDash([]);
+        count = { x: cluster.x + w / 2, y: cluster.y - h / 2 };
+        context.fillStyle = mapColour('amber');
+        context.beginPath();
+        context.arc(count.x, count.y, Math.max(9, context.measureText(String(cluster.photos.length)).width / 2 + 4), 0, 2 * Math.PI);
+        context.fill();
+      } else {
+        context.fillStyle = colour;
+        context.beginPath();
+        context.arc(cluster.x, cluster.y, radius, 0, 2 * Math.PI);
+        context.fill();
+      }
       context.fillStyle = mapColour('charcoal');
       context.textAlign = 'center';
-      context.fillText(String(cluster.photos.length), cluster.x, cluster.y);
+      context.fillText(String(cluster.photos.length), count.x, count.y);
       context.textAlign = 'start';
       state.map.hits.push({ ...cluster, radius });
       continue;
@@ -2742,8 +2767,6 @@ function paintFan(context) {
 }
 
 const MAP_DECISIONS = { flag: 'flagged', reject: 'rejected' };
-const byFanOrder = (a, b) => (b.decision === 'flag') - (a.decision === 'flag') || (b.rating || 0) - (a.rating || 0)
-  || (a.captured_at || '~').localeCompare(b.captured_at || '~');
 function fanOut(hit) {
   const [anchor] = hit.photos;  // a cluster sits at its first frame's point
   state.map.fan = { at: { lat: anchor.latitude, lon: anchor.longitude }, members: [...hit.photos].sort(byFanOrder) };
@@ -2794,7 +2817,8 @@ function drawScale() {
 
 // The screen-reader path to the same frames: one button per frame drawn on its own.
 // A selection change only moves aria-current, so the focused button survives it.
-function renderFramesInView(photos) {
+function renderFramesInView(frames) {
+  const photos = [...frames].sort(byFanOrder);  // before the key, so an unchanged set keeps its focused button
   const list = document.querySelector('#map-frames');
   const key = photos.map(mapKey).join(',');
   if (key === state.map.framesKey) {
