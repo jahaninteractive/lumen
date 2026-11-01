@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +54,22 @@ class CliTests(unittest.TestCase):
         with redirect_stdout(output):
             code = main(["--library", str(library_dir), *args, "--json"])
         return code, json.loads(output.getvalue())
+
+    def test_map_region_writes_into_the_library_and_prints_a_relative_path(self):
+        body = json.dumps({"elements": [{"type": "way", "tags": {"highway": "track"},
+                                         "geometry": [{"lat": -24.6, "lon": 26.1}, {"lat": -24.9, "lon": 26.5}]}]}).encode()
+        response = unittest.mock.MagicMock(status=200)
+        response.read.return_value = body
+        response.__enter__.return_value = response
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("lumen.mapdata.urllib.request.urlopen", return_value=response) as urlopen:
+            library_dir = Path(directory) / "library"
+            code, payload = self.run_json(library_dir, "map-region", "madikwe", "--bbox", "-24.95,26.05,-24.55,26.55")
+            self.assertTrue((library_dir / "map" / "regions" / "madikwe.geojson").is_file())
+            refused, error = self.run_json(library_dir, "map-region", "big", "--bbox", "-26,25,-23,27")
+        self.assertEqual((0, {"path": "map/regions/madikwe.geojson", "features": 1}), (code, payload))
+        self.assertEqual((2, {"error": "bounding box larger than 4 square degrees"}), (refused, error))
+        self.assertEqual(1, urlopen.call_count)
 
     def test_ingest_command_exit_code_follows_verification(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,15 +1,19 @@
 """Map layers from the photographer's files: GPX tracks and waypoints, GeoJSON features, and the geometry helpers
-that decide what is worth drawing at a zoom level."""
+that decide what is worth drawing at a zoom level. `fetch_region` is the one network call, made only when the
+photographer runs `lumen map-region`; the web server never calls it."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 GPX_NS = "{http://www.topografix.com/GPX/1/1}"
 # Below these zooms a kind is clutter (every road in a country at once); kinds not listed always draw.
@@ -399,3 +403,90 @@ class MapIndex:
     def summaries(self) -> list[dict]:
         return [{"name": path, "summary": json.loads(summary)}
                 for path, summary in self._db.execute("SELECT path, summary FROM sources ORDER BY path")]
+
+
+# Overpass regions
+
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Overpass is a shared public service; a bigger box is a country-sized query it will time out on anyway.
+MAX_REGION_SQUARE_DEGREES = 4
+# A closed way with one of these tags is an area; any other closed way (a ring road) stays a line.
+AREA_TAGS = ("natural", "boundary", "leisure")
+
+
+def overpass_query(south: float, west: float, north: float, east: float) -> str:
+    box = f"({south},{west},{north},{east})"
+    return ("[out:json][timeout:90];("
+            f'way["boundary"~"^(protected_area|national_park)$"]{box};'
+            f'relation["boundary"~"^(protected_area|national_park)$"]{box};'
+            f'way["leisure"="nature_reserve"]{box};'
+            f'relation["leisure"="nature_reserve"]{box};'
+            f'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|track)$"]{box};'
+            f'way["waterway"~"^(river|stream)$"]{box};'
+            f'way["natural"="water"]{box};'
+            ");out geom;")
+
+
+def _overpass_line(geometry) -> list[list[float]]:
+    return [[point["lon"], point["lat"]] for point in geometry or []]
+
+
+def overpass_to_geojson(payload: dict) -> dict:
+    """A FeatureCollection of an `out geom` answer: ways as lines (closed water, boundary or leisure ways as
+    polygons), relations as the MultiLineString of their outer members. Properties are the OSM tags plus `kind`
+    and `name`."""
+    features = []
+    for element in payload.get("elements") or []:
+        tags = element.get("tags") or {}
+        if element.get("type") == "way":
+            line = _overpass_line(element.get("geometry"))
+            if len(line) < 2:
+                continue
+            area = line[0] == line[-1] and (tags.get("natural") == "water" or "boundary" in tags or "leisure" in tags)
+            geometry = {"type": "Polygon", "coordinates": [line]} if area else {"type": "LineString", "coordinates": line}
+        elif element.get("type") == "relation":
+            lines = [_overpass_line(member["geometry"]) for member in element.get("members") or []
+                     if member.get("role") == "outer" and member.get("geometry")]
+            if not lines:
+                continue
+            geometry = {"type": "MultiLineString", "coordinates": lines}
+        else:
+            continue
+        properties = {**tags, "kind": _kind(tags, ""), "name": tags.get("name", "")}
+        features.append({"type": "Feature", "properties": properties, "geometry": geometry})
+    return {"type": "FeatureCollection", "features": features}
+
+
+def fetch_region(name: str, bbox: tuple[float, float, float, float], out_dir: Path, *, opener=None,
+                 timeout: float = 120.0) -> Path:
+    """Asks Overpass for the park, road and water detail inside `bbox` (south, west, north, east) and writes it to
+    `out_dir/<name>.geojson`. Raises ValueError for a bad name or box and RuntimeError when Overpass fails."""
+    south, west, north, east = bbox
+    if not (south < north and west < east):
+        raise ValueError("bounding box must be south,west,north,east with south < north and west < east")
+    if (north - south) * (east - west) > MAX_REGION_SQUARE_DEGREES:
+        raise ValueError("bounding box larger than 4 square degrees")
+    stem = Path(name).name.lstrip(".").removesuffix(".geojson")
+    if not stem:
+        raise ValueError("region name required")
+    request = urllib.request.Request(OVERPASS_URL, data=urlencode({"data": overpass_query(*bbox)}).encode(),
+                                     headers={"User-Agent": "Lumen"}, method="POST")
+    try:
+        with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
+            status = getattr(response, "status", None) or response.getcode()
+            body = response.read()
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise RuntimeError(f"Overpass answered {error.code}") from None
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"Overpass answered {error.reason}") from None
+    except OSError as error:  # a timeout or reset during the read is not wrapped in URLError
+        raise RuntimeError(f"Overpass answered {error.strerror or error or 'timed out'}") from None
+    if status != 200:
+        raise RuntimeError(f"Overpass answered {status}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / f"{stem}.geojson"
+    partial = target.with_name(target.name + ".part")
+    partial.write_text(json.dumps(overpass_to_geojson(json.loads(body))), encoding="utf-8")
+    partial.replace(target)
+    return target

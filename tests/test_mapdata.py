@@ -5,8 +5,11 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from lumen.mapdata import (KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, decimate, parse_geojson, parse_gpx, pixel_degrees,
-                           position_at)
+import urllib.error
+from urllib.parse import parse_qs
+
+from lumen.mapdata import (KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, decimate, fetch_region, overpass_query,
+                           overpass_to_geojson, parse_geojson, parse_gpx, pixel_degrees, position_at)
 
 HEADER = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="test">\n'
 
@@ -314,6 +317,111 @@ class MapIndexTests(unittest.TestCase):
         self.assertEqual(summaries["overlays/untimed.gpx"], {"features": 2, "tracks": 2, "waypoints": 0, "span": None})
         self.assertEqual(summaries["base/layer.geojson"],
                          {"features": len(LAYER["features"]), "tracks": 0, "waypoints": 0, "span": None})
+
+
+OVERPASS = {"elements": [
+    {"type": "way", "id": 1, "tags": {"natural": "water", "name": "Pan"},
+     "geometry": [{"lat": -24.7, "lon": 26.2}, {"lat": -24.7, "lon": 26.3}, {"lat": -24.8, "lon": 26.3},
+                  {"lat": -24.7, "lon": 26.2}]},
+    {"type": "way", "id": 2, "tags": {"highway": "track"},
+     "geometry": [{"lat": -24.6, "lon": 26.1}, {"lat": -24.9, "lon": 26.5}]},
+    {"type": "way", "id": 3, "tags": {"highway": "track"}, "geometry": [{"lat": -24.6, "lon": 26.1}]},
+    {"type": "relation", "id": 4, "tags": {"boundary": "protected_area", "name": "Madikwe"}, "members": [
+        {"type": "way", "role": "outer", "geometry": [{"lat": -24.6, "lon": 26.1}, {"lat": -24.6, "lon": 26.5}]},
+        {"type": "way", "role": "outer", "geometry": [{"lat": -24.6, "lon": 26.5}, {"lat": -24.9, "lon": 26.5}]},
+        {"type": "way", "role": "inner", "geometry": [{"lat": -24.7, "lon": 26.2}, {"lat": -24.8, "lon": 26.2}]},
+        {"type": "node", "role": "outer"},
+    ]},
+]}
+
+
+class FakeResponse:
+    def __init__(self, body: bytes, status: int = 200):
+        self.body, self.status = body, status
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class OverpassTests(unittest.TestCase):
+    def test_query_names_the_box_in_south_west_north_east_order(self):
+        query = overpass_query(-24.95, 26.05, -24.55, 26.55)
+        self.assertTrue(query.startswith("[out:json][timeout:90];(way[\"boundary\"~\"^(protected_area|national_park)$\"]"
+                                         "(-24.95,26.05,-24.55,26.55);"))
+        self.assertTrue(query.endswith('way["natural"="water"](-24.95,26.05,-24.55,26.55););out geom;'))
+        self.assertEqual(7, query.count("(-24.95,26.05,-24.55,26.55)"))
+
+    def test_geojson_from_ways_and_relations(self):
+        collection = overpass_to_geojson(OVERPASS)
+        self.assertEqual("FeatureCollection", collection["type"])
+        water, road, park = collection["features"]
+        self.assertEqual("Polygon", water["geometry"]["type"])
+        self.assertEqual([[[26.2, -24.7], [26.3, -24.7], [26.3, -24.8], [26.2, -24.7]]], water["geometry"]["coordinates"])
+        self.assertEqual({"natural": "water", "name": "Pan", "kind": "lake"}, water["properties"])
+        self.assertEqual(("LineString", "road", ""), (road["geometry"]["type"], road["properties"]["kind"], road["properties"]["name"]))
+        self.assertEqual("MultiLineString", park["geometry"]["type"])
+        self.assertEqual([[[26.1, -24.6], [26.5, -24.6]], [[26.5, -24.6], [26.5, -24.9]]], park["geometry"]["coordinates"])
+        self.assertEqual(("park", "Madikwe"), (park["properties"]["kind"], park["properties"]["name"]))
+        self.assertEqual(["lake", "road", "park"], [f.kind for f in parse_geojson(json.dumps(collection))])
+
+    def test_fetch_region_posts_the_query_and_writes_the_file(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append((request, timeout))
+            return FakeResponse(json.dumps(OVERPASS).encode())
+
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "regions"
+            path = fetch_region("../.madikwe", (-24.95, 26.05, -24.55, 26.55), out, opener=opener)
+            self.assertEqual(out / "madikwe.geojson", path)
+            self.assertEqual(3, len(json.loads(path.read_text())["features"]))
+            self.assertEqual(["madikwe.geojson"], [p.name for p in out.iterdir()])
+        request, timeout = requests[0]
+        self.assertEqual(("https://overpass-api.de/api/interpreter", "POST", "Lumen", 120.0),
+                         (request.full_url, request.get_method(), request.get_header("User-agent"), timeout))
+        query = parse_qs(request.data.decode())["data"][0]
+        self.assertIn("out geom", query)
+        self.assertIn("(-24.95,26.05,-24.55,26.55)", query)
+
+    def test_fetch_region_refuses_bad_boxes_and_names_without_asking(self):
+        def opener(request, timeout):
+            raise AssertionError("no request expected")
+
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            with self.assertRaisesRegex(ValueError, "bounding box larger than 4 square degrees"):
+                fetch_region("big", (-26.0, 25.0, -23.0, 27.0), out, opener=opener)
+            for bbox in ((-24.55, 26.05, -24.95, 26.55), (-24.95, 26.55, -24.55, 26.05)):
+                with self.assertRaises(ValueError):
+                    fetch_region("flip", bbox, out, opener=opener)
+            with self.assertRaisesRegex(ValueError, "region name required"):
+                fetch_region("..", (-24.95, 26.05, -24.55, 26.55), out, opener=opener)
+
+    def test_fetch_region_reports_http_and_network_failures(self):
+        def refused(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {}, None)
+
+        def offline(request, timeout):
+            raise urllib.error.URLError("timed out")
+
+        def reset(request, timeout):
+            raise ConnectionResetError(54, "Connection reset by peer")
+
+        cases = ((lambda request, timeout: FakeResponse(b"{}", 504), "Overpass answered 504"),
+                 (refused, "Overpass answered 429"), (offline, "Overpass answered timed out"),
+                 (reset, "Overpass answered Connection reset by peer"))
+        with tempfile.TemporaryDirectory() as directory:
+            for opener, message in cases:
+                with self.assertRaisesRegex(RuntimeError, message):
+                    fetch_region("madikwe", (-24.95, 26.05, -24.55, 26.55), Path(directory), opener=opener)
+            self.assertEqual([], list(Path(directory).iterdir()))
 
 
 if __name__ == "__main__":

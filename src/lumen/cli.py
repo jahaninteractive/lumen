@@ -16,6 +16,7 @@ from .config import Settings
 from .diagnostics import doctor_report
 from .digest import parse_day
 from .library import CleanupError, ExportRequest, Library, public_message
+from .mapdata import fetch_region
 from .pipelines import PipelineRegistry
 
 
@@ -147,6 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
     cleared = commands.add_parser("cleared", help="count frames cleared in an earlier session that are back in the catalog")
     cleared.add_argument("--remove", action="store_true", help="remove them with recoverable working files")
     cleared.add_argument("--json", action="store_true")
+
+    region = commands.add_parser("map-region", help="fetch park, road and water detail for a bounding box from Overpass")
+    region.add_argument("name")
+    region.add_argument("--bbox", required=True, help="south,west,north,east in decimal degrees")
+    region.add_argument("--json", action="store_true")
 
     siril = commands.add_parser("siril", help="run a reviewed Siril script from the managed outputs folder")
     siril.add_argument("script", type=Path)
@@ -374,6 +380,20 @@ def main(argv: list[str] | None = None) -> int:
             library.catalog.append_event(args.photo_id, "pipeline", asdict(result) | {"output": str(result.output)})
         _print(asdict(result) | {"output": str(result.output)}, args.json)
         return 0 if result.success else 2
+
+    if args.command == "map-region":
+        try:
+            bbox = tuple(float(value) for value in args.bbox.split(","))
+            if len(bbox) != 4:
+                raise ValueError("--bbox needs south,west,north,east")
+            path = fetch_region(args.name, bbox, settings.map_regions_dir)
+            payload = {"path": path.relative_to(settings.library_dir).as_posix(),
+                       "features": len(json.loads(path.read_text(encoding="utf-8"))["features"])}
+            code = 0
+        except (ValueError, OverflowError, OSError, RuntimeError) as error:
+            payload, code = {"error": str(error)}, 2
+        _print(payload, args.json)
+        return code
 
     if args.command == "siril":
         pipeline = PipelineRegistry().siril(settings.output_dir)
