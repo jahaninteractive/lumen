@@ -28,7 +28,7 @@ from lumen.pipelines import DarktablePipeline, JpegExportResult
 from PIL import ImageCms
 from lumen.analysis import RegionObservation, SubjectRegions
 from lumen.composition import CropRect
-from lumen.domain import DevelopSettings, PhotoEdit
+from lumen.domain import DevelopSettings, Photo, PhotoEdit
 from lumen.omlx import DevelopAdvice
 from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, RejectReview, TagResult
@@ -3694,6 +3694,65 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(1, everything["unfixed"])
         rejects = library.map_photos(GroupFilters(decision="reject"))
         self.assertEqual(([photos["d2"]], 0), ([photo["id"] for photo in rejects["photos"]], rejects["unfixed"]))
+
+    def _trash_snapshot(self, library, stamp, frames):
+        """A cleanup snapshot holding `frames` ({fingerprint: (latitude, rating, with_preview)}), as cleanup leaves it."""
+        from lumen.catalog import Catalog
+        folder = library.settings.trash_dir / stamp
+        (folder / "files" / "previews").mkdir(parents=True)
+        snapshot = Catalog(folder / "catalog.sqlite3")
+        for fingerprint, (latitude, rating, with_preview) in frames.items():
+            photo_id = snapshot.upsert_photo(Photo(path=f"/gone/{fingerprint}.ARW", fingerprint=fingerprint,
+                                                   captured_at=datetime(2026, 10, 1, 9, tzinfo=timezone.utc), camera_id="A"))
+            snapshot.set_rating(photo_id, rating)
+            if latitude is not None:
+                snapshot.update_location(photo_id, latitude=latitude, longitude=20.0, altitude=None)
+            if with_preview:
+                Image.new("RGB", (120, 90), "teal").save(folder / "files" / "previews" / f"{fingerprint}.jpg")
+        snapshot.close()
+
+    @staticmethod
+    def _cleared_key(fingerprint):
+        import hashlib
+        return hashlib.sha256(fingerprint.encode()).hexdigest()[:16]
+
+    def test_map_cleared_without_preview_has_no_thumb(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            self.assertEqual([], library.map_cleared(), "no trash, nothing cleared")
+            self._trash_snapshot(library, "20261020T080000Z-1", {"f" * 16: (-33.0, 2, False), "g" * 16: (-34.0, 3, True),
+                                                                 "h" * 16: (None, 5, True)})
+            (library.settings.trash_dir / "20261021T080000Z-1").mkdir()
+            (library.settings.trash_dir / "20261021T080000Z-1" / "catalog.sqlite3").write_text("not a database")
+            cleared = library.map_cleared()
+            self.assertEqual([{"key": self._cleared_key("f" * 16), "latitude": -33.0, "longitude": 20.0,
+                               "captured_at": "2026-10-01T09:00:00+00:00", "place": None, "decision": "none", "rating": 2,
+                               "thumb_url": None},
+                              {"key": self._cleared_key("g" * 16), "latitude": -34.0, "longitude": 20.0,
+                               "captured_at": "2026-10-01T09:00:00+00:00", "place": None, "decision": "none", "rating": 3,
+                               "thumb_url": f"/thumb/cleared/{self._cleared_key('g' * 16)}"}],
+                             sorted(cleared, key=lambda row: row["latitude"], reverse=True),
+                             "h has no fix; the unreadable snapshot is skipped")
+            self.assertIsNone(library.cleared_thumb(self._cleared_key("f" * 16)))
+            self.assertIsNone(library.cleared_thumb("0" * 16))
+            thumb = library.cleared_thumb(self._cleared_key("g" * 16))
+            self.assertEqual(library.settings.cache_dir / "thumbs", thumb.parent)
+            self.assertTrue(thumb.is_file())
+
+    def test_map_cleared_dedupes_by_fingerprint_newest_wins(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            self._trash_snapshot(library, "20261020T080000Z-1", {"f" * 16: (-33.0, 1, True)})
+            self._trash_snapshot(library, "20261025T080000Z-1", {"f" * 16: (-33.0, 4, False)})
+            self.assertEqual([(4, None)], [(row["rating"], row["thumb_url"]) for row in library.map_cleared()],
+                             "the newest snapshot's row wins, preview and all")
+            self.assertIsNone(library.cleared_thumb(self._cleared_key("f" * 16)))
+
+    def test_map_cleared_skips_frames_back_in_the_catalog(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            live = library.catalog.list_photos()[0].fingerprint
+            self._trash_snapshot(library, "20261020T080000Z-1", {live: (-33.0, 1, True), "f" * 16: (-34.0, 1, True)})
+            self.assertEqual([self._cleared_key("f" * 16)], [row["key"] for row in library.map_cleared()])
+            self.assertIsNone(library.cleared_thumb(self._cleared_key(live)))
 
     def test_geotag_dry_run_counts_and_writes_nothing(self):
         library, photos = self._map_library({"d0": "2026:10:22 08:00:05", "d1": "2026:10:22 08:05:00",

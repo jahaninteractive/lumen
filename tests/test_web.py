@@ -199,9 +199,51 @@ class WebTests(unittest.TestCase):
             self.assertEqual((200, {"building": True}), self.get_json("/api/map/features?bbox=-35,17,-32,20&zoom=8"))
 
     def test_map_photos_with_no_fixes_counts_the_unfixed_frame(self):
-        self.assertEqual((200, {"photos": [], "count": 0, "unfixed": 1}), self.get_json("/api/map/photos"))
-        self.assertEqual((200, {"photos": [], "count": 0, "unfixed": 1}), self.get_json("/api/map/photos?show_rejected=1"))
+        self.assertEqual((200, {"photos": [], "count": 0, "unfixed": 1, "cleared": []}), self.get_json("/api/map/photos"))
+        self.assertEqual((200, {"photos": [], "count": 0, "unfixed": 1, "cleared": []}),
+                         self.get_json("/api/map/photos?show_rejected=1"))
         self.assertEqual(400, self.get_json("/api/map/photos?bogus=1")[0])
+
+    def test_map_photos_ids_filter_and_its_400s(self):
+        self.assertEqual(1, self.get_json("/api/map/photos?ids=1")[1]["unfixed"])
+        self.assertEqual(0, self.get_json("/api/map/photos?ids=2,3")[1]["unfixed"])
+        for bad in ("x", "1,1", "1,,2", "0", "-1", "1.5", "%201", "01", "1" * 19, ",".join(str(n) for n in range(1, 202))):
+            with self.subTest(ids=bad):
+                self.assertEqual((400, {"error": "invalid filter: ids"}), self.get_json(f"/api/map/photos?ids={bad}"))
+        for bad in ("0", "yes", "", "1&include_cleared=1"):
+            with self.subTest(include_cleared=bad):
+                self.assertEqual((400, {"error": "invalid filter: include_cleared"}),
+                                 self.get_json(f"/api/map/photos?include_cleared={bad}"))
+
+    def test_map_photos_include_cleared_and_its_thumb(self):
+        import hashlib
+        from lumen.catalog import Catalog
+        from lumen.domain import Photo
+        folder = self.root / "library" / "trash" / "20261020T080000Z-1"
+        (folder / "files" / "previews").mkdir(parents=True)
+        snapshot = Catalog(folder / "catalog.sqlite3")
+        photo_id = snapshot.upsert_photo(Photo(path=str(self.root / "gone.ARW"), fingerprint="ab" * 32, captured_at=None, camera_id="A"))
+        snapshot.update_location(photo_id, latitude=-33.0, longitude=18.0, altitude=None)
+        snapshot.close()
+        Image.new("RGB", (120, 90), "teal").save(folder / "files" / "previews" / f"{'ab' * 32}.jpg")
+        key = hashlib.sha256(("ab" * 32).encode()).hexdigest()[:16]
+        self.assertEqual([], self.get_json("/api/map/photos")[1]["cleared"])
+        code, payload = self.get_json("/api/map/photos?include_cleared=1&show_rejected=1")
+        self.assertEqual(200, code, payload)
+        self.assertEqual([{"key": key, "latitude": -33.0, "longitude": 18.0, "captured_at": None, "place": None,
+                           "decision": "none", "rating": 0, "thumb_url": f"/thumb/cleared/{key}"}], payload["cleared"])
+        text = json.dumps(payload)
+        for secret in ("ab" * 32, str(self.root), "20261020T080000Z", "trash"):
+            self.assertNotIn(secret, text)
+        with urllib.request.urlopen(self.base + f"/thumb/cleared/{key}", timeout=3) as response:
+            self.assertEqual(("image/jpeg", "public, max-age=86400"),
+                             (response.headers["Content-Type"], response.headers["Cache-Control"]))
+            self.assertEqual("JPEG", Image.open(BytesIO(response.read())).format)
+        for bad in ("0" * 16, key[:15], key + "0", key.upper(), "../catalog.sqlite3"):
+            with self.subTest(key=bad), self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(self.base + f"/thumb/cleared/{bad}", timeout=3)
+            self.assertEqual(404, caught.exception.code)
+            caught.exception.close()
 
     def test_map_overlay_round_trip_and_cross_origin_refusal(self):
         body = {"name": "walk.gpx", "text": self.MAP_GPX}

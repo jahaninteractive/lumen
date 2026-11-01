@@ -38,7 +38,7 @@ from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
 from .rawdevelop import DevelopError, describe_histogram, render_raw
 from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_cache, prune_thumbnails, read_image_dimensions,
-                       read_metadata)
+                       read_metadata, thumbnail_for)
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
 from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywords, load_blocked, load_vocabulary, match_keywords
@@ -173,6 +173,7 @@ class Library:
         self._owns_runner = job_runner is None
         self._places: PlaceIndex | None = None
         self._map_index: MapIndex | None = None
+        self._cleared: dict[str, tuple[dict, Path | None]] | None = None  # map_cleared by key, with each preview
 
     @property
     def job_runner(self) -> LocalJobRunner:
@@ -335,6 +336,42 @@ class Library:
                    "decision": photo.decision, "rating": photo.rating, "thumb_url": f"/thumb/{photo.id}"}
                   for photo in matched if photo.latitude is not None and photo.longitude is not None]
         return {"photos": photos, "unfixed": len(matched) - len(photos)}
+
+    def map_cleared(self) -> list[dict]:
+        """Frames with a fix that cleanups removed and no import has brought back, read from every trash snapshot
+        (newest wins per fingerprint). Keyed by an opaque digest so no fingerprint or path reaches the browser."""
+        live = {row[0] for row in self.catalog.connection.execute("SELECT fingerprint FROM photos")}
+        seen, cleared = set(live), {}
+        for path in sorted(self.settings.trash_dir.glob("*/catalog.sqlite3"), reverse=True):
+            try:
+                with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as snapshot:
+                    snapshot.row_factory = sqlite3.Row
+                    rows = snapshot.execute("SELECT fingerprint, latitude, longitude, captured_at, place, decision, rating"
+                                            " FROM photos ORDER BY id").fetchall()
+            except sqlite3.Error:
+                continue  # an unreadable snapshot is skipped, as _restore_cleared does
+            for row in rows:
+                fingerprint = row["fingerprint"]
+                if fingerprint in seen or not isinstance(fingerprint, str) or not re.fullmatch(r"[\w-]+", fingerprint):
+                    continue
+                seen.add(fingerprint)
+                if row["latitude"] is None or row["longitude"] is None:
+                    continue
+                key = hashlib.sha256(fingerprint.encode()).hexdigest()[:16]
+                preview = path.parent / "files" / "previews" / f"{fingerprint}.jpg"
+                preview = preview if preview.is_file() else None
+                cleared[key] = ({"key": key, "latitude": row["latitude"], "longitude": row["longitude"],
+                                 "captured_at": row["captured_at"], "place": row["place"], "decision": row["decision"],
+                                 "rating": row["rating"], "thumb_url": f"/thumb/cleared/{key}" if preview else None}, preview)
+        self._cleared = cleared
+        return [frame for frame, _ in cleared.values()]
+
+    def cleared_thumb(self, key: str) -> Path | None:
+        """The cached thumbnail of a cleared frame's trashed preview, or None for an unknown key or no preview."""
+        if self._cleared is None:
+            self.map_cleared()
+        preview = self._cleared.get(key, (None, None))[1]
+        return thumbnail_for(preview, self.settings.cache_dir / "thumbs") if preview else None
 
     def list_overlays(self) -> list[dict]:
         with self._mutation():

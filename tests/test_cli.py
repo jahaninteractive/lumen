@@ -356,6 +356,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(["a1", "b2"], shown("--tagged"))
             self.assertEqual(["b2"], shown("--text", "heron"))
             self.assertEqual(["a1", "a2"], shown("--camera", "A", "--keepers", "--from", "2026-10-21"))
+            self.assertEqual(["a1", "b2"], shown("--ids", f"{ids['a1']},{ids['b2']},{ids['a3']}"))
+            self.assertEqual((2, {"error": "invalid filter: ids"}), self.run_json(library_dir, "groups", "--ids", "1,1"))
             code, payload = self.run_json(library_dir, "groups", "--from", "2026-10-22", "--to", "2026-10-21")
             self.assertEqual((2, {"error": "invalid filter: date_to"}), (code, payload))
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

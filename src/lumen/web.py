@@ -81,6 +81,10 @@ def parse_group_filters(query: str) -> GroupFilters:
             if value not in {"0", "1"}:
                 raise ValueError(f"invalid filter: {key}")
             values[key] = value == "1"
+        elif key == "ids":  # a map cluster's frames; GroupFilters checks distinct and the count
+            if not re.fullmatch(r"[1-9]\d{0,17}(,[1-9]\d{0,17})*", value):
+                raise ValueError("invalid filter: ids")
+            values[key] = tuple(int(item) for item in value.split(","))
         elif key == "min_rating":
             if not re.fullmatch(r"[0-5]", value):
                 raise ValueError("invalid filter: min_rating")
@@ -347,9 +351,14 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         if path == "/api/map/overlays":
                             self._send_json({"overlays": library.list_overlays()})
                         else:
-                            frames = library.map_photos(parse_group_filters(urlparse(self.path).query))
+                            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                            include_cleared = query.pop("include_cleared", None)
+                            if include_cleared not in (None, ["1"]):
+                                raise ValueError("invalid filter: include_cleared")
+                            frames = library.map_photos(parse_group_filters(urlencode(query, doseq=True)))
                             self._send_json({"photos": frames["photos"], "count": len(frames["photos"]),
-                                             "unfixed": frames["unfixed"]})
+                                             "unfixed": frames["unfixed"],
+                                             "cleared": library.map_cleared() if include_cleared else []})
                 except (ValueError, OSError) as error:
                     self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -482,6 +491,18 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                                     HTTPStatus.SERVICE_UNAVAILABLE if offline else HTTPStatus.NOT_FOUND)
                     return
                 self._send_bytes(full.read_bytes(), "image/jpeg", cache=True)
+                return
+            match = re.fullmatch(r"/thumb/cleared/([0-9a-f]{16})", path)
+            if match:  # a frame cleared from the catalog, drawn on the map from its trashed preview
+                try:
+                    with Library(settings) as library:
+                        thumb = library.cleared_thumb(match.group(1))
+                except (OSError, ValueError):
+                    thumb = None
+                if not thumb:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                self._send_bytes(thumb.read_bytes(), "image/jpeg", cache=True)
                 return
             match = re.fullmatch(r"/(preview|thumb)/(\d+)", path)
             if match:

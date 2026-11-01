@@ -192,6 +192,8 @@ def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--export-failed", dest="export_failed_only", action="store_true", help="only frames whose last export failed")
     parser.add_argument("--text", help="match tag descriptions or subjects")
     parser.add_argument("--show-rejected", action="store_true")
+    parser.add_argument("--ids", type=lambda value: tuple(int(item) for item in value.split(",")), metavar="ID,ID",
+                        help="only these frames (at most 200)")
 
 
 def serve_settings(settings: Settings) -> Settings:

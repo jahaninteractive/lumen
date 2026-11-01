@@ -754,6 +754,18 @@ class CatalogTests(unittest.TestCase):
             with self.subTest(invalid=fields), self.assertRaisesRegex(ValueError, "^invalid filter: "):
                 GroupFilters(**fields)
 
+    def test_ids_filter_narrows_groups(self):
+        ids, _ = seed_filter_photos(self.catalog)
+        names = {photo_id: name for name, photo_id in ids.items()}
+        shown = lambda filters: sorted(names[p["id"]] for g in self.catalog.list_groups(filters) for p in g["photos"])
+        self.assertEqual(["a1", "b2"], shown(GroupFilters(ids=(ids["a1"], ids["b2"], ids["a3"]))), "rejects stay hidden by default")
+        self.assertEqual(["a1", "a3"], shown(GroupFilters(ids=(ids["a1"], ids["a3"]), show_rejected=True)))
+        self.assertEqual([], shown(GroupFilters(ids=(9999,))))
+        for bad in ((), (1, 1), (0,), (-2,), (True,), ("1",), [1], tuple(range(1, 202))):
+            with self.subTest(ids=bad), self.assertRaisesRegex(ValueError, "^invalid filter: ids$"):
+                GroupFilters(ids=bad)
+        GroupFilters(ids=tuple(range(1, 201)))
+
     def test_keepers_only_filter_matches_library_keeper_definition(self):
         with Library(Settings(library_dir=Path(self.tmp.name) / "library")) as library:
             ids, groups = seed_filter_photos(library.catalog)

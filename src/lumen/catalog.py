@@ -28,6 +28,9 @@ _MIGRATIONS = {
 }
 
 
+MAX_ID_FILTER = 200
+
+
 @dataclass(frozen=True)
 class GroupFilters:
     """Contact-sheet filters; every condition is ANDed in SQL. Invalid values raise ValueError("invalid filter: <field>")."""
@@ -41,6 +44,7 @@ class GroupFilters:
     export_failed_only: bool = False
     text: str | None = None
     show_rejected: bool = False
+    ids: tuple[int, ...] | None = None  # exactly these frames (a map cluster), still ANDed with the rest
 
     def __post_init__(self) -> None:
         for name in ("date_from", "date_to"):
@@ -61,6 +65,10 @@ class GroupFilters:
         for name in ("keepers_only", "tagged_only", "export_failed_only", "show_rejected"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"invalid filter: {name}")
+        if self.ids is not None and not (type(self.ids) is tuple and 0 < len(self.ids) <= MAX_ID_FILTER
+                                         and len(set(self.ids)) == len(self.ids)
+                                         and all(type(i) is int and i > 0 for i in self.ids)):
+            raise ValueError("invalid filter: ids")
 
     def where(self) -> tuple[str, list[Any]]:
         """SQL conditions over photos `p` joined to photo_groups `g`; values are always bound parameters."""
@@ -79,6 +87,9 @@ class GroupFilters:
             params.append(self.decision)
         elif not self.show_rejected:
             conditions.append("p.decision != 'reject'")
+        if self.ids:
+            conditions.append(f"p.id IN ({','.join('?' * len(self.ids))})")
+            params.extend(self.ids)
         if self.min_rating:
             conditions.append("p.rating >= ?")
             params.append(self.min_rating)
