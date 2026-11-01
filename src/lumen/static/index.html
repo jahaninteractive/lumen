@@ -40,6 +40,7 @@
           <button type="button" id="review-tab" role="tab" aria-controls="review-panel" aria-selected="false" tabindex="-1">Review</button>
           <button type="button" id="assist-tab" role="tab" aria-controls="assist-panel" aria-selected="false" tabindex="-1">Assist</button>
           <button type="button" id="astro-tab" role="tab" aria-controls="astro-panel" aria-selected="false" tabindex="-1">Astro</button>
+          <button type="button" id="map-tab" role="tab" aria-controls="map-panel" aria-selected="false" tabindex="-1">Map</button>
           <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
         </div>
@@ -206,6 +207,35 @@
           <p id="astro-status" role="status" aria-live="polite"></p>
           <div id="astro-paths" class="recovery" aria-label="Managed job files"></div>
           <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
+        </section>
+        <section id="map-panel" role="tabpanel" aria-labelledby="map-tab" tabindex="0" hidden>
+          <h2>Where the frames were taken</h2>
+          <p class="lead">Frames with a position on an offline map, with your GPS tracks and waypoints over it. Drop .gpx or .geojson files anywhere on this panel.</p>
+          <div class="map-layout">
+            <div class="map-stage">
+              <canvas id="map-canvas" role="img" tabindex="0" aria-label="Map"></canvas>
+              <p id="map-scale" class="quiet" aria-hidden="true"></p>
+            </div>
+            <aside class="map-side">
+              <fieldset><legend>Frames</legend>
+                <label><input type="radio" name="map-scope" value="shown" checked> Shown frames</label>
+                <label><input type="radio" name="map-scope" value="all"> Whole catalog</label>
+              </fieldset>
+              <p id="map-status" role="status" aria-live="polite"></p>
+              <section><h3>Overlays</h3><ul id="map-overlays"></ul>
+                <label>Add GPX or GeoJSON <input type="file" id="map-overlay-file" accept=".gpx,.geojson" multiple></label></section>
+              <section id="map-geotag" hidden><h3>Place frames on a track</h3>
+                <form id="map-geotag-form">
+                  <label>Track <select id="map-geotag-track"></select></label>
+                  <label>Camera clock offset <input id="map-geotag-offset" pattern="[+-]\d\d:\d\d" placeholder="+02:00"></label>
+                  <label>Max gap (minutes) <input id="map-geotag-gap" type="number" min="1" max="120" value="10"></label>
+                  <label><input type="checkbox" id="map-geotag-replace"> Replace positions typed earlier</label>
+                  <p id="map-geotag-preview" class="quiet"></p>
+                  <button type="submit">Place frames</button>
+                </form></section>
+              <section><h3>Frames in view</h3><ul id="map-frames"></ul></section>
+            </aside>
+          </div>
         </section>
         <section id="export-panel" role="tabpanel" aria-labelledby="export-tab" tabindex="0" hidden>
           <h2>Finish as JPEG</h2>

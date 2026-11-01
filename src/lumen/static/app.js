@@ -705,7 +705,15 @@ function locationLine(photo, record) {
   link.target = '_blank';
   link.rel = 'noopener';
   link.textContent = 'Open in Apple Maps';
-  return [line, link, ...placeEditor(photo, record), ...(record.location_typed ? positionEditor(photo, record) : [])];
+  const onMap = document.createElement('a');
+  onMap.href = '#map';
+  onMap.id = 'show-on-map';
+  onMap.textContent = 'Show on map';
+  onMap.addEventListener('click', event => {
+    event.preventDefault();
+    showOnMap(photo, record);
+  });
+  return [line, link, onMap, ...placeEditor(photo, record), ...(record.location_typed ? positionEditor(photo, record) : [])];
 }
 
 // The photographer names the place for this frame, its burst, or every frame inside a radius they set; remembering adds it to the local index at this GPS fix.
@@ -2359,6 +2367,572 @@ function updateWorkflow() {
   }
 }
 
+// Map tab: Web Mercator over the offline base map, frames as dots or clusters, overlays and geotagging beside it.
+const mapCanvas = document.querySelector('#map-canvas');
+const mapStatus = document.querySelector('#map-status');
+const MAP_MAX_LAT = 85.0511;
+const MAP_ZOOM = { min: 1, max: 18 };
+const mapImages = new Map();  // photo id -> Image, so a thumb loads once
+state.map = { zoom: 2, center: { lat: 20, lon: 0 }, photos: [], features: [], overlays: [], selected: null, scope: 'shown',
+  focus: null, fitPending: false, hits: [], framesKey: '', drag: null, featureRequest: 0, building: false };
+
+const worldSize = zoom => 256 * 2 ** zoom;
+function project(lat, lon, zoom) {
+  const size = worldSize(zoom);
+  const sin = Math.sin(Math.max(-MAP_MAX_LAT, Math.min(MAP_MAX_LAT, lat)) * Math.PI / 180);
+  return { x: (lon + 180) / 360 * size, y: (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * size };
+}
+function unproject(x, y, zoom) {
+  const size = worldSize(zoom);
+  const lon = ((x / size * 360) % 360 + 360) % 360 - 180;  // wrapped into -180..180
+  const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / size))) * 180 / Math.PI;
+  return { lat, lon };
+}
+function mapSize() {
+  return { width: mapCanvas.clientWidth, height: mapCanvas.clientHeight };
+}
+const clampZoom = zoom => Math.max(MAP_ZOOM.min, Math.min(MAP_ZOOM.max, zoom));
+
+// ponytail: a set of points straddling 180 degrees fits the long way round; unwrap the longitudes if that ever matters.
+function fitBounds(points, padding = 0.1) {
+  const { width, height } = mapSize();
+  if (!width || !height) return false;
+  if (!points.length) {
+    Object.assign(state.map, { center: { lat: 20, lon: 0 }, zoom: clampZoom(Math.log2(width / 256)) });
+    return true;
+  }
+  const lats = points.map(point => point.lat);
+  const lons = points.map(point => point.lon);
+  const corner = project(Math.max(...lats), Math.min(...lons), 0);
+  const opposite = project(Math.min(...lats), Math.max(...lons), 0);
+  const span = { x: opposite.x - corner.x, y: opposite.y - corner.y };
+  const usable = 1 - 2 * padding;
+  const zoom = span.x || span.y
+    ? Math.log2(Math.min(span.x ? width * usable / span.x : Infinity, span.y ? height * usable / span.y : Infinity))
+    : 12;
+  state.map.zoom = clampZoom(Math.min(zoom, 15));
+  state.map.center = unproject((corner.x + opposite.x) / 2, (corner.y + opposite.y) / 2, 0);
+  return true;
+}
+
+// A world x is drawn at whichever copy of the world lies nearest `near`, so the view crosses 180 degrees cleanly.
+function toScreen(lat, lon, near = null) {
+  const { width, height } = mapSize();
+  const size = worldSize(state.map.zoom);
+  const centre = project(state.map.center.lat, state.map.center.lon, state.map.zoom);
+  const point = project(lat, lon, state.map.zoom);
+  let x = point.x - centre.x + width / 2;
+  const target = near ?? width / 2;
+  x += Math.round((target - x) / size) * size;
+  return { x, y: point.y - centre.y + height / 2 };
+}
+function viewBox() {
+  const { width, height } = mapSize();
+  const { zoom } = state.map;
+  const centre = project(state.map.center.lat, state.map.center.lon, zoom);
+  const north = unproject(centre.x, Math.max(0, centre.y - height / 2), zoom).lat;
+  const south = unproject(centre.x, Math.min(worldSize(zoom), centre.y + height / 2), zoom).lat;
+  if (width >= worldSize(zoom)) return { south, west: -180, north, east: 180 };
+  return { south, north, west: unproject(centre.x - width / 2, 0, zoom).lon, east: unproject(centre.x + width / 2, 0, zoom).lon };
+}
+const kmPerPixel = () => 360 / worldSize(state.map.zoom) * Math.cos(state.map.center.lat * Math.PI / 180) * 111.32;
+
+async function loadMap() {
+  const scope = document.querySelector('input[name="map-scope"]:checked')?.value || 'shown';
+  state.map.scope = scope;
+  try {
+    const [photos, overlays] = await Promise.all([
+      request(`/api/map/photos${scope === 'shown' ? location.search : ''}`),
+      request('/api/map/overlays'),
+    ]);
+    state.map.photos = photos.photos;
+    state.map.overlays = overlays.overlays;
+  } catch (error) {
+    mapStatus.textContent = error.message;
+    return;
+  }
+  renderOverlays();
+  renderGeotag();
+  state.map.fitPending = true;
+  await fitMap();
+}
+
+// The frame asked for, else the frames, else the overlays' tracks and waypoints, else the world.
+async function fitMap() {
+  if (!mapSize().width) return;  // the panel is folded; the resize that unfolds it fits
+  state.map.fitPending = false;
+  const { focus } = state.map;
+  if (focus) {
+    Object.assign(state.map, { center: focus, zoom: 12, focus: null });
+  } else if (state.map.photos.length) {
+    fitBounds(state.map.photos.map(photo => ({ lat: photo.latitude, lon: photo.longitude })));
+  } else {
+    let points = [];
+    if (state.map.overlays.some(overlay => overlay.tracks || overlay.waypoints)) {
+      try {
+        const world = await request('/api/map/features?bbox=-85,-180,85,180&zoom=1');
+        points = (world.features || []).filter(feature => ['track', 'waypoint'].includes(feature.kind))
+          .flatMap(feature => geometryPoints(feature.geometry));
+      } catch { /* the world view below still draws */ }
+    }
+    fitBounds(points);
+  }
+  drawMap();
+  loadFeatures();
+}
+function geometryPoints(geometry) {
+  const flat = coordinates => (typeof coordinates[0] === 'number' ? [{ lon: coordinates[0], lat: coordinates[1] }] : coordinates.flatMap(flat));
+  return flat(geometry.coordinates);
+}
+
+let featureTimer = null;
+function scheduleFeatures() {
+  window.clearTimeout(featureTimer);
+  featureTimer = window.setTimeout(loadFeatures, 150);
+}
+// A newer viewport wins; an index still building answers {building: true} and is asked again in two seconds.
+async function loadFeatures() {
+  window.clearTimeout(featureTimer);
+  if (!mapSize().width) return;
+  const requestId = ++state.map.featureRequest;
+  const box = viewBox();
+  const bbox = [box.south, box.west, box.north, box.east].map(value => value.toFixed(5)).join(',');
+  let answer;
+  try {
+    answer = await request(`/api/map/features?bbox=${bbox}&zoom=${state.map.zoom.toFixed(2)}`);
+  } catch (error) {
+    if (requestId === state.map.featureRequest) mapStatus.textContent = error.message;
+    return;
+  }
+  if (requestId !== state.map.featureRequest) return;
+  if (answer.building) {
+    state.map.building = true;
+    mapStatus.textContent = 'Building map index…';
+    featureTimer = window.setTimeout(loadFeatures, 2000);
+    return;
+  }
+  if (state.map.building) mapStatus.textContent = '';
+  state.map.building = false;
+  state.map.features = answer.features;
+  drawMap();
+}
+
+const MAP_ORDER = ['lake', 'coastline', 'border', 'river', 'road', 'park', 'track', 'waypoint', 'place'];
+let mapColours = null;
+function mapColour(name) {
+  if (!mapColours) {
+    const style = window.getComputedStyle(document.documentElement);
+    mapColours = Object.fromEntries(['charcoal', 'graphite', 'line', 'muted', 'amber', 'cyan'].map(key => [key, style.getPropertyValue(`--${key}`).trim()]));
+  }
+  return mapColours[name];
+}
+
+// Each ring or line as one subpath; consecutive vertices unwrap against each other so a line over 180 degrees stays whole.
+function traceGeometry(context, geometry) {
+  const lines = { LineString: [geometry.coordinates], MultiLineString: geometry.coordinates, Polygon: geometry.coordinates,
+    MultiPolygon: (geometry.coordinates || []).flat() }[geometry.type] || [];
+  context.beginPath();
+  for (const line of lines) {
+    let previous = null;
+    line.forEach(([lon, lat], index) => {
+      const point = toScreen(lat, lon, previous?.x);
+      if (index) context.lineTo(point.x, point.y);
+      else context.moveTo(point.x, point.y);
+      previous = point;
+    });
+    if (geometry.type.endsWith('Polygon')) context.closePath();
+  }
+}
+
+function drawFeature(context, feature) {
+  const { kind, geometry } = feature;
+  const zoom = state.map.zoom;
+  context.setLineDash([]);
+  context.globalAlpha = 1;
+  if (geometry.type === 'Point') {
+    const [lon, lat] = geometry.coordinates;
+    const point = toScreen(lat, lon);
+    if (kind === 'waypoint') {
+      context.fillStyle = mapColour('amber');
+      context.beginPath();
+      context.arc(point.x, point.y - 10, 5, Math.PI, 0);
+      context.lineTo(point.x, point.y);
+      context.closePath();
+      context.fill();
+      if (zoom >= 8 && feature.name) context.fillText(feature.name, point.x + 8, point.y - 8);
+    } else if (kind === 'place' && (zoom >= 7 || (zoom >= 5 && feature.rank <= 3)) && feature.name) {
+      context.fillStyle = mapColour('muted');
+      context.fillText(feature.name, point.x + 4, point.y);
+    }
+    return;
+  }
+  const styles = {
+    lake: ['cyan', 1], coastline: ['line', 1], border: ['line', 1, [6, 4]], river: ['cyan', 1], road: ['muted', 0.75],
+    park: ['amber', 1, [4, 3]], track: ['amber', 2],
+  };
+  const [colour, width, dash] = styles[kind] || ['line', 1];
+  traceGeometry(context, geometry);
+  if (kind === 'lake') {
+    context.fillStyle = mapColour('graphite');
+    context.fill('evenodd');
+    context.globalAlpha = 0.4;
+  }
+  context.strokeStyle = mapColour(colour);
+  context.lineWidth = width;
+  if (dash) context.setLineDash(dash);
+  context.stroke();
+}
+
+// ponytail: greedy O(frames x clusters); a grid bucket if thousands of frames ever share one view.
+function clusterPhotos() {
+  const { width, height } = mapSize();
+  const clusters = [];
+  for (const photo of state.map.photos) {
+    const point = toScreen(photo.latitude, photo.longitude);
+    if (point.x < -24 || point.y < -24 || point.x > width + 24 || point.y > height + 24) continue;
+    const near = clusters.find(cluster => Math.hypot(cluster.x - point.x, cluster.y - point.y) < 24);
+    if (near) near.photos.push(photo);
+    else clusters.push({ ...point, photos: [photo] });
+  }
+  return clusters;
+}
+
+function thumbFor(photo) {
+  let image = mapImages.get(photo.id);
+  if (!image) {
+    image = new Image();
+    image.addEventListener('load', () => drawMap());
+    image.src = photo.thumb_url;
+    mapImages.set(photo.id, image);
+  }
+  return image.complete && image.naturalWidth ? image : null;
+}
+
+let mapFrame = 0;
+function drawMap() {
+  window.cancelAnimationFrame(mapFrame);
+  mapFrame = window.requestAnimationFrame(paintMap);
+}
+function paintMap() {
+  const { width, height } = mapSize();
+  if (!width || !height) return;
+  const ratio = window.devicePixelRatio || 1;
+  if (mapCanvas.width !== Math.round(width * ratio) || mapCanvas.height !== Math.round(height * ratio)) {
+    mapCanvas.width = Math.round(width * ratio);
+    mapCanvas.height = Math.round(height * ratio);
+  }
+  const context = mapCanvas.getContext('2d');
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.fillStyle = mapColour('charcoal');
+  context.fillRect(0, 0, width, height);
+  context.font = '12px "Avenir Next", Avenir, system-ui, sans-serif';
+  context.textBaseline = 'middle';
+  const rank = kind => (MAP_ORDER.includes(kind) ? MAP_ORDER.indexOf(kind) : 0);
+  [...state.map.features].sort((a, b) => rank(a.kind) - rank(b.kind)).forEach(feature => drawFeature(context, feature));
+  context.setLineDash([]);
+  context.globalAlpha = 1;
+  const clusters = clusterPhotos();
+  state.map.hits = [];
+  for (const cluster of clusters) {
+    if (cluster.photos.length > 1) {
+      const radius = Math.min(22, 10 + 3 * Math.log2(cluster.photos.length));
+      context.fillStyle = cluster.photos.some(photo => photo.id === state.map.selected) ? mapColour('amber') : mapColour('cyan');
+      context.beginPath();
+      context.arc(cluster.x, cluster.y, radius, 0, 2 * Math.PI);
+      context.fill();
+      context.fillStyle = mapColour('charcoal');
+      context.textAlign = 'center';
+      context.fillText(String(cluster.photos.length), cluster.x, cluster.y);
+      context.textAlign = 'start';
+      state.map.hits.push({ ...cluster, radius });
+      continue;
+    }
+    const [photo] = cluster.photos;
+    const colour = photo.id === state.map.selected ? mapColour('amber') : mapColour('cyan');
+    const image = state.map.zoom >= 11 ? thumbFor(photo) : null;
+    if (image) {
+      const scale = 48 / Math.max(image.naturalWidth, image.naturalHeight);
+      const [w, h] = [image.naturalWidth * scale, image.naturalHeight * scale];
+      context.drawImage(image, cluster.x - w / 2, cluster.y - h / 2, w, h);
+      context.strokeStyle = colour;
+      context.lineWidth = 2;
+      context.strokeRect(cluster.x - w / 2, cluster.y - h / 2, w, h);
+      state.map.hits.push({ ...cluster, radius: 24 });
+    } else {
+      context.fillStyle = colour;
+      context.beginPath();
+      context.arc(cluster.x, cluster.y, 6, 0, 2 * Math.PI);
+      context.fill();
+      state.map.hits.push({ ...cluster, radius: 10 });
+    }
+  }
+  drawScale();
+  const centre = state.map.center;
+  const visible = clusters.reduce((sum, cluster) => sum + cluster.photos.length, 0);
+  const tracks = state.map.features.filter(feature => feature.kind === 'track').length;
+  mapCanvas.setAttribute('aria-label', `Map centred on ${centre.lat.toFixed(3)}, ${centre.lon.toFixed(3)}, ${roundKm(kmPerPixel() * width)} km across, ${visible} frames in view, ${tracks} tracks`);
+  renderFramesInView(clusters.filter(cluster => cluster.photos.length === 1).map(cluster => cluster.photos[0]));
+}
+const roundKm = km => (km >= 10 ? Math.round(km) : Number(km.toPrecision(2)));
+
+function drawScale() {
+  const scale = document.querySelector('#map-scale');
+  const perPixel = kmPerPixel();
+  const raw = perPixel * 100;
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  const nice = [5, 2, 1].map(step => step * magnitude).find(value => value <= raw);
+  scale.style.width = `${Math.round(nice / perPixel)}px`;
+  scale.textContent = nice >= 1 ? `${nice} km` : `${Math.round(nice * 1000)} m`;
+}
+
+// The screen-reader path to the same frames: one button per frame drawn on its own.
+function renderFramesInView(photos) {
+  const key = photos.map(photo => `${photo.id}${photo.id === state.map.selected ? '*' : ''}`).join(',');
+  if (key === state.map.framesKey) return;
+  state.map.framesKey = key;
+  const list = document.querySelector('#map-frames');
+  list.replaceChildren(...photos.map(photo => {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    const when = photo.captured_at ? new Date(photo.captured_at).toLocaleString() : 'No capture time';
+    button.textContent = `${photo.place || 'Unnamed place'} · ${when}`;
+    if (photo.id === state.map.selected) button.setAttribute('aria-current', 'true');
+    button.addEventListener('click', () => openMapFrame(photo.id));
+    item.append(button);
+    return item;
+  }));
+  if (!photos.length) {
+    const item = document.createElement('li');
+    item.className = 'quiet';
+    item.textContent = state.map.photos.length ? 'Zoom in to see single frames.' : 'No frames with a position.';
+    list.append(item);
+  }
+}
+
+function openMapFrame(photoId) {
+  state.map.selected = photoId;
+  drawMap();
+  if (!photoById(photoId)) return announce('That frame is not on the contact sheet; change the Review filters to show it.');
+  openLoupe(photoId);
+}
+
+function zoomAbout(x, y, zoom) {
+  const { width, height } = mapSize();
+  const before = project(state.map.center.lat, state.map.center.lon, state.map.zoom);
+  const under = unproject(before.x + x - width / 2, before.y + y - height / 2, state.map.zoom);
+  state.map.zoom = clampZoom(zoom);
+  const after = project(under.lat, under.lon, state.map.zoom);
+  state.map.center = unproject(after.x - (x - width / 2), after.y - (y - height / 2), state.map.zoom);
+  drawMap();
+  scheduleFeatures();
+}
+function panBy(dx, dy) {
+  const centre = project(state.map.center.lat, state.map.center.lon, state.map.zoom);
+  state.map.center = unproject(centre.x + dx, centre.y + dy, state.map.zoom);
+  drawMap();
+  scheduleFeatures();
+}
+function mapHit(x, y) {
+  return state.map.hits.find(hit => Math.hypot(hit.x - x, hit.y - y) <= hit.radius);
+}
+function activateHit(hit) {
+  if (hit.photos.length > 1) {
+    const { width, height } = mapSize();
+    panBy(hit.x - width / 2, hit.y - height / 2);  // the cluster to the centre, then two levels in on it
+    return zoomAbout(width / 2, height / 2, state.map.zoom + 2);
+  }
+  openMapFrame(hit.photos[0].id);
+}
+
+function wireMapInput() {
+  const offset = event => {
+    const rect = mapCanvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+  mapCanvas.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    mapCanvas.setPointerCapture(event.pointerId);
+    state.map.drag = { ...offset(event), moved: false };
+  });
+  mapCanvas.addEventListener('pointermove', event => {
+    const drag = state.map.drag;
+    if (!drag) return;
+    const point = offset(event);
+    if (!drag.moved && Math.hypot(point.x - drag.x, point.y - drag.y) < 4) return;
+    drag.moved = true;
+    panBy(drag.x - point.x, drag.y - point.y);
+    Object.assign(drag, point);
+  });
+  mapCanvas.addEventListener('pointerup', event => {
+    const drag = state.map.drag;
+    state.map.drag = null;
+    if (!drag || drag.moved) return;
+    const point = offset(event);
+    const hit = mapHit(point.x, point.y);
+    if (hit) activateHit(hit);
+  });
+  mapCanvas.addEventListener('pointercancel', () => { state.map.drag = null; });
+  mapCanvas.addEventListener('wheel', event => {
+    event.preventDefault();
+    const point = offset(event);
+    zoomAbout(point.x, point.y, state.map.zoom - Math.max(-1, Math.min(1, event.deltaY * 0.005)));
+  }, { passive: false });
+  mapCanvas.addEventListener('dblclick', event => {
+    const point = offset(event);
+    if (!mapHit(point.x, point.y)) zoomAbout(point.x, point.y, state.map.zoom + 1);
+  });
+  mapCanvas.addEventListener('keydown', event => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const { width, height } = mapSize();
+    const pan = { ArrowLeft: [-64, 0], ArrowRight: [64, 0], ArrowUp: [0, -64], ArrowDown: [0, 64] }[event.key];
+    if (pan) panBy(...pan);
+    else if (event.key === '+' || event.key === '=') zoomAbout(width / 2, height / 2, state.map.zoom + 1);
+    else if (event.key === '-') zoomAbout(width / 2, height / 2, state.map.zoom - 1);
+    else if (event.key === '0') fitMap();
+    else if (event.key === 'Enter') {
+      // Enter opens the selected frame when it is drawn, else whatever sits nearest the centre.
+      const hits = state.map.hits;
+      const chosen = hits.find(hit => hit.photos.some(photo => photo.id === state.map.selected))
+        || [...hits].sort((a, b) => Math.hypot(a.x - width / 2, a.y - height / 2) - Math.hypot(b.x - width / 2, b.y - height / 2))[0];
+      if (!chosen) return announce('No frames in view.');
+      activateHit(chosen);
+    } else return;
+    event.preventDefault();
+  });
+  if (window.ResizeObserver) {
+    new window.ResizeObserver(() => {
+      if (state.map.fitPending) fitMap();
+      else { drawMap(); scheduleFeatures(); }
+    }).observe(mapCanvas);
+  }
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+function renderOverlays() {
+  const list = document.querySelector('#map-overlays');
+  list.replaceChildren(...state.map.overlays.map(overlay => {
+    const item = document.createElement('li');
+    const name = document.createElement('strong');
+    name.textContent = overlay.name;
+    const detail = document.createElement('span');
+    detail.className = 'quiet';
+    detail.textContent = overlay.error ? ` unreadable: ${overlay.error}`
+      : ` ${plural(overlay.tracks, 'track')}, ${plural(overlay.waypoints, 'waypoint')}${overlay.span ? `, ${overlay.span.map(time => new Date(time).toLocaleString()).join(' to ')}` : ''}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary';
+    remove.textContent = 'Remove';
+    remove.setAttribute('aria-label', `Remove ${overlay.name}`);
+    remove.addEventListener('click', async () => {
+      try {
+        await request(`/api/map/overlays/${encodeURIComponent(overlay.name)}`, { method: 'DELETE' });
+        announce(`Removed ${overlay.name} from the map.`);
+        await loadMap();
+      } catch (error) { announce(error.message); }
+    });
+    item.append(name, detail, ' ', remove);
+    return item;
+  }));
+  if (!state.map.overlays.length) {
+    const item = document.createElement('li');
+    item.className = 'quiet';
+    item.textContent = 'No overlays yet.';
+    list.append(item);
+  }
+}
+
+async function addOverlayFiles(files) {
+  const added = [];
+  for (const file of files) {
+    if (file.size > 20 * 1024 * 1024) {
+      announce(`${file.name} is larger than 20 MB; Lumen did not add it.`);
+      continue;
+    }
+    try {
+      const summary = await post('/api/map/overlays', { name: file.name, text: await file.text() });
+      added.push(`${summary.name}: ${plural(summary.tracks, 'track')}, ${plural(summary.waypoints, 'waypoint')}`);
+    } catch (error) {
+      announce(`${file.name}: ${error.message}`);
+    }
+  }
+  if (!added.length) return;
+  announce(`Added ${added.join('; ')}.`);
+  await loadMap();
+}
+
+const geotagField = id => document.querySelector(`#map-geotag-${id}`);
+function renderGeotag() {
+  const timed = state.map.overlays.filter(overlay => overlay.span);
+  document.querySelector('#map-geotag').hidden = !timed.length;
+  const select = geotagField('track');
+  const current = select.value;
+  select.replaceChildren(...timed.map(overlay => new Option(overlay.name, overlay.name)));
+  if (timed.some(overlay => overlay.name === current)) select.value = current;
+  if (timed.length) scheduleGeotagPreview();
+}
+function geotagBody(dryRun) {
+  const gap = Number(geotagField('gap').value);
+  if (!Number.isInteger(gap) || gap < 1 || gap > 120) throw new Error('Max gap must be a whole number of minutes from 1 to 120.');
+  const offset = geotagField('offset');
+  if (!offset.checkValidity()) throw new Error('Camera clock offset must look like +02:00.');
+  return { query: location.search.slice(1), offset: offset.value.trim() || null, max_gap_minutes: gap, dry_run: dryRun,
+    replace: geotagField('replace').checked };
+}
+async function geotag(dryRun) {
+  const result = await post(`/api/map/overlays/${encodeURIComponent(geotagField('track').value)}/geotag`, geotagBody(dryRun));
+  geotagField('offset').value = result.offset;
+  return result;
+}
+let geotagTimer = null;
+function scheduleGeotagPreview() {
+  window.clearTimeout(geotagTimer);
+  geotagTimer = window.setTimeout(async () => {
+    const preview = geotagField('preview');
+    try {
+      const result = await geotag(true);
+      preview.textContent = `${plural(result.placed, 'frame')} would be placed, ${result.out_of_span} outside the track`;
+    } catch (error) { preview.textContent = error.message; }
+  }, 300);
+}
+
+wireMapInput();
+document.querySelectorAll('input[name="map-scope"]').forEach(radio => radio.addEventListener('change', loadMap));
+document.querySelector('#map-overlay-file').addEventListener('change', async event => {
+  await addOverlayFiles([...event.target.files]);
+  event.target.value = '';
+});
+const mapPanel = document.querySelector('#map-panel');
+mapPanel.addEventListener('dragover', event => event.preventDefault());
+mapPanel.addEventListener('drop', event => {
+  event.preventDefault();
+  addOverlayFiles([...event.dataTransfer.files]);
+});
+['track', 'offset', 'gap', 'replace'].forEach(id => geotagField(id).addEventListener('change', scheduleGeotagPreview));
+['offset', 'gap'].forEach(id => geotagField(id).addEventListener('input', scheduleGeotagPreview));
+document.querySelector('#map-geotag-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const track = geotagField('track').value;
+  try {
+    const result = await geotag(false);
+    announce(`Placed ${plural(result.placed, 'frame')} on ${track}; ${result.out_of_span} fell outside the track.`);
+    const photos = await request(`/api/map/photos${state.map.scope === 'shown' ? location.search : ''}`);
+    state.map.photos = photos.photos;
+    drawMap();
+    scheduleGeotagPreview();
+  } catch (error) { announce(error.message); }
+});
+
+// From the frame dialog: close it, open the Map tab centred on this frame at street zoom, the frame marked.
+function showOnMap(photo, record) {
+  closeView();
+  state.map.selected = photo.id;
+  state.map.focus = { lat: record.latitude, lon: record.longitude };
+  selectTab(document.querySelector('#map-tab'));
+  mapCanvas.focus();
+}
+
 // One [role=tablist]: click, Arrow keys, Home, and End select a tab, show its panel, and remember it under storageKey.
 // A click on the tab that is already selected calls onReselect instead, when given.
 function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = null) {
@@ -2408,6 +2982,7 @@ const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   if (tab.id === 'review-tab') loadRejectSuggestions();
   if (tab.id === 'assist-tab') loadVocabulary();
   if (tab.id === 'clear-tab') loadCleared();
+  if (tab.id === 'map-tab') loadMap();
 }, () => togglePanel());  // clicking the open tab again folds the panel away, and back
 
 function collapsePanel(collapsed) {

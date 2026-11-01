@@ -930,7 +930,7 @@ class WebTests(unittest.TestCase):
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"]]
-        self.assertEqual(["Add photos", "Review", "Assist", "Astro", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
+        self.assertEqual(["Add photos", "Review", "Assist", "Astro", "Map", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for tab in tabs:
             self.assertEqual("button", tab["tag"])
@@ -969,6 +969,18 @@ class WebTests(unittest.TestCase):
         for name in ("remove-group", "remove-cleared", "clear-workspace"):
             self.assertNotIn(export, by_id[name]["parents"])
             self.assertIn(by_id["clear-panel"], by_id[name]["parents"])
+
+    def test_map_tab_has_a_panel_canvas_and_status(self):
+        with urllib.request.urlopen(self.base + "/", timeout=3) as response:
+            parser = LandmarkParser()
+            parser.feed(response.read().decode())
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        self.assertTrue(any(node["attrs"].get("role") == "tab" and node["attrs"].get("aria-controls") == "map-panel" for node in parser.nodes))
+        self.assertEqual("tabpanel", by_id["map-panel"]["attrs"].get("role"))
+        self.assertEqual(("canvas", "img"), (by_id["map-canvas"]["tag"], by_id["map-canvas"]["attrs"].get("role")))
+        self.assertEqual("status", by_id["map-status"]["attrs"].get("role"))
+        for name in ("map-canvas", "map-status", "map-overlays", "map-overlay-file", "map-geotag-form", "map-frames"):
+            self.assertIn(by_id["map-panel"], by_id[name]["parents"])
 
     def test_refine_route_scope_validation_and_unavailable_darktable_reason(self):
         with patch("lumen.library.find_tool", return_value=None):
@@ -5736,7 +5748,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual("tabpanel", by_id["export-panel"]["attrs"]["role"])
         self.assertIn(by_id["workflow-panels"], by_id["export-panel"]["parents"])
         nav = next(node for node in parser.nodes if node["tag"] == "nav")
-        self.assertNotIn("aside", parser.tags, "the inspector rail is gone; the frame view holds the inspector")
+        self.assertEqual(["map-side"], [node["attrs"].get("class") for node in parser.nodes if node["tag"] == "aside"], "the inspector rail is gone; the frame view holds the inspector")
         header = by_id["rail-header"]
         self.assertIn(nav, header["parents"])
         for name in ("merge-batches", "merge-count", "jump-selected", "back-to-top"):
