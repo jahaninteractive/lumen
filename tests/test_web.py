@@ -1025,8 +1025,17 @@ class WebTests(unittest.TestCase):
         self.assertEqual("tabpanel", by_id["map-panel"]["attrs"].get("role"))
         self.assertEqual(("canvas", "img"), (by_id["map-canvas"]["tag"], by_id["map-canvas"]["attrs"].get("role")))
         self.assertEqual("status", by_id["map-status"]["attrs"].get("role"))
-        for name in ("map-canvas", "map-status", "map-overlays", "map-overlay-file", "map-unfixed", "map-geotag-form", "map-frames"):
+        for name in ("map-canvas", "map-status", "map-overlays", "map-overlay-file", "map-unfixed", "map-geotag-form", "map-frames",
+                     "map-show-all", "map-card"):
             self.assertIn(by_id["map-panel"], by_id[name]["parents"])
+        show_all = by_id["map-show-all"]
+        self.assertEqual(("button", "button", True), (show_all["tag"], show_all["attrs"].get("type"), "hidden" in show_all["attrs"]))
+        card = by_id["map-card"]
+        self.assertEqual(("dialog", "false", True), (card["attrs"].get("role"), card["attrs"].get("aria-modal"), "hidden" in card["attrs"]))
+        self.assertTrue(any(node["tag"] == "button" and card in node["parents"] for node in parser.nodes))
+        scopes = [node for node in parser.nodes if node["tag"] == "input" and node["attrs"].get("name") == "map-scope"]
+        self.assertEqual(["shown", "all", "ever"], [node["attrs"]["value"] for node in scopes])
+        self.assertTrue(any(node["tag"] == "label" and node["text"].strip() == "Everything ever imported" for node in scopes[2]["parents"]))
 
     def test_refine_route_scope_validation_and_unavailable_darktable_reason(self):
         with patch("lumen.library.find_tool", return_value=None):

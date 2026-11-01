@@ -2372,9 +2372,15 @@ const mapCanvas = document.querySelector('#map-canvas');
 const mapStatus = document.querySelector('#map-status');
 const MAP_MAX_LAT = 85.0511;
 const MAP_ZOOM = { min: 1, max: 18 };
-const mapImages = new Map();  // photo id -> Image, so a thumb loads once
+const mapShowAll = document.querySelector('#map-show-all');
+const mapCard = document.querySelector('#map-card');
+const MAP_THUMB_ZOOM = 9;  // lone frames draw as thumbs from here in
+const MAP_FAN_SIZE = 12;
+const mapImages = new Map();  // photo id (or cleared key) -> Image, so a thumb loads once
+// Cleared frames from the trash sit in photos too, with `cleared: true` and `key` in place of `id`.
 state.map = { zoom: 2, center: { lat: 20, lon: 0 }, photos: [], features: [], overlays: [], selected: null, scope: 'shown',
-  unfixed: 0, focus: null, fitPending: false, hits: [], framesKey: '', drag: null, featureRequest: 0, building: false };
+  unfixed: 0, focus: null, fitPending: false, hits: [], framesKey: '', drag: null, featureRequest: 0, building: false, fan: null };
+const mapKey = photo => (photo.cleared ? `cleared-${photo.key}` : photo.id);
 
 const worldSize = zoom => 256 * 2 ** zoom;
 function project(lat, lon, zoom) {
@@ -2441,12 +2447,13 @@ const kmPerPixel = () => 360 / worldSize(state.map.zoom) * Math.cos(state.map.ce
 async function loadMap(refit = true) {
   const scope = document.querySelector('input[name="map-scope"]:checked')?.value || 'shown';
   state.map.scope = scope;
+  foldMap();
   try {
     const [photos, overlays] = await Promise.all([
-      request(`/api/map/photos${scope === 'shown' ? location.search : ''}`),
+      request(`/api/map/photos${{ shown: location.search, ever: '?include_cleared=1' }[scope] || ''}`),
       request('/api/map/overlays'),
     ]);
-    state.map.photos = photos.photos;
+    state.map.photos = [...photos.photos, ...photos.cleared.map(frame => ({ ...frame, cleared: true }))];
     state.map.unfixed = photos.unfixed;
     state.map.overlays = overlays.overlays;
   } catch (error) {
@@ -2469,6 +2476,7 @@ async function loadMap(refit = true) {
 async function fitMap() {
   if (!mapSize().width) return;  // the panel is folded; the resize that unfolds it fits
   state.map.fitPending = false;
+  foldMap();
   const { focus } = state.map;
   if (focus) {
     Object.assign(state.map, { center: focus, zoom: 12, focus: null });
@@ -2606,12 +2614,13 @@ function clusterPhotos() {
 }
 
 function thumbFor(photo) {
-  let image = mapImages.get(photo.id);
+  if (!photo.thumb_url) return null;  // a cleared frame whose preview did not reach the trash
+  let image = mapImages.get(mapKey(photo));
   if (!image) {
     image = new Image();
     image.addEventListener('load', () => drawMap());
     image.src = photo.thumb_url;
-    mapImages.set(photo.id, image);
+    mapImages.set(mapKey(photo), image);
   }
   return image.complete && image.naturalWidth ? image : null;
 }
@@ -2656,30 +2665,117 @@ function paintMap() {
       continue;
     }
     const [photo] = cluster.photos;
-    const colour = photo.id === state.map.selected ? mapColour('amber') : mapColour('cyan');
-    const image = state.map.zoom >= 11 ? thumbFor(photo) : null;
-    if (image) {
-      const scale = 48 / Math.max(image.naturalWidth, image.naturalHeight);
-      const [w, h] = [image.naturalWidth * scale, image.naturalHeight * scale];
-      context.drawImage(image, cluster.x - w / 2, cluster.y - h / 2, w, h);
-      context.strokeStyle = colour;
-      context.lineWidth = 2;
-      context.strokeRect(cluster.x - w / 2, cluster.y - h / 2, w, h);
-      state.map.hits.push({ ...cluster, radius: 24 });
-    } else {
-      context.fillStyle = colour;
-      context.beginPath();
-      context.arc(cluster.x, cluster.y, 6, 0, 2 * Math.PI);
-      context.fill();
-      state.map.hits.push({ ...cluster, radius: 10 });
-    }
+    state.map.hits.push(drawFrame(context, photo, cluster, state.map.zoom >= MAP_THUMB_ZOOM));
   }
+  const ring = paintFan(context);
   drawScale();
   const centre = state.map.center;
   const visible = clusters.reduce((sum, cluster) => sum + cluster.photos.length, 0);
   const tracks = state.map.features.filter(feature => feature.kind === 'track').length;
   mapCanvas.setAttribute('aria-label', `Map centred on ${centre.lat.toFixed(3)}, ${centre.lon.toFixed(3)}, ${roundKm(kmPerPixel() * width)} km across, ${visible} frames in view, ${tracks} tracks`);
-  renderFramesInView(clusters.filter(cluster => cluster.photos.length === 1).map(cluster => cluster.photos[0]));
+  const singles = clusters.filter(cluster => cluster.photos.length === 1).map(cluster => cluster.photos[0]);
+  renderFramesInView([...singles, ...ring.filter(photo => !singles.includes(photo))]);
+}
+
+// One frame at a screen point: its thumb when asked for and loaded, else a dot (hollow for a cleared frame). Returns its hit.
+function drawFrame(context, photo, at, withThumb) {
+  const colour = photo.id === state.map.selected ? mapColour('amber') : mapColour('cyan');
+  const image = withThumb ? thumbFor(photo) : null;
+  context.lineWidth = 2;
+  if (image) {
+    const scale = 48 / Math.max(image.naturalWidth, image.naturalHeight);
+    const [w, h] = [image.naturalWidth * scale, image.naturalHeight * scale];
+    context.drawImage(image, at.x - w / 2, at.y - h / 2, w, h);
+    context.strokeStyle = colour;
+    context.strokeRect(at.x - w / 2, at.y - h / 2, w, h);
+    return { x: at.x, y: at.y, photos: [photo], radius: 24 };
+  }
+  context.beginPath();
+  context.arc(at.x, at.y, 6, 0, 2 * Math.PI);
+  if (photo.cleared) {
+    context.strokeStyle = colour;
+    context.stroke();
+  } else {
+    context.fillStyle = colour;
+    context.fill();
+  }
+  return { x: at.x, y: at.y, photos: [photo], radius: 10 };
+}
+
+// The open fan: up to MAP_FAN_SIZE frames on a ring round the cluster's point, their hits ahead of the cluster's,
+// and the Show all button under the ring. Returns the frames drawn on the ring.
+function paintFan(context) {
+  const { fan } = state.map;
+  if (!fan) {
+    mapShowAll.hidden = true;
+    return [];
+  }
+  const centre = toScreen(fan.at.lat, fan.at.lon);
+  const shown = fan.members.slice(0, MAP_FAN_SIZE);
+  const radius = Math.max(56, MAP_FAN_SIZE * shown.length / 2);
+  const hits = shown.map((photo, index) => {
+    const angle = -Math.PI / 2 + 2 * Math.PI * index / shown.length;
+    const slot = { x: centre.x + radius * Math.cos(angle), y: centre.y + radius * Math.sin(angle) };
+    context.strokeStyle = mapColour('line');
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(centre.x, centre.y);
+    context.lineTo(slot.x, slot.y);
+    context.stroke();
+    return drawFrame(context, photo, slot, true);
+  });
+  state.map.hits.unshift(...hits);
+  const live = fan.members.filter(photo => !photo.cleared);
+  const cleared = fan.members.length - live.length;
+  mapShowAll.hidden = !live.length;
+  if (live.length) {
+    const ids = live.slice(0, 200);  // the ids filter's ceiling
+    mapShowAll.textContent = `Show ${ids.length < live.length ? `the first 200 of ${live.length}` : `all ${live.length}`} in Review${cleared ? ` (${cleared} cleared)` : ''}`;
+    const { width, height } = mapSize();
+    const half = mapShowAll.offsetWidth / 2;
+    mapShowAll.style.left = `${Math.max(half + 8, Math.min(width - half - 8, centre.x))}px`;
+    mapShowAll.style.top = `${Math.max(8, Math.min(height - mapShowAll.offsetHeight - 8, centre.y + radius + 32))}px`;
+  }
+  return shown;
+}
+
+const MAP_DECISIONS = { flag: 'flagged', reject: 'rejected' };
+const byFanOrder = (a, b) => (b.decision === 'flag') - (a.decision === 'flag') || (b.rating || 0) - (a.rating || 0)
+  || (a.captured_at || '~').localeCompare(b.captured_at || '~');
+function fanOut(hit) {
+  const [anchor] = hit.photos;  // a cluster sits at its first frame's point
+  state.map.fan = { at: { lat: anchor.latitude, lon: anchor.longitude }, members: [...hit.photos].sort(byFanOrder) };
+  drawMap();
+  const live = hit.photos.filter(photo => !photo.cleared).length;
+  announce(`${plural(hit.photos.length, 'frame')} fanned out${live < hit.photos.length ? `, ${hit.photos.length - live} cleared` : ''}; they are in Frames in view.`);
+}
+function foldMap() {  // pan, zoom, a new scope or a click on empty map closes the fan and the card
+  state.map.fan = null;
+  mapShowAll.hidden = true;
+  mapCard.hidden = true;
+}
+
+// A cleared frame is not in the catalog, so it gets a card beside its point instead of the frame dialog.
+let mapCardReturn = null;
+function openMapCard(photo, at = toScreen(photo.latitude, photo.longitude), invoker = mapCanvas) {
+  const image = document.querySelector('#map-card-thumb');
+  if (photo.thumb_url) image.src = photo.thumb_url;
+  else image.removeAttribute('src');
+  document.querySelector('#map-card-time').textContent = photo.captured_at ? new Date(photo.captured_at).toLocaleString() : 'No capture time';
+  document.querySelector('#map-card-place').textContent = photo.place || 'Unnamed place';
+  document.querySelector('#map-card-state').textContent = `${MAP_DECISIONS[photo.decision] || 'no decision'} · ${photo.rating ? '★'.repeat(photo.rating) : 'unrated'}`;
+  mapCard.hidden = false;
+  const { width, height } = mapSize();
+  const [w, h] = [mapCard.offsetWidth, mapCard.offsetHeight];
+  const left = at.x + 32 + w <= width ? at.x + 32 : at.x - 32 - w;
+  mapCard.style.left = `${Math.max(8, Math.min(width - w - 8, left))}px`;
+  mapCard.style.top = `${Math.max(8, Math.min(height - h - 8, at.y - h / 2))}px`;
+  mapCardReturn = invoker;
+  mapCard.focus();
+}
+function closeMapCard() {
+  mapCard.hidden = true;
+  (mapCardReturn?.isConnected ? mapCardReturn : mapCanvas).focus();
 }
 const roundKm = km => (km >= 10 ? Math.round(km) : Number(km.toPrecision(2)));
 
@@ -2697,7 +2793,7 @@ function drawScale() {
 // A selection change only moves aria-current, so the focused button survives it.
 function renderFramesInView(photos) {
   const list = document.querySelector('#map-frames');
-  const key = photos.map(photo => photo.id).join(',');
+  const key = photos.map(mapKey).join(',');
   if (key === state.map.framesKey) {
     list.querySelectorAll('button').forEach(button => {
       if (Number(button.dataset.id) === state.map.selected) button.setAttribute('aria-current', 'true');
@@ -2711,9 +2807,14 @@ function renderFramesInView(photos) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'secondary';
-    button.dataset.id = photo.id;
     const when = photo.captured_at ? new Date(photo.captured_at).toLocaleString() : 'No capture time';
-    button.textContent = `${photo.place || 'Unnamed place'} · ${when}`;
+    button.textContent = `${photo.place || 'Unnamed place'} · ${when}${photo.cleared ? ' (cleared)' : ''}`;
+    if (photo.cleared) {
+      button.addEventListener('click', () => openMapCard(photo, undefined, button));
+      item.append(button);
+      return item;
+    }
+    button.dataset.id = photo.id;
     if (photo.id === state.map.selected) button.setAttribute('aria-current', 'true');
     button.addEventListener('click', () => openMapFrame(photo.id, button));
     item.append(button);
@@ -2750,6 +2851,7 @@ async function openMapFrame(photoId, invoker = mapCanvas) {
 }
 
 function zoomAbout(x, y, zoom) {
+  foldMap();
   const { width, height } = mapSize();
   const before = project(state.map.center.lat, state.map.center.lon, state.map.zoom);
   const under = unproject(before.x + x - width / 2, before.y + y - height / 2, state.map.zoom);
@@ -2760,6 +2862,7 @@ function zoomAbout(x, y, zoom) {
   scheduleFeatures();
 }
 function panBy(dx, dy) {
+  foldMap();
   const centre = project(state.map.center.lat, state.map.center.lon, state.map.zoom);
   state.map.center = unproject(centre.x + dx, centre.y + dy, state.map.zoom);
   drawMap();
@@ -2769,12 +2872,10 @@ function mapHit(x, y) {
   return state.map.hits.find(hit => Math.hypot(hit.x - x, hit.y - y) <= hit.radius);
 }
 function activateHit(hit) {
-  if (hit.photos.length > 1) {
-    const { width, height } = mapSize();
-    panBy(hit.x - width / 2, hit.y - height / 2);  // the cluster to the centre, then two levels in on it
-    return zoomAbout(width / 2, height / 2, state.map.zoom + 2);
-  }
-  openMapFrame(hit.photos[0].id);
+  if (hit.photos.length > 1) return fanOut(hit);
+  const [photo] = hit.photos;
+  if (photo.cleared) return openMapCard(photo, hit);
+  openMapFrame(photo.id);
 }
 
 function wireMapInput() {
@@ -2803,6 +2904,10 @@ function wireMapInput() {
     const point = offset(event);
     const hit = mapHit(point.x, point.y);
     if (hit) activateHit(hit);
+    else if (state.map.fan || !mapCard.hidden) {
+      foldMap();
+      drawMap();
+    }
   });
   mapCanvas.addEventListener('pointercancel', () => { state.map.drag = null; });
   mapCanvas.addEventListener('wheel', event => {
@@ -2822,7 +2927,10 @@ function wireMapInput() {
     else if (event.key === '+' || event.key === '=') zoomAbout(width / 2, height / 2, state.map.zoom + 1);
     else if (event.key === '-') zoomAbout(width / 2, height / 2, state.map.zoom - 1);
     else if (event.key === '0') fitMap();
-    else if (event.key === 'Enter') {
+    else if (event.key === 'Escape' && state.map.fan) {
+      foldMap();
+      drawMap();
+    } else if (event.key === 'Enter') {
       // Enter opens the selected frame when it is drawn, else whatever sits nearest the centre.
       const hits = state.map.hits;
       const chosen = hits.find(hit => hit.photos.some(photo => photo.id === state.map.selected))
@@ -2939,6 +3047,21 @@ function scheduleGeotagPreview() {
 }
 
 wireMapInput();
+mapShowAll.addEventListener('click', async () => {
+  const ids = (state.map.fan?.members || []).filter(photo => !photo.cleared).slice(0, 200).map(photo => photo.id);
+  try {  // the default filter hides rejects, and a rejected member is still one of these frames
+    await applyFilters(new URLSearchParams({ ids: ids.join(','), show_rejected: '1' }).toString());
+  } catch (error) {
+    return announce(error.message);
+  }
+  selectTab(document.querySelector('#review-tab'));
+});
+document.querySelector('#map-card-close').addEventListener('click', closeMapCard);
+mapCard.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  closeMapCard();
+});
 document.querySelectorAll('input[name="map-scope"]').forEach(radio => radio.addEventListener('change', () => loadMap()));
 document.querySelector('#map-overlay-file').addEventListener('change', async event => {
   await addOverlayFiles([...event.target.files]);

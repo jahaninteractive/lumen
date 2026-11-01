@@ -215,11 +215,21 @@
             <div class="map-stage">
               <canvas id="map-canvas" role="img" tabindex="0" aria-label="Map"></canvas>
               <p id="map-scale" class="quiet" aria-hidden="true"></p>
+              <button type="button" id="map-show-all" hidden>Show all in Review</button>
+              <div id="map-card" role="dialog" aria-modal="false" aria-labelledby="map-card-time" tabindex="-1" hidden>
+                <img id="map-card-thumb" alt="">
+                <p id="map-card-time"></p>
+                <p id="map-card-place"></p>
+                <p id="map-card-state"></p>
+                <p class="quiet">Import its folder again with Include cleared to work on it</p>
+                <button type="button" id="map-card-close">Close</button>
+              </div>
             </div>
             <aside class="map-side">
               <fieldset><legend>Frames</legend>
                 <label><input type="radio" name="map-scope" value="shown" checked> Shown frames</label>
                 <label><input type="radio" name="map-scope" value="all"> Whole catalog</label>
+                <label><input type="radio" name="map-scope" value="ever"> Everything ever imported</label>
               </fieldset>
               <p id="map-status" role="status" aria-live="polite"></p>
               <section><h3>Overlays</h3><ul id="map-overlays"></ul>
