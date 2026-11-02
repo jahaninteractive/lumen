@@ -2747,18 +2747,20 @@ function paintMap() {
         context.lineWidth = 2;
         if (best.cleared) context.setLineDash([4, 3]);
         context.strokeRect(cluster.x - w / 2, cluster.y - h / 2, w, h);
-        context.setLineDash([]);
+        outlineMarker(context, () => context.rect(cluster.x - w / 2 - 1.75, cluster.y - h / 2 - 1.75, w + 3.5, h + 3.5));
         count = { x: cluster.x + w / 2, y: cluster.y - h / 2 };
         hitRadius = Math.hypot(w, h) / 2;  // the whole thumb answers a click
         context.fillStyle = mapColour('amber');
         context.beginPath();
         context.arc(count.x, count.y, Math.max(9, context.measureText(String(cluster.photos.length)).width / 2 + 4), 0, 2 * Math.PI);
         context.fill();
+        outlineMarker(context);
       } else {
         context.fillStyle = colour;
         context.beginPath();
         context.arc(cluster.x, cluster.y, radius, 0, 2 * Math.PI);
         context.fill();
+        outlineMarker(context);
       }
       context.fillStyle = mapColour('charcoal');
       context.textAlign = 'center';
@@ -2780,6 +2782,19 @@ function paintMap() {
   renderFramesInView([...singles, ...ring.filter(photo => !singles.includes(photo))]);
 }
 
+// A 1.5 px charcoal outline round the current path (or the one `trace` adds), so the cyan and amber markers keep
+// their colours and still read on a light style's land.
+function outlineMarker(context, trace) {
+  if (trace) {
+    context.beginPath();
+    trace();
+  }
+  context.setLineDash([]);
+  context.strokeStyle = mapColour('charcoal');
+  context.lineWidth = 1.5;
+  context.stroke();
+}
+
 // One frame at a screen point: its thumb when asked for and loaded, else a dot (hollow for a cleared frame). Returns its hit.
 function drawFrame(context, photo, at, withThumb) {
   const colour = photo.id === state.map.selected ? mapColour('amber') : mapColour('cyan');
@@ -2792,17 +2807,19 @@ function drawFrame(context, photo, at, withThumb) {
     context.strokeStyle = colour;
     if (photo.cleared) context.setLineDash([4, 3]);  // a cleared thumb is framed dashed, as its dot is hollow
     context.strokeRect(at.x - w / 2, at.y - h / 2, w, h);
-    context.setLineDash([]);
+    outlineMarker(context, () => context.rect(at.x - w / 2 - 1.75, at.y - h / 2 - 1.75, w + 3.5, h + 3.5));
     return { x: at.x, y: at.y, photos: [photo], radius: 24 };
   }
   context.beginPath();
   context.arc(at.x, at.y, 6, 0, 2 * Math.PI);
-  if (photo.cleared) {
+  if (photo.cleared) {  // the charcoal ring sits just outside the 2 px coloured one
     context.strokeStyle = colour;
     context.stroke();
+    outlineMarker(context, () => context.arc(at.x, at.y, 7.75, 0, 2 * Math.PI));
   } else {
     context.fillStyle = colour;
     context.fill();
+    outlineMarker(context);
   }
   return { x: at.x, y: at.y, photos: [photo], radius: 10 };
 }
