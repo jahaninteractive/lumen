@@ -694,12 +694,14 @@ function locationLine(photo, record) {
   line.id = 'location';
   line.className = 'quiet';
   const place = record?.place ? `Place: ${[record.place, record.place_country].filter(Boolean).join(', ')}` : '';
+  const terrain = (record?.terrain || []).join(', ');
+  const named = [place, terrain].filter(Boolean).join(' · ');
   if (record?.latitude == null || record?.longitude == null) {
-    line.textContent = place || 'No location in the file';  // a place set by hand needs no GPS fix
+    line.textContent = named || 'No location in the file';  // a place set by hand needs no GPS fix
     return [line, ...placeEditor(photo, record), ...positionEditor(photo, record)];
   }
   const degrees = (value, positive, negative) => `${Math.abs(value).toFixed(4)}° ${value < 0 ? negative : positive}`;
-  line.textContent = `${place ? `${place} · ` : 'Location: '}${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
+  line.textContent = `${named ? `${named} · ` : 'Location: '}${degrees(record.latitude, 'N', 'S')}, ${degrees(record.longitude, 'E', 'W')}${record.altitude == null ? '' : ` · ${Math.round(record.altitude)} m`}`;
   const link = document.createElement('a');
   link.href = `https://maps.apple.com/?ll=${record.latitude},${record.longitude}&q=${encodeURIComponent(photo.name)}`;
   link.target = '_blank';

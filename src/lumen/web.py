@@ -451,6 +451,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     crop = library.catalog.get_crop(item["photo"].id) if item else None
                     location_typed = library.location_typed(item["photo"]) if item else False
                     advice = library.latest_develop_advice(item["photo"].id) if item else None
+                    terrain = None if not item or _MAP_BUILD_LOCK.locked() else library.terrain_for(item["photo"])
                 if not item:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
@@ -462,6 +463,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     photo.pop(key, None)
                 photo["preview_url"] = preview_url
                 photo["location_typed"] = location_typed  # only a position typed in Lumen can be edited
+                if terrain is not None:
+                    photo["terrain"] = terrain
                 self._send_json({"photo": photo, "develop": develop and develop.to_dict(),
                                  "metrics": asdict(item["metrics"]), "tags": item["tags"], "warnings": item["warnings"],
                                  "advice": advice})

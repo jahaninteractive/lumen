@@ -184,6 +184,28 @@ class WebTests(unittest.TestCase):
         self.assertEqual(["coastline"], [feature["kind"] for feature in payload["features"]])
         self.assertEqual({"features": []}, self.get_json("/api/map/features?bbox=40,0,50,10&zoom=8")[1])
 
+    def test_photo_detail_carries_terrain_only_when_known(self):
+        folder = self.root / "map"
+        folder.mkdir(exist_ok=True)
+        polygon = lambda kind, name, west, south, east, north: {
+            "type": "Feature", "properties": {"kind": kind, "name": name}, "geometry": {"type": "Polygon", "coordinates": [
+                [[west, south], [east, south], [east, north], [west, north], [west, south]]]}}
+        (folder / "terrain.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+            polygon("mountain", "Waterberg", 27, -25, 28, -24), polygon("plain", "Bushveld", 25, -27, 30, -22)]}))
+        with Library(Settings(library_dir=self.root / "library", map_dir=folder)) as library:
+            library.catalog.update_location(1, latitude=-24.5, longitude=27.5, altitude=None)
+        code, payload = self.get_json("/api/photos/1")
+        self.assertEqual(200, code, payload)
+        self.assertNotIn("terrain", payload["photo"], "no index has been built yet")
+        self.assertEqual(200, self.get_json("/api/map/features?bbox=-25,27,-24,28&zoom=10")[0])
+        photo = self.get_json("/api/photos/1")[1]["photo"]
+        self.assertEqual(["Waterberg", "Bushveld"], photo["terrain"])
+        for key in ("path", "fingerprint", "preview_path", "mirror_path"):
+            self.assertNotIn(key, photo)
+        from lumen import web
+        with web._MAP_BUILD_LOCK:
+            self.assertNotIn("terrain", self.get_json("/api/photos/1")[1]["photo"], "a build in progress is not waited on")
+
     def test_map_features_rejects_bad_bbox(self):
         for query in ("bbox=-32,17,-35,20&zoom=8", "bbox=-35,17,-32&zoom=8", "bbox=-95,17,-32,20&zoom=8",
                       "bbox=-35,17,-32,190&zoom=8", "bbox=a,b,c,d&zoom=8", "bbox=nan,17,-32,20&zoom=8", "zoom=8"):

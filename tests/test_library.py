@@ -31,6 +31,7 @@ from lumen.composition import CropRect
 from lumen.domain import DevelopSettings, Photo, PhotoEdit
 from lumen.omlx import DevelopAdvice
 from lumen.rawdevelop import DevelopRender
+from lumen.mapdata import MapIndex
 from lumen.omlx import CompositionResponseError, CompositionReview, OmlxError, RejectReview, TagResult
 from lumen.omlx import AstroResponseError, TagResponseError, parse_composition_response, parse_tag_response
 from lumen.catalog import GroupFilters
@@ -3694,6 +3695,31 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(1, everything["unfixed"])
         rejects = library.map_photos(GroupFilters(decision="reject"))
         self.assertEqual(([photos["d2"]], 0), ([photo["id"] for photo in rejects["photos"]], rejects["unfixed"]))
+
+    def test_terrain_for_names_the_regions_round_a_fix_once_the_index_exists(self):
+        self.image_path.unlink()
+        for name in ("fixed", "unfixed"):
+            Image.new("RGB", (120, 90), "gray").save(self.source_dir / f"{name}.jpg")
+        map_dir = self.library_dir.parent / "map"
+        map_dir.mkdir()
+        polygon = lambda kind, name, west, south, east, north: {
+            "type": "Feature", "properties": {"kind": kind, "name": name}, "geometry": {"type": "Polygon", "coordinates": [
+                [[west, south], [east, south], [east, north], [west, north], [west, south]]]}}
+        (map_dir / "terrain.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+            polygon("mountain", "Waterberg", 27, -25, 28, -24), polygon("plain", "Bushveld", 25, -27, 30, -22)]}))
+        library = Library(Settings(library_dir=self.library_dir, map_dir=map_dir))
+        self.addCleanup(library.close)
+        library.import_path(self.source_dir)
+        ids = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+        library.catalog.update_location(ids["fixed"], latitude=-24.5, longitude=27.5, altitude=None)
+        photo, unfixed_photo = (library.catalog.get_photo(ids[name]) for name in ("fixed", "unfixed"))
+        self.assertIsNone(library.terrain_for(photo), "no index file yet, and none is built")
+        self.assertFalse(library.settings.map_index_path.exists())
+        library.map_features(-25, -24, 27, 28, zoom=10)
+        self.assertEqual(["Waterberg", "Bushveld"], library.terrain_for(photo))
+        self.assertIsNone(library.terrain_for(unfixed_photo))
+        with patch.object(MapIndex, "terrain_at", side_effect=sqlite3.OperationalError("database is locked")):
+            self.assertIsNone(library.terrain_for(photo), "a build on another connection is not an error")
 
     def _trash_snapshot(self, library, stamp, frames):
         """A cleanup snapshot holding `frames` ({fingerprint: (latitude, rating, with_preview)}), as cleanup leaves it."""

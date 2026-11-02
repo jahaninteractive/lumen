@@ -368,6 +368,19 @@ class Library:
             index.ensure()
             return {"features": index.query(min_lat, max_lat, min_lon, max_lon, zoom=zoom)}
 
+    def terrain_for(self, photo: Photo) -> list[str] | None:
+        """Names of the terrain round the frame's fix, smallest first; None when there is no fix or no built index.
+        Never builds the index, so the frame dialog does not wait on one; a build on another connection is None."""
+        if photo.latitude is None or photo.longitude is None or not self.settings.map_index_path.exists():
+            return None
+        index = self.map_index
+        if index is None:
+            return None
+        try:
+            return index.terrain_at(photo.latitude, photo.longitude)
+        except sqlite3.OperationalError:
+            return None
+
     def map_photos(self, filters: GroupFilters | None) -> dict:
         """Frames with a fix matching the filters, and how many matching frames have none; no filters is the contact
         sheet's default view (rejects hidden)."""
