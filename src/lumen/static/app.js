@@ -2539,20 +2539,48 @@ async function loadFeatures() {
   drawMap();
 }
 
-const MAP_ORDER = ['lake', 'coastline', 'border', 'river', 'road', 'park', 'track', 'waypoint', 'place'];
+const MAP_ORDER = ['land', 'mountain', 'plain', 'desert', 'lake', 'coastline', 'border', 'river', 'road', 'park', 'sea', 'region', 'peak',
+  'track', 'waypoint', 'place'];
+const MAP_FONT = '12px "Avenir Next", Avenir, system-ui, sans-serif';
+// The two natural palettes; Workbench reads the page's own tokens. Frames, clusters, tracks and the selection keep amber/cyan/charcoal.
+const MAP_PALETTES = {
+  'natural-dark': { sea: '#142a40', land: '#29261f', water: '#21507a', waterline: '#5b9ccc', mountain: '#9a6438', plain: '#4f9440',
+    desert: '#d2ad68', label: '#a9b2bc', sealabel: '#8fbbe0', line: '#544f46', muted: '#a9b2bc' },
+  'natural-light': { sea: '#b8d5ea', land: '#f2ebd8', water: '#93c3e4', waterline: '#3f84bb', mountain: '#a8703f', plain: '#7fb85a',
+    desert: '#ddbb73', label: '#3a362f', sealabel: '#336f9f', line: '#9c9384', muted: '#5c564c' },
+};
+const mapStyleSelect = document.querySelector('#map-style');
+function mapStyle() {
+  let stored = null;
+  try { stored = localStorage.getItem('lumen-map-style'); } catch { /* per-visit only */ }
+  if (stored && [...mapStyleSelect.options].some(option => option.value === stored)) mapStyleSelect.value = stored;
+  return mapStyleSelect.value;
+}
+mapStyle();
 let mapColours = null;
 function mapColour(name) {
   if (!mapColours) {
     const style = window.getComputedStyle(document.documentElement);
-    mapColours = Object.fromEntries(['charcoal', 'graphite', 'line', 'muted', 'amber', 'cyan'].map(key => [key, style.getPropertyValue(`--${key}`).trim()]));
+    const token = Object.fromEntries(['charcoal', 'graphite', 'line', 'muted', 'amber', 'cyan'].map(key => [key, style.getPropertyValue(`--${key}`).trim()]));
+    const chosen = mapStyleSelect.value;
+    const base = MAP_PALETTES[chosen] || { sea: token.charcoal, land: token.graphite, water: token.charcoal, waterline: token.cyan,
+      mountain: null, plain: null, desert: null, label: token.muted, sealabel: token.muted, line: token.line, muted: token.muted };
+    mapColours = { ...token, ...base, tint: chosen === 'natural-light' ? 0.28 : 0.18 };
   }
   return mapColours[name];
 }
+mapStyleSelect.addEventListener('change', () => {
+  try { localStorage.setItem('lumen-map-style', mapStyleSelect.value); } catch { /* per-visit only */ }
+  mapColours = null;
+  drawMap();
+});
 
 // Each ring or line as one subpath; consecutive vertices unwrap against each other so a line over 180 degrees stays whole.
+// Returns the screen bounding box of what it traced.
 function traceGeometry(context, geometry) {
   const lines = { LineString: [geometry.coordinates], MultiLineString: geometry.coordinates, Polygon: geometry.coordinates,
     MultiPolygon: (geometry.coordinates || []).flat() }[geometry.type] || [];
+  const box = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
   context.beginPath();
   for (const line of lines) {
     let previous = null;
@@ -2561,9 +2589,27 @@ function traceGeometry(context, geometry) {
       if (index) context.lineTo(point.x, point.y);
       else context.moveTo(point.x, point.y);
       previous = point;
+      box.left = Math.min(box.left, point.x);
+      box.right = Math.max(box.right, point.x);
+      box.top = Math.min(box.top, point.y);
+      box.bottom = Math.max(box.bottom, point.y);
     });
     if (geometry.type.endsWith('Polygon')) context.closePath();
   }
+  return box;
+}
+
+const MAP_NAMED_AREAS = new Set(['sea', 'mountain', 'plain', 'desert', 'region']);
+// A sea or terrain name, only once its scalerank is within zoom - 1; sea names pale-blue italic.
+function drawAreaLabel(context, feature, x, y) {
+  if (!feature.name || !(feature.rank <= state.map.zoom - 1)) return;
+  context.globalAlpha = 1;
+  context.fillStyle = mapColour(feature.kind === 'sea' ? 'sealabel' : 'label');
+  if (feature.kind === 'sea') context.font = `italic ${MAP_FONT}`;
+  context.textAlign = 'center';
+  context.fillText(feature.name, x, y);
+  context.textAlign = 'start';
+  context.font = MAP_FONT;
 }
 
 function drawFeature(context, feature) {
@@ -2582,20 +2628,48 @@ function drawFeature(context, feature) {
       context.closePath();
       context.fill();
       if (zoom >= 8 && feature.name) context.fillText(feature.name, point.x + 8, point.y - 8);
+    } else if (kind === 'peak') {
+      context.fillStyle = mapColour('label');
+      context.beginPath();
+      context.moveTo(point.x, point.y - 5);
+      context.lineTo(point.x + 5, point.y + 4);
+      context.lineTo(point.x - 5, point.y + 4);
+      context.closePath();
+      context.fill();
+      if (zoom >= 8 && feature.name) context.fillText(feature.name, point.x + 8, point.y);
+    } else if (MAP_NAMED_AREAS.has(kind)) {
+      drawAreaLabel(context, feature, point.x, point.y);
     } else if (kind === 'place' && (zoom >= 7 || (zoom >= 5 && feature.rank <= 3)) && feature.name) {
       context.fillStyle = mapColour('muted');
       context.fillText(feature.name, point.x + 4, point.y);
     }
     return;
   }
+  if (kind === 'land') {
+    traceGeometry(context, geometry);
+    context.fillStyle = mapColour('land');
+    context.fill('evenodd');
+    return;
+  }
+  if (MAP_NAMED_AREAS.has(kind)) {  // sea and region are named only; mountain, plain and desert tinted when the style has a tint
+    const box = traceGeometry(context, geometry);
+    const tint = kind === 'sea' || kind === 'region' ? null : mapColour(kind);
+    if (tint) {
+      context.fillStyle = tint;
+      context.globalAlpha = mapColour('tint');
+      context.fill('evenodd');
+    }
+    if (Math.max(box.right - box.left, box.bottom - box.top) >= 80) drawAreaLabel(context, feature, (box.left + box.right) / 2, (box.top + box.bottom) / 2);
+    return;
+  }
   const styles = {
-    lake: ['cyan', 1], coastline: ['line', 1], border: ['line', 1, [6, 4]], river: ['cyan', 1], road: ['muted', 0.75],
+    lake: ['waterline', 1], coastline: ['line', 1], border: ['line', 1, [6, 4]], river: ['waterline', 1], road: ['muted', 0.75],
     park: ['amber', 1, [4, 3]], track: ['amber', 2],
   };
   const [colour, width, dash] = styles[kind] || ['line', 1];
   traceGeometry(context, geometry);
   if (kind === 'lake') {
-    context.fillStyle = mapColour('graphite');
+    context.fillStyle = mapColour('water');
     context.fill('evenodd');
     context.globalAlpha = 0.4;
   }
@@ -2646,9 +2720,9 @@ function paintMap() {
   }
   const context = mapCanvas.getContext('2d');
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.fillStyle = mapColour('charcoal');
+  context.fillStyle = mapColour('sea');
   context.fillRect(0, 0, width, height);
-  context.font = '12px "Avenir Next", Avenir, system-ui, sans-serif';
+  context.font = MAP_FONT;
   context.textBaseline = 'middle';
   const rank = kind => (MAP_ORDER.includes(kind) ? MAP_ORDER.indexOf(kind) : 0);
   [...state.map.features].sort((a, b) => rank(a.kind) - rank(b.kind)).forEach(feature => drawFeature(context, feature));

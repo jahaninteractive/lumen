@@ -373,7 +373,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 #map-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 #map-canvas:active { cursor: grabbing; }
 #map-canvas:focus-visible { outline: 3px solid var(--cyan); outline-offset: -3px; }
-#map-scale { position: absolute; left: .75rem; bottom: .5rem; margin: 0; border-bottom: 2px solid var(--muted); font-size: .8rem; line-height: 1.2; pointer-events: none; }
+#map-scale { position: absolute; left: .75rem; bottom: .5rem; margin: 0; padding: 0 .25rem; background: var(--charcoal); border-bottom: 2px solid var(--muted); font-size: .8rem; line-height: 1.2; pointer-events: none; }
 .map-side { display: flex; flex-direction: column; gap: .75rem; min-width: 0; }
 .map-side fieldset { margin: 0; }
 .map-side label { display: block; margin: .35rem 0; }

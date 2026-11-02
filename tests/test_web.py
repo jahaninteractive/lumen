@@ -1048,8 +1048,11 @@ class WebTests(unittest.TestCase):
         self.assertEqual(("canvas", "img"), (by_id["map-canvas"]["tag"], by_id["map-canvas"]["attrs"].get("role")))
         self.assertEqual("status", by_id["map-status"]["attrs"].get("role"))
         for name in ("map-canvas", "map-status", "map-overlays", "map-overlay-file", "map-unfixed", "map-geotag-form", "map-frames",
-                     "map-show-all", "map-card"):
+                     "map-show-all", "map-card", "map-style"):
             self.assertIn(by_id["map-panel"], by_id[name]["parents"])
+        self.assertEqual("select", by_id["map-style"]["tag"])
+        styles = [node["attrs"].get("value") for node in parser.nodes if node["tag"] == "option" and by_id["map-style"] in node["parents"]]
+        self.assertEqual(["workbench", "natural-dark", "natural-light"], styles)
         show_all = by_id["map-show-all"]
         self.assertEqual(("button", "button", True), (show_all["tag"], show_all["attrs"].get("type"), "hidden" in show_all["attrs"]))
         card = by_id["map-card"]

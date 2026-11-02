@@ -5,7 +5,6 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 ## From the 2026-11-01 Map tab
 
 - **Time-scrubbing along a track.** A slider that walks a GPX track and highlights the frames taken near each moment. A non-goal of `docs/superpowers/specs/2026-11-01-map-tab-design.md`; the tab places frames and draws tracks but has no time axis. Trigger: the photographer asks where they were at a given hour more than once.
-- **Natural Earth `land` fill.** The base map draws coastline over a solid background instead of fetching the 10 MB `ne_10m_land` polygons, so land and sea share a colour. Trigger: the land/sea distinction is missed on a coastal trip; add the layer to `scripts/bootstrap.sh` with its SHA-256 and a fill style in the canvas.
 - **Shown frames goes stale when the Review filters change.** With the Map tab open, changing the Review filters does not refetch `/api/map/photos`; switching tabs or the Frames radio does. Trigger: the first time it misleads.
 
 ## From the model-speed research (closed 2026-10-31)
