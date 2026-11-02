@@ -59,6 +59,11 @@ natural_earth_layers=(
   ne_10m_lakes.geojson 2d036f53dedec578001c5c30c2959ee7d4eebc1306900fa4367c49929ec8f2d9
   ne_10m_roads.geojson 66a0c7b438e92fd124822cc5921cfa11042f48c294ade5e0f03f2c6640fd0248
   ne_10m_populated_places_simple.geojson fd3fa867a320cbd5c5b6bb5bc550afeec2939fb2cef688e508007282a55ac42f
+  ne_10m_land.geojson 1ac90796408bc6ad6911d69448485d3c4dbf2190370080368a09976e1c9f7416
+  ne_10m_geography_regions_polys.geojson b7b26e50ea917d3696aec87f932def2bf5f890f5770e441d59c162c6f4c92a77
+  ne_10m_geography_regions_points.geojson 25821b530966e62756faebf53699f12bf73550f8228aa4bbdf3e4132dd7cf806
+  ne_10m_geography_regions_elevation_points.geojson f98a16867867146ec4146d6d4b18c823eeedb2825947de666116cf9a4e3f43cb
+  ne_10m_geography_marine_polys.geojson 53f865e8ffa966cdd402145c82c5cd14ee7ce974cd0eb9a3f59f03a4cfd2d66c
 )
 fast_model="mlx-community/Qwen3-VL-8B-Instruct-4bit"
 review_model="mlx-community/Qwen3.8-27B-4bit"
@@ -225,7 +230,7 @@ else
 
   # 5b. Natural Earth base map
   map_dir="$project_root/vendor/data/map"
-  if ask "Download the Natural Earth base map for the Map tab (about 80 MB) into vendor/data/map? [Y/n]" Y; then
+  if ask "Download the Natural Earth base map for the Map tab (about 100 MB) into vendor/data/map? [Y/n]" Y; then
     mkdir -p "$map_dir"
     for name sha in "${natural_earth_layers[@]}"; do
       if fetch "$natural_earth_url$name" "$map_dir/$name"; then

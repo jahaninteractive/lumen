@@ -49,9 +49,12 @@ class ScriptTests(unittest.TestCase):
         live = " ".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())
         self.assertIn("ca96624a56bd078437bca8184e78163e5039ad19", live)
         for layer in ("ne_10m_coastline", "ne_10m_admin_0_boundary_lines_land", "ne_10m_rivers_lake_centerlines",
-                      "ne_10m_lakes", "ne_10m_roads", "ne_10m_populated_places_simple"):
+                      "ne_10m_lakes", "ne_10m_roads", "ne_10m_populated_places_simple", "ne_10m_land",
+                      "ne_10m_geography_regions_polys", "ne_10m_geography_regions_points",
+                      "ne_10m_geography_regions_elevation_points", "ne_10m_geography_marine_polys"):
             self.assertRegex(live, rf"{layer}\.geojson\S*\s+[0-9a-f]{{64}}")
         self.assertIn('vendor/data/map', live)
+        self.assertIn("about 100 MB", live)
 
     def test_web_ui_reports_live_omlx_health(self):
         script = Path("src/lumen/static/app.js").read_text()
