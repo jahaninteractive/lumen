@@ -3091,7 +3091,8 @@ function renderOverlays() {
     const detail = document.createElement('span');
     detail.className = 'quiet';
     detail.textContent = overlay.error ? `unreadable: ${overlay.error}`
-      : `${plural(overlay.tracks, 'track')}, ${plural(overlay.waypoints, 'waypoint')}${overlay.span ? `, ${spanText(overlay.span)}` : ''}${overlay.tracks && !overlay.span ? ', no times, cannot place frames' : ''}`;
+      : [overlay.tracks || !overlay.waypoints ? plural(overlay.tracks, 'track') : '', overlay.waypoints ? plural(overlay.waypoints, 'waypoint') : '',
+        overlay.span ? spanText(overlay.span) : '', overlay.tracks && !overlay.span ? 'no times, cannot place frames' : ''].filter(Boolean).join(', ');
     text.append(name, detail);
     const remove = document.createElement('button');
     remove.type = 'button';

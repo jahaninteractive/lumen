@@ -383,6 +383,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 .map-side li { margin: .35rem 0; overflow-wrap: anywhere; }
 #map-overlays li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: .5rem; align-items: start; }
 #map-overlays li .quiet { display: block; }
+#map-overlays button { padding: .15rem .6rem; min-height: 0; font-size: .85rem; }
 #map-frames button { width: 100%; text-align: left; font-weight: 400; }
 #map-frames button[aria-current="true"] { border-color: var(--amber); }
 #map-status:empty { display: none; }
