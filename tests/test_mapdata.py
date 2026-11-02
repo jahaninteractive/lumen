@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -9,8 +10,9 @@ import urllib.error
 from unittest import mock
 from urllib.parse import parse_qs
 
-from lumen.mapdata import (KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, decimate, fetch_region, overpass_query,
-                           overpass_to_geojson, parse_geojson, parse_gpx, pixel_degrees, position_at)
+from lumen.mapdata import (KIND_MIN_ZOOM, Feature, MapIndex, TrackPoint, clip_ring, decimate, fetch_region,
+                           overpass_query, overpass_to_geojson, parse_geojson, parse_gpx, pixel_degrees, point_in_ring,
+                           position_at)
 
 HEADER = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="test">\n'
 
@@ -206,6 +208,21 @@ class GeoJsonTests(unittest.TestCase):
         self.assertEqual(decimate(coords, 0.1), [[0, 0], [0.2, 0], [0.21, 0.3], [0.22, 0.3]])
         self.assertEqual(decimate([[1, 1]], 0.1), [[1, 1]])
 
+    def test_clip_ring_keeps_a_crossing_ring_closed_and_drops_an_outside_one(self):
+        box = (0, 10, 0, 10)
+        square = [[5, 5], [15, 5], [15, 15], [5, 15], [5, 5]]
+        clipped = clip_ring(square, box)
+        self.assertEqual(clipped[0], clipped[-1])
+        self.assertEqual(sorted(map(tuple, clipped[:-1])), [(5, 5), (5, 10), (10, 5), (10, 10)])
+        self.assertEqual(clip_ring([[20, 20], [30, 20], [30, 30], [20, 20]], box), [])
+        inside = [[1, 1], [2, 1], [2, 2], [1, 1]]
+        self.assertEqual(clip_ring(inside, box), inside)
+
+    def test_point_in_ring_even_odd(self):
+        ring = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
+        self.assertTrue(point_in_ring(5, 5, ring))
+        self.assertFalse(point_in_ring(15, 5, ring))
+
     def test_feature_bbox(self):
         polygon = Feature("park", "P", 0, {"type": "Polygon", "coordinates": [[[26.1, -24.9], [26.4, -24.6], [26.2, -24.7]]]})
         self.assertEqual(polygon.bbox, (-24.9, -24.6, 26.1, 26.4))
@@ -237,6 +254,20 @@ LAYER = {
     ],
 }
 MADIKWE = (-24.95, -24.55, 26.05, 26.55)
+# Waterberg (with a hole) inside Bushveld inside land; kinds are explicit, so the file name does not matter.
+TERRAIN = {
+    "type": "FeatureCollection",
+    "features": [
+        {"type": "Feature", "properties": {"kind": "mountain", "name": "Waterberg"},
+         "geometry": {"type": "Polygon", "coordinates": [
+             [[27, -25], [28, -25], [28, -24], [27, -24], [27, -25]],
+             [[27.4, -24.6], [27.6, -24.6], [27.6, -24.4], [27.4, -24.4], [27.4, -24.6]]]}},
+        {"type": "Feature", "properties": {"kind": "plain", "name": "Bushveld"},
+         "geometry": {"type": "Polygon", "coordinates": [[[25, -27], [30, -27], [30, -22], [25, -22], [25, -27]]]}},
+        {"type": "Feature", "properties": {"kind": "land", "name": ""},
+         "geometry": {"type": "Polygon", "coordinates": [[[10, -40], [40, -40], [40, 0], [10, 0], [10, -40]]]}},
+    ],
+}
 
 
 class PositionAtTests(unittest.TestCase):
@@ -267,6 +298,7 @@ class MapIndexTests(unittest.TestCase):
         self.base.mkdir()
         self.overlays.mkdir()
         (self.base / "layer.geojson").write_text(json.dumps(LAYER))
+        (self.base / "terrain.geojson").write_text(json.dumps(TERRAIN))
         (self.overlays / "tuesday.gpx").write_text(TRACK_GPX)
         (self.overlays / "untimed.gpx").write_text(UNTIMED_GPX)
         self.index = MapIndex(self.root / "map.sqlite", [self.base, self.root / "missing", self.overlays])
@@ -274,9 +306,10 @@ class MapIndexTests(unittest.TestCase):
 
     def test_ensure_indexes_sources_once_and_reparses_only_changes(self):
         first = self.index.ensure()
-        self.assertEqual(first["sources"], 3)
-        self.assertEqual(first["features"], len(LAYER["features"]) + 2 + 2)
-        self.assertEqual(sorted(first["reparsed"]), ["base/layer.geojson", "overlays/tuesday.gpx", "overlays/untimed.gpx"])
+        self.assertEqual(first["sources"], 4)
+        self.assertEqual(first["features"], len(LAYER["features"]) + len(TERRAIN["features"]) + 2 + 2)
+        self.assertEqual(sorted(first["reparsed"]), ["base/layer.geojson", "base/terrain.geojson", "overlays/tuesday.gpx",
+                                                     "overlays/untimed.gpx"])
         self.assertEqual(first["failed"], [])
         self.assertEqual(self.index.ensure()["reparsed"], [])
         track = self.overlays / "tuesday.gpx"
@@ -285,14 +318,15 @@ class MapIndexTests(unittest.TestCase):
         self.assertEqual(self.index.ensure()["reparsed"], ["overlays/tuesday.gpx"])
         track.unlink()
         after = self.index.ensure()
-        self.assertEqual((after["sources"], after["features"], after["reparsed"]), (2, len(LAYER["features"]) + 2, []))
+        self.assertEqual((after["sources"], after["features"], after["reparsed"]),
+                         (3, len(LAYER["features"]) + len(TERRAIN["features"]) + 2, []))
         self.assertEqual([f["name"] for f in self.index.query(-25, -24, 26, 27, zoom=12) if f["kind"] == "track"], [])
 
     def test_ensure_records_a_broken_file_and_keeps_going(self):
         (self.base / "broken.gpx").write_text("<nope/>")
         result = self.index.ensure()
         self.assertEqual(result["failed"], ["base/broken.gpx"])
-        self.assertEqual(result["sources"], 4)
+        self.assertEqual(result["sources"], 5)
         broken = [s for s in self.index.summaries() if s["name"] == "base/broken.gpx"]
         self.assertEqual(broken, [{"name": "base/broken.gpx", "summary": {"error": "not a GPX 1.1 document"}}])
 
@@ -306,7 +340,7 @@ class MapIndexTests(unittest.TestCase):
     def test_query_returns_only_intersecting_features_without_paths(self):
         self.index.ensure()
         features = self.index.query(*MADIKWE, zoom=12)
-        self.assertEqual({f["name"] for f in features}, {"Wiggle", "R49", "Madikwe", "Tuesday morning "})
+        self.assertEqual({f["name"] for f in features}, {"Wiggle", "R49", "Madikwe", "Tuesday morning ", "Bushveld", ""})
         for feature in features:
             self.assertEqual(set(feature), {"kind", "name", "rank", "geometry"})
 
@@ -362,6 +396,43 @@ class MapIndexTests(unittest.TestCase):
         hooked = next(f for f in self.index.query(-24.8, -24.6, 26.2, 26.45, zoom=12) if f["name"] == "Hook")
         self.assertEqual(hooked["geometry"]["type"], "MultiLineString")
         self.assertEqual(len(hooked["geometry"]["coordinates"]), 2)
+
+    def test_query_clips_polygons_to_the_padded_viewport_and_drops_those_outside(self):
+        self.index.ensure()
+        land = [f for f in self.index.query(-25, -24, 27, 28, zoom=10) if f["kind"] == "land"]
+        self.assertEqual(len(land), 1)
+        lons = [lon for lon, _ in land[0]["geometry"]["coordinates"][0]]
+        self.assertTrue(min(lons) >= 26.8 and max(lons) <= 28.2)  # inside the 10% padded box
+        self.assertEqual(land[0]["geometry"]["coordinates"][0][0], land[0]["geometry"]["coordinates"][0][-1])
+        self.assertEqual([f for f in self.index.query(50, 51, 100, 101, zoom=10) if f["kind"] == "land"], [])
+
+    def test_query_clips_a_polygon_across_the_antimeridian_once(self):
+        (self.base / "ne_10m_land.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"featurecla": "Land"}, "geometry": {"type": "Polygon",
+             "coordinates": [[[179, -17], [180, -17], [180, -18], [179, -18], [179, -17]]]}}]}))
+        self.index.ensure()
+        found = [f for f in self.index.query(-19, -16, 178, -178, zoom=8) if f["kind"] == "land"]
+        self.assertEqual(len(found), 1)
+
+    def test_terrain_at_names_containing_polygons_smallest_first(self):
+        self.index.ensure()
+        self.assertEqual(self.index.terrain_at(-24.2, 27.2), ["Waterberg", "Bushveld"])
+        self.assertEqual(self.index.terrain_at(-24.5, 27.5), ["Bushveld"])  # inside the hole
+        self.assertEqual(self.index.terrain_at(-30, 27), [])
+        self.assertEqual(self.index.terrain_at(-24.2, 27.2), self.index.terrain_at(-24.2, 27.2))
+
+    def test_terrain_at_tolerates_a_point_on_an_edge(self):
+        self.index.ensure()
+        self.index.terrain_at(-24, 27)  # a vertex; must not raise
+
+    def test_an_index_from_an_older_format_is_rebuilt(self):
+        first = sorted(self.index.ensure()["reparsed"])
+        self.index.close()
+        with sqlite3.connect(self.root / "map.sqlite") as db:
+            db.execute("PRAGMA user_version = 1")
+        db.close()
+        self.assertEqual(sorted(self.index.ensure()["reparsed"]), first)
+        self.assertEqual(self.index.ensure()["reparsed"], [])
 
     def test_ensure_records_an_unreadable_file_as_failed(self):
         (self.base / "folder.geojson").mkdir()

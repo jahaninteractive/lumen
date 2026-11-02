@@ -49,8 +49,11 @@ PARK_BOUNDARIES = frozenset({"protected_area", "national_park"})
 # Stored source names are "<tag>/<file name>", the tag being the folder's place in MapIndex's source_dirs, so the
 # same file name in two folders never collides and no directory reaches the index or the browser.
 SOURCE_TAGS = ("base", "regions", "overlays")
-# Lines are clipped to the viewport grown by this fraction of its size on each side, so a small pan has edges.
+# Lines and polygons are clipped to the viewport grown by this fraction of its size on each side, so a small pan
+# has edges.
 VIEWPORT_PAD = 0.1
+# Bumped when parsing changes what a file indexes as; an index of another format is emptied and rebuilt.
+MAP_FORMAT = 2
 MAP_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources(path TEXT PRIMARY KEY, size INTEGER, mtime_ns INTEGER, summary TEXT);
 CREATE TABLE IF NOT EXISTS features(id INTEGER PRIMARY KEY, source TEXT, kind TEXT, name TEXT, rank INTEGER,
@@ -295,9 +298,44 @@ def _clip(coords: list[list[float]], box: tuple[float, float, float, float]) -> 
     return runs
 
 
+def clip_ring(ring: list[list[float]], box: tuple[float, float, float, float]) -> list[list[float]]:
+    """Sutherland-Hodgman clip of a `[lon, lat]` ring to `box` (min_lat, max_lat, west, east). The clipped ring
+    runs along the box edge where the original left it, so its fill stays inside; [] when fewer than three distinct
+    vertices remain. A closed ring comes back closed."""
+    min_lat, max_lat, west, east = box
+    closed = len(ring) > 1 and ring[0] == ring[-1]
+    points = ring[:-1] if closed else list(ring)
+    for axis, bound, sign in ((0, west, 1), (0, east, -1), (1, min_lat, 1), (1, max_lat, -1)):
+        clipped = []
+        for index, current in enumerate(points):
+            previous = points[index - 1]
+            current_in, previous_in = sign * (current[axis] - bound) >= 0, sign * (previous[axis] - bound) >= 0
+            if current_in != previous_in:
+                t = (bound - previous[axis]) / (current[axis] - previous[axis])
+                crossing = [previous[0] + t * (current[0] - previous[0]), previous[1] + t * (current[1] - previous[1])]
+                crossing[axis] = bound
+                clipped.append([round(value, 5) for value in crossing])
+            if current_in:
+                clipped.append(current)
+        points = clipped
+    if len({tuple(point) for point in points}) < 3:
+        return []
+    return points + [points[0]] if closed else points
+
+
+def point_in_ring(lon: float, lat: float, ring: list[list[float]]) -> bool:
+    """Even-odd test of a position against a `[lon, lat]` ring."""
+    inside = False
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+        if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
 def _drawn(geometry: dict, step: float, box: tuple[float, float, float, float]) -> dict | None:
-    """Geometry clipped to `box` (lines only: clipping a ring distorts its fill) and decimated by `step`; None when
-    no part of a line touches the box. A clipped line can come back as a MultiLineString."""
+    """Geometry clipped to `box` and decimated by `step`; None when nothing of it is left in the box. A clipped
+    line can come back as a MultiLineString; a polygon's rings are clipped along the box edge and empty holes
+    dropped."""
     kind, coordinates = geometry["type"], geometry["coordinates"]
     if kind in ("LineString", "MultiLineString"):
         parts = [coordinates] if kind == "LineString" else coordinates
@@ -306,10 +344,15 @@ def _drawn(geometry: dict, step: float, box: tuple[float, float, float, float]) 
             return None
         return {"type": "LineString", "coordinates": runs[0]} if len(runs) == 1 else \
             {"type": "MultiLineString", "coordinates": runs}
-    if kind == "Polygon":
-        coordinates = [decimate(ring, step) for ring in coordinates]
-    elif kind == "MultiPolygon":
-        coordinates = [[decimate(ring, step) for ring in polygon] for polygon in coordinates]
+    if kind in ("Polygon", "MultiPolygon"):
+        polygons = []
+        for polygon in [coordinates] if kind == "Polygon" else coordinates:
+            rings = [clip_ring(ring, box) for ring in polygon]
+            if rings and rings[0]:
+                polygons.append([decimate(ring, step) for ring in rings if ring])
+        if not polygons:
+            return None
+        coordinates = polygons[0] if kind == "Polygon" else polygons
     return {"type": kind, "coordinates": coordinates}
 
 
@@ -360,6 +403,11 @@ class MapIndex:
             self.index_path.parent.mkdir(parents=True, exist_ok=True)
             self._connection = sqlite3.connect(self.index_path)
             self._connection.executescript(MAP_SCHEMA)
+            if self._connection.execute("PRAGMA user_version").fetchone()[0] != MAP_FORMAT:
+                with self._connection:  # the manifest keys on size and mtime, which a parser change does not touch
+                    for table in ("sources", "features", "features_rtree"):
+                        self._connection.execute(f"DELETE FROM {table}")
+                    self._connection.execute(f"PRAGMA user_version = {MAP_FORMAT}")
         return self._connection
 
     def _source_files(self) -> dict[str, Path]:
@@ -441,6 +489,26 @@ class MapIndex:
                 if drawn is not None:
                     found.append({"kind": kind, "name": name, "rank": rank, "geometry": drawn})
         return found
+
+    def terrain_at(self, lat: float, lon: float) -> list[str]:
+        """Names of the terrain polygons containing the position, smallest bounding box first, each once."""
+        rows = self._db.execute(
+            "SELECT f.name, f.geometry, (r.max_lat - r.min_lat) * (r.max_lon - r.min_lon) AS area "
+            "FROM features_rtree r JOIN features f ON f.id = r.id "
+            "WHERE ? BETWEEN r.min_lat AND r.max_lat AND ? BETWEEN r.min_lon AND r.max_lon "
+            f"AND f.kind IN ({', '.join('?' * len(TERRAIN_KINDS))}) ORDER BY area, f.id",
+            (lat, lon, *sorted(TERRAIN_KINDS)),
+        )
+        names = []
+        for name, geometry, _area in rows:
+            geometry = json.loads(geometry)
+            if not name or name in names or geometry["type"] not in ("Polygon", "MultiPolygon"):
+                continue
+            polygons = [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+            if any(point_in_ring(lon, lat, polygon[0]) and not any(point_in_ring(lon, lat, hole) for hole in polygon[1:])
+                   for polygon in polygons):
+                names.append(name)
+        return names
 
     def summaries(self) -> list[dict]:
         return [{"name": path, "summary": json.loads(summary)}
