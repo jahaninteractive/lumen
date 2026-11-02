@@ -106,7 +106,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .rail-header { position: sticky; top: 0; z-index: 1; display: grid; gap: .5rem; padding: 1.25rem 1.25rem .75rem; border-bottom: 1px solid var(--line); background: var(--charcoal); }
 .rail-header h2, .rail-header p { margin: 0; }
 main { min-width: 0; overflow-anchor: none; }  /* a panel that grows above the sheet must not drag the scroll back down with it */
-.main-top { position: sticky; top: 0; z-index: 1; background: var(--black); }
+.main-top { position: sticky; top: 0; z-index: 2; background: var(--black); }  /* above .contact-top: at the sheet's end Safari slides that header up over the tabs and it would take the click */
 .tab-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding-right: 1.25rem; border-bottom: 1px solid var(--line); }
 .tab-row .tab-rail { flex: 1 1 auto; border-bottom: 0; }
 .burst { scroll-margin-top: var(--sticky-top, 0px); margin-bottom: 1.5rem; padding: .25rem; border-radius: 6px; outline-offset: 2px; }
