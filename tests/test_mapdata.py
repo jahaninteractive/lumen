@@ -414,6 +414,31 @@ class MapIndexTests(unittest.TestCase):
         found = [f for f in self.index.query(-19, -16, 178, -178, zoom=8) if f["kind"] == "land"]
         self.assertEqual(len(found), 1)
 
+    def test_query_keeps_both_halves_of_a_polygon_and_a_line_across_180_degrees(self):
+        (self.base / "antarctica.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"kind": "land", "name": "Antarctica"}, "geometry": {"type": "Polygon",
+             "coordinates": [[[-180, -90], [180, -90], [180, -65], [-180, -65], [-180, -90]]]}},
+            {"type": "Feature", "properties": {"kind": "border", "name": "Parallel"}, "geometry": {"type": "LineString",
+             "coordinates": [[-180, -75], [-170, -75], [170, -75], [180, -75]]}}]}))
+        self.index.ensure()
+        found = self.index.query(-80, -70, 170, -170, zoom=4)
+        land = [f for f in found if f["name"] == "Antarctica"]
+        self.assertEqual(len(land), 1)
+        self.assertEqual(land[0]["geometry"]["type"], "MultiPolygon")
+        lons = [lon for polygon in land[0]["geometry"]["coordinates"] for lon, _ in polygon[0]]
+        self.assertTrue(any(lon >= 170 for lon in lons) and any(lon <= -170 for lon in lons))
+        line = [f for f in found if f["name"] == "Parallel"]
+        self.assertEqual(len(line), 1)
+        self.assertEqual(line[0]["geometry"]["type"], "MultiLineString")
+        lons = [lon for run in line[0]["geometry"]["coordinates"] for lon, _ in run]
+        self.assertTrue(any(lon >= 170 for lon in lons) and any(lon <= -170 for lon in lons))
+
+    def test_query_drops_a_hole_clipped_away_but_keeps_the_outer_ring(self):
+        self.index.ensure()
+        waterberg = [f for f in self.index.query(-25.1, -24.9, 26.9, 27.1, zoom=10) if f["name"] == "Waterberg"]
+        self.assertEqual(len(waterberg), 1)
+        self.assertEqual(len(waterberg[0]["geometry"]["coordinates"]), 1)
+
     def test_terrain_at_names_containing_polygons_smallest_first(self):
         self.index.ensure()
         self.assertEqual(self.index.terrain_at(-24.2, 27.2), ["Waterberg", "Bushveld"])

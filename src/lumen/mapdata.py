@@ -356,6 +356,20 @@ def _drawn(geometry: dict, step: float, box: tuple[float, float, float, float]) 
     return {"type": kind, "coordinates": coordinates}
 
 
+# Single and multi forms of the geometries a viewport across 180 degrees can split in two.
+MERGED_TYPES = {"LineString": "MultiLineString", "MultiLineString": "MultiLineString",
+                "Polygon": "MultiPolygon", "MultiPolygon": "MultiPolygon"}
+
+
+def _merged(first: dict, second: dict) -> dict:
+    """One multi geometry holding the parts of two drawn halves of the same line or polygon."""
+    parts = []
+    for geometry in (first, second):
+        single = MERGED_TYPES[geometry["type"]] != geometry["type"]
+        parts.extend([geometry["coordinates"]] if single else geometry["coordinates"])
+    return {"type": MERGED_TYPES[first["type"]], "coordinates": parts}
+
+
 def _padded(box: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
     min_lat, max_lat, west, east = box
     lat_pad, lon_pad = (max_lat - min_lat) * VIEWPORT_PAD, (east - west) * VIEWPORT_PAD
@@ -473,7 +487,7 @@ class MapIndex:
         `min_lon > max_lon` is a viewport across 180 degrees."""
         spans = [(min_lon, max_lon)] if min_lon <= max_lon else [(min_lon, 180.0), (-180.0, max_lon)]
         step = pixel_degrees(zoom)
-        seen, found = set(), []
+        seen, found, entries = set(), [], {}
         for west, east in spans:
             box = (min_lat, max_lat, west, east)
             rows = self._db.execute(
@@ -482,12 +496,22 @@ class MapIndex:
                 box,
             )
             for row_id, kind, name, rank, geometry in rows:
-                if row_id in seen or KIND_MIN_ZOOM.get(kind, 0) > zoom:
+                if KIND_MIN_ZOOM.get(kind, 0) > zoom:
+                    continue
+                geometry = json.loads(geometry)
+                # A row met again in the second span is a line or polygon across 180 degrees: clip it to this span
+                # too and merge, so the half beyond 180 is not lost. A point is whole the first time.
+                if row_id in seen and geometry["type"] not in MERGED_TYPES:
                     continue
                 seen.add(row_id)
-                drawn = _drawn(json.loads(geometry), step, _padded(box))
-                if drawn is not None:
-                    found.append({"kind": kind, "name": name, "rank": rank, "geometry": drawn})
+                drawn = _drawn(geometry, step, _padded(box))
+                if drawn is None:
+                    continue
+                if row_id in entries:
+                    entries[row_id]["geometry"] = _merged(entries[row_id]["geometry"], drawn)
+                else:
+                    entries[row_id] = {"kind": kind, "name": name, "rank": rank, "geometry": drawn}
+                    found.append(entries[row_id])
         return found
 
     def terrain_at(self, lat: float, lon: float) -> list[str]:
@@ -505,8 +529,8 @@ class MapIndex:
             if not name or name in names or geometry["type"] not in ("Polygon", "MultiPolygon"):
                 continue
             polygons = [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
-            if any(point_in_ring(lon, lat, polygon[0]) and not any(point_in_ring(lon, lat, hole) for hole in polygon[1:])
-                   for polygon in polygons):
+            if any(point_in_ring(lon, lat, polygon[0])
+                   and not any(point_in_ring(lon, lat, hole) for hole in polygon[1:]) for polygon in polygons):
                 names.append(name)
         return names
 
