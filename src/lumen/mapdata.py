@@ -241,9 +241,12 @@ def parse_geojson(text: str, *, source_name: str = "") -> list[Feature]:
         except (TypeError, ValueError, IndexError, OverflowError):
             continue
         name = str(props.get("name") or "")
+        if name.isupper() and props.get("name_en"):  # Natural Earth spells some regions in capitals ("NAMIB DESERT")
+            name = str(props["name_en"])
         if kind == "peak":
             try:
-                name = f"{name}, {int(float(props['elevation']))} m"
+                elevation = f"{int(float(props['elevation']))} m"
+                name = f"{name}, {elevation}" if name else elevation
             except (KeyError, TypeError, ValueError, OverflowError):
                 pass
         rank = _rank(props.get("scalerank"))
@@ -324,9 +327,10 @@ def clip_ring(ring: list[list[float]], box: tuple[float, float, float, float]) -
 
 
 def point_in_ring(lon: float, lat: float, ring: list[list[float]]) -> bool:
-    """Even-odd test of a position against a `[lon, lat]` ring."""
+    """Even-odd test of a position against a `[lon, lat]` ring; a third (altitude) value is ignored."""
     inside = False
-    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+    for p, q in zip(ring, ring[1:] + ring[:1]):
+        x1, y1, x2, y2 = p[0], p[1], q[0], q[1]
         if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
             inside = not inside
     return inside
@@ -496,8 +500,8 @@ class MapIndex:
                 box,
             )
             for row_id, kind, name, rank, geometry in rows:
-                if KIND_MIN_ZOOM.get(kind, 0) > zoom:
-                    continue
+                if KIND_MIN_ZOOM.get(kind, 0) > zoom or (kind in ("sea", "region") and rank > zoom - 1):
+                    continue  # sea and region are never filled, and the browser names them only at rank <= zoom - 1
                 geometry = json.loads(geometry)
                 # A row met again in the second span is a line or polygon across 180 degrees: clip it to this span
                 # too and merge, so the half beyond 180 is not lost. A point is whole the first time.
@@ -533,6 +537,10 @@ class MapIndex:
                    and not any(point_in_ring(lon, lat, hole) for hole in polygon[1:]) for polygon in polygons):
                 names.append(name)
         return names
+
+    def is_empty(self) -> bool:
+        """True while no source is indexed, as a format change leaves the index until the next ensure()."""
+        return self._db.execute("SELECT 1 FROM sources LIMIT 1").fetchone() is None
 
     def summaries(self) -> list[dict]:
         return [{"name": path, "summary": json.loads(summary)}

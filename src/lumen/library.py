@@ -369,16 +369,17 @@ class Library:
             return {"features": index.query(min_lat, max_lat, min_lon, max_lon, zoom=zoom)}
 
     def terrain_for(self, photo: Photo) -> list[str] | None:
-        """Names of the terrain round the frame's fix, smallest first; None when there is no fix or no built index.
-        Never builds the index, so the frame dialog does not wait on one; a build on another connection is None."""
+        """Names of the terrain round the frame's fix, smallest first; None when there is no fix or no built index
+        (missing, or empty after a format change). Never builds the index, so the frame dialog does not wait on one;
+        a build on another connection or a malformed polygon is None, never a failed frame detail."""
         if photo.latitude is None or photo.longitude is None or not self.settings.map_index_path.exists():
             return None
         index = self.map_index
         if index is None:
             return None
         try:
-            return index.terrain_at(photo.latitude, photo.longitude)
-        except sqlite3.OperationalError:
+            return None if index.is_empty() else index.terrain_at(photo.latitude, photo.longitude)
+        except (sqlite3.DatabaseError, ValueError, TypeError, IndexError):
             return None
 
     def map_photos(self, filters: GroupFilters | None) -> dict:

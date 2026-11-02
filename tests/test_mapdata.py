@@ -177,6 +177,22 @@ class GeoJsonTests(unittest.TestCase):
         found = parse_geojson(json.dumps(peaks), source_name="ne_10m_geography_regions_elevation_points.geojson")
         self.assertEqual([(f.kind, f.name) for f in found], [("peak", "Kilimanjaro, 5895 m"), ("peak", "Sani Pass")])
 
+    def test_an_unnamed_peak_is_its_elevation_alone(self):
+        peaks = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"featurecla": "mountain", "name": "", "elevation": 694, "scalerank": 8}, "geometry": {"type": "Point", "coordinates": [37.35, -3.07]}}]}
+        found = parse_geojson(json.dumps(peaks), source_name="ne_10m_geography_regions_elevation_points.geojson")
+        self.assertEqual([f.name for f in found], ["694 m"])
+
+    def test_an_all_capitals_name_gives_way_to_name_en(self):
+        point = lambda props: {"type": "Feature", "properties": props, "geometry": {"type": "Point", "coordinates": [15, -24]}}
+        regions = {"type": "FeatureCollection", "features": [
+            point({"featurecla": "Desert", "name": "NAMIB DESERT", "name_en": "Namib Desert"}),
+            point({"featurecla": "Range/mtn", "name": "SELWYN MTS."}),
+            point({"featurecla": "Plain", "name": "Bushveld", "name_en": "The Bushveld"}),
+        ]}
+        found = parse_geojson(json.dumps(regions), source_name="ne_10m_geography_regions_polys.geojson")
+        self.assertEqual([f.name for f in found], ["Namib Desert", "SELWYN MTS.", "Bushveld"])
+
     def test_land_and_sea_files_split_multipolygons_and_drop_null_island(self):
         land = {"type": "FeatureCollection", "features": [
             {"type": "Feature", "properties": {"featurecla": "Land", "scalerank": 0}, "geometry": {"type": "MultiPolygon", "coordinates": [
@@ -438,6 +454,18 @@ class MapIndexTests(unittest.TestCase):
         waterberg = [f for f in self.index.query(-25.1, -24.9, 26.9, 27.1, zoom=10) if f["name"] == "Waterberg"]
         self.assertEqual(len(waterberg), 1)
         self.assertEqual(len(waterberg[0]["geometry"]["coordinates"]), 1)
+
+    def test_query_drops_unlabelled_sea_and_region_polygons(self):
+        square = [[[26, -25], [27, -25], [27, -24], [26, -24], [26, -25]]]
+        feature = lambda kind, name, rank: {"type": "Feature", "properties": {"kind": kind, "name": name, "scalerank": rank},
+                                            "geometry": {"type": "Polygon", "coordinates": square}}
+        (self.base / "seas.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+            feature("sea", "Near sea", 4), feature("sea", "Far sea", 6), feature("region", "Near region", 5),
+            feature("region", "Far region", 7), feature("mountain", "Far range", 9)]}))
+        self.index.ensure()
+        names = {f["name"] for f in self.index.query(-25, -24, 26, 27, zoom=6)}
+        self.assertTrue({"Near sea", "Near region", "Far range"} <= names, names)
+        self.assertFalse({"Far sea", "Far region"} & names, "labelled only at rank <= zoom - 1, never filled")
 
     def test_terrain_at_names_containing_polygons_smallest_first(self):
         self.index.ensure()

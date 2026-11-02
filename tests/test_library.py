@@ -3721,6 +3721,40 @@ class LibraryTests(unittest.TestCase):
         with patch.object(MapIndex, "terrain_at", side_effect=sqlite3.OperationalError("database is locked")):
             self.assertIsNone(library.terrain_for(photo), "a build on another connection is not an error")
 
+    def _terrain_library(self, features):
+        """A library with one fixed frame at (-24.5, 27.5) and `features` as an overlay; the index not yet built."""
+        self.image_path.unlink()
+        Image.new("RGB", (120, 90), "gray").save(self.source_dir / "fixed.jpg")
+        library = Library(Settings(library_dir=self.library_dir))
+        self.addCleanup(library.close)
+        library.settings.map_overlays_dir.mkdir(parents=True, exist_ok=True)
+        (library.settings.map_overlays_dir / "terrain.geojson").write_text(
+            json.dumps({"type": "FeatureCollection", "features": features}))
+        library.import_path(self.source_dir)
+        photo_id = library.catalog.list_photos()[0].id
+        library.catalog.update_location(photo_id, latitude=-24.5, longitude=27.5, altitude=None)
+        return library, library.catalog.get_photo(photo_id)
+
+    def test_terrain_for_swallows_a_broken_polygon(self):
+        square = [[27, -25, 1200], [28, -25, 1200], [28, -24, 1200], [27, -24, 1200], [27, -25, 1200]]
+        region = lambda coordinates: {"type": "Feature", "properties": {"kind": "region", "name": "Waterberg"},
+                                      "geometry": {"type": "Polygon", "coordinates": coordinates}}
+        library, photo = self._terrain_library([region([square])])
+        library.map_features(-25, -24, 27, 28, zoom=10)
+        self.assertEqual(["Waterberg"], library.terrain_for(photo), "3-D positions are read as lon, lat")
+        (library.settings.map_overlays_dir / "terrain.geojson").write_text(json.dumps(
+            {"type": "FeatureCollection", "features": [region([square, [27.2, -24.8]])]}))  # a hole that is one position
+        library.map_index.ensure()
+        self.assertIsNone(library.terrain_for(photo), "a malformed ring is no terrain, not a failed frame detail")
+
+    def test_terrain_for_is_none_while_the_index_is_empty(self):
+        library, photo = self._terrain_library([])
+        library.map_index._db  # creates the file with empty tables, as a format wipe leaves it
+        self.assertTrue(library.settings.map_index_path.exists())
+        self.assertIsNone(library.terrain_for(photo))
+        library.map_features(-25, -24, 27, 28, zoom=10)
+        self.assertEqual([], library.terrain_for(photo), "a built index with no terrain names nothing")
+
     def _trash_snapshot(self, library, stamp, frames):
         """A cleanup snapshot holding `frames` ({fingerprint: (latitude, rating, with_preview)}), as cleanup leaves it."""
         from lumen.catalog import Catalog
