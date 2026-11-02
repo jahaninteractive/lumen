@@ -20,16 +20,31 @@ from . import __version__
 
 GPX_NS = "{http://www.topografix.com/GPX/1/1}"
 # Below these zooms a kind is clutter (every road in a country at once); kinds not listed always draw.
-KIND_MIN_ZOOM = {"road": 6, "place": 5, "river": 3, "lake": 3}
-# Natural Earth names its files by layer, so the file name is the only kind a bare NE download carries.
+KIND_MIN_ZOOM = {"road": 6, "place": 5, "river": 3, "lake": 3, "sea": 3, "mountain": 3, "plain": 3, "desert": 3,
+                 "region": 3, "peak": 6}
+# Natural Earth names its files by layer, so the file name is the only kind a bare NE download carries. Order
+# matters: the first marker found wins, so the border file ("..._boundary_lines_land") never reads as land.
 NE_FILE_KINDS = (
+    ("geography_regions_elevation_points", "peak"),
+    ("geography_regions", "terrain"),
+    ("geography_marine", "sea"),
     ("coastline", "coastline"),
     ("admin_0_boundary", "border"),
+    ("ne_10m_land", "land"),
     ("rivers", "river"),
     ("lakes", "lake"),
     ("roads", "road"),
     ("populated_places", "place"),
 )
+TERRAIN_KINDS = frozenset({"mountain", "plain", "desert", "region"})
+# A "terrain" file's features are kinded by their lower-cased Natural Earth `featurecla`, else "region".
+FEATURE_CLASSES = {
+    **dict.fromkeys(("range/mtn", "foothills", "plateau"), "mountain"),
+    **dict.fromkeys(("plain", "lowland", "basin", "delta", "valley", "depression", "tundra", "wetlands"), "plain"),
+    "desert": "desert",
+}
+# Classes skipped in any file but the lakes layer: too broad to label, drawn by another layer, or a joke.
+DROPPED_CLASSES = frozenset({"continent", "dragons-be-here", "lake", "null island"})
 PARK_BOUNDARIES = frozenset({"protected_area", "national_park"})
 # Stored source names are "<tag>/<file name>", the tag being the folder's place in MapIndex's source_dirs, so the
 # same file name in two folders never collides and no directory reaches the index or the browser.
@@ -182,6 +197,8 @@ def _kind(properties: dict, source_name: str) -> str:
         return str(properties["kind"])
     for marker, kind in NE_FILE_KINDS:
         if marker in source_name:
+            if kind == "terrain":
+                return FEATURE_CLASSES.get(str(properties.get("featurecla") or "").lower(), "region")
             return kind
     if properties.get("boundary") in PARK_BOUNDARIES or properties.get("leisure") == "nature_reserve":
         return "park"
@@ -196,8 +213,10 @@ def _kind(properties: dict, source_name: str) -> str:
 
 def parse_geojson(text: str, *, source_name: str = "") -> list[Feature]:
     """Features of a FeatureCollection, kinded by an explicit `kind` property, then the Natural Earth file name,
-    then OSM-style tags, else "other". Features without coordinates are skipped. Raises ValueError for anything
-    that is not a FeatureCollection. A malformed feature is skipped so one bad record cannot sink a layer file."""
+    then OSM-style tags, else "other". Property names are read case-insensitively. Features without coordinates,
+    and features of a DROPPED_CLASSES class outside the lakes layer, are skipped; a MultiPolygon becomes one
+    Polygon feature per member. Raises ValueError for anything that is not a FeatureCollection. A malformed
+    feature is skipped so one bad record cannot sink a layer file."""
     data = json.loads(text)
     if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
         raise ValueError("not a GeoJSON FeatureCollection")
@@ -207,19 +226,29 @@ def parse_geojson(text: str, *, source_name: str = "") -> list[Feature]:
             continue
         geometry = item.get("geometry")
         properties = item.get("properties")
-        properties = properties if isinstance(properties, dict) else {}
+        props = {str(k).lower(): v for k, v in properties.items()} if isinstance(properties, dict) else {}
         if not isinstance(geometry, dict) or not isinstance(geometry.get("type"), str):
+            continue
+        kind = _kind(props, source_name)
+        # The lakes layer's own class is "Lake"; only the physical files' lake labels are dropped.
+        if kind != "lake" and str(props.get("featurecla") or "").lower() in DROPPED_CLASSES:
             continue
         try:
             coordinates = _rounded(geometry.get("coordinates"))
         except (TypeError, ValueError, IndexError, OverflowError):
             continue
-        features.append(Feature(
-            _kind(properties, source_name),
-            str(properties.get("name") or ""),
-            _rank(properties.get("scalerank")),
-            {"type": geometry["type"], "coordinates": coordinates},
-        ))
+        name = str(props.get("name") or "")
+        if kind == "peak":
+            try:
+                name = f"{name}, {int(float(props['elevation']))} m"
+            except (KeyError, TypeError, ValueError, OverflowError):
+                pass
+        rank = _rank(props.get("scalerank"))
+        if geometry["type"] == "MultiPolygon":
+            features.extend(Feature(kind, name, rank, {"type": "Polygon", "coordinates": member})
+                            for member in coordinates)
+        else:
+            features.append(Feature(kind, name, rank, {"type": geometry["type"], "coordinates": coordinates}))
     return features
 
 

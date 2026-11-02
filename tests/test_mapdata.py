@@ -150,6 +150,57 @@ class GeoJsonTests(unittest.TestCase):
             for props in ranks]}
         self.assertEqual([f.rank for f in parse_geojson(json.dumps(collection))], [3, 0, 0, 0])
 
+    def test_natural_earth_physical_files_kind_by_class_case_insensitively(self):
+        polys = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"FEATURECLA": "Range/mtn", "NAME": "Waterberg", "SCALERANK": 2},
+             "geometry": {"type": "Polygon", "coordinates": [[[27, -24], [28, -24], [28, -25], [27, -25], [27, -24]]]}},
+            {"type": "Feature", "properties": {"FEATURECLA": "Plain", "NAME": "Bushveld", "SCALERANK": 3}, "geometry": {"type": "Point", "coordinates": [27.5, -24.5]}},
+            {"type": "Feature", "properties": {"FEATURECLA": "Desert", "NAME": "Kalahari", "SCALERANK": 1}, "geometry": {"type": "Point", "coordinates": [21, -24]}},
+            {"type": "Feature", "properties": {"FEATURECLA": "Island", "NAME": "Robben", "SCALERANK": 6}, "geometry": {"type": "Point", "coordinates": [18.4, -33.8]}},
+            {"type": "Feature", "properties": {"FEATURECLA": "Continent", "NAME": "Africa", "SCALERANK": 0}, "geometry": {"type": "Point", "coordinates": [20, 0]}},
+            {"type": "Feature", "properties": {"FEATURECLA": "Lake", "NAME": "Caspian", "SCALERANK": 0}, "geometry": {"type": "Point", "coordinates": [50, 42]}},
+        ]}
+        found = parse_geojson(json.dumps(polys), source_name="ne_10m_geography_regions_polys.geojson")
+        self.assertEqual([(f.kind, f.name, f.rank) for f in found],
+                         [("mountain", "Waterberg", 2), ("plain", "Bushveld", 3), ("desert", "Kalahari", 1), ("region", "Robben", 6)])
+        points = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"featurecla": "cape", "name": "Cape Point", "scalerank": 4}, "geometry": {"type": "Point", "coordinates": [18.5, -34.3]}}]}
+        self.assertEqual(parse_geojson(json.dumps(points), source_name="ne_10m_geography_regions_points.geojson")[0].kind, "region")
+
+    def test_peaks_carry_their_elevation_in_the_name(self):
+        peaks = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"featurecla": "mountain", "name": "Kilimanjaro", "elevation": 5895, "scalerank": 1}, "geometry": {"type": "Point", "coordinates": [37.35, -3.07]}},
+            {"type": "Feature", "properties": {"featurecla": "pass", "name": "Sani Pass", "scalerank": 5}, "geometry": {"type": "Point", "coordinates": [29.3, -29.6]}},
+        ]}
+        found = parse_geojson(json.dumps(peaks), source_name="ne_10m_geography_regions_elevation_points.geojson")
+        self.assertEqual([(f.kind, f.name) for f in found], [("peak", "Kilimanjaro, 5895 m"), ("peak", "Sani Pass")])
+
+    def test_land_and_sea_files_split_multipolygons_and_drop_null_island(self):
+        land = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"featurecla": "Land", "scalerank": 0}, "geometry": {"type": "MultiPolygon", "coordinates": [
+                [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]], [[[10, 10], [11, 10], [11, 11], [10, 11], [10, 10]]]]}},
+            {"type": "Feature", "properties": {"featurecla": "Null island", "scalerank": 0}, "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0.1, 0], [0.1, 0.1], [0, 0]]]}},
+        ]}
+        found = parse_geojson(json.dumps(land), source_name="ne_10m_land.geojson")
+        self.assertEqual([(f.kind, f.geometry["type"]) for f in found], [("land", "Polygon"), ("land", "Polygon")])
+        self.assertEqual(found[1].geometry["coordinates"][0][0], [10, 10])
+        seas = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"featurecla": "gulf", "name": "False Bay", "scalerank": 3},
+             "geometry": {"type": "Polygon", "coordinates": [[[18.4, -34.1], [18.9, -34.1], [18.9, -34.4], [18.4, -34.4], [18.4, -34.1]]]}}]}
+        self.assertEqual([(f.kind, f.name) for f in parse_geojson(json.dumps(seas), source_name="ne_10m_geography_marine_polys.geojson")], [("sea", "False Bay")])
+
+    def test_lakes_file_keeps_its_lake_class(self):
+        lakes = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"featurecla": "Lake", "name": "Victoria", "scalerank": 0},
+             "geometry": {"type": "Polygon", "coordinates": [[[32, -1], [34, -1], [34, -3], [32, -1]]]}}]}
+        self.assertEqual([(f.kind, f.name) for f in parse_geojson(json.dumps(lakes), source_name="ne_10m_lakes.geojson")],
+                         [("lake", "Victoria")])
+
+    def test_border_file_is_not_caught_by_the_land_marker(self):
+        border = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {}, "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}}]}
+        self.assertEqual(parse_geojson(json.dumps(border), source_name="ne_10m_admin_0_boundary_lines_land.geojson")[0].kind, "border")
+
     def test_decimate_keeps_ends_and_drops_close_vertices(self):
         coords = [[0, 0], [0.01, 0], [0.2, 0], [0.21, 0.05], [0.21, 0.3], [0.22, 0.3]]
         self.assertEqual(decimate(coords, 0.1), [[0, 0], [0.2, 0], [0.21, 0.3], [0.22, 0.3]])
@@ -162,7 +213,8 @@ class GeoJsonTests(unittest.TestCase):
         self.assertEqual(point.bbox, (-33.92, -33.92, 18.42, 18.42))
 
     def test_zoom_helpers(self):
-        self.assertEqual(KIND_MIN_ZOOM, {"road": 6, "place": 5, "river": 3, "lake": 3})
+        self.assertEqual(KIND_MIN_ZOOM, {"road": 6, "place": 5, "river": 3, "lake": 3, "sea": 3, "mountain": 3,
+                                         "plain": 3, "desert": 3, "region": 3, "peak": 6})
         self.assertEqual(pixel_degrees(0), 360 / 256)
         self.assertEqual(pixel_degrees(2), 360 / 1024)
 
