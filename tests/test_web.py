@@ -226,6 +226,17 @@ class WebTests(unittest.TestCase):
                          self.get_json("/api/map/photos?show_rejected=1"))
         self.assertEqual(400, self.get_json("/api/map/photos?bogus=1")[0])
 
+    def test_map_photos_thumb_url_is_versioned_and_served(self):
+        with Library(Settings(library_dir=self.root / "library", map_dir=self.root / "map")) as library:
+            library.catalog.update_location(1, latitude=-33.5, longitude=18.5, altitude=None)
+        code, payload = self.get_json("/api/map/photos")
+        self.assertEqual(200, code, payload)
+        self.assertEqual(1, len(payload["photos"]))
+        for photo in payload["photos"]:
+            self.assertRegex(photo["thumb_url"], r"^/thumb/\d+\?v=.+")
+            with urllib.request.urlopen(self.base + photo["thumb_url"], timeout=3) as response:
+                self.assertEqual((200, "image/jpeg"), (response.status, response.headers["Content-Type"]))
+
     def test_map_photos_ids_filter_and_its_400s(self):
         self.assertEqual(1, self.get_json("/api/map/photos?ids=1")[1]["unfixed"])
         self.assertEqual(0, self.get_json("/api/map/photos?ids=2,3")[1]["unfixed"])

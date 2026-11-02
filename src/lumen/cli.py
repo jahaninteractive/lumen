@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
@@ -18,6 +17,7 @@ from .digest import parse_day
 from .library import CleanupError, ExportRequest, Library, public_message
 from .mapdata import fetch_region
 from .pipelines import PipelineRegistry
+from .previews import preview_version
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -478,18 +478,6 @@ def main(argv: list[str] | None = None) -> int:
             server.server_close()
         return 0
     return 2
-
-
-def preview_version(fingerprint: str, preview_kind: str, preview_path: str | None, crop_selected_at: str | None = None) -> str:
-    """Cache key for a preview URL. The file's mtime is in it because a develop save rewrites the same
-    content-addressed path under the same fingerprint and kind, so nothing else would change; the crop's
-    selection time is in it because the thumb tier is cropped while the preview file is not."""
-    try:
-        stamp = Path(preview_path).stat().st_mtime_ns if preview_path else 0
-    except OSError:
-        stamp = 0
-    crop = f"-{hashlib.sha1(crop_selected_at.encode()).hexdigest()[:8]}" if crop_selected_at else ""
-    return f"{fingerprint[:16]}-{preview_kind}-{stamp}{crop}"
 
 
 def _serializable_groups(groups: list[dict]) -> list[dict]:

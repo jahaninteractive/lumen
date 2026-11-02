@@ -38,7 +38,7 @@ from .tools import find_tool
 from .grouping import TimeGapGroupingPolicy, split_near_duplicates
 from .rawdevelop import DevelopError, describe_histogram, render_raw
 from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_cache, prune_thumbnails, read_image_dimensions,
-                       read_metadata, thumbnail_for)
+                       preview_version, read_metadata, thumbnail_for)
 from .scoring import RankedPhoto, rank_group
 from .sidecars import SidecarWriter
 from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywords, load_blocked, load_vocabulary, match_keywords
@@ -386,9 +386,12 @@ class Library:
         """Frames with a fix matching the filters, and how many matching frames have none; no filters is the contact
         sheet's default view (rejects hidden)."""
         matched = self.catalog.list_photos(filters or GroupFilters())
+        # Ids are reused after a clear and re-import, so the URL carries the preview's version; no crop stamp, because
+        # the route hashes the crop into its own cache file.
         photos = [{"id": photo.id, "latitude": photo.latitude, "longitude": photo.longitude,
                    "captured_at": photo.captured_at.isoformat() if photo.captured_at else None, "place": photo.place,
-                   "decision": photo.decision, "rating": photo.rating, "thumb_url": f"/thumb/{photo.id}"}
+                   "decision": photo.decision, "rating": photo.rating,
+                   "thumb_url": f"/thumb/{photo.id}?v={preview_version(photo.fingerprint, photo.preview_kind, photo.preview_path)}"}
                   for photo in matched if photo.latitude is not None and photo.longitude is not None]
         return {"photos": photos, "unfixed": len(matched) - len(photos)}
 

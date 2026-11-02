@@ -20,6 +20,7 @@ from lumen.config import Settings
 from lumen.vocabulary import load_blocked as load_vocabulary_blocked, load_vocabulary
 from lumen.catalog import GroupFilters
 from lumen.library import Library
+from lumen.previews import preview_version
 from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
 from lumen import geonames as geonames_module
 from lumen import library as library_module
@@ -3686,8 +3687,10 @@ class LibraryTests(unittest.TestCase):
         library.catalog.update_location(photos["d0"], latitude=-33.5, longitude=18.5, altitude=None)
         library.catalog.update_location(photos["d2"], latitude=-34.5, longitude=19.5, altitude=None)
         library.set_decision(photos["d2"], "reject")
+        d0 = library.catalog.get_photo(photos["d0"])
+        version = preview_version(d0.fingerprint, d0.preview_kind, d0.preview_path)
         self.assertEqual([{"id": photos["d0"], "latitude": -33.5, "longitude": 18.5, "captured_at": "2026-10-22T08:00:00",
-                           "place": None, "decision": "none", "rating": 0, "thumb_url": f"/thumb/{photos['d0']}"}],
+                           "place": None, "decision": "none", "rating": 0, "thumb_url": f"/thumb/{photos['d0']}?v={version}"}],
                          library.map_photos(None)["photos"])
         self.assertEqual(1, library.map_photos(None)["unfixed"], "d1 has no fix; the rejected d2 is hidden")
         everything = library.map_photos(GroupFilters(show_rejected=True))
@@ -3695,6 +3698,19 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(1, everything["unfixed"])
         rejects = library.map_photos(GroupFilters(decision="reject"))
         self.assertEqual(([photos["d2"]], 0), ([photo["id"] for photo in rejects["photos"]], rejects["unfixed"]))
+
+    def test_map_thumb_url_changes_with_the_preview_file(self):
+        """Photo ids are reused after a clear and re-import, so the map's thumb URL must carry the preview's version
+        or the browser shows another frame's cached thumbnail."""
+        library, photos = self._map_library({"d0": "2026:10:22 08:00:00", "d1": "2026:10:22 08:00:01"})
+        for name in ("d0", "d1"):
+            library.catalog.update_location(photos[name], latitude=-33.5, longitude=18.5, altitude=None)
+        os.utime(library.catalog.get_photo(photos["d0"]).preview_path, ns=(1_000_000_000, 1_000_000_000))
+        os.utime(library.catalog.get_photo(photos["d1"]).preview_path, ns=(2_000_000_000, 2_000_000_000))
+        urls = [photo["thumb_url"] for photo in library.map_photos(None)["photos"]]
+        versions = [url.split("?v=", 1)[1] for url in urls]
+        self.assertEqual(2, len(set(versions)), urls)
+        self.assertTrue(all(version.endswith(("-1000000000", "-2000000000")) for version in versions), versions)
 
     def test_terrain_for_names_the_regions_round_a_fix_once_the_index_exists(self):
         self.image_path.unlink()

@@ -321,3 +321,15 @@ def prune_thumbnails(cache_dir: Path, previews: Iterable[Path]) -> int:
     # ponytail: a superseded crop's thumb lives until its preview changes; a few KB each.
     return prune_cache(cache_dir, {cached.name for cached in cache_dir.glob("*.jpg")
                                    if cached.stem in live or cached.stem.rsplit("-", 1)[0] in live})
+
+
+def preview_version(fingerprint: str, preview_kind: str, preview_path: str | None, crop_selected_at: str | None = None) -> str:
+    """Cache key for a preview URL. The file's mtime is in it because a develop save rewrites the same
+    content-addressed path under the same fingerprint and kind, so nothing else would change; the crop's
+    selection time is in it because the thumb tier is cropped while the preview file is not."""
+    try:
+        stamp = Path(preview_path).stat().st_mtime_ns if preview_path else 0
+    except OSError:
+        stamp = 0
+    crop = f"-{hashlib.sha1(crop_selected_at.encode()).hexdigest()[:8]}" if crop_selected_at else ""
+    return f"{fingerprint[:16]}-{preview_kind}-{stamp}{crop}"
