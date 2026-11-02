@@ -3072,16 +3072,27 @@ function wireMapInput() {
 }
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+// A track's time span for the photographer: "Sat 1 Nov, 07:12 to 11:40", or both days when it crosses midnight.
+function spanText(span) {
+  const [start, end] = span.map(time => new Date(time));
+  const day = date => date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  const clock = date => date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return day(start) === day(end) ? `${day(start)}, ${clock(start)} to ${clock(end)}`
+    : `${day(start)} ${clock(start)} to ${day(end)} ${clock(end)}`;
+}
+
 function renderOverlays() {
   const list = document.querySelector('#map-overlays');
   list.replaceChildren(...state.map.overlays.map(overlay => {
     const item = document.createElement('li');
+    const text = document.createElement('div');
     const name = document.createElement('strong');
     name.textContent = overlay.name;
     const detail = document.createElement('span');
     detail.className = 'quiet';
-    detail.textContent = overlay.error ? ` unreadable: ${overlay.error}`
-      : ` ${plural(overlay.tracks, 'track')}, ${plural(overlay.waypoints, 'waypoint')}${overlay.span ? `, ${overlay.span.map(time => new Date(time).toLocaleString()).join(' to ')}` : ''}${overlay.tracks && !overlay.span ? ', no times, cannot place frames' : ''}`;
+    detail.textContent = overlay.error ? `unreadable: ${overlay.error}`
+      : `${plural(overlay.tracks, 'track')}, ${plural(overlay.waypoints, 'waypoint')}${overlay.span ? `, ${spanText(overlay.span)}` : ''}${overlay.tracks && !overlay.span ? ', no times, cannot place frames' : ''}`;
+    text.append(name, detail);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'secondary';
@@ -3094,7 +3105,7 @@ function renderOverlays() {
         await loadMap();
       } catch (error) { announce(error.message); }
     });
-    item.append(name, detail, ' ', remove);
+    item.append(text, remove);
     return item;
   }));
   if (!state.map.overlays.length) {

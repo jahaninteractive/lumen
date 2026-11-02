@@ -7,6 +7,8 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 
 ## Unreleased
 
+The Map keeps a fixed height beside a side column that scrolls on its own, so ten GPX overlays no longer stretch the canvas; each overlay lists its name over a short day and time range ("Sat 1 Nov, 07:12 to 11:40") with Remove beside it.
+
 Map thumbnails carry their preview's version, so a frame cleared and imported again never shows another frame's cached thumbnail when SQLite reuses its id.
 
 Camera JPEGs are first-class sources. Shoot JPEG in the body and the file is published as the camera made it: export skips every renderer (decoder `camera`): a full export with no crop or watermark is lossless (the camera's bytes, `quality: "lossless"`, with Lumen's EXIF, XMP and IPTC written by exiftool), a cropped or watermarked full export re-encodes once at the camera's own quantization tables and chroma subsampling instead of quality 92 / 4:2:0, and an untagged or sRGB-tagged JPEG needs no ICC profile (a body set to AdobeRGB is refused by name). The full-size view of a JPEG is the file itself rather than its small embedded preview. Version 0.2.1.
