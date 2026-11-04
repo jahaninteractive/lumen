@@ -407,6 +407,7 @@ function selectGroup(group) {
 function burstSection(group, groupIndex, frames) {
   const section = document.createElement('section');
   section.className = 'burst';
+  if (frames.length === 1) section.className += ' burst-single';  // flows beside other singles, see .contact-sheet
   section.dataset.burst = group.id;
   section.setAttribute('aria-labelledby', `burst-${group.id}-heading`);
   const header = document.createElement('div');
@@ -416,7 +417,8 @@ function burstSection(group, groupIndex, frames) {
   heading.textContent = `Burst ${groupIndex + 1}`;
   const facts = document.createElement('span');
   facts.className = 'quiet';
-  facts.textContent = [frameCount(group.frame_count), startTime(group, true), bestFrame(group) ? `best ${bestFrame(group).name}` : null].filter(Boolean).join(' · ');
+  facts.textContent = frames.length === 1 ? startTime(group)  // the day heading in the rail carries the date; the tile names the frame
+    : [frameCount(group.frame_count), startTime(group, true), bestFrame(group) ? `best ${bestFrame(group).name}` : null].filter(Boolean).join(' · ');
   const selected = document.createElement('span');
   selected.className = 'burst-selected';
   const toggle = document.createElement('label');
@@ -1522,6 +1524,7 @@ const FILTER_CONTROLS = {
   export_failed_only: '#filter-export-failed', text: '#filter-text',
 };
 const FLAG_FILTERS = ['tagged_only', 'export_failed_only'];
+const FOLDED_FILTERS = ['date_from', 'date_to', 'camera', 'tagged_only', 'export_failed_only'];  // under More filters
 const FILTER_DEFAULTS = { min_rating: '0' };
 // One status choice stands for keepers_only or a decision; "all" hides rejected frames, as the server does by default.
 const STATUSES = { all: {}, keepers: { keepers_only: '1' }, flag: { decision: 'flag' }, none: { decision: 'none' }, reject: { decision: 'reject' } };
@@ -1530,7 +1533,7 @@ const statusRadio = value => document.querySelector(`#status-${value}`);
 function filterStatus() {
   return Object.keys(STATUSES).find(value => statusRadio(value).checked) || 'all';
 }
-let findTimer = null;  // pending debounced apply from #find / #filter-text
+let findTimer = null;  // pending debounced apply from #filter-text
 
 function cancelFind() {
   window.clearTimeout(findTimer);
@@ -1559,15 +1562,16 @@ function syncFilters(cameras) {
     option.textContent = camera;
     return option;
   }));
-  // A pending find apply owns both text fields, as does a mirror that matches the field being typed in.
-  const text = ['#find', '#filter-text'].map(selector => document.querySelector(selector));
-  const holdText = findTimer !== null || (text.includes(document.activeElement) && text[0].value === text[1].value);
   Object.entries(FILTER_CONTROLS).forEach(([name, selector]) => {
     const control = document.querySelector(selector);
     if (FLAG_FILTERS.includes(name)) control.checked = params.get(name) === '1';
-    else if (!(name === 'text' && holdText)) keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');
+    else if (!(name === 'text' && findTimer !== null)) keepTyping(control, params.get(name) ?? FILTER_DEFAULTS[name] ?? '');  // a pending apply owns the text
   });
-  if (!holdText) keepTyping(text[0], params.get('text') ?? '');
+  // Folded filters open the fold when one is set, and the summary counts them, so a narrowed sheet never looks unfiltered.
+  const folded = FOLDED_FILTERS.filter(name => FLAG_FILTERS.includes(name) ? params.get(name) === '1' : (params.get(name) ?? '') !== (FILTER_DEFAULTS[name] ?? ''));
+  const fold = document.querySelector('#filter-more');
+  if (folded.length) fold.open = true;
+  document.querySelector('#filter-more-label').textContent = folded.length ? `More filters (${folded.length} set)` : 'More filters';
   const status = params.get('keepers_only') === '1' ? 'keepers' : params.get('decision') in STATUSES ? params.get('decision') : 'all';
   Object.keys(STATUSES).forEach(value => { statusRadio(value).checked = value === status; });
 }
@@ -1623,6 +1627,7 @@ async function load() {
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
   state.keeperCount = groups.keeper_count;
+  if (groups.burst_gap_seconds !== undefined && document.activeElement?.id !== 'burst-gap') showBurstGap(groups.burst_gap_seconds);
   if (!defaultTabChosen) { defaultTabChosen = true; chooseDefaultTab(); }
   syncFilters(groups.cameras);
   const selectedGroup = state.groups.find(group => group.photos.some(photo => photo.id === state.selectedId))
@@ -1718,6 +1723,7 @@ async function startTagJob(url, payload) {
 document.querySelector('#tag-all').addEventListener('click', () => startTagJob('/api/photos/tag-all', { retag: document.querySelector('#retag-all').checked }));
 document.querySelector('#tag-keepers').addEventListener('click', () => startTagJob('/api/photos/tag', { scope: 'keepers', ...(redoKeepers() ? { retag: true } : {}) }));
 document.querySelector('#assist-keepers').addEventListener('click', () => startTagJob('/api/photos/assist', { scope: 'keepers', ...(redoKeepers() ? { redo: true } : {}) }));
+document.querySelector('#cull-bursts').addEventListener('click', () => startTagJob('/api/photos/cull', redoKeepers() ? { redo: true } : {}));
 // One tick for both keeper buttons: repeat tagging and scanning that is already done (and model captions for Run all).
 function redoKeepers() {
   return document.querySelector('#redo-keepers').checked;
@@ -1890,7 +1896,7 @@ document.querySelector('#reject-all-yes').addEventListener('click', () => {
   return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
 });
 
-const JOB_NAMES = { import: 'Import', export: 'Export', develop_group: 'Apply develop to burst', tag: 'Tagging', assist: 'Local AI assist', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+const JOB_NAMES = { import: 'Import', export: 'Export', develop_group: 'Apply develop to burst', tag: 'Tagging', assist: 'Local AI assist', cull: 'Pick and develop bursts', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
@@ -1898,6 +1904,7 @@ function jobText(job) {
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed${result.previously_cleared ? `, ${result.previously_cleared} previously cleared` : ''}${result.restored ? `, ${result.restored} restored with earlier work` : ''}.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'assist' && job.result ? ` ${result.tagged} tagged, ${result.reviewed} scanned (${result.suggested} suggested rejects), ${result.captioned} captioned, ${result.skipped} already done, ${result.failed} failed.`
+    : job.kind === 'cull' && job.result ? ` ${result.picked} picked, ${result.advised} develop suggestions, ${result.skipped} already done, ${result.failed} failed.`
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
     : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.`
@@ -1926,11 +1933,7 @@ function watchJob(job) {
   const status = document.querySelector('#job-status');
   const text = jobText(job);
   if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
-  document.querySelector('#job-strip').hidden = false;
-  if (['tag', 'assist', 'review_rejects', 'triage', 'export'].includes(job.kind)) {  // AI and export jobs also report in the bottom bar
-    const detail = JOB_ACTIVE.includes(job.status) && job.total ? ` ${job.processed} of ${job.total}${job.label ? ` · ${job.label}` : ''}` : '';
-    aiStatus(JOB_ACTIVE.includes(job.status) ? 'running' : job.status === 'succeeded' ? 'done' : 'failed', text + detail);
-  }
+  document.querySelector('#job-strip').hidden = false;  // jobs report only here, never in the AI line above, so the footer says each thing once
   if (job.kind === 'export' || job.kind === 'develop_group') renderExportDialog(job);
   if (job.kind === 'astro') setAstroJob(job);
   else {
@@ -2328,6 +2331,8 @@ function updateWorkflow() {
   const bothLoaded = fastLoaded && roleReady('review');
   document.querySelector('#assist-keepers').textContent = `Tag, scan and caption keepers (${keepers})`;
   document.querySelector('#assist-keepers').disabled = state.busy || !keepers || !bothLoaded;
+  document.querySelector('#cull-bursts').textContent = `Pick and develop every burst (${state.groups.length})`;
+  document.querySelector('#cull-bursts').disabled = state.busy || !state.groups.length || !roleReady('review');
   document.querySelector('#scan-rejects').disabled = state.busy || !keepers || !fastLoaded;
   document.querySelector('#reject-all-shown').disabled = state.cullingBlocked || !state.rejectSuggestions.length;
   document.querySelector('#retag-all').disabled = state.busy;
@@ -3335,6 +3340,9 @@ document.querySelector('#back-to-top').addEventListener('click', () => {
   document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });
   announce('Scrolled to the workflow tabs.');
 });
+document.querySelector('#main-content').addEventListener('scroll', () => {  // the button shows once there is somewhere to go back to
+  document.querySelector('#back-to-top').dataset.show = String(document.querySelector('#main-content').scrollTop > 200);
+}, { passive: true });
 // Keep scroll-into-view clear of the sticky tab row and, where it sticks, the contact sheet's filter bar beneath it.
 if (window.ResizeObserver) {
   const top = document.querySelector('.main-top');
@@ -3387,30 +3395,43 @@ document.querySelector('#filter-form').addEventListener('submit', event => {
   cancelFind();
   return applyFilters().catch(error => announce(error.message));
 });
-// The rail find and the form's tag text are one `text` filter; typing in either mirrors the other and applies it.
-[['#find', '#filter-text'], ['#filter-text', '#find']].forEach(([source, mirror]) => document.querySelector(source).addEventListener('input', () => {
-  document.querySelector(mirror).value = document.querySelector(source).value;
+// Typing in the tag text applies it after a pause.
+document.querySelector('#filter-text').addEventListener('input', () => {
   updateExpandSearch();
   window.clearTimeout(findTimer);
   findTimer = window.setTimeout(() => {
     findTimer = null;
     applyFilters().catch(error => announce(error.message));
   }, 300);
-}));
+});
+// The batch rail folds away to give the sheet its width; the choice is remembered per browser.
+function showRail(shown) {
+  document.querySelector('.workspace').dataset.rail = shown ? 'shown' : 'hidden';
+  document.querySelector('#rail-toggle').setAttribute('aria-expanded', String(shown));
+  try {
+    if (shown) localStorage.removeItem('lumen-rail-hidden');
+    else localStorage.setItem('lumen-rail-hidden', '1');
+  } catch { /* per-visit only */ }
+}
+document.querySelector('#rail-toggle').addEventListener('click', () => {
+  const shown = document.querySelector('.workspace').dataset.rail === 'hidden';
+  showRail(shown);
+  announce(shown ? 'Batch list shown.' : 'Batch list hidden; the contact sheet has the width.');
+});
+try { if (localStorage.getItem('lumen-rail-hidden') === '1') showRail(false); } catch { /* per-visit only */ }
 // Advisory: the fast model adds vocabulary keywords to the search as OR terms; the photographer can edit or clear them.
 function updateExpandSearch() {
-  const blank = ['#find', '#filter-text'].every(selector => !document.querySelector(selector).value.trim());
+  const blank = !document.querySelector('#filter-text').value.trim();
   document.querySelector('#expand-search').disabled = state.busy || blank || !roleReady('fast');
 }
 document.querySelector('#expand-search').addEventListener('click', async () => {
-  const query = (document.querySelector('#filter-text').value || document.querySelector('#find').value).trim();
+  const query = document.querySelector('#filter-text').value.trim();
   state.busy = true;
   updateWorkflow();
   try {
     const result = await aiCall('Search expansion', () => post('/api/search/expand', { query }));
     cancelFind();
     document.querySelector('#filter-text').value = result.text;
-    document.querySelector('#find').value = result.text;
     await applyFilters();
     announce(`Expanded to ${result.terms.length + 1} term${result.terms.length ? 's' : ''}`);
   } catch (error) {
@@ -3436,12 +3457,56 @@ function applyTileSize(size, announceChange = false) {
   if (announceChange) announce(`${size[0].toUpperCase()}${size.slice(1)} tiles`);
 }
 document.querySelector('#tile-size').addEventListener('change', () => applyTileSize(document.querySelector('#tile-size').value, true));
+// Burst gap: a catalog preference; the slider shows the server's value and a release regroups every burst.
+const burstGap = document.querySelector('#burst-gap');
+const burstGapText = seconds => `${Number(seconds).toLocaleString(undefined, { maximumFractionDigits: 1 })} s`;
+function showBurstGap(seconds) {
+  document.querySelector('#burst-gap').value = seconds;
+  document.querySelector('#burst-gap-value').textContent = burstGapText(seconds);
+}
+burstGap.addEventListener('input', () => { document.querySelector('#burst-gap-value').textContent = burstGapText(burstGap.value); });
+burstGap.addEventListener('change', async () => {
+  burstGap.disabled = true;
+  try {
+    const result = await post('/api/burst-gap', { seconds: Number(burstGap.value) });
+    await load();
+    announce(`Bursts regrouped at ${burstGapText(result.burst_gap_seconds)}: ${plural(result.groups, 'burst')}`);
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    burstGap.disabled = false;
+  }
+});
 try {
   const rememberedSize = localStorage.getItem('lumen-tile-size');
   if (rememberedSize in TILE_SIZES && rememberedSize !== 'medium') applyTileSize(rememberedSize);
 } catch { /* per-visit only */ }
 document.querySelector('#ask-composition-ai').addEventListener('click', askCompositionAI);
 sheet.addEventListener('keydown', handleCullingKey);
+// About: what Lumen is, what the status call says is installed, and who the data and tools come from. Never a path.
+function aboutRows(status) {
+  const rows = [['Lumen', status.version ? `v${status.version}` : 'unknown', true], ...firstRunSetupRows(status)];
+  rows.push(['Vision analyzer', status.vision_analyzer?.available ? 'ready' : 'missing. Run zsh scripts/bootstrap.sh to compile it', status.vision_analyzer?.available === true]);
+  if (status.geonames) rows.push(['GeoNames', status.geonames.places ? `${status.geonames.places.toLocaleString()} places` : 'not indexed', Boolean(status.geonames.places)]);
+  if (status.map) rows.push(['Map layers', `${status.map.layers || 0} of 11`, (status.map.layers || 0) >= 11]);
+  return rows;
+}
+const about = document.querySelector('#about');
+document.querySelector('#app-version').addEventListener('click', () => {
+  document.querySelector('#about-tools').replaceChildren(...aboutRows(state.status || {}).flatMap(([name, text, ok]) => {
+    const term = document.createElement('dt');
+    term.textContent = name;
+    const detail = document.createElement('dd');
+    detail.textContent = text;
+    detail.dataset.ok = String(ok);
+    return [term, detail];
+  }));
+  if (about.showModal) about.showModal();
+  else about.hidden = false;
+});
+about.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !about.showModal) about.hidden = true;
+});
 const shortcuts = document.querySelector('#shortcuts');
 document.querySelector('#shortcuts-button').addEventListener('click', () => {
   if (shortcuts.showModal) shortcuts.showModal();

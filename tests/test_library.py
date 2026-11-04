@@ -1721,6 +1721,31 @@ class LibraryTests(unittest.TestCase):
             frame.convert("RGB").save(self.source_dir / f"S{index}.jpg", exif=exif, quality=95)
         return [(self.source_dir / f"S{index}.jpg").resolve() for index in range(3)]
 
+    def test_burst_gap_is_a_catalog_preference_that_regroups_and_keeps_hand_work(self):
+        """Frames 1 s apart; a 0.5 s gap splits them, 2 s (the default) joins them, and the choice survives a reopen."""
+        paths = self.write_scene_change_burst()
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            ids = [library.catalog.photo_by_path(str(path)).id for path in paths]
+            self.assertEqual(2.0, library.burst_gap_seconds)
+            timed = lambda: [{photo["id"] for photo in group["photos"]} for group in library.list_groups()  # noqa: E731
+                             if {photo["id"] for photo in group["photos"]} & set(ids)]
+            self.assertEqual([set(ids)], timed())
+            for bad in (0, 0.4, 10.5, "2", True, None, float("nan")):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    library.set_burst_gap(bad)
+            library.set_pick(ids[1])
+
+            self.assertEqual({"burst_gap_seconds": 0.5, "groups": 4}, library.set_burst_gap(0.5))  # plus the untimed base frame
+            self.assertEqual([{ids[0]}, {ids[1]}, {ids[2]}], timed())
+            self.assertEqual({"burst_gap_seconds": 10, "groups": 2}, library.set_burst_gap(10))
+            (burst,) = [group for group in library.list_groups() if len(group["photos"]) == 3]
+            self.assertEqual(ids[1], burst["automatic_pick_id"], "a hand pick survives regrouping")
+            library.import_path(self.source_dir)  # an import regroups at the chosen gap, not the default
+            self.assertEqual([set(ids)], timed())
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            self.assertEqual(10.0, library.burst_gap_seconds)
+
     def test_scene_change_inside_a_burst_splits_into_clusters_each_with_its_pick(self):
         paths = self.write_scene_change_burst()
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -3378,6 +3403,52 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual({"tagged": 3, "reviewed": 3, "captioned": 2, "skipped": 0, "failed": 0, "suggested": 0}, redone["result"], "redo repeats model work")
         self.assertEqual(["Mine.", "Lion at rest.", "Lion at rest."], redone_captions, "redo never replaces the photographer's caption")
         self.assertEqual((6, 6, 4), (FakeFast.tags, FakeFast.reviews, FakeReview.captions))
+
+    def test_cull_job_picks_each_burst_with_the_review_model_and_advises_develop_for_the_pick(self):
+        from lumen.omlx import DevelopAdvice
+
+        class FakeReview:
+            model, role, critiques, advice = "review-model", "review", 0, 0
+            def critique_burst(self, frames):
+                FakeReview.critiques += 1
+                return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
+            def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None):
+                FakeReview.advice += 1
+                return DevelopAdvice({"exposure": 0.3}, "Lift the shadows.", "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._burst(root)
+            Image.new("RGB", (120, 90)).save(root / "lone.jpg")  # a one-frame burst: no critique, still advised
+            calls = []
+            with patch("lumen.library.render_raw", side_effect=self.develop_render(calls)), \
+                    Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
+                last = burst["photos"][-1]["id"]
+                self.assertNotEqual(last, burst["automatic_pick_id"])
+                job = library.start_cull_job(FakeReview())
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
+                self.assertEqual(last, burst["automatic_pick_id"], "the model's frame becomes the pick")
+                self.assertIn("manual_pick", [event.kind for event in library.catalog.events_for(last)])
+                self.assertEqual({"exposure": 0.3}, library.latest_develop_advice(last)["settings"])
+                self.assertIsNone(library.develop_for(last), "advice is never saved as settings")
+                library.set_pick(burst["photos"][0]["id"])  # the photographer overrules the model
+                again = library.start_cull_job(FakeReview())
+                library.wait_for_job(again.id)
+                rerun = library.job_status(again.id)["result"]
+                burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
+                self.assertEqual(burst["photos"][0]["id"], burst["automatic_pick_id"], "a rerun keeps the hand pick")
+                redo = library.start_cull_job(FakeReview(), redo=True)
+                library.wait_for_job(redo.id)
+                redone = library.job_status(redo.id)["result"]
+        self.assertEqual(("cull", "succeeded", 2), (status["kind"], status["status"], status["processed"]))
+        self.assertEqual({"picked": 1, "advised": 2, "skipped": 0, "failed": 0}, status["result"])
+        self.assertEqual({"picked": 0, "advised": 0, "skipped": 2, "failed": 0}, rerun, "a rerun does no model work")
+        self.assertEqual({"picked": 1, "advised": 2, "skipped": 0, "failed": 0}, redone)
+        self.assertEqual((2, 4), (FakeReview.critiques, FakeReview.advice))
+        self.assertEqual(4, len(calls), "one advice render per advised frame")
 
     def test_low_confidence_species_named_in_subjects_stays_suggested(self):
         class FakeTagger:

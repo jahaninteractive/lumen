@@ -13,21 +13,21 @@
       <img class="mark" src="/static/mark.svg" alt="" width="20" height="20">
       <strong>Lumen</strong>
       <span class="subtitle">local RAW workbench</span>
-      <span class="subtitle" id="app-version"></span>
+      <button type="button" class="subtitle version" id="app-version" aria-haspopup="dialog" title="About Lumen"></button>
     </div>
     <p id="system-status" role="status" aria-live="polite">Checking local tools…</p>
   </header>
 
   <div class="workspace">
-    <nav aria-label="Photo batches" class="batch-rail">
+    <nav aria-label="Photo batches" class="batch-rail" id="batch-rail">
       <div id="rail-header" class="rail-header">
+        <div class="rail-models" id="role-model-pair" hidden><label for="review-model">Review model</label>
+        <select id="review-model" data-role="review"></select>
+        <label for="fast-model">Fast model</label>
+        <select id="fast-model" data-role="fast"></select></div>
         <h2>Batches</h2>
-        <label for="find">Find</label>
-        <input type="search" id="find" autocomplete="off" placeholder="penguin, blur, caption words…">
         <p id="merge-count" class="quiet" hidden>0 batches selected</p>
         <button type="button" id="merge-batches" class="secondary" hidden disabled>Merge selected batches</button>
-        <button type="button" id="jump-selected" class="secondary" hidden>Jump to selected</button>
-        <button type="button" id="back-to-top" class="secondary">Back to top</button>
       </div>
       <div id="batch-list"><p class="quiet">No imported batches yet.</p></div>
     </nav>
@@ -134,7 +134,11 @@
           <details class="how"><summary>How this works</summary>
           <p class="quiet">Run all: tags, a problem scan, and a caption for every keeper that lacks them. Already finished work is skipped, so run it again after more culling.</p>
           <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the strip at the foot of the page.</p>
+          <p class="quiet">Pick and develop every burst: the review model names the best frame of each burst, that frame becomes your best, and the model then suggests develop settings for it, parked on its Develop tab. Bursts already picked and advised are skipped unless Redo is ticked, and a rerun never undoes a frame you chose by hand.</p>
           </details>
+          <div class="button-row">
+            <button type="button" id="cull-bursts" class="ai" aria-describedby="ai-availability" disabled>Pick and develop every burst (0)</button>
+          </div>
           <div class="button-row">
             <button type="button" id="assist-keepers" class="ai" aria-describedby="ai-availability" disabled>Tag, scan and caption keepers (0)</button>
             <button type="button" id="tag-keepers" class="secondary ai" aria-describedby="ai-availability" disabled>Tag keepers (0)</button>
@@ -327,6 +331,7 @@
       <section aria-labelledby="contact-heading" class="contact-area">
         <div class="contact-top">
         <div class="section-heading">
+          <button type="button" id="rail-toggle" class="secondary" aria-expanded="true" aria-controls="batch-rail" title="Show or hide the batch list">Batches</button>
           <h1 id="contact-heading">Contact sheet</h1>
           <span id="photo-count">0 frames</span>
           <span class="view-controls">
@@ -336,8 +341,12 @@
               <option value="medium" selected>Medium</option>
               <option value="large">Large</option>
             </select></span>
+            <span class="pair"><label for="burst-gap">Burst gap <output id="burst-gap-value" for="burst-gap">2 s</output></label>
+            <input type="range" id="burst-gap" min="0.5" max="10" step="0.5" value="2" aria-describedby="burst-gap-help"></span>
+            <span id="burst-gap-help" class="sr-only">Frames closer than this many seconds form one burst; changing it regroups every burst and keeps your merges, splits and picks.</span>
           </span>
           <button type="button" id="open-compare" class="secondary" aria-haspopup="dialog" hidden disabled>Compare marked</button>
+          <button type="button" id="jump-selected" class="secondary" hidden>Jump to selected</button>
           <button type="button" id="shortcuts-button" class="secondary" aria-haspopup="dialog">Shortcuts</button>
         </div>
         <form id="filter-form" class="filter-form" aria-label="Filter frames">
@@ -364,6 +373,8 @@
             </select></span>
             <button type="button" id="reset-filters" class="secondary">Reset</button>
           </div>
+          <details id="filter-more">
+          <summary><span id="filter-more-label">More filters</span></summary>
           <div class="filter-row">
             <span class="pair"><label for="filter-from">From</label><input type="date" id="filter-from"></span>
             <span class="pair"><label for="filter-to">To</label><input type="date" id="filter-to"></span>
@@ -371,9 +382,6 @@
             <label for="filter-tagged" class="toggle"><input type="checkbox" id="filter-tagged"> Tagged only</label>
             <label for="filter-export-failed" class="toggle"><input type="checkbox" id="filter-export-failed"> Export failed</label>
           </div>
-        </form>
-        <details id="refine-fold">
-          <summary>Refine previews</summary>
           <span class="refine-controls">
             <span class="pair"><label for="refine-scope">Refine</label>
             <select id="refine-scope" aria-describedby="refine-availability">
@@ -385,20 +393,18 @@
           </span>
           <p id="refine-availability" class="quiet refine-note"></p>
           <p id="refine-status" class="refine-note"></p>
-        </details>
+          </details>
+        </form>
         </div>
         <div id="contact-sheet" class="contact-sheet" aria-live="polite"></div>
         <button type="button" id="show-more" class="secondary" hidden>Show 200 more</button>
+        <button type="button" id="back-to-top" class="secondary">Back to top</button>
       </section>
     </main>
 
   </div>
 
   <footer class="ai-bar" aria-label="Local AI">
-    <span class="pair" id="role-model-pair" hidden><label for="review-model">Review model</label>
-    <select id="review-model" data-role="review"></select>
-    <label for="fast-model">Fast model</label>
-    <select id="fast-model" data-role="fast"></select></span>
     <p id="ai-availability" class="quiet"></p>
     <p id="ai-status" role="status" aria-live="polite">Local AI idle. Requests and their results are reported here.</p>
     <section id="job-strip" class="job-strip" aria-label="Background job" hidden>
@@ -421,6 +427,31 @@
     </div>
   </dialog>
 
+  <dialog id="about" aria-labelledby="about-heading">
+    <form method="dialog">
+      <h2 id="about-heading"><img class="mark" src="/static/mark.svg" alt="" width="28" height="28">About Lumen</h2>
+      <p>Lumen is a photography manager for Sony raw files that runs entirely on this Mac. It never edits, moves, renames or deletes a camera original: previews, picks, crops, develop settings and exports all live inside the Lumen library. Nothing is sent anywhere; the local AI is a model running on this machine.</p>
+      <p class="quiet">Made by Nasir David. © 2026 Jahan Interactive Pty Ltd, released under the <a href="https://github.com/jahaninteractive/lumen/blob/main/LICENSE" rel="noopener">MIT License</a>.</p>
+      <div class="about-columns">
+      <div>
+      <h3>Installed</h3>
+      <dl id="about-tools"></dl>
+      </div>
+      <div>
+      <h3>Credits</h3>
+      <ul class="credits">
+        <li><a href="https://www.geonames.org/" rel="noopener">GeoNames</a> place names, licensed <a href="https://creativecommons.org/licenses/by/4.0/" rel="noopener">CC BY 4.0</a>.</li>
+        <li><a href="https://www.naturalearthdata.com/" rel="noopener">Natural Earth</a> base map, public domain.</li>
+        <li>Map regions © <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap</a> contributors, licensed <a href="https://opendatacommons.org/licenses/odbl/" rel="noopener">ODbL</a>.</li>
+        <li><a href="https://www.darktable.org/" rel="noopener">darktable</a> and <a href="https://siril.org/" rel="noopener">Siril</a>, both GPL-3.0.</li>
+        <li><a href="https://exiftool.org/" rel="noopener">ExifTool</a> by Phil Harvey, and <a href="https://python-pillow.org/" rel="noopener">Pillow</a>.</li>
+        <li><a href="https://github.com/jundot/omlx" rel="noopener">oMLX</a> serves the local models; the Qwen models are Apache-2.0, by Alibaba Cloud.</li>
+      </ul>
+      </div>
+      </div>
+      <button type="submit" class="secondary">Close</button>
+    </form>
+  </dialog>
   <dialog id="shortcuts" aria-labelledby="shortcuts-heading">
     <form method="dialog">
       <h2 id="shortcuts-heading">Keyboard shortcuts</h2>

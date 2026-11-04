@@ -567,19 +567,21 @@ class WebTests(unittest.TestCase):
             self.assertIn(word, javascript)
         self.assertNotRegex(javascript, r"job[^\n]*\.innerHTML")
 
-    def test_footer_strip_holds_model_selects_availability_activity_and_jobs(self):
+    def test_footer_strip_holds_availability_activity_and_jobs_and_the_rail_holds_model_selects(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         footer = next(node for node in parser.nodes if node["tag"] == "footer")
         header = next(node for node in parser.nodes if node["tag"] == "header")
-        for name in ("role-model-pair", "ai-availability", "ai-status", "job-strip"):
+        for name in ("ai-availability", "ai-status", "job-strip"):
             self.assertIn(footer, by_id[name]["parents"], name)
             self.assertNotIn(header, by_id[name]["parents"], name)
+        self.assertIn(by_id["rail-header"], by_id["role-model-pair"]["parents"], "the model selects sit at the top of the rail, above Batches")
+        self.assertNotIn(footer, by_id["role-model-pair"]["parents"])
         order = [node["attrs"]["id"] for node in parser.nodes
-                 if node["attrs"].get("id") in {"role-model-pair", "ai-availability", "ai-status", "job-strip"}]
-        self.assertEqual(["role-model-pair", "ai-availability", "ai-status", "job-strip"], order)
+                 if node["attrs"].get("id") in {"ai-availability", "ai-status", "job-strip"}]
+        self.assertEqual(["ai-availability", "ai-status", "job-strip"], order)
         self.assertIn("hidden", by_id["job-strip"]["attrs"])
         self.assertEqual("quiet", by_id["ai-availability"]["attrs"].get("class"))
 
@@ -846,6 +848,29 @@ class WebTests(unittest.TestCase):
             self.assertEqual([[1], [2]], sorted([photo["id"] for photo in group["photos"]] for group in groups))
         code, result = self.post_json("/api/photos/2/split", {})
         self.assertEqual((400, "photo 2 is already in a burst of its own"), (code, result["error"]))
+
+    def test_burst_gap_route_validates_and_regroups(self):
+        for index in (1, 2):  # three frames 1 s apart including the fixture frame's sibling
+            exif = Image.Exif(); exif[36867] = f"2026:10:21 12:00:0{index}"
+            Image.new("RGB", (40, 30), (80, 100, 120)).save(self.root / f"t{index}.jpg", exif=exif)
+        with Library(Settings(library_dir=self.root / "library", near_duplicate_distance=0)) as library:
+            library.import_path(self.root)
+        self.assertEqual(2.0, self.get_json("/api/groups")[1]["burst_gap_seconds"])
+        for payload in ({}, {"seconds": "2"}, {"seconds": 0}, {"seconds": 11}, {"seconds": 2, "extra": 1}):
+            with self.subTest(payload=payload):
+                self.assertEqual(400, self.post_json("/api/burst-gap", payload)[0])
+        self.assertEqual(403, self.post_json("/api/burst-gap", {"seconds": 1}, headers={"Origin": "https://attacker.example"})[0])
+        code, result = self.post_json("/api/burst-gap", {"seconds": 0.5})
+        self.assertEqual((200, 0.5), (code, result["burst_gap_seconds"]), result)
+        groups = self.get_json("/api/groups")[1]
+        self.assertEqual(0.5, groups["burst_gap_seconds"])
+        self.assertEqual(result["groups"], len(groups["groups"]))
+        self.assertTrue(all(len(group["photos"]) == 1 for group in groups["groups"] if any(photo["name"].startswith("t") for photo in group["photos"])))
+        self.assertEqual(200, self.post_json("/api/burst-gap", {"seconds": 5})[0])
+        groups = self.get_json("/api/groups")[1]
+        timed = [group for group in groups["groups"] if any(photo["name"].startswith("t") for photo in group["photos"])]
+        self.assertEqual(1, len(timed))
+        self.assertEqual(2, len(timed[0]["photos"]))
 
     def test_merge_route_validates_ids_and_merges_into_earliest_group(self):
         second = self.root / "second.jpg"
@@ -1675,6 +1700,40 @@ console.log(JSON.stringify([panel.hidden, store]));
             self.assertEqual(400, code)
             self.assertIn("review model Qwen3.8-27B-4bit is not loaded", body["error"])
             self.assertFalse(any(j["kind"] == "assist" and j["status"] in ("queued", "running") for j in self.get_json("/api/jobs")[1]["jobs"]))
+
+    def test_cull_route_runs_one_job_over_every_burst_with_the_review_model(self):
+        from lumen.omlx import BurstCritique, DevelopAdvice
+
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = kwargs.get("role") + "-model", kwargs.get("role")
+            def critique_burst(self, frames): return BurstCritique(frames[0][0], "ok", 0.5, "{}")
+            def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None): return DevelopAdvice({}, "Fine as is.", "{}")
+
+        def render(source, destination, executable, *, settings=None, long_edge=0, image_format="tiff16", histogram=False, runner=None):
+            Image.new("RGB", (64, 48)).save(destination, format="JPEG")
+            return DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={}, lens_correction_supported=False,
+                                 neutral_temperature=5500.0, neutral_tint=0.0)
+
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.OmlxTagger", FakeTagger), \
+                patch("lumen.library.render_raw", side_effect=render):
+            for payload in ({"scope": "keepers"}, {"redo": "yes"}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/photos/cull", payload)[0])
+            code, job = self.post_json("/api/photos/cull", {})
+            self.assertEqual((202, "cull"), (code, job["kind"]))
+            done = self.wait_job(job["job_id"])
+            self.assertEqual(("succeeded", {"picked": 0, "advised": 1, "skipped": 0, "failed": 0}), (done["status"], done["result"]))
+            self.assertEqual("Fine as is.", self.get_json("/api/photos/1")[1]["advice"]["rationale"])
+        fast_only = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=fast_only), patch("lumen.library.OmlxTagger", FakeTagger):
+            code, body = self.post_json("/api/photos/cull", {})
+            self.assertEqual(400, code)
+            self.assertIn("review model Qwen3.8-27B-4bit is not loaded", body["error"])
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('id="cull-bursts"', html)
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("'/api/photos/cull'", js)
 
     def test_review_panel_has_native_rows_keys_and_counted_confirmation(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
@@ -3776,6 +3835,24 @@ const regression = `
     assert.equal(prevented, before, 'brackets do nothing on the sheet');
     return;
   }
+  if (scenario === 'about') {
+    await load();
+    state.status = { ...state.status, version: '0.3.0', raw_developer: { available: true, path: '/secret/bin/raw_developer' }, vision_analyzer: { available: false },
+      tools: { exiftool: { available: true, version: '13.55', path: '/opt/homebrew/bin/exiftool' }, 'darktable-cli': { available: true, version: '5.6.2' } }, geonames: { dir: '/secret/geonames', places: 358424 }, map: { dir: '/secret/map', layers: 11 } };
+    element('#app-version').listeners.click();
+    assert.equal(element('#about').hidden, false);
+    const rows = element('#about-tools').children;
+    const pairs = []; for (let i = 0; i < rows.length; i += 2) pairs.push([rows[i].textContent, rows[i + 1].textContent, rows[i + 1].dataset.ok]);
+    assert.deepEqual(pairs[0], ['Lumen', 'v0.3.0', 'true']);
+    assert.ok(pairs.some(([name, text, ok]) => name === 'exiftool' && text === '13.55' && ok === 'true'), JSON.stringify(pairs));
+    assert.ok(pairs.some(([name, text, ok]) => name === 'Vision analyzer' && text.startsWith('missing') && ok === 'false'));
+    assert.ok(pairs.some(([name, text]) => name === 'GeoNames' && text.includes('358')));
+    assert.ok(pairs.some(([name, text, ok]) => name === 'Map layers' && text === '11 of 11' && ok === 'true'));
+    assert.ok(!JSON.stringify(pairs).includes('/secret') && !JSON.stringify(pairs).includes('/opt/'), 'never a path');
+    element('#about').listeners.keydown({ key: 'Escape' });
+    assert.equal(element('#about').hidden, true);
+    return;
+  }
   if (scenario === 'expand-search') {
     await load();
     const button = element('#expand-search');
@@ -3787,7 +3864,7 @@ const regression = `
     await button.listeners.click();
     await new Promise(setImmediate);
     assert.deepEqual(expandPosts, [{ query: 'seabirds' }]);
-    assert.deepEqual([text.value, element('#find').value], ['seabirds | tern | gull', 'seabirds | tern | gull']);
+    assert.equal(text.value, 'seabirds | tern | gull');
     assert.equal(new URLSearchParams(location.search).get('text'), 'seabirds | tern | gull');
     assert.equal(lastGroupsUrl, '/api/groups?' + new URLSearchParams({ text: 'seabirds | tern | gull' }));
     assert.equal(element('#announcer').textContent, 'Expanded to 3 terms');
@@ -3806,19 +3883,17 @@ const regression = `
     await inspect(state.groups[0].photos[0]);
     assert.equal(reasons(), undefined, 'no match line without a find');
     groups[0].photos[0].matched = ['keyword: ice'];
-    const find = element('#find');
+    const find = element('#filter-text');
     find.tagName = 'INPUT';
-    find.value = 'ice';
     const flush = () => new Promise(setImmediate);
     const type = async (control, value) => { control.value = value; control.listeners.input(); await flush(); };
     const fire = async () => { const due = [...timeouts.values()]; timeouts.clear(); due.forEach(callback => callback()); await flush(); };  // never await: an apply may wait on a deferred reply
     await type(find, 'ice');
     assert.equal(lastGroupsUrl, '/api/groups', 'find is debounced');
-    assert.equal(element('#filter-text').value, 'ice', 'the form mirrors find at once');
     await fire();
     assert.equal(lastGroupsUrl, '/api/groups?text=ice');
     assert.equal(location.search, '?text=ice');
-    assert.equal(find.value, 'ice', 'syncFilters keeps the rail find in step with the URL');
+    assert.equal(find.value, 'ice', 'syncFilters keeps the text field in step with the URL');
     await inspect(state.groups[0].photos[0]);
     assert.equal(reasons().textContent, 'Matches: keyword: ice');
     const posts = decisionPosts.length;
@@ -4310,21 +4385,21 @@ const regression = `
     assert.equal(dialog.hidden, false, 'the progress dialog opens when the job is accepted');
     assert.equal(element('#export-dialog-cancel').hidden, false);
     assert.equal(element('#export-dialog-close').hidden, true);
-    assert.equal(element('#ai-status').dataset.phase, 'running');
+    assert.equal(element('#ai-status').dataset.phase, undefined, 'a job never writes the AI line');
     assert.ok(element('#export-status').textContent.includes('status bar'));
     await tick();
     assert.equal(element('#export-dialog-label').textContent, '1 of 2 · photo-1.jpg');
     assert.equal(element('#export-dialog-progress').value, 50);
     assert.equal(element('#export-dialog-status').textContent, 'Export running.');
-    assert.equal(element('#ai-status').textContent, 'Export running. 1 of 2 · photo-1.jpg', 'the bottom status bar carries the same progress');
-    assert.ok(element('#job-label').textContent.includes('Export 17 · 1 of 2'));
+    assert.equal(element('#job-status').textContent, 'Export running.', 'the job strip is the only footer line for a job');
+    assert.ok(element('#job-label').textContent.includes('Export 17 · 1 of 2 · photo-1.jpg'));
     if (scenario === 'export-cancel') {
       await element('#export-dialog-cancel').listeners.click();
       assert.equal(exportCancels, 1);
       assert.equal(state.job.status, 'cancelled');
       assert.equal(activeTimers, 0);
       assert.equal(element('#export-dialog-status').textContent, 'Export cancelled. Finished items are kept.');
-      assert.equal(element('#ai-status').dataset.phase, 'failed');
+      assert.equal(element('#job-status').textContent, 'Export cancelled. Finished items are kept.');
       assert.equal(element('#export-dialog-cancel').hidden, true);
       assert.equal(element('#export-dialog-close').hidden, false);
       return;
@@ -4335,8 +4410,8 @@ const regression = `
     assert.equal(element('#export-dialog-status').textContent, 'Export finished. 1 saved, 1 failed. Tick Export failed in the filters to see them.');
     assert.equal(element('#export-status').textContent, 'Export finished. 1 saved, 1 failed. Tick Export failed in the filters to see them.');
     assert.deepEqual(element('#export-results').children.map(item => item.textContent), ['photo-2.jpg: bad render'], 'failures are listed by basename');
-    assert.equal(element('#ai-status').dataset.phase, 'done');
-    assert.equal(element('#ai-status').textContent, 'Export finished. 1 saved, 1 failed. Tick Export failed in the filters to see them.');
+    assert.equal(element('#ai-status').dataset.phase, undefined, 'a finished job leaves the AI line alone');
+    assert.equal(element('#job-status').textContent, 'Export finished. 1 saved, 1 failed. Tick Export failed in the filters to see them.');
     assert.equal(element('#export-dialog-cancel').hidden, true);
     assert.equal(element('#export-dialog-close').hidden, false);
     assert.equal(dialog.hidden, false, 'the outcome stays visible until closed');
@@ -4547,7 +4622,7 @@ const regression = `
     assert.deepEqual(assistPosts, [{ scope: 'keepers' }]);
     assert.equal(state.job.kind, 'assist');
     assert.ok(element('#job-label').textContent.startsWith('Local AI assist'), element('#job-label').textContent);
-    assert.equal(element('#ai-status').dataset.phase, 'running');
+    assert.equal(element('#ai-status').dataset.phase, undefined, 'the job strip, not the AI line, reports the job');
     assert.equal(button.disabled, true, 'one job at a time');
     state.job = null;
     updateWorkflow();
@@ -4734,7 +4809,8 @@ const regression = `
     groups = [{ ...group(1, [1, 2]), started_at: '2026-10-21T08:00:00+00:00' }, { ...group(2, [3]), started_at: '2026-10-21T09:30:00+00:00' }];
     await load();
     const sections = () => element('#contact-sheet').children;
-    assert.deepEqual(sections().map(section => [section.tagName, section.className, section.dataset.burst]), [['SECTION', 'burst', 1], ['SECTION', 'burst', 2]]);
+    assert.deepEqual(sections().map(section => [section.tagName, section.className, section.dataset.burst]), [['SECTION', 'burst', 1], ['SECTION', 'burst burst-single', 2]], 'a one-frame burst flows beside other singles');
+    assert.ok(!texts(sections()[1]).join(' ').includes('1 frame'), 'a single names no count; the tile names the frame');
     for (const section of sections()) {
       const heading = tree(section).find(node => node.tagName === 'H3');
       assert.equal(section.getAttribute('aria-labelledby'), heading.id, 'each burst section is labelled by its heading');
@@ -4993,14 +5069,16 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_decisions_update_cards_in_place_and_keeper_count(self):
         self.run_javascript_cleanup_regression("decisions")
 
-    def test_filter_bar_is_two_rows_without_apply_or_fold(self):
+    def test_filter_bar_is_one_row_without_apply_and_folds_the_rest(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         form = by_id["filter-form"]
-        rows = [node for node in parser.nodes if node["parents"] and node["parents"][-1] is form and "filter-row" in node["attrs"].get("class", "")]
+        rows = [node for node in parser.nodes if form in node["parents"] and "filter-row" in node["attrs"].get("class", "")]
         self.assertEqual(2, len(rows))
+        self.assertIs(form, rows[0]["parents"][-1], "the first row is in view")
+        self.assertIs(by_id["filter-more"], rows[1]["parents"][-1], "the second row folds under More filters")
         for name in ("filter-text", "expand-search", "filter-status", "filter-rating", "reset-filters"):
             self.assertIn(rows[0], by_id[name]["parents"], f"{name} sits on the first row")
         for name in ("filter-from", "filter-to", "filter-camera", "filter-tagged"):
@@ -5008,7 +5086,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         heading = by_id["contact-heading"]["parents"][-1]
         for name in ("tile-size", "open-compare", "shortcuts-button"):
             self.assertIn(heading, by_id[name]["parents"], f"{name} sits in the heading row, apart from the filters")
-        self.assertFalse(any(node["tag"] in {"details", "summary"} and form in node["parents"] for node in parser.nodes), "no folded section")
+        self.assertEqual(["filter-more"], [node["attrs"].get("id") for node in parser.nodes if node["tag"] == "details" and form in node["parents"]], "one fold, for the second row")
         self.assertFalse(any(node["tag"] == "button" and node["attrs"].get("type") == "submit" and form in node["parents"] for node in parser.nodes), "no Apply button")
         self.run_javascript_cleanup_regression("filter-live")
 
@@ -5021,16 +5099,38 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_reload_forgets_a_frame_that_is_gone(self):
         self.run_javascript_cleanup_regression("resume-gone")
 
+    def test_about_dialog_opens_from_the_version_and_credits_the_data_and_tools(self):
+        html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('<button type="button" class="subtitle version" id="app-version" aria-haspopup="dialog"', html)
+        self.assertIn('<dialog id="about" aria-labelledby="about-heading">', html)
+        for needle in ("Made by Nasir David", "Jahan Interactive Pty Ltd", "MIT License", "geonames.org", "CC BY 4.0", "naturalearthdata.com", "openstreetmap.org/copyright", "ODbL", "darktable.org", "siril.org", "exiftool.org", "python-pillow.org", "github.com/jundot/omlx"):
+            self.assertIn(needle, html, f"the credits name {needle}")
+        self.run_javascript_cleanup_regression("about")
+
     def test_javascript_expand_search_posts_the_query_and_applies_the_or_text(self):
         self.run_javascript_cleanup_regression("expand-search")
 
     def test_javascript_find_input_filters_and_inspector_shows_match_reasons(self):
         self.run_javascript_cleanup_regression("find")
 
-    def test_rail_find_input_is_labelled_and_mirrors_the_text_filter(self):
+    def test_rail_has_no_find_and_the_filter_bar_folds_its_second_row(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
-        self.assertIn('<label for="find">Find</label>', html)
-        self.assertIn('id="find"', html)
+        self.assertNotIn('id="find"', html, "the rail find was the text filter under another name")
+        self.assertIn('<details id="filter-more">', html)
+        self.assertIn('<summary><span id="filter-more-label">More filters</span></summary>', html)
+        self.assertNotIn('id="refine-fold"', html, "Refine previews lives under More filters")
+        self.assertIn('id="rail-toggle" class="secondary" aria-expanded="true" aria-controls="batch-rail"', html)
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        fold = by_id["filter-more"]
+        for name in ("filter-from", "filter-camera", "filter-export-failed", "refine-previews", "refine-status"):
+            self.assertIn(fold, by_id[name]["parents"], f"{name} folds under More filters")
+        for name in ("filter-text", "filter-status", "filter-rating", "reset-filters"):
+            self.assertNotIn(fold, by_id[name]["parents"], f"{name} stays in view")
+        js = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertNotIn("'#find'", js)
+        self.assertIn("lumen-rail-hidden", js)
 
     def test_javascript_all_rejected_burst_explains_no_keeper_and_offers_pick(self):
         self.run_javascript_cleanup_regression("all-rejected")
@@ -5446,7 +5546,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertTrue(any(node["tag"] == "legend" and node["text"].strip() == "Show" for node in parser.nodes if by_id["filter-status"] in node["parents"]))
         self.assertEqual(["0", "1", "2", "3", "4", "5"], options("filter-rating"))
         buttons = {node["text"].strip(): node["attrs"].get("type") for node in parser.nodes if node["tag"] == "button" and form in node["parents"]}
-        self.assertEqual({"Reset": "button", "Expand search": "button"}, buttons)
+        self.assertEqual({"Reset": "button", "Expand search": "button", "Refine previews": "button"}, buttons)
         self.assertEqual("ai-availability", by_id["expand-search"]["attrs"].get("aria-describedby"))
         more = by_id["show-more"]
         self.assertEqual(("button", "button"), (more["tag"], more["attrs"].get("type")))
@@ -5504,21 +5604,19 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         parser = LandmarkParser()
         parser.feed(html)
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
-        fold = by_id["refine-fold"]
+        fold = by_id["filter-more"]
         self.assertEqual("details", fold["tag"])
         summary = next(node for node in parser.nodes if node["tag"] == "summary" and node["parents"][-1] is fold)
-        self.assertEqual("Refine previews", summary["text"].strip())
+        self.assertEqual("More filters", summary["text"].strip())
         top = next(node for node in parser.nodes if "contact-top" in node["attrs"].get("class", "").split())
-        self.assertIs(top, fold["parents"][-1])
+        self.assertIs(by_id["filter-form"], fold["parents"][-1], "the fold is the filter form's last part")
         self.assertIs(top, by_id["filter-form"]["parents"][-1])
-        order = [node["attrs"].get("id") for node in parser.nodes if node["parents"] and node["parents"][-1] is top]
-        self.assertEqual(order.index("filter-form") + 1, order.index("refine-fold"), "the fold sits directly after the filter bar")
         for name in ("refine-scope", "refine-previews", "refine-availability", "refine-status"):
             self.assertIn(fold, by_id[name]["parents"], name)
         view = next(node for node in parser.nodes if node["attrs"].get("class") == "view-controls")
         self.assertEqual(["tile-size"], [node["attrs"]["id"] for node in parser.nodes if view in node["parents"] and node["tag"] in ("select", "button")])
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
-        self.assertRegex(styles, r"#refine-fold summary[^{]*\{[^}]*min-height: 44px")
+        self.assertRegex(styles, r"#filter-more summary[^{]*\{[^}]*padding: \.3rem 0")
         self.assertRegex(styles, r"\.rail-header button \{ width: 100%; \}")
 
     def test_javascript_cleanup_selection_follows_photo_after_group_refresh(self):
@@ -5547,7 +5645,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(1 if retain_success else 0, sum(len(group["photos"]) for group in payload["groups"]))
         self.run_javascript_cleanup_regression("workspace-mixed" if retain_success else "workspace-ungrouped")
         with urllib.request.urlopen(self.base + "/api/groups", timeout=3) as response:
-            self.assertEqual({"groups": [], "photo_count": 0, "rejected_count": 0, "counts": {"filtered": 0, "total": 0}, "cameras": [], "keeper_count": 0}, json.load(response))
+            self.assertEqual({"groups": [], "photo_count": 0, "rejected_count": 0, "counts": {"filtered": 0, "total": 0}, "cameras": [], "keeper_count": 0, "burst_gap_seconds": 2.0}, json.load(response))
         with Library(Settings(library_dir=self.root / "library")) as library:
             self.assertEqual([], library.catalog.list_photos())
 
@@ -5842,9 +5940,12 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual(["map-side"], [node["attrs"].get("class") for node in parser.nodes if node["tag"] == "aside"], "the inspector rail is gone; the frame view holds the inspector")
         header = by_id["rail-header"]
         self.assertIn(nav, header["parents"])
-        for name in ("merge-batches", "merge-count", "jump-selected", "back-to-top"):
+        for name in ("merge-batches", "merge-count"):
             self.assertIn(header, by_id[name]["parents"], f"{name} lives in the sticky rail header")
-        for name in ("merge-batches", "jump-selected", "back-to-top"):
+        for name in ("rail-toggle", "jump-selected"):
+            self.assertIn(by_id["contact-heading"]["parents"][-1], by_id[name]["parents"], f"{name} sits in the sheet heading")
+        self.assertNotIn(nav, by_id["back-to-top"]["parents"], "Back to top floats at the foot of the sheet, not in the rail")
+        for name in ("merge-batches", "jump-selected", "back-to-top", "rail-toggle"):
             node = by_id[name]
             self.assertEqual(("button", "button"), (node["tag"], node["attrs"].get("type")))
             self.assertTrue(node["text"].strip() or node["attrs"].get("aria-label"), f"{name} needs an accessible name")

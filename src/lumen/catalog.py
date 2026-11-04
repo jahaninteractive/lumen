@@ -230,6 +230,10 @@ class Catalog:
                 fingerprint TEXT PRIMARY KEY,
                 cleared_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         self.connection.commit()
@@ -960,6 +964,14 @@ class Catalog:
             self.connection.execute("UPDATE metrics SET total_score = ? WHERE photo_id = ?", (score, photo_id))
         self.connection.commit()
         return group_id
+
+    def get_preference(self, key: str) -> str | None:
+        row = self.connection.execute("SELECT value FROM preferences WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_preference(self, key: str, value: str) -> None:
+        with self.connection:
+            self.connection.execute("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", (key, value))
 
     def clear_group_assignments(self) -> None:
         self.connection.execute("UPDATE photos SET group_id = NULL")

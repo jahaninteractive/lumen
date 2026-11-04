@@ -1,7 +1,7 @@
 # Lumen user guide
 
 Everything a photographer does after install, in the order a shoot goes:
-ingest, cull, frame view, places, local AI, export, refine, stack. Install and
+ingest, cull, frame view, places, map, local AI, export, refine, stack. Install and
 first run are in the [README](../README.md).
 
 ## What is working
@@ -19,7 +19,8 @@ first run are in the [README](../README.md).
   the profile, and Lumen then refuses it as "not sRGB" rather than guess.
 - Embedded Sony RAW preview extraction through ExifTool, with `sips` and
   darktable fallbacks.
-- Deterministic 2-second burst grouping by camera and capture time.
+- Deterministic burst grouping by camera and capture time, 2 s apart by
+  default, with a saved slider from 0.5 to 10 s that regroups the catalog.
 - Explainable best-shot scoring from sharpness, exposure, and optional macOS
   Vision face/eye quality.
 - Approximate sky background, highlight clipping, star count, and trailing
@@ -31,6 +32,13 @@ first run are in the [README](../README.md).
   already done.
 - Burst critique (which frame is best and why), per-day digests, and sky-frame
   triage from the local models; none of them pick, reject, or exclude for you.
+- One job that asks the review model to name the best frame of every burst,
+  sets it as the pick, and parks suggested develop settings on it, skipping
+  bursts already done and never undoing a frame you chose by hand.
+- A Map tab: frames with a position over an offline Natural Earth base map
+  with terrain, sea and peak names, clustered when they crowd, with GPX and
+  GeoJSON overlays, geotagging along a track, three map styles, and frames
+  from earlier imports read from the trash snapshots.
 - GPS location read from the original and kept in the catalog and Full exports,
   resolved offline to a place name and country from a local GeoNames index.
   Frames without GPS take a position you type (a ship's display, a map), and a
@@ -120,6 +128,15 @@ second CLI process exit 2 and say the catalog is in use. Stop the server or use
 the web page.
 
 ## Cull
+
+Bursts are frames from one camera less than the **Burst gap** apart, 2 s by
+default. The slider beside **Tiles** moves it from 0.5 to 10 s; releasing it
+regroups every burst in the catalog at the new gap and announces the count.
+The gap is saved with the catalog, so imports and restarts keep it, and
+regrouping is the same pass an import runs: your merges, splits and hand picks
+survive it, and near-duplicate splitting still applies inside a burst. Widen
+it for slow sequences (a bird working a perch, a ship's bow coming round);
+narrow it when unrelated frames land together.
 
 Each frame can be flagged, rejected, or cleared, and rated 0 to 5 stars.
 Rejecting is a decision, never a deletion. From the CLI:
@@ -272,19 +289,21 @@ corrected.
 
 ## Filters and paging
 
-The filter bar has two rows and every control applies as soon as it changes;
-there is no Apply button. Row one holds tag text with Expand, a status choice
-(**All**, **Keepers**, **Flagged**, **Unsorted**, **Rejected**), minimum rating,
-and Reset. Row two holds the date range, camera, **Tagged only**, and **Export
-failed** (frames whose last export failed; one that later exports drops out).
-**All**
-hides rejected frames; choose **Rejected** to review them. The heading shows
-"N of M frames" while a filter is on, and carries Tiles and Shortcuts;
-**Compare marked** appears once a frame is marked, and **Refine previews**
-folds under the filter bar. The heading and filter bar stay pinned under the tabs
-while the sheet scrolls; on a phone-width window they scroll with it. Clicking
-the open tab again (Add photos, Review, …) folds its panel away, and a further
-click brings it back. Filters live in the page URL, so a reload or
+Every filter control applies as soon as it changes; there is no Apply button.
+The bar holds tag text with Expand, a status choice (**All**, **Keepers**,
+**Flagged**, **Unsorted**, **Rejected**), minimum rating, and Reset. **More
+filters** folds the date range, camera, **Tagged only**, **Export failed**
+(frames whose last export failed; one that later exports drops out) and
+**Refine previews** beneath it; it opens itself and shows how many are set
+whenever one of them is. **All** hides rejected frames; choose **Rejected** to
+review them. The heading shows "N of M frames" while a filter is on, and
+carries **Batches** (hides or shows the left rail, remembered per browser),
+Tiles, Burst gap, **Jump to selected** and Shortcuts; **Compare marked**
+appears once a frame is marked. **Back to top** floats at the foot of the
+sheet. The Review model and Fast model selects sit at the top of the rail. The version in the masthead opens **About Lumen** (what is installed, and the data and tool credits). One-frame bursts sit side by side like tiles with a one-line header.
+The heading and filter bar stay pinned under the tabs while the sheet scrolls;
+on a phone-width window they scroll with it. Clicking the open tab again (Add
+photos, Review, …) folds its panel away, and a further click brings it back. Filters live in the page URL, so a reload or
 bookmark keeps them. Frames are grouped by capture day and shown 200 at a time;
 the button after the last frame shows the next page. Separate tag-text terms
 with `|` to match any of them (`heron | egret`). **Expand search** asks
@@ -373,6 +392,67 @@ instead, at most one request per second. Privacy: only then do coordinates leave
 the Mac. Each answer is cached into the local index, so later frames nearby
 resolve offline without asking again.
 
+## Map
+
+The **Map** tab shows where the frames were taken, offline. Frames with a
+position (the camera's fix, a typed one, or one placed from a track) draw over
+an eleven-layer Natural Earth base map: coastline, borders, rivers, lakes,
+roads, towns, land, seas, terrain regions and peaks. Names appear as you zoom
+in; peaks carry their height from zoom 8. The frame view's **Show on map** link
+opens the tab centred on that frame, and the frame dialog names the terrain
+round a fix after its place.
+
+- **Frames** picks what is drawn. *Shown frames* follows the Review filters,
+  *Whole catalog* shows everything, and *Everything ever imported* adds frames
+  cleared in earlier sessions (read from the trash snapshots, including
+  rejects) as hollow dots; clicking one opens a card with its thumbnail, time,
+  place, decision and rating and says to import its folder again with Include
+  cleared to work on it.
+- Frames that crowd become a cluster with a count. From zoom 9 a cluster shows
+  its best frame as a thumbnail. Click a cluster to fan up to 12 of its frames
+  out on a ring (flagged first, then by rating and time, rejects last);
+  **Show all n in Review** narrows the Review filter to exactly those frames.
+  Double-click zooms into a cluster. Clicking a frame opens it, narrowing
+  Review to that day if the frame is off the sheet.
+- **Frames in view** lists the drawn frames in the same order for the keyboard
+  and screen readers. On the canvas, arrow keys pan, `+` and `-` zoom, `0` fits
+  every frame, Enter opens the selected frame (else whatever sits nearest the
+  centre), and Escape folds a ring or closes a card.
+- **Map style** offers Workbench (the charcoal look), Natural dark and Natural
+  light, remembered per browser. Frames, clusters and tracks keep their colours
+  in all three.
+
+**Overlays.** Drop `.gpx` or `.geojson` files anywhere on the panel, or use
+**Add GPX or GeoJSON**, and they draw with their waypoints; each is listed with
+its day and time span and a **Remove** button. The files live in
+`<library>/map/overlays/`, so copying them there by hand works too. A file that
+cannot be indexed is listed with its error.
+
+**Place frames on a track.** Choose a track, and the panel reports how many of
+the frames without a fix would be placed and how many fall outside the track's
+times. Lumen interpolates a position between the two track points around each
+capture time, up to **Max gap** minutes apart (1 to 120, default 10), using the
+**Camera clock offset** it reads from the frames (else the Mac's zone) and
+shows for you to correct. **Place frames** writes them as typed positions; a
+camera fix is never touched, and a position typed earlier is replaced only with
+**Replace positions typed earlier** ticked. The placed frames then resolve to a
+place name like any typed position.
+
+**Detail for one area.** The base map has no park boundaries or minor roads,
+and its 1:10m coastline loses bays narrower than about a kilometre.
+`uv run lumen map-region <name> --bbox S,W,N,E` fetches parks, roads, water and
+the coastline for one bounding box (at most 4 square degrees) from OpenStreetMap's Overpass
+API into `<library>/map/regions/`. This is the only part of the map that goes
+online, and only when you run it; `lumen serve` never does.
+
+**Data and index.** `zsh scripts/bootstrap.sh` fetches the eleven layers (about
+100 MB) into `vendor/data/map/` (`LUMEN_MAP_DIR`) at a pinned commit with
+SHA-256s; Lumen indexes them with every region and overlay into
+`<library>/cache/map.sqlite` the first time the tab is opened (a few seconds)
+and reparses only files that changed. `lumen doctor` reports the layers it
+found under `map`. Without the folder the tab still draws frames and tracks,
+over nothing. Natural Earth data is public domain.
+
 ## Local AI
 
 Everything below runs through your local oMLX server and is advisory: the
@@ -397,7 +477,7 @@ Lumen lets you switch each role between them instead of fixing one:
 
 - At startup, `lumen serve` puts the review role on the 27B if oMLX has it
   loaded, and on the 8B if it does not.
-- The **Review model** dropdown in the footer strip switches the running server
+- The **Review model** dropdown at the top of the left rail switches the running server
   between the two. An unloaded model is marked "(not loaded)". The choice is
   not saved: a restart picks again by the rule above. Run the same caption or
   **Where to start** on a frame, flip the dropdown, and run it again to compare.
@@ -461,8 +541,20 @@ skipped, a failing step is logged and the next still runs):
 uv run lumen assist --keepers        # or --all
 ```
 
-The UI button is **Tag, scan and caption keepers (N)** in the Assist tab. The other
-model actions, each also available from the UI:
+The UI button is **Tag, scan and caption keepers (N)** in the Assist tab.
+
+**Pick and develop every burst (N)**, above it, runs one job over every burst
+on the review model: the model names the best frame of the burst, that frame
+becomes the pick, and the model then suggests develop settings for it, parked
+on its Develop tab as **Park the handles here**. A burst whose every frame is
+rejected is skipped and a lone keeper is its own pick. Bursts already picked
+and advised are skipped unless **Redo finished work** is ticked, and a rerun
+never undoes a frame you chose by hand. Nothing is developed or exported: the
+pick is the same advisory pick as **Pick the best frame**, and the settings
+wait for you to park and save them. A failing burst is logged and the next
+still runs.
+
+The other model actions, each also available from the UI:
 
 ```sh
 uv run lumen review-rejects --keepers   # Review tab: Scan keepers for problems
@@ -599,8 +691,8 @@ darktable as described in the README, add its executable directory to `PATH` if 
 
 ## Refine previews
 
-Import shows the camera's small embedded JPEG. **Refine previews** (a disclosure
-under the contact sheet's filter bar) re-renders frames from the RAW with darktable at 2048 px,
+Import shows the camera's small embedded JPEG. **Refine previews** (under the
+contact sheet's **More filters** fold) re-renders frames from the RAW with darktable at 2048 px,
 then re-measures sharpness, exposure, astro, and face/eye signals and re-ranks
 each affected burst. Choose the scope — the selected burst, the frames matching
 the current filters, or the whole catalog — and follow progress in the footer

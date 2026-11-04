@@ -4,6 +4,8 @@ photographer runs `lumen map-region`; the web server never calls it."""
 
 from __future__ import annotations
 
+import gzip
+import http.client
 import json
 import math
 import sqlite3
@@ -209,6 +211,8 @@ def _kind(properties: dict, source_name: str) -> str:
         return "river"
     if properties.get("natural") == "water":
         return "lake"
+    if properties.get("natural") == "coastline":
+        return "coastline"
     if properties.get("highway"):
         return "road"
     return "other"
@@ -566,6 +570,7 @@ def overpass_query(south: float, west: float, north: float, east: float) -> str:
             f'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|track)$"]{box};'
             f'way["waterway"~"^(river|stream)$"]{box};'
             f'way["natural"="water"]{box};'
+            f'way["natural"="coastline"]{box};'
             ");out geom;")
 
 
@@ -602,7 +607,7 @@ def overpass_to_geojson(payload: dict) -> dict:
 
 def fetch_region(name: str, bbox: tuple[float, float, float, float], out_dir: Path, *, opener=None,
                  timeout: float = 120.0) -> Path:
-    """Asks Overpass for the park, road and water detail inside `bbox` (south, west, north, east) and writes it to
+    """Asks Overpass for the park, road, water and coastline detail inside `bbox` (south, west, north, east) and writes it to
     `out_dir/<name>.geojson`. Raises ValueError for a bad name or box and RuntimeError when Overpass fails."""
     south, west, north, east = bbox
     if not (south < north and west < east):
@@ -613,16 +618,20 @@ def fetch_region(name: str, bbox: tuple[float, float, float, float], out_dir: Pa
     if not stem:
         raise ValueError("region name required")
     request = urllib.request.Request(OVERPASS_URL, data=urlencode({"data": overpass_query(*bbox)}).encode(),
-                                     headers={"User-Agent": OVERPASS_USER_AGENT}, method="POST")
+                                     headers={"User-Agent": OVERPASS_USER_AGENT, "Accept-Encoding": "gzip"}, method="POST")
     try:
         with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
             status = getattr(response, "status", None) or response.getcode()
             body = response.read()
+            if response.headers.get("Content-Encoding") == "gzip":  # Overpass JSON shrinks several-fold
+                body = gzip.decompress(body)
     except urllib.error.HTTPError as error:
         error.close()
         raise RuntimeError(f"Overpass answered {error.code}") from None
     except urllib.error.URLError as error:
         raise RuntimeError(f"Overpass answered {error.reason}") from None
+    except http.client.IncompleteRead as error:  # the body was cut short; a chunked read raises this, not OSError
+        raise RuntimeError(f"Overpass answered incomplete: the connection dropped after {len(error.partial)} bytes") from None
     except OSError as error:  # a timeout or reset during the read is not wrapped in URLError
         raise RuntimeError(f"Overpass answered {error.strerror or str(error) or 'timed out'}") from None
     if status != 200:

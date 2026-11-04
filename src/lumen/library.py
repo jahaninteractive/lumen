@@ -45,6 +45,7 @@ from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywo
 
 
 DEVELOP_ADVICE_LONG_EDGE = 1024  # all the vision model needs; it is not judging single pixels
+BURST_GAP_RANGE = (0.5, 10.0)  # seconds; the slider's travel
 NEARBY_PLACE_KM = 5.0  # fixes this close share one name: a drifting boat's bursts are all the same spot
 NEARBY_PLACE_RANGE = (1.0, 20.0)  # the photographer's radius; the slider's own bounds
 OVERLAY_SUFFIXES = (".gpx", ".geojson")
@@ -721,6 +722,65 @@ class Library:
         return self._run_photo_job("assist", fast, scope, per_photo,
                                    counters=("tagged", "reviewed", "captioned", "skipped", "failed", "suggested"),
                                    manifest={"review_model": review.model, "redo": redo})
+
+    def start_cull_job(self, review, *, redo: bool = False) -> Job:
+        """One job over every burst: the review model names the best frame, that frame becomes the pick, and the
+        same model proposes develop settings for it. A burst already critiqued, and a pick already advised, is
+        skipped unless `redo`. The proposal stays advisory: it is read back on the frame's Develop tab, never saved."""
+        if type(redo) is not bool:
+            raise ValueError("redo must be true or false")
+        manifest = {"kind": "cull", "redo": redo, "role": getattr(review, "role", None), "model": review.model}
+        runner = self.job_runner
+        job = self.catalog.create_prepared_job("cull", lambda job_id: self._write_job_files(job_id, manifest))
+
+        def work(context) -> None:
+            with Library(self.settings, job_runner=runner) as worker:
+                groups = worker.list_groups()
+                counts = {"picked": 0, "advised": 0, "skipped": 0, "failed": 0}
+                for index, group in enumerate(groups, 1):
+                    if context.cancelled:
+                        break
+                    label = Path(group["photos"][0]["path"]).name
+                    for name in worker._cull_group(group, review, job, redo=redo):
+                        counts[name] += 1
+                    context.update_progress(index / len(groups), label=label[:200], processed=index, total=len(groups))
+                with worker._mutation():
+                    worker._regroup_and_write_sidecars()
+                worker._write_job_files(job.id, manifest | {"summary": counts})
+
+        self._submit_job(runner, job, work)
+        return job
+
+    def _cull_group(self, group: dict, review, job: Job, *, redo: bool) -> tuple[str, ...]:
+        """Pick, then advise, one burst; each step records its own failure event and the next burst still runs."""
+        kept = [photo for photo in group["photos"] if photo["decision"] != "reject"]
+        if not kept:
+            return ("skipped",)
+        names: list[str] = []
+        chosen = kept[0] if len(kept) == 1 else None  # a lone keeper is its own best frame
+        if chosen is None:
+            critique = None if redo else self.latest_critique(group["id"])
+            if critique is None:
+                try:
+                    critique = self.critique_burst(group["id"], review)
+                except (OmlxError, ValueError, OSError, RuntimeError) as error:
+                    self._log_job(job, f"{Path(kept[0]['path']).name}: pick {type(error).__name__}: {error}")
+                    return ("failed",)
+                names.append("picked")
+            chosen = next(photo for photo in kept if photo["id"] == critique["photo_id"])
+        # A stored critique never overrides a frame the photographer chose by hand; a fresh one is this job's own answer.
+        hand_picked = any(self.catalog.get_photo(photo["id"]).manual_pick for photo in kept)
+        if group["automatic_pick_id"] != chosen["id"] and ("picked" in names or not hand_picked):
+            self.set_pick(chosen["id"])
+        if redo or self.latest_develop_advice(chosen["id"]) is None:
+            try:
+                self.suggest_develop(chosen["id"], review, settings=self.develop_for(chosen["id"]) or DevelopSettings())
+            except (OmlxError, ValueError, OSError, RuntimeError) as error:
+                self._log_job(job, f"{Path(chosen['path']).name}: advise {type(error).__name__}: {error}")
+                names.append("failed")
+            else:
+                names.append("advised")
+        return tuple(names) or ("skipped",)
 
     def start_triage_job(self, tagger, *, group_id: int) -> Job:
         """Advisory sky triage of every frame in one group, whatever its exposure; exclusions never change."""
@@ -2414,9 +2474,25 @@ class Library:
         )
         return photo_id
 
+    @property
+    def burst_gap_seconds(self) -> float:
+        """The photographer's burst gap, kept in the catalog so an import or restart regroups at the same value."""
+        stored = self.catalog.get_preference("burst_gap_seconds")
+        return float(stored) if stored is not None else self.settings.burst_gap_seconds
+
+    @_coordinated
+    def set_burst_gap(self, seconds: float) -> dict:
+        """Set the gap every burst is grouped by and regroup now; merges, splits and hand picks survive as on import."""
+        low, high = BURST_GAP_RANGE
+        if type(seconds) not in (int, float) or not low <= seconds <= high:
+            raise ValueError(f"burst gap must be a number of seconds from {low:g} to {high:g}")
+        self.catalog.set_preference("burst_gap_seconds", repr(float(seconds)))
+        self._regroup_and_write_sidecars()
+        return {"burst_gap_seconds": seconds, "groups": len(self.catalog.list_groups())}
+
     def _regroup_and_write_sidecars(self) -> None:
         photos = self.catalog.list_photos()
-        groups = TimeGapGroupingPolicy(self.settings.burst_gap_seconds).group([photo for photo in photos if not photo.merged_into])
+        groups = TimeGapGroupingPolicy(self.burst_gap_seconds).group([photo for photo in photos if not photo.merged_into])
         metrics_by_id = {photo.id: self.catalog.get_metrics(photo.id) for photo in photos if photo.id is not None}
         hashes = {photo_id: metrics.dhash if metrics else None for photo_id, metrics in metrics_by_id.items()}
         groups = [cluster for group in groups

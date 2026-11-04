@@ -7,6 +7,18 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 
 ## Unreleased
 
+The contact sheet gets more of the window. The rail's Find field is gone (it was the filter bar's tag text under another name) and a **Batches** button in the sheet heading hides the rail altogether, remembered per browser; **Jump to selected** sits in the heading and **Back to top** floats at the foot of the sheet. The Review model and Fast model selects sit at the top of the rail, above Batches, so the footer is one status line. Clicking the version in the masthead opens **About Lumen**: what Lumen promises, what the status call says is installed (never a path), and credits for GeoNames (CC BY 4.0), Natural Earth, OpenStreetMap (ODbL), darktable, Siril, ExifTool, Pillow, oMLX and the Qwen models. The filter bar keeps one row (tag text, Expand search, status, rating, Reset) and folds the date range, camera, **Tagged only**, **Export failed** and **Refine previews** under **More filters**, which opens itself and counts the filters set whenever one is. One-frame bursts flow side by side like tiles with a one-line header instead of each taking a header and a row.
+
+A background job (tagging, assist, cull, reject scan, triage, export) reports only in the job strip with its Cancel/Clear button; the Local AI line above it no longer repeats the same sentence, so the footer says each thing once.
+
+`lumen map-region` also fetches the OpenStreetMap coastline (`natural=coastline`), drawn as a `coastline` line over the base map, so a bay the 1:10m Natural Earth shoreline generalises away is outlined where frames were taken; the land fill underneath stays the coarse polygon. A region download cut short mid-body is reported as `Overpass answered incomplete: the connection dropped after <n> bytes` instead of a traceback, and the request asks for gzip so the body is several times smaller on a slow link.
+
+A **Burst gap** slider beside Tiles (0.5 to 10 s, default 2 s) regroups every burst at the new gap on release; the value is saved in the catalog (`preferences` table), so imports and restarts group the same way, and merges, splits and hand picks survive as they do on import (`POST /api/burst-gap` `{seconds}`, `burst_gap_seconds` on `GET /api/groups`).
+
+The README and `docs/GUIDE.md` now cover the Map tab (a `Map` section: frames, clusters, overlays, placing frames on a track, `lumen map-region`, the Natural Earth data) and the Assist tab's "Pick and develop every burst" job.
+
+The Assist tab's "Pick and develop every burst" runs one job over every burst: the review model names the best frame, that frame becomes the pick, and the model then suggests develop settings for it, parked on its Develop tab. Bursts already picked and advised are skipped unless Redo is ticked, and a rerun never undoes a frame you chose by hand (`POST /api/photos/cull`, job kind `cull`).
+
 The Map keeps a fixed height beside a side column that scrolls on its own, so ten GPX overlays no longer stretch the canvas; each overlay lists its name over a short day and time range ("Sat 1 Nov, 07:12 to 11:40") with Remove beside it.
 
 Map thumbnails carry their preview's version, so a frame cleared and imported again never shows another frame's cached thumbnail when SQLite reuses its id.

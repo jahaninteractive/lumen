@@ -5,8 +5,9 @@ The Python package is `lumen-raw` and the command is `lumen`.
 Lumen is a fully local, non-destructive RAW photography workbench for Apple
 Silicon Macs. It catalogs Sony `.ARW` files (and the camera's own JPEGs) without moving or changing them,
 extracts previews, groups bursts, explains a best-shot choice, optionally tags
-previews through oMLX, writes portable sidecars, checks astrophotography frames,
-and hands exports to local tools such as darktable.
+previews through oMLX, writes portable sidecars, shows where the frames were
+taken on an offline map, checks astrophotography frames, and hands exports to
+local tools such as darktable.
 
 Lumen runs on any Apple Silicon Mac with 16 GB of memory using one oMLX
 model, the fast vision model (`Qwen3-VL-8B-Instruct-4bit`, about 6 GB loaded),
@@ -15,7 +16,7 @@ captions, digests, composition advice, and develop suggestions. With more
 memory, such as the 48 GB M4 it was built on, add the review model
 (`Qwen3.8-27B-4bit`, about 16 GB loaded) for closer reads of a frame and bolder
 develop advice, and keep it loaded for whatever else you use oMLX for, such as
-its chat. **Review model** and **Fast model** dropdowns in the footer strip move
+its chat. **Review model** and **Fast model** dropdowns at the top of the left rail move
 either role between the two while Lumen runs (see
 [Choosing the models](docs/GUIDE.md#choosing-the-models)).
 
@@ -41,13 +42,18 @@ goes:
   portable sidecars, so the frames stay searchable years later in any tool.
 - **Travel-safe ingest.** Cards get copied to a primary disk and a mirror and
   every byte is verified before I am told it is safe to format.
+- **Where was I.** A Map tab draws the frames over an offline Natural Earth
+  base map with named terrain, seas and peaks, clusters them when they crowd,
+  and takes a phone's GPX track to place the frames the camera could not fix.
+  Nothing goes online unless I ask for one area's detail by hand.
 - **Easy export.** One click from a kept frame to a full-resolution JPEG for
   print, a 2048 px version for sharing, or a web version with a watermark.
   Shoot JPEG in the body instead and the full export is the camera's own file,
   byte for byte, with the caption and keywords written in.
 - **AI where there is no internet.** Lodges, ships, and field camps have no or
   painfully slow connections, and I do not want my frames uploaded anywhere.
-  Tagging, caption drafts, problem scans, burst critique, and day digests run
+  Tagging, caption drafts, problem scans, burst critique, day digests, and a
+  one-job pass that picks and proposes develop settings for every burst run
   on local models through oMLX on the same Mac, offline, and only suggest.
 - **Night skies too.** Long trips mean dark skies, so sky-frame triage and a
   reproducible Siril stack live in the same tool.
@@ -85,7 +91,9 @@ already in place, so it is safe to re-run:
    library should live elsewhere);
 3. downloads GeoNames (`countryInfo.txt`, `readme.txt`, `cities500`) into
    `vendor/data/geonames/` and asks which country files you want
-   (`LUMEN_GEONAMES_COUNTRIES="ZA AQ"` answers without asking);
+   (`LUMEN_GEONAMES_COUNTRIES="ZA AQ"` answers without asking), and the eleven
+   Natural Earth layers for the Map tab (about 100 MB, pinned commit and
+   SHA-256s) into `vendor/data/map/`;
 4. downloads darktable 5.6.2 and Siril 1.4.4, checks each disk image against a
    pinned SHA-256, and copies the apps into `vendor/apps/`;
 5. on macOS 15 or newer, offers to copy oMLX 0.7.2 into `/Applications` (open
@@ -112,6 +120,7 @@ that Lumen looks for locally:
 | `vendor/apps/darktable.app` | the darktable application bundle; Lumen runs `Contents/MacOS/darktable-cli` | JPEG export, refined previews, RAW preview fallback |
 | `vendor/apps/Siril.app` | the Siril application bundle; Lumen runs `Contents/MacOS/siril-cli` | Astro stacking |
 | `vendor/data/geonames/` | GeoNames `<CC>.txt`, `cities500.txt`, `countryInfo.txt` | Places (see below) |
+| `vendor/data/map/` | eleven Natural Earth 1:10m GeoJSON layers (`LUMEN_MAP_DIR`) | Map tab base map |
 | `vendor/downloads/` | installers you keep around (`.dmg`, `.zip`); Lumen never reads it | nothing |
 
 Tool discovery checks `PATH` first and then the project-local bundle, and
@@ -134,6 +143,9 @@ The bootstrap fills these. To do it by hand (`--no-download`):
   scripts through the legacy hook below.
 - **GeoNames** (optional, needed for place names): see [Places](docs/GUIDE.md#places) for
   which files to download.
+- **Natural Earth** (optional, needed for the Map tab's base map): the layer
+  names and the pinned commit are in `scripts/bootstrap.sh`; put the
+  `.geojson` files directly in `vendor/data/map/`. See [Map](docs/GUIDE.md#map).
 
 ## First run
 
@@ -188,8 +200,11 @@ Each step is a section of [docs/GUIDE.md](docs/GUIDE.md):
 - [Filters and paging](docs/GUIDE.md#filters-and-paging), and
   [Places](docs/GUIDE.md#places): offline place names from GeoNames, typed
   GPS for frames without a fix.
+- [Map](docs/GUIDE.md#map): frames over an offline base map, GPX tracks,
+  geotagging along a track, and frames from earlier imports.
 - [Local AI](docs/GUIDE.md#local-ai): tags, problem scan, captions, burst
-  critique, digests, and develop suggestions through oMLX, all advisory.
+  critique, digests, develop suggestions, and a pick-and-develop pass over
+  every burst through oMLX, all advisory.
 - [Finish and clear a shoot](docs/GUIDE.md#finish-and-clear-a-shoot): crop,
   export presets, and recoverable removal.
 - [Refine previews](docs/GUIDE.md#refine-previews) and

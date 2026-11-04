@@ -309,7 +309,8 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         for photo in group["photos"]:  # Why each frame matched the find text; always present.
                             photo["matched"] = library.catalog.match_terms(photo["id"], filters.text) if filters.text else []
                     payload = {"photo_count": library.photo_count(), "counts": library.catalog.group_counts(filters),
-                               "cameras": library.cameras(), "keeper_count": len(library.keeper_ids())}
+                               "cameras": library.cameras(), "keeper_count": len(library.keeper_ids()),
+                               "burst_gap_seconds": library.burst_gap_seconds}
                 hide_rejected = not filters.show_rejected and filters.decision == "any"
                 rejected_count = 0  # rejected frames the current filters would reveal
                 for group in groups:
@@ -616,6 +617,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     selected = choose_macos_folder()
                     self._send_json({"path": selected, "cancelled": selected is None})
                     return
+                if path == "/api/burst-gap":
+                    if payload.keys() != {"seconds"}:
+                        raise ValueError("burst gap needs seconds and nothing else")
+                    with Library(settings) as library:
+                        self._send_json(library.set_burst_gap(payload["seconds"]))
+                    return
                 if path == "/api/role-model":
                     if payload.keys() != {"role", "model"} or payload["role"] not in role_fields:
                         raise ValueError("role must be fast or review, with a model")
@@ -679,6 +686,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         fast, review = library.tagger_for("fast"), library.tagger_for("review")  # refusals reach the browser verbatim
                         job = library.start_assist_job(fast, review, scope=scope, redo=redo)
+                        self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
+                    return
+                if path == "/api/photos/cull":
+                    if payload.keys() - {"redo"}:
+                        raise ValueError("cull takes optional redo only")
+                    redo = payload.get("redo", False)
+                    if type(redo) is not bool:
+                        raise ValueError("redo must be true or false")
+                    with Library(settings, job_runner=self.server.job_runner()) as library:
+                        job = library.start_cull_job(library.tagger_for("review"), redo=redo)  # a not-loaded refusal reaches the browser verbatim
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/review-rejects":
@@ -1077,7 +1094,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if isinstance(error, RuntimeError) and "another heavy job" in str(error):
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
-                job_route = path.startswith(("/api/map/", "/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist",
+                job_route = path.startswith(("/api/map/", "/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist", "/api/photos/cull",
                                              "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/")) or re.search(r"/develop(/|$)", path)
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)

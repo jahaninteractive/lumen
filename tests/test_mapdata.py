@@ -6,6 +6,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import gzip
+import http.client
 import urllib.error
 from unittest import mock
 from urllib.parse import parse_qs
@@ -536,8 +538,8 @@ OVERPASS = {"elements": [
 
 
 class FakeResponse:
-    def __init__(self, body: bytes, status: int = 200):
-        self.body, self.status = body, status
+    def __init__(self, body: bytes, status: int = 200, headers: dict | None = None):
+        self.body, self.status, self.headers = body, status, headers or {}
 
     def read(self):
         return self.body
@@ -554,8 +556,16 @@ class OverpassTests(unittest.TestCase):
         query = overpass_query(-24.95, 26.05, -24.55, 26.55)
         self.assertTrue(query.startswith("[out:json][timeout:90];(way[\"boundary\"~\"^(protected_area|national_park)$\"]"
                                          "(-24.95,26.05,-24.55,26.55);"))
-        self.assertTrue(query.endswith('way["natural"="water"](-24.95,26.05,-24.55,26.55););out geom;'))
-        self.assertEqual(7, query.count("(-24.95,26.05,-24.55,26.55)"))
+        self.assertTrue(query.endswith('way["natural"="coastline"](-24.95,26.05,-24.55,26.55););out geom;'))
+        self.assertEqual(8, query.count("(-24.95,26.05,-24.55,26.55)"))
+
+    def test_coastline_way_is_a_coastline_line_even_when_closed(self):
+        ring = [{"lat": -24.7, "lon": 26.2}, {"lat": -24.7, "lon": 26.3}, {"lat": -24.8, "lon": 26.3}, {"lat": -24.7, "lon": 26.2}]
+        collection = overpass_to_geojson({"elements": [
+            {"type": "way", "tags": {"natural": "coastline"}, "geometry": ring}]})
+        coast, = collection["features"]
+        self.assertEqual(("LineString", "coastline"), (coast["geometry"]["type"], coast["properties"]["kind"]))
+        self.assertEqual(["coastline"], [f.kind for f in parse_geojson(json.dumps(collection))])
 
     def test_geojson_from_ways_and_relations(self):
         collection = overpass_to_geojson(OVERPASS)
@@ -595,12 +605,20 @@ class OverpassTests(unittest.TestCase):
         request, timeout = requests[0]
         self.assertEqual(("https://overpass-api.de/api/interpreter", "POST", 120.0),
                          (request.full_url, request.get_method(), timeout))
+        self.assertEqual("gzip", request.get_header("Accept-encoding"))
         agent = request.get_header("User-agent")
         self.assertTrue(agent.startswith("Lumen/"))
         self.assertIn("https://github.com/jahaninteractive/lumen", agent)
         query = parse_qs(request.data.decode())["data"][0]
         self.assertIn("out geom", query)
         self.assertIn("(-24.95,26.05,-24.55,26.55)", query)
+
+    def test_fetch_region_inflates_a_gzipped_answer(self):
+        body = gzip.compress(json.dumps(OVERPASS).encode())
+        opener = lambda request, timeout: FakeResponse(body, headers={"Content-Encoding": "gzip"})
+        with tempfile.TemporaryDirectory() as directory:
+            path = fetch_region("madikwe", (-24.95, 26.05, -24.55, 26.55), Path(directory), opener=opener)
+            self.assertEqual(3, len(json.loads(path.read_text())["features"]))
 
     def test_fetch_region_refuses_bad_boxes_and_names_without_asking(self):
         def opener(request, timeout):
@@ -626,9 +644,13 @@ class OverpassTests(unittest.TestCase):
         def reset(request, timeout):
             raise ConnectionResetError(54, "Connection reset by peer")
 
+        def cut(request, timeout):
+            raise http.client.IncompleteRead(b"x" * 5652366)
+
         cases = ((lambda request, timeout: FakeResponse(b"{}", 504), "Overpass answered 504"),
                  (refused, "Overpass answered 429"), (offline, "Overpass answered timed out"),
-                 (reset, "Overpass answered Connection reset by peer"))
+                 (reset, "Overpass answered Connection reset by peer"),
+                 (cut, "Overpass answered incomplete: the connection dropped after 5652366 bytes"))
         with tempfile.TemporaryDirectory() as directory:
             for opener, message in cases:
                 with self.assertRaisesRegex(RuntimeError, message):

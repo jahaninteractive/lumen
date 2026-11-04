@@ -149,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleared.add_argument("--remove", action="store_true", help="remove them with recoverable working files")
     cleared.add_argument("--json", action="store_true")
 
-    region = commands.add_parser("map-region", help="fetch park, road and water detail for a bounding box from Overpass")
+    region = commands.add_parser("map-region", help="fetch park, road, water and coastline detail for a bounding box from Overpass")
     region.add_argument("name")
     region.add_argument("--bbox", required=True, help="south,west,north,east in decimal degrees")
     region.add_argument("--json", action="store_true")
