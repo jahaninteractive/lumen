@@ -2058,7 +2058,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'fold-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'fold-remembered' && key === 'lumen-panel-collapsed' ? '1' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'fold-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'fold-remembered' && key === 'lumen-panel-collapsed' ? '1' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : scenario === 'rail-remembered' && key === 'lumen-rail-hidden' ? '1' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -4476,6 +4476,48 @@ const regression = `
     assert.deepEqual([element('#ingest-panel').hidden, element('#import-panel').hidden, element('#add-source-ingest').checked], [false, true, true], 'the remembered source is restored');
     return;
   }
+  if (scenario === 'rail-toggle') {
+    await load();
+    const workspace = element('.workspace'), toggle = element('#rail-toggle');
+    assert.equal(workspace.dataset.rail, undefined, 'the rail shows unless hidden was remembered');
+    toggle.listeners.click();
+    assert.equal(workspace.dataset.rail, 'hidden');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(stored['lumen-rail-hidden'], '1', 'hidden is remembered per browser');
+    assert.equal(element('#announcer').textContent, 'Batch list hidden; the contact sheet has the width.');
+    toggle.listeners.click();
+    assert.equal(workspace.dataset.rail, 'shown');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+    assert.equal(stored['lumen-rail-hidden'], undefined, 'shown is the default, so nothing is remembered');
+    assert.equal(element('#announcer').textContent, 'Batch list shown.');
+    return;
+  }
+  if (scenario === 'rail-remembered') {
+    await new Promise(setImmediate);  // the startup load
+    assert.equal(element('.workspace').dataset.rail, 'hidden', 'a hidden rail stays hidden on the next visit');
+    assert.equal(element('#rail-toggle').getAttribute('aria-expanded'), 'false');
+    return;
+  }
+  if (scenario === 'filter-fold') {
+    await load();
+    const fold = element('#filter-more'), label = element('#filter-more-label');
+    assert.equal(fold.open, undefined, 'no folded filter set leaves the fold as the markup ships it');
+    assert.equal(label.textContent, 'More filters');
+    history.replaceState(null, '', '?min_rating=2');
+    await load();
+    assert.equal(fold.open, undefined, 'a first-row filter never opens the fold');
+    assert.equal(label.textContent, 'More filters');
+    history.replaceState(null, '', '?camera=ILCE-7M4%3A1&tagged_only=1');
+    await load();
+    assert.equal(fold.open, true, 'a folded filter in the URL opens the fold, so a narrowed sheet never looks unfiltered');
+    assert.equal(label.textContent, 'More filters (2 set)');
+    fold.open = false;
+    history.replaceState(null, '', '');
+    await load();
+    assert.equal(fold.open, false, 'clearing the filters never forces the fold either way');
+    assert.equal(label.textContent, 'More filters');
+    return;
+  }
   if (scenario === 'fold-remembered') {
     await new Promise(setImmediate);  // the startup load
     assert.equal(element('#export-tab').getAttribute('aria-selected'), 'true', 'the remembered tab is still selected');
@@ -4852,8 +4894,15 @@ const regression = `
     assert.deepEqual(scrolled.at(-1), [sections()[1], { behavior: 'auto', block: 'start' }]);
     assert.ok(element('#announcer').textContent.includes('Burst 2'));
     element('#back-to-top').listeners.click();
-    assert.deepEqual(scrolled.at(-1), [element('#main-content'), { top: 0, behavior: 'auto' }]);
+    assert.deepEqual(scrolled.slice(-2), [[element('.workspace'), { top: 0, behavior: 'auto' }], [element('#main-content'), { top: 0, behavior: 'auto' }]], 'both scrollers go home: below 680px the workspace scrolls, not main');
     assert.ok(element('#announcer').textContent.includes('workflow tabs'));
+    element('#main-content').scrollTop = 300; element('#main-content').listeners.scroll();
+    assert.equal(element('#back-to-top').dataset.show, 'true', 'a scrolled main column shows the button');
+    element('#main-content').scrollTop = 0; element('#main-content').listeners.scroll();
+    assert.equal(element('#back-to-top').dataset.show, 'false');
+    element('.workspace').scrollTop = 300; element('.workspace').listeners.scroll();
+    assert.equal(element('#back-to-top').dataset.show, 'true', 'a scrolled workspace (narrow layout) shows the button too');
+    element('.workspace').scrollTop = 0;
 
     const exportTab = element('#add-tab');  // the open tab
     element('#workflow-panels').hidden = false;
@@ -5112,6 +5161,13 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_find_input_filters_and_inspector_shows_match_reasons(self):
         self.run_javascript_cleanup_regression("find")
+
+    def test_javascript_rail_toggle_hides_the_batch_list_and_remembers_it(self):
+        self.run_javascript_cleanup_regression("rail-toggle")
+        self.run_javascript_cleanup_regression("rail-remembered")
+
+    def test_javascript_filter_fold_opens_and_counts_when_a_folded_filter_is_set(self):
+        self.run_javascript_cleanup_regression("filter-fold")
 
     def test_rail_has_no_find_and_the_filter_bar_folds_its_second_row(self):
         html = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()

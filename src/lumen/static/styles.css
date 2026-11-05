@@ -94,6 +94,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .workspace {
   flex: 1 1 auto;
   min-height: 0;
+  contain: layout;  /* the sheet's height otherwise leaks into the document, and a scroll-into-view then shifts the window and leaves a gap under the footer */
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
 }

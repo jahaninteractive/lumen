@@ -3336,13 +3336,15 @@ document.querySelector('#jump-selected').addEventListener('click', () => {
   if (index < 0) return announce('No burst is selected.');
   announce(scrollToGroup(state.selectedGroupId) ? `Burst ${index + 1} shown.` : `Burst ${index + 1} has no frames on the contact sheet.`);
 });
+// Below 680px the workspace scrolls as one column and the main column does not, so both are watched and both go home.
+const sheetScrollers = ['.workspace', '#main-content'].map(selector => document.querySelector(selector));
 document.querySelector('#back-to-top').addEventListener('click', () => {
-  document.querySelector('#main-content').scrollTo({ top: 0, behavior: scrollMotion() });
+  sheetScrollers.forEach(node => node.scrollTo({ top: 0, behavior: scrollMotion() }));
   announce('Scrolled to the workflow tabs.');
 });
-document.querySelector('#main-content').addEventListener('scroll', () => {  // the button shows once there is somewhere to go back to
-  document.querySelector('#back-to-top').dataset.show = String(document.querySelector('#main-content').scrollTop > 200);
-}, { passive: true });
+sheetScrollers.forEach(node => node.addEventListener('scroll', () => {  // the button shows once there is somewhere to go back to
+  document.querySelector('#back-to-top').dataset.show = String(sheetScrollers.some(scroller => scroller.scrollTop > 200));
+}, { passive: true }));
 // Keep scroll-into-view clear of the sticky tab row and, where it sticks, the contact sheet's filter bar beneath it.
 if (window.ResizeObserver) {
   const top = document.querySelector('.main-top');
