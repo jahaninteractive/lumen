@@ -650,7 +650,12 @@ class OverpassTests(unittest.TestCase):
         cases = ((lambda request, timeout: FakeResponse(b"{}", 504), "Overpass answered 504"),
                  (refused, "Overpass answered 429"), (offline, "Overpass answered timed out"),
                  (reset, "Overpass answered Connection reset by peer"),
-                 (cut, "Overpass answered incomplete: the connection dropped after 5652366 bytes"))
+                 (cut, "Overpass answered incomplete: the connection dropped after 5652366 bytes"),
+                 (lambda request, timeout: FakeResponse(gzip.compress(json.dumps(OVERPASS).encode())[:-20],
+                                                        headers={"Content-Encoding": "gzip"}), "Overpass answered incomplete"),
+                 (lambda request, timeout: FakeResponse(gzip.compress(b'{"elements": ['),
+                                                        headers={"Content-Encoding": "gzip"}), "Overpass answered incomplete"),
+                 (lambda request, timeout: FakeResponse(b'{"elements": ['), "Overpass answered incomplete"))
         with tempfile.TemporaryDirectory() as directory:
             for opener, message in cases:
                 with self.assertRaisesRegex(RuntimeError, message):

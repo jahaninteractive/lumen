@@ -12,6 +12,7 @@ import sqlite3
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -624,7 +625,10 @@ def fetch_region(name: str, bbox: tuple[float, float, float, float], out_dir: Pa
             status = getattr(response, "status", None) or response.getcode()
             body = response.read()
             if response.headers.get("Content-Encoding") == "gzip":  # Overpass JSON shrinks several-fold
-                body = gzip.decompress(body)
+                try:
+                    body = gzip.decompress(body)
+                except (EOFError, zlib.error):
+                    raise RuntimeError(f"Overpass answered incomplete: the connection dropped after {len(body)} bytes") from None
     except urllib.error.HTTPError as error:
         error.close()
         raise RuntimeError(f"Overpass answered {error.code}") from None
@@ -636,7 +640,10 @@ def fetch_region(name: str, bbox: tuple[float, float, float, float], out_dir: Pa
         raise RuntimeError(f"Overpass answered {error.strerror or str(error) or 'timed out'}") from None
     if status != 200:
         raise RuntimeError(f"Overpass answered {status}")
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except ValueError:  # a body cut short mid-JSON, gzipped or not
+        raise RuntimeError(f"Overpass answered incomplete: the connection dropped after {len(body)} bytes") from None
     if not isinstance(payload, dict):
         raise RuntimeError("Overpass answered something other than a JSON object")
     remark = str(payload.get("remark", ""))
