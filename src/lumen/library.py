@@ -2164,6 +2164,9 @@ class Library:
             text = (job_dir / manifest.log).read_text(encoding="utf-8", errors="replace")
         except OSError:
             text = ""
+        # A launch-check refusal fails the job before Siril starts; the command line is written just before launch.
+        if not (frames_path.is_file() or any(line.startswith("lumen: command ") for line in text.splitlines())):
+            raise ValueError("no debrief until the stack has run")
         try:
             frames = json.loads(frames_path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
@@ -2282,39 +2285,62 @@ class Library:
             by_path = {Path(photo.path).resolve(): photo for photo in catalog.list_photos()}
             light_ids = [photo.id for frame in manifest.lights.frames if (photo := by_path.get(Path(frame.source)))]
             tiff, preview = self._name_astro_outputs(manifest, execution, by_path)
-            settings = {
-                "job_id": manifest.job_id, "manifest": "manifest.json", "script_sha256": manifest.script_sha256,
-                "siril_version": manifest.siril.version_text, "command": list(manifest.command),
-                "warnings": list(manifest.warnings), "lights": len(manifest.lights.frames),
-                "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
-                "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames),
-                "light_fingerprints": [frame.fingerprint for frame in manifest.lights.frames],
-                "light_photo_ids": light_ids, "exit_code": execution.returncode,
-                "bits_per_sample": list(execution.bits_per_sample),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if preview is not None:
-                settings["preview"] = preview.name
-            stack_identity = hashlib.sha256("\n".join(settings["light_fingerprints"]).encode()).hexdigest()
-            artifact = catalog.save_artifact(None, f"astro-job-{manifest.job_id}", stack_identity, "astro_tiff",
-                                             str(tiff), settings, output_fingerprint)
             try:
-                details = {"job_id": manifest.job_id, "artifact_id": artifact.id, "output": artifact.path,
-                           "output_fingerprint": output_fingerprint, "created_at": settings["created_at"]}
-                catalog.append_event(None, "astro_stacked", details | {"light_photo_ids": light_ids})
-                for photo_id in light_ids:
-                    catalog.append_event(photo_id, "astro_stacked", details)
-                for photo_id in light_ids:
-                    self._write_sidecar(photo_id, catalog=catalog)
-                catalog.update_job(job_id, result_path=str(tiff))
-            except Exception:
-                catalog.discard_export(artifact.id, kind="astro_stacked")
-                for photo_id in light_ids:  # Sidecars must not keep events the catalog no longer has.
-                    try:
+                settings = {
+                    "job_id": manifest.job_id, "manifest": "manifest.json", "script_sha256": manifest.script_sha256,
+                    "siril_version": manifest.siril.version_text, "command": list(manifest.command),
+                    "warnings": list(manifest.warnings), "lights": len(manifest.lights.frames),
+                    "excluded_lights": len(manifest.excluded_lights), "darks": len(manifest.darks.frames),
+                    "flats": len(manifest.flats.frames), "biases": len(manifest.biases.frames),
+                    "light_fingerprints": [frame.fingerprint for frame in manifest.lights.frames],
+                    "light_photo_ids": light_ids, "exit_code": execution.returncode,
+                    "bits_per_sample": list(execution.bits_per_sample),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if preview is not None:
+                    settings["preview"] = preview.name
+                stack_identity = hashlib.sha256("\n".join(settings["light_fingerprints"]).encode()).hexdigest()
+                artifact = catalog.save_artifact(None, f"astro-job-{manifest.job_id}", stack_identity, "astro_tiff",
+                                                 str(tiff), settings, output_fingerprint)
+                try:
+                    details = {"job_id": manifest.job_id, "artifact_id": artifact.id, "output": artifact.path,
+                               "output_fingerprint": output_fingerprint, "created_at": settings["created_at"]}
+                    catalog.append_event(None, "astro_stacked", details | {"light_photo_ids": light_ids})
+                    for photo_id in light_ids:
+                        catalog.append_event(photo_id, "astro_stacked", details)
+                    for photo_id in light_ids:
                         self._write_sidecar(photo_id, catalog=catalog)
-                    except Exception:
-                        pass
+                    catalog.update_job(job_id, result_path=str(tiff))
+                except Exception:
+                    catalog.discard_export(artifact.id, kind="astro_stacked")
+                    for photo_id in light_ids:  # Sidecars must not keep events the catalog no longer has.
+                        try:
+                            self._write_sidecar(photo_id, catalog=catalog)
+                        except Exception:
+                            pass
+                    raise
+            except Exception:
+                self._restore_siril_names(manifest, execution, tiff, preview)
                 raise
+
+    @staticmethod
+    def _restore_siril_names(manifest, execution, tiff, preview) -> None:
+        """Best effort: undo the stack's renaming when its bookkeeping failed, so the folder matches a failed job."""
+        moves = [(current, original) for current, original in ((tiff, execution.result), (preview, execution.preview))
+                 if current is not None and original is not None and current != original]
+        if not moves:
+            return
+        try:
+            for current, original in moves:
+                current.rename(original)
+            line = "put Siril's names back after the catalog could not record the stack"
+        except OSError as error:
+            line = f"could not put Siril's names back: {error.strerror or error}"
+        try:
+            with (Path(manifest.job_dir) / manifest.log).open("a", encoding="utf-8") as log:
+                log.write(f"lumen: {line}\n")
+        except OSError:
+            pass
 
     @staticmethod
     def _name_astro_outputs(manifest, execution, by_path) -> tuple[Path, Path | None]:

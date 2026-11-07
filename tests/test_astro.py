@@ -687,7 +687,10 @@ class AstroJobTests(unittest.TestCase):
         self.assertEqual("failed", finished.status)
         self.assertIn("disk full", finished.error)
         self.assertIsNone(finished.result_path)
-        self.assertTrue((Path(job.manifest_path).parent / "2026-10-21_2200_ILCE-7CM2_28mm_f4_3x15s_ISO3200.tif").is_file())
+        job_dir = Path(job.manifest_path).parent  # the rename is undone, so the folder reads as a failed stack
+        self.assertTrue((job_dir / "result.tif").is_file() and (job_dir / "preview.jpg").is_file())
+        self.assertEqual([], [path.name for path in job_dir.glob("2026-*")])
+        self.assertIn("lumen: put Siril's names back", Path(job.log_path).read_text(encoding="utf-8"))
         self.assertEqual([], self.library.catalog.list_artifacts())
         for photo_id in self.photo_ids:
             self.assertEqual([], [event for event in self.library.catalog.events_for(photo_id) if event.kind == "astro_stacked"])
@@ -811,6 +814,8 @@ class AstroJobTests(unittest.TestCase):
         self.assertEqual("failed", finished.status)
         self.assertIn("already contains", finished.error)
         self.assertEqual([], self.launches)
+        with self.assertRaisesRegex(ValueError, "no debrief until the stack has run"):
+            self.library.astro_debrief(job.id, "ship")  # Siril never launched: the log holds only the refusal
 
     def test_timeout_fails_the_job_and_reaps_the_process(self):
         self.scenario = "hang"

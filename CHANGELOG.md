@@ -8,6 +8,7 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 ## 0.4.0 (2026-11-07)
 
 - Astro debrief: after a stack runs (succeeded or failed) the Astro tab shows What happened, Try now and Next time, written by Lumen's rules from the frames' EXIF and Siril's log, so it needs no AI; a "Where you shot" select (Dark site, City or light pollution, Ship or boat, Handheld; remembered per browser) changes only the advice. An optional "Look at the stack" asks the local review model for notes on the preview; it never changes the settings. A job keeps `frames.json` (what the converted lights' headers and EXIF say), drops Siril's multi-GB `process/` folder after a run, and names its outputs from the EXIF, e.g. `2026-10-18_2129_ILCE-7CM2_28mm_f4_4x15s_ISO3200.tif`.
+- Astro debrief names a frame by its camera file name (`frame 1 (DSC02719.ARW)`), as the checklist shows it; a job refused before Siril launched (an original offline or changed) gets no debrief; a stack whose catalog record fails keeps Siril's `result.tif`/`preview.jpg` names.
 
 ## 0.3.3 (2026-11-07)
 

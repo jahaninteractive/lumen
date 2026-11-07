@@ -4402,6 +4402,16 @@ const regression = `
           assert.deepEqual(debriefGets, ['dark_site', 'ship']);
           assert.equal(stored['lumen-astro-place'], 'ship');
           assert.equal(element('#astro-next-settings').textContent, '1 s · f/2 · ISO 12800 · 40 lights');
+          holdUrls.add('/api/astro/jobs/7/debrief?place=city');  // a slow answer for a place already left
+          place.value = 'city';
+          const slow = place.listeners.change();
+          await new Promise(setImmediate);
+          place.value = 'ship';
+          await place.listeners.change();
+          heldReplies.shift()();
+          await slow;
+          assert.deepEqual(texts('#astro-happened'), ['Frame 1 (a.ARW) trailed: ship.'], 'a late answer for another place is ignored');
+          assert.equal(element('#astro-next-settings').textContent, '1 s · f/2 · ISO 12800 · 40 lights');
           const review = element('#review-astro');
           state.status.omlx_roles.review.loaded = false;
           updateWorkflow();

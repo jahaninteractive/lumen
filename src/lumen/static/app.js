@@ -2255,7 +2255,8 @@ async function loadAstroDebrief() {
   const section = document.querySelector('#astro-debrief');
   try {
     const debrief = await request(`/api/astro/jobs/${job.job_id}/debrief?place=${encodeURIComponent(astroPlace.value)}`);
-    if (state.astro.job?.job_id !== job.job_id) return;  // another job took the panel meanwhile
+    // Another job took the panel, or the place changed again, meanwhile; the later request paints.
+    if (state.astro.job?.job_id !== job.job_id || debrief.place !== astroPlace.value) return;
     fillList('#astro-happened', debrief.happened);
     fillList('#astro-try-now', debrief.try_now);
     document.querySelector('#astro-next-settings').textContent = debrief.next_time.settings;

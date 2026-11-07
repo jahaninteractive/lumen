@@ -221,7 +221,9 @@ if __name__ == "__main__":
 
 def debrief_manifest(lights: int = 4, darks: int = 0, recipe: str = "tracked") -> SimpleNamespace:
     def group(kind: str, count: int) -> SimpleNamespace:
-        return SimpleNamespace(frames=[SimpleNamespace(link=f"{kind}s/{kind}_{n:05d}.arw") for n in range(1, count + 1)])
+        return SimpleNamespace(frames=[SimpleNamespace(link=f"{kind}s/{kind}_{n:05d}.arw",
+                                                       source=f"/Volumes/Card/{kind}/DSC0{2718 + n}.ARW")
+                                       for n in range(1, count + 1)])
     return SimpleNamespace(lights=group("light", lights), darks=group("dark", darks), flats=group("flat", 0),
                            biases=group("bias", 0), recipe=recipe)
 
@@ -253,10 +255,10 @@ class DebriefTests(unittest.TestCase):
         self.assertIn("6-7 shared stars", happened)
         self.assertIn("Nothing was stacked", happened)
         odd = next(line for line in result["happened"] if "odd one out" in line)
-        for reason in ("Frame 1", "light_00001.arw", "26 stars against a median of 62", "6 s against 13 s",
+        for reason in ("Frame 1 (DSC02719.ARW)", "26 stars against a median of 62", "6 s against 13 s",
                        "2 min 48 s before frame 2"):
             self.assertIn(reason, odd)
-        self.assertTrue(result["try_now"][0].startswith("Exclude frame 1 (light_00001.arw)"))
+        self.assertTrue(result["try_now"][0].startswith("Exclude frame 1 (DSC02719.ARW)"))
         self.assertEqual(result["place"], "dark_site")
 
     def test_next_time_per_place(self) -> None:

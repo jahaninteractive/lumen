@@ -341,7 +341,7 @@ def debrief(run: SirilRun, frames: dict | None, manifest: Any, place: str) -> di
     if place not in PLACES:
         raise ValueError(f"unknown place: {place}")
     table = PLACE_SETTINGS[place]
-    lights = [Path(frame.link).name for frame in manifest.lights.frames]
+    lights = [Path(frame.source).name for frame in manifest.lights.frames]  # the camera's name, as the checklist shows it
 
     def frame_name(k: int) -> str:
         return f"frame {k} ({lights[k - 1]})" if 0 < k <= len(lights) else f"frame {k}"
@@ -392,7 +392,7 @@ def debrief(run: SirilRun, frames: dict | None, manifest: Any, place: str) -> di
                     odd.append(f"taken {_gap(distance)} {'before' if signed > 0 else 'after'} frame {neighbour}")
                     odd_pair = tuple(sorted((reference, neighbour)))
         if odd:
-            happened.append(f"{frame_name(reference).capitalize()}, the reference, is the odd one out: "
+            happened.append(f"F{frame_name(reference)[1:]}, the reference, is the odd one out: "
                             + "; ".join(odd) + ".")
 
     # Exposures and timing.
