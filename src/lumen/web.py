@@ -388,6 +388,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 with Library(settings) as library:
                     self._send_json({"jobs": library.list_job_status()})
                 return
+            match = re.fullmatch(r"/api/astro/jobs/(\d+)/debrief", path)
+            if match:
+                query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                try:
+                    if set(query) != {"place"} or len(query["place"]) != 1:
+                        raise ValueError("debrief takes one place")
+                    with Library(settings) as library:
+                        self._send_json(library.astro_debrief(int(match.group(1)), query["place"][0]))
+                except (LookupError, OverflowError):
+                    self._send_json({"error": "astro job is unavailable"}, status=HTTPStatus.NOT_FOUND)
+                except ValueError as error:
+                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                return
             match = re.fullmatch(r"/api/(astro/)?jobs/(\d+)", path)
             if match:
                 try:

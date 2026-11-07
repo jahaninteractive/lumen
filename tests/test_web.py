@@ -6368,6 +6368,32 @@ class AstroWebTests(unittest.TestCase):
         for secret in (str(self.root), str(self.night), "fingerprint", "manifest_path", "result_path", SIRIL.executable, "lumen: command"):
             self.assertNotIn(secret, text)
 
+    def test_debrief_route_after_a_run(self):
+        _, prepared = self.prepare()
+        job_id = prepared["job_id"]
+        self.assertEqual(202, self.post_json(f"/api/astro/jobs/{job_id}/run", {})[0])
+        self.assertEqual("succeeded", self.poll(job_id, {"succeeded", "failed", "cancelled"})["status"])
+        code, payload = self.get_json(f"/api/astro/jobs/{job_id}/debrief?place=ship")
+        self.assertEqual(200, code, payload)
+        self.assertEqual({"place", "happened", "try_now", "next_time", "review"}, set(payload))
+        self.assertEqual("ship", payload["place"])
+        self.assertIsNone(payload["review"])
+        self.assert_safe(payload)
+        for query in ("", "?place=ship&place=city", "?place=ship&extra=1", "?place=moon"):
+            with self.subTest(query=query):
+                code, body = self.get_json(f"/api/astro/jobs/{job_id}/debrief{query}")
+                self.assertEqual(400, code)
+                self.assert_safe(body)
+
+    def test_debrief_refuses_unrun_and_unknown(self):
+        _, prepared = self.prepare()
+        code, body = self.get_json(f"/api/astro/jobs/{prepared['job_id']}/debrief?place=ship")
+        self.assertEqual((400, {"error": "no debrief until the stack has run"}), (code, body))
+        code, body = self.get_json(f"/api/astro/jobs/{prepared['job_id']}/debrief?place=moon")
+        self.assertEqual(400, code)
+        code, body = self.get_json("/api/astro/jobs/999/debrief?place=ship")
+        self.assertEqual((404, {"error": "astro job is unavailable"}), (code, body))
+
     def test_prepare_requires_explicit_confirmation_and_strict_fields(self):
         bad = (
             {"group_id": self.group["id"]},

@@ -30,7 +30,7 @@ from .geonames import Place, PlaceIndex, distance_km, online_lookup, parse_posit
 from . import ingest
 from .mapdata import MapIndex, parse_geojson, parse_gpx, position_at
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
-from .astrodebrief import output_stem, parse_siril_log, rename_outputs
+from .astrodebrief import debrief, output_stem, parse_siril_log, rename_outputs
 from .jobs import LocalJobRunner
 from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, DevelopAdvice, OmlxError,
                    OmlxTagger, get_server_status)
@@ -2135,6 +2135,33 @@ class Library:
 
         runner.submit(job_id, work)
         return job
+
+    def astro_debrief(self, job_id: int, place: str) -> dict:
+        """The rules-based debrief of a stack that has run; LookupError for an unknown or non-astro job."""
+        try:
+            job = self.catalog.get_job(job_id)
+        except ValueError:
+            raise LookupError("astro job is unavailable") from None
+        if job.kind != "astro":
+            raise LookupError("astro job is unavailable")
+        job_dir = self.settings.output_dir / "astro" / str(job_id)
+        frames_path = job_dir / "frames.json"
+        if not (job.status in ("succeeded", "failed")
+                or (job.status in ("cancelled", "interrupted") and frames_path.is_file())):
+            raise ValueError("no debrief until the stack has run")
+        try:
+            manifest = load_manifest(Path(job.manifest_path), self.settings.output_dir)
+        except (ValueError, OSError):
+            raise ValueError("astro job manifest is unavailable") from None
+        try:
+            text = (job_dir / manifest.log).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        try:
+            frames = json.loads(frames_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            frames = None
+        return debrief(parse_siril_log(text), frames if isinstance(frames, dict) else None, manifest, place) | {"review": None}
 
     def cancel_job(self, job_id: int) -> bool:
         if self._runner is not None:
