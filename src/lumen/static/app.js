@@ -3467,17 +3467,31 @@ function showBurstGap(seconds) {
   document.querySelector('#burst-gap-value').textContent = burstGapText(seconds);
 }
 burstGap.addEventListener('input', () => { document.querySelector('#burst-gap-value').textContent = burstGapText(burstGap.value); });
-burstGap.addEventListener('change', async () => {
-  burstGap.disabled = true;
+// One regroup at a time and never disabled (that drops keyboard focus): steps taken while one runs coalesce into a single trailing request.
+let gapInFlight = false;
+let gapPending = false;
+async function applyBurstGap() {
+  const seconds = Number(burstGap.value);
+  gapInFlight = true;
+  burstGap.setAttribute('aria-busy', 'true');
   try {
-    const result = await post('/api/burst-gap', { seconds: Number(burstGap.value) });
+    const result = await post('/api/burst-gap', { seconds });
     await load();
     announce(`Bursts regrouped at ${burstGapText(result.burst_gap_seconds)}: ${plural(result.groups, 'burst')}`);
   } catch (error) {
     announce(error.message);
   } finally {
-    burstGap.disabled = false;
+    gapInFlight = false;
+    burstGap.removeAttribute('aria-busy');
+    if (gapPending) {
+      gapPending = false;
+      if (Number(burstGap.value) !== seconds) await applyBurstGap();
+    }
   }
+}
+burstGap.addEventListener('change', () => {
+  if (gapInFlight) gapPending = true;
+  else applyBurstGap();
 });
 try {
   const rememberedSize = localStorage.getItem('lumen-tile-size');

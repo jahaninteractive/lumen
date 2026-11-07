@@ -2147,6 +2147,7 @@ const photoDetailRequests = [];
 const holdUrls = new Set();
 let fullStatus = 404;  // what /full/<id> answers when the frame view asks why the image failed
 const heldReplies = [];
+const gapPosts = [];
 let keeperOverride = null;
 let groupsError = null;
 let resumeJobs = [];
@@ -2416,6 +2417,7 @@ async function fetch(url, options = {}) {
     payload = exportPolls < 3 || scenario === 'export-cancel' ? exportJob('running', 0.5, { label: 'photo-1.jpg', processed: 1, total: 2 })
       : exportJob('succeeded', 1, { label: 'photo-2.jpg', processed: 2, total: 2, result: { exported: 1, failed: 1, skipped: 0 }, log_tail: ['photo-2.jpg: bad render'] });
   }
+  else if (url === '/api/burst-gap') { assert.equal(options.method, 'POST'); gapPosts.push(JSON.parse(options.body)); payload = { burst_gap_seconds: gapPosts.at(-1).seconds, groups: 1 }; }
   else if (url === '/api/astro/jobs') { assert.equal(options.method, 'POST'); astroPosts.push(JSON.parse(options.body)); payload = jobPayload('queued', 0, { recipe: astroPosts.at(-1).recipe }); }
   else if (url === '/api/astro/jobs/7/run') { assert.deepEqual(JSON.parse(options.body), {}); runs += 1; payload = jobPayload('queued', 0); }
   else if (url === '/api/astro/jobs/7/cancel') { assert.deepEqual(JSON.parse(options.body), {}); cancels += 1; payload = jobPayload('cancelled', 0.5); }
@@ -2904,6 +2906,29 @@ const regression = `
     assert.equal(element('#reject-all-confirm').hidden, true);
     assert.equal(announcements.at(-1), '2 frames rejected');
     assert.equal(groupLoads, loadsBefore, 'decisions update in place without load()');
+    return;
+  }
+  if (scenario === 'burst-gap') {
+    await load();
+    const slider = element('#burst-gap');
+    let disabledEver = false;
+    Object.defineProperty(slider, 'disabled', { get() { return false; }, set(value) { if (value) disabledEver = true; } });
+    slider.focus();
+    holdUrls.add('/api/burst-gap');
+    const step = value => { slider.value = String(value); return slider.listeners.change(); };
+    const first = step(3); step(4); step(5);
+    await new Promise(setImmediate);
+    assert.equal(disabledEver, false, 'the slider is never disabled');
+    assert.equal(document.activeElement, slider, 'focus stays on the slider');
+    assert.equal(heldReplies.length, 1, 'one request in flight');
+    assert.equal(slider.getAttribute('aria-busy'), 'true');
+    heldReplies.shift()();
+    await first;
+    for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+    assert.deepEqual(gapPosts, [{ seconds: 3 }, { seconds: 5 }], 'the steps coalesce into one trailing request');
+    assert.equal(document.activeElement, slider);
+    assert.equal(disabledEver, false);
+    assert.equal(slider.getAttribute('aria-busy'), undefined);
     return;
   }
   if (scenario === 'culling-keys') {
@@ -5210,6 +5235,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_all_rejected_burst_explains_no_keeper_and_offers_pick(self):
         self.run_javascript_cleanup_regression("all-rejected")
+
+    def test_javascript_burst_gap_keeps_focus_and_coalesces_steps(self):
+        self.run_javascript_cleanup_regression("burst-gap")
 
     def test_javascript_culling_keys_move_focus_and_decide_in_place(self):
         self.run_javascript_cleanup_regression("culling-keys")
