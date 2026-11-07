@@ -407,7 +407,8 @@ function selectGroup(group) {
 function burstSection(group, groupIndex, frames) {
   const section = document.createElement('section');
   section.className = 'burst';
-  if (frames.length === 1) section.className += ' burst-single';  // flows beside other singles, see .contact-sheet
+  const single = group.frame_count === 1;  // the burst's size, not how many frames this page shows
+  if (single) section.className += ' burst-single';  // flows beside other singles, see .contact-sheet
   section.dataset.burst = group.id;
   section.setAttribute('aria-labelledby', `burst-${group.id}-heading`);
   const header = document.createElement('div');
@@ -417,7 +418,7 @@ function burstSection(group, groupIndex, frames) {
   heading.textContent = `Burst ${groupIndex + 1}`;
   const facts = document.createElement('span');
   facts.className = 'quiet';
-  facts.textContent = frames.length === 1 ? startTime(group)  // the day heading in the rail carries the date; the tile names the frame
+  facts.textContent = single ? startTime(group)  // the day heading in the rail carries the date; the tile names the frame
     : [frameCount(group.frame_count), startTime(group, true), bestFrame(group) ? `best ${bestFrame(group).name}${bestFrame(group).model_pick ? " (model's pick)" : ''}` : null].filter(Boolean).join(' · ');
   const selected = document.createElement('span');
   selected.className = 'burst-selected';

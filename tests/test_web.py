@@ -4487,6 +4487,16 @@ const regression = `
     assert.equal(warning?.textContent, 'Warning: Sony reduced-size lossless raw; darktable cannot decode it');
     return;
   }
+  if (scenario === 'filtered-burst') {
+    const shown = Object.assign(group(1, [1]), { frame_count: 8 });  // the Keepers filter left one of eight frames on this page
+    const section = burstSection(shown, 0, shown.photos);
+    const facts = section.children[0].children.find(node => node.className === 'quiet').textContent;
+    assert.ok(!section.classList.contains('burst-single'), 'a filtered burst is laid out by its size');
+    assert.ok(facts.includes('8 frames') && facts.includes('best'), facts);
+    const single = group(2, [2]);
+    assert.ok(burstSection(single, 1, single.photos).classList.contains('burst-single'));
+    return;
+  }
   if (scenario === 'rows') {
     groups = [group(1, [1, 2, 3, 4, 5])];
     await load();
@@ -6004,6 +6014,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_contact_sheet_groups_frames_into_burst_sections(self):
         self.run_javascript_cleanup_regression("bursts")
+
+    def test_javascript_filtered_burst_keeps_its_frame_count_and_best_frame(self):
+        self.run_javascript_cleanup_regression("filtered-burst")
 
     def test_javascript_arrow_up_down_move_one_grid_row(self):
         self.run_javascript_cleanup_regression("rows")
