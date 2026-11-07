@@ -515,6 +515,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 self._send_bytes(full.read_bytes(), "image/jpeg", cache=True)
                 return
+            match = re.fullmatch(r"/astro/(\d+)/preview", path)
+            if match:  # the stack's auto-stretched JPEG, shown beside its debrief
+                try:
+                    with Library(settings) as library:
+                        preview = library.astro_preview(int(match.group(1)))
+                    content = preview.read_bytes() if preview else None
+                except (OSError, OverflowError):
+                    content = None
+                if content is None:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                self._send_bytes(content, "image/jpeg")
+                return
             match = re.fullmatch(r"/thumb/cleared/([0-9a-f]{16})", path)
             if match:  # a frame cleared from the catalog, drawn on the map from its trashed preview
                 try:

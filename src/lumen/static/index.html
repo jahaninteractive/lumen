@@ -172,6 +172,7 @@
           <p class="quiet">Shooting for a good stack: keep every light at the same exposure, ISO and aperture. Keep exposures short enough that stars stay points, about 5 seconds at 28 mm f/4 on a high-resolution body (the NPF rule; the 500 rule is too long for these sensors). Take more frames rather than longer ones: 15 to 30 lights, since noise falls with the square root of the count, so 4 frames only halve it. Add about 10 darks with the lens cap on, at the same exposure, ISO and temperature.</p>
           </details>
           <p id="astro-availability" class="quiet">Checking Siril…</p>
+          <div class="astro-setup">
           <fieldset id="astro-lights-group">
             <legend>Lights to include <span id="astro-group-count" class="quiet">No batch selected</span></legend>
             <div id="astro-lights" class="scope-options"></div>
@@ -182,6 +183,7 @@
           </div>
           <fieldset>
             <legend>Calibration folders (optional)</legend>
+            <div class="calibration">
             <div class="calibration-row">
               <p id="astro-darks-label">Dark frames</p>
               <p id="astro-darks-path" class="path" aria-labelledby="astro-darks-label">None</p>
@@ -200,6 +202,7 @@
               <button type="button" id="browse-astro-biases" class="secondary">Choose biases folder…</button>
               <button type="button" id="reset-astro-biases" class="secondary" disabled>No biases</button>
             </div>
+            </div>
           </fieldset>
           <fieldset id="astro-recipe"><legend>Recipe</legend><div class="scope-options"><label><input type="radio" name="astro-recipe" value="tracked" checked> Tracked (global star alignment)</label><label><input type="radio" name="astro-recipe" value="untracked"> Untracked wide-field (two-pass alignment, keeps the common area)</label></div></fieldset>
           <p><label for="astro-place">Where you shot <select id="astro-place"><option value="dark_site">Dark site</option><option value="city">City or light pollution</option><option value="ship">Ship or boat</option><option value="handheld">Handheld</option></select></label></p>
@@ -212,6 +215,9 @@
             <button type="button" id="cancel-astro" class="danger" disabled>Cancel stack</button>
             <button type="button" id="reveal-astro" class="secondary" disabled>Show job folder in Finder</button>
           </div>
+          </div>
+          <div class="astro-result">
+          <div>
           <p id="astro-summary"></p>
           <section id="astro-debrief" aria-labelledby="astro-debrief-heading" hidden>
             <h3 id="astro-debrief-heading">Debrief</h3>
@@ -234,6 +240,12 @@
           <p id="astro-status" role="status" aria-live="polite"></p>
           <div id="astro-paths" class="recovery" aria-label="Managed job files"></div>
           <pre id="astro-log" class="log" aria-label="Siril log tail"></pre>
+          </div>
+          <figure id="astro-stack" hidden>
+            <a id="astro-stack-link" target="_blank" rel="noopener"><img id="astro-stack-image" alt=""></a>
+            <figcaption><span id="astro-stack-name" class="path"></span> <span class="quiet">Siril's auto-stretch of the stack. Opens full size in a new tab.</span></figcaption>
+          </figure>
+          </div>
         </section>
         <section id="map-panel" role="tabpanel" aria-labelledby="map-tab" tabindex="0" hidden>
           <h2>Where the frames were taken</h2>

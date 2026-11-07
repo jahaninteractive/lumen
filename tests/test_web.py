@@ -6470,6 +6470,20 @@ class AstroWebTests(unittest.TestCase):
             self.assertEqual(404, code, body)
         self.assertEqual({"notes": ["Cloud on the left."]}, self.get_json(f"/api/astro/jobs/{job_id}/debrief?place=ship")[1]["review"])
 
+    def test_preview_route_serves_the_stack_jpeg(self):
+        _, prepared = self.prepare()
+        job_id = prepared["job_id"]
+        for path in (f"/astro/{job_id}/preview", "/astro/999/preview"):  # not run yet, and unknown
+            with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(self.base + path, timeout=3)
+            caught.exception.close()
+            self.assertEqual(404, caught.exception.code)
+        self.assertEqual(202, self.post_json(f"/api/astro/jobs/{job_id}/run", {})[0])
+        self.poll(job_id, {"succeeded"})
+        with urllib.request.urlopen(f"{self.base}/astro/{job_id}/preview", timeout=3) as response:
+            self.assertEqual("image/jpeg", response.headers["Content-Type"])
+            self.assertEqual(b"\xff\xd8", response.read(2))
+
     def test_debrief_refuses_unrun_and_unknown(self):
         _, prepared = self.prepare()
         code, body = self.get_json(f"/api/astro/jobs/{prepared['job_id']}/debrief?place=ship")

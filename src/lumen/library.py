@@ -2174,13 +2174,18 @@ class Library:
         return (debrief(parse_siril_log(text), frames if isinstance(frames, dict) else None, manifest, place)
                 | {"review": self.latest_astro_review(job_id)})
 
-    def review_astro_stack(self, job_id: int, tagger, *, place: str) -> StackReview:
-        """Advisory: the review model's notes on the stacked preview, with the rules' debrief as its context."""
-        rules = self.astro_debrief(job_id, place)  # Refuses an unknown, unrun, or wrong-place job first.
+    def astro_preview(self, job_id: int) -> Path | None:
+        """The finished stack's preview JPEG, or None for an unknown, unrun or preview-less job."""
         preview = next((Path(artifact.path).parent / name for artifact in self.catalog.list_artifacts()
                         if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id
                         and (name := _astro_preview_name(artifact))), None)
-        if preview is None or not preview.is_file():
+        return preview if preview is not None and preview.is_file() else None
+
+    def review_astro_stack(self, job_id: int, tagger, *, place: str) -> StackReview:
+        """Advisory: the review model's notes on the stacked preview, with the rules' debrief as its context."""
+        rules = self.astro_debrief(job_id, place)  # Refuses an unknown, unrun, or wrong-place job first.
+        preview = self.astro_preview(job_id)
+        if preview is None:
             raise ValueError("this stack has no preview to look at")
         text = "\n".join(["What happened:", *(f"- {line}" for line in rules["happened"]),
                           "Try now:", *(f"- {line}" for line in rules["try_now"]),

@@ -2206,6 +2206,18 @@ function setAstroJob(job) {
     warnings.append(item);
   });
   document.querySelector('#astro-log').textContent = job.log_tail.join('\n');
+  const stack = document.querySelector('#astro-stack');  // the finished stack beside its debrief
+  stack.hidden = !(job.status === 'succeeded' && job.result?.preview);
+  if (!stack.hidden) {
+    const url = `/astro/${job.job_id}/preview`;
+    const image = document.querySelector('#astro-stack-image');
+    if (image.getAttribute('src') !== url) {  // polling repeats; reload the 6 MB JPEG only for a new job
+      image.src = url;
+      image.alt = `The stacked night sky, auto-stretched: ${job.result.preview}`;
+      document.querySelector('#astro-stack-link').href = url;
+      document.querySelector('#astro-stack-name').textContent = job.result.preview;
+    }
+  }
   const paths = document.querySelector('#astro-paths');
   paths.replaceChildren();
   const files = [['Manifest', 'manifest.json'], ['Siril log', 'siril.log']];
