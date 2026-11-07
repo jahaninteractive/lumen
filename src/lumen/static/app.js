@@ -1552,6 +1552,7 @@ function filterQuery() {
   return params.toString();
 }
 
+let foldedShown = 0;
 function syncFilters(cameras) {
   const params = new URLSearchParams(location.search);
   const anyCamera = document.createElement('option');
@@ -1570,8 +1571,9 @@ function syncFilters(cameras) {
   });
   // Folded filters open the fold when one is set, and the summary counts them, so a narrowed sheet never looks unfiltered.
   const folded = FOLDED_FILTERS.filter(name => FLAG_FILTERS.includes(name) ? params.get(name) === '1' : (params.get(name) ?? '') !== (FILTER_DEFAULTS[name] ?? ''));
-  const fold = document.querySelector('#filter-more');
-  if (folded.length) fold.open = true;
+  // Only a folded filter becoming set opens it; a fold the photographer closed stays closed across reloads.
+  if (folded.length && !foldedShown) document.querySelector('#filter-more').open = true;
+  foldedShown = folded.length;
   document.querySelector('#filter-more-label').textContent = folded.length ? `More filters (${folded.length} set)` : 'More filters';
   const status = params.get('keepers_only') === '1' ? 'keepers' : params.get('decision') in STATUSES ? params.get('decision') : 'all';
   Object.keys(STATUSES).forEach(value => { statusRadio(value).checked = value === status; });
@@ -1600,6 +1602,7 @@ const roleSelects = [...document.querySelectorAll('#role-model-pair select')];
 function syncRoleModels(status) {
   const models = Array.isArray(status.review_models) ? status.review_models : [];
   document.querySelector('#role-model-pair').hidden = models.length < 2;
+  document.querySelector('#rail-show-models').hidden = models.length < 2;
   const loaded = status.omlx_live?.loaded_models || [];
   for (const select of roleSelects) {
     select.replaceChildren(...models.map(model => new Option(loaded.includes(model) ? model : `${model} (not loaded)`, model)));
@@ -3407,10 +3410,10 @@ document.querySelector('#filter-text').addEventListener('input', () => {
     applyFilters().catch(error => announce(error.message));
   }, 300);
 });
-// The batch rail folds away to give the sheet its width; the choice is remembered per browser.
+// The batch rail folds to a narrow strip to give the sheet its width; the choice is remembered per browser.
 function showRail(shown) {
   document.querySelector('.workspace').dataset.rail = shown ? 'shown' : 'hidden';
-  document.querySelector('#rail-toggle').setAttribute('aria-expanded', String(shown));
+  for (const id of ['#rail-toggle', '#rail-show-models', '#rail-show-batches']) document.querySelector(id).setAttribute('aria-expanded', String(shown));
   try {
     if (shown) localStorage.removeItem('lumen-rail-hidden');
     else localStorage.setItem('lumen-rail-hidden', '1');
@@ -3420,6 +3423,15 @@ document.querySelector('#rail-toggle').addEventListener('click', () => {
   const shown = document.querySelector('.workspace').dataset.rail === 'hidden';
   showRail(shown);
   announce(shown ? 'Batch list shown.' : 'Batch list hidden; the contact sheet has the width.');
+});
+// The strip's buttons reopen the rail where the photographer was heading.
+document.querySelector('#rail-show-models').addEventListener('click', () => {
+  showRail(true);
+  document.querySelector('#review-model').focus();
+});
+document.querySelector('#rail-show-batches').addEventListener('click', () => {
+  showRail(true);
+  (document.querySelectorAll('.batch-button')[0] ?? document.querySelector('#batch-list')).focus();
 });
 try { if (localStorage.getItem('lumen-rail-hidden') === '1') showRail(false); } catch { /* per-visit only */ }
 // Advisory: the fast model adds vocabulary keywords to the search as OR terms; the photographer can edit or clear them.

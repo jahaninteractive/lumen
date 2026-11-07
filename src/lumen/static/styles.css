@@ -98,8 +98,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
 }
-.workspace[data-rail="hidden"] { grid-template-columns: minmax(0, 1fr); }
-.workspace[data-rail="hidden"] .batch-rail { display: none; }
+.workspace[data-rail="hidden"] { grid-template-columns: 2.5rem minmax(0, 1fr); }
+.workspace[data-rail="hidden"] .rail-header, .workspace[data-rail="hidden"] #batch-list { display: none; }
+.workspace:not([data-rail="hidden"]) .rail-strip { display: none; }
+.rail-strip { display: flex; flex-direction: column; align-items: center; gap: .5rem; padding: .75rem 0; }
+.rail-strip button { writing-mode: vertical-rl; min-height: 0; padding: .6rem .2rem; font-size: .8rem; }
+.rail-strip button[hidden] { display: none; }
 #back-to-top { position: sticky; bottom: 1rem; display: block; margin: 1rem 1.25rem 1rem auto; box-shadow: 0 2px 8px rgba(0, 0, 0, .5); }
 #back-to-top:not([data-show="true"]) { visibility: hidden; }  /* only once the sheet has scrolled */
 .batch-rail, main { min-height: 0; overflow-y: auto; }
@@ -445,6 +449,8 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   .workspace { display: block; overflow-y: auto; }
   .batch-rail, main { overflow: visible; }
   .batch-rail { border-right: 0; border-bottom: 1px solid var(--line); }
+  .rail-strip { flex-direction: row; padding: .4rem 1.25rem; }
+  .rail-strip button { writing-mode: horizontal-tb; padding: .2rem .6rem; }
   .input-row { align-items: stretch; flex-direction: column; }
   .contact-top { position: static; }  /* on a phone the bar is too tall to pin */
   .segmented { gap: .4rem; }

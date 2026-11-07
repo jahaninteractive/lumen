@@ -20,6 +20,10 @@
 
   <div class="workspace">
     <nav aria-label="Photo batches" class="batch-rail" id="batch-rail">
+      <div id="rail-strip" class="rail-strip">
+        <button type="button" id="rail-show-models" class="secondary" aria-controls="batch-rail" aria-expanded="false" title="Show the model selects" hidden>Models</button>
+        <button type="button" id="rail-show-batches" class="secondary" aria-controls="batch-rail" aria-expanded="false" title="Show the batch list">Batches</button>
+      </div>
       <div id="rail-header" class="rail-header">
         <div class="rail-models" id="role-model-pair" hidden><label for="review-model">Review model</label>
         <select id="review-model" data-role="review"></select>

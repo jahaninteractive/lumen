@@ -585,6 +585,20 @@ class WebTests(unittest.TestCase):
         self.assertIn("hidden", by_id["job-strip"]["attrs"])
         self.assertEqual("quiet", by_id["ai-availability"]["attrs"].get("class"))
 
+    def test_rail_strip_offers_models_and_batches(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        rail, strip = by_id["batch-rail"], by_id["rail-strip"]
+        self.assertIn(rail, strip["parents"], "the collapsed strip lives in the rail")
+        for name in ("rail-show-models", "rail-show-batches"):
+            self.assertIn(strip, by_id[name]["parents"], name)
+            self.assertEqual("button", by_id[name]["tag"])
+            self.assertEqual("batch-rail", by_id[name]["attrs"].get("aria-controls"))
+            self.assertEqual("false", by_id[name]["attrs"].get("aria-expanded"))
+        self.assertIn(rail, by_id["role-model-pair"]["parents"], "the model selects stay in the rail")
+
     def test_javascript_header_reports_health_without_model_names(self):
         self.run_javascript_cleanup_regression("status-health")
 
@@ -4547,6 +4561,27 @@ const regression = `
     assert.equal(element('#announcer').textContent, 'Batch list shown.');
     return;
   }
+  if (scenario === 'rail-strip') {
+    await load();
+    syncRoleModels({ review_models: ['big', 'small'], omlx_roles: { review: { model: 'big' }, fast: { model: 'small' } } });
+    const workspace = element('.workspace'), toggles = ['#rail-toggle', '#rail-show-models', '#rail-show-batches'].map(element);
+    element('#rail-toggle').listeners.click();
+    assert.equal(workspace.dataset.rail, 'hidden');
+    assert.deepEqual(toggles.map(toggle => toggle.getAttribute('aria-expanded')), ['false', 'false', 'false']);
+    assert.equal(element('#rail-show-models').hidden, false, 'two models: the strip offers them');
+    element('#rail-show-models').listeners.click();
+    assert.notEqual(workspace.dataset.rail, 'hidden');
+    assert.deepEqual(toggles.map(toggle => toggle.getAttribute('aria-expanded')), ['true', 'true', 'true']);
+    assert.equal(document.activeElement, element('#review-model'), 'Models lands on the review select');
+    assert.equal(stored['lumen-rail-hidden'], undefined);
+    element('#rail-toggle').listeners.click();
+    element('#rail-show-batches').listeners.click();
+    assert.notEqual(workspace.dataset.rail, 'hidden');
+    assert.equal(document.activeElement, document.querySelectorAll('.batch-button')[0], 'Batches lands on the first batch');
+    syncRoleModels({ review_models: ['big'] });
+    assert.equal(element('#rail-show-models').hidden, true, 'one model: no selects to show');
+    return;
+  }
   if (scenario === 'rail-remembered') {
     await new Promise(setImmediate);  // the startup load
     assert.equal(element('.workspace').dataset.rail, 'hidden', 'a hidden rail stays hidden on the next visit');
@@ -4571,6 +4606,18 @@ const regression = `
     await load();
     assert.equal(fold.open, false, 'clearing the filters never forces the fold either way');
     assert.equal(label.textContent, 'More filters');
+    history.replaceState(null, '', '?date_from=2026-01-01');
+    await load();
+    assert.equal(fold.open, true, 'a folded filter that becomes set opens the fold');
+    fold.open = false;
+    await load();
+    assert.equal(fold.open, false, 'a reload with the same folded filter leaves the fold closed');
+    assert.equal(label.textContent, 'More filters (1 set)');
+    history.replaceState(null, '', '');
+    await load();
+    history.replaceState(null, '', '?camera=X');
+    await load();
+    assert.equal(fold.open, true, 'a folded filter set again opens it again');
     return;
   }
   if (scenario === 'fold-remembered') {
@@ -5220,6 +5267,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_rail_toggle_hides_the_batch_list_and_remembers_it(self):
         self.run_javascript_cleanup_regression("rail-toggle")
         self.run_javascript_cleanup_regression("rail-remembered")
+
+    def test_javascript_rail_strip_reopens_the_rail_at_models_or_batches(self):
+        self.run_javascript_cleanup_regression("rail-strip")
 
     def test_javascript_filter_fold_opens_and_counts_when_a_folded_filter_is_set(self):
         self.run_javascript_cleanup_regression("filter-fold")
