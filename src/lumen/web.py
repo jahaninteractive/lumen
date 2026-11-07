@@ -200,11 +200,14 @@ def reveal_astro_job(settings: Settings, job_id: int) -> str:
     """Finder reveal of one existing managed job folder; never creates folders for unknown jobs."""
     with Library(settings) as library:
         library.catalog.get_job(job_id)
+        names = [Path(artifact.path).name for artifact in library.catalog.list_artifacts()
+                 if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id]
     job_dir = settings.output_dir / "astro" / str(job_id)
     if not job_dir.is_dir():
         raise ValueError("astro job folder is unavailable")
     # A finished stack opens with its TIFF selected; otherwise the folder, so the manifest and log stay reachable.
-    return reveal_outputs(settings, job_dir, "result.tif" if (job_dir / "result.tif").is_file() else None)
+    select = next((name for name in names if (job_dir / name).is_file()), None)
+    return reveal_outputs(settings, job_dir, select)
 
 
 class LumenServer(ThreadingHTTPServer):

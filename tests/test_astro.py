@@ -474,6 +474,15 @@ from types import SimpleNamespace
 from PIL import Image
 scenario = sys.argv[1]
 print("log: Welcome to siril 1.4.4 for macos (aarch64) - CLI", flush=True)
+print("log: Running command: convert", flush=True)
+cards = ["SIMPLE  =                    T", "EXPTIME =                  15.", "APERTURE=                   4.",
+         "ISOSPEED=                3200.", "FOCALLEN=                  28.", "XPIXSZ  =     5.07000017166138",
+         "INSTRUME= 'Sony ILCE-7CM2'", "END"]
+Path("process").mkdir()
+for index, _ in enumerate(sorted(Path("lights").iterdir()), 1):
+    date = "DATE-OBS= '2026-10-21T20:00:0%d'" % index
+    Path("process", "light_%05d.fit" % index).write_bytes("".join(card.ljust(80) for card in [date] + cards).ljust(2880).encode())
+Path("process", "r_light_00001.fit").write_bytes(b"registered")
 print("log: Running command: calibrate", flush=True)
 print("log: Running command: register", flush=True)
 if scenario == "hang":
@@ -526,9 +535,10 @@ class AstroJobTests(unittest.TestCase):
         patcher = patch("lumen.astro.subprocess.Popen", side_effect=self.fake_popen)
         patcher.start()
         self.addCleanup(patcher.stop)
-        patcher = patch("lumen.astro.find_tool", return_value=None)  # no exiftool: the stack still succeeds
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for target in ("lumen.astro.find_tool", "lumen.astrodebrief.find_tool"):
+            patcher = patch(target, return_value=None)  # no exiftool: the stack still succeeds
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def fake_popen(self, command, **kwargs):
         import sys
@@ -601,8 +611,11 @@ class AstroJobTests(unittest.TestCase):
         job = self.prepare(excluded_photo_ids=[self.photo_ids[2]])
         finished = self.run_and_wait(job.id)
         self.assertEqual(("succeeded", 1.0, None), (finished.status, finished.progress, finished.error))
-        result = Path(job.manifest_path).parent / "result.tif"
+        stem = "2026-10-21_2200_ILCE-7CM2_28mm_f4_2x15s_ISO3200"
+        result = Path(job.manifest_path).parent / f"{stem}.tif"
         self.assertEqual(str(result), finished.result_path)
+        self.assertEqual({f"{stem}.tif", f"{stem}.jpg"}, {path.name for path in result.parent.glob(f"{stem}.*")})
+        self.assertFalse((result.parent / "result.tif").exists())
         self.assertEqual(1, len(self.launches))
         self.assertEqual(load_manifest(Path(job.manifest_path), self.settings.output_dir).command, tuple(self.launches[0]))
         log = Path(job.log_path).read_text(encoding="utf-8")
@@ -618,6 +631,9 @@ class AstroJobTests(unittest.TestCase):
         self.assertEqual("1.4.4", artifact.settings["siril_version"])
         self.assertEqual(0, artifact.settings["exit_code"])
         self.assertEqual((16,), tuple(artifact.settings["bits_per_sample"]))
+        self.assertEqual(f"{stem}.jpg", artifact.settings["preview"])
+        self.assertEqual({"artifact_id": artifact.id, "name": f"{stem}.tif", "preview": f"{stem}.jpg"},
+                         self.library.job_status(job.id)["result"])
         for photo_id in self.photo_ids[:2]:
             events = [event for event in self.library.catalog.events_for(photo_id) if event.kind == "astro_stacked"]
             self.assertEqual(1, len(events))
@@ -627,6 +643,24 @@ class AstroJobTests(unittest.TestCase):
         self.assertEqual([], [event for event in self.library.catalog.events_for(self.photo_ids[2]) if event.kind == "astro_stacked"])
         self.assertEqual(1, len([event for event in self.library.catalog.events_for(None) if event.kind == "astro_stacked"]))
         self.assertEqual(before, self.snapshot())
+
+    def test_execute_job_writes_frames_and_removes_process(self):
+        for scenario, status in (("success", "succeeded"), ("nonzero", "failed")):
+            with self.subTest(scenario=scenario):
+                self.scenario = scenario
+                job = self.prepare()
+                self.assertEqual(status, self.run_and_wait(job.id).status)
+                job_dir = Path(job.manifest_path).parent
+                self.assertFalse((job_dir / "process").exists())
+                self.assertTrue((job_dir / "lights").is_dir())
+                record = json.loads((job_dir / "frames.json").read_text(encoding="utf-8"))
+                self.assertEqual([1, 2, 3], [frame["position"] for frame in record["frames"]])
+                self.assertEqual(("light_00001.tif", 15.0, "Sony ILCE-7CM2"), tuple(
+                    record["frames"][0][key] for key in ("name", "exposure", "instrument")))
+                self.assertFalse(record["originals_online"])
+                log = Path(job.log_path).read_text(encoding="utf-8")
+                self.assertIn("lumen: wrote frames.json (3 frames", log)
+                self.assertIn("lumen: removed Siril's process/ folder", log)
 
     def test_changed_or_missing_frames_block_launch(self):
         original = self.lights[1].read_bytes()
@@ -649,13 +683,23 @@ class AstroJobTests(unittest.TestCase):
         self.assertEqual("failed", finished.status)
         self.assertIn("disk full", finished.error)
         self.assertIsNone(finished.result_path)
-        self.assertTrue((Path(job.manifest_path).parent / "result.tif").is_file())
+        self.assertTrue((Path(job.manifest_path).parent / "2026-10-21_2200_ILCE-7CM2_28mm_f4_3x15s_ISO3200.tif").is_file())
         self.assertEqual([], self.library.catalog.list_artifacts())
         for photo_id in self.photo_ids:
             self.assertEqual([], [event for event in self.library.catalog.events_for(photo_id) if event.kind == "astro_stacked"])
             sidecar = json.loads(self.library.sidecars.paths(self.library.catalog.get_photo(photo_id))[0].read_text())
             self.assertNotIn("astro_stacked", [event["kind"] for event in sidecar["provenance"]])
         self.assertEqual([], [event for event in self.library.catalog.events_for(None) if event.kind == "astro_stacked"])
+
+    def test_a_taken_stem_keeps_siril_names(self):
+        job = self.prepare()
+        job_dir = Path(job.manifest_path).parent
+        (job_dir / "2026-10-21_2200_ILCE-7CM2_28mm_f4_3x15s_ISO3200.tif").write_bytes(b"taken")
+        finished = self.run_and_wait(job.id)
+        self.assertEqual(("succeeded", str(job_dir / "result.tif")), (finished.status, finished.result_path))
+        [artifact] = self.library.catalog.list_artifacts()
+        self.assertEqual(("result.tif", "preview.jpg"), (Path(artifact.path).name, artifact.settings["preview"]))
+        self.assertIn("lumen: kept Siril's names:", Path(job.log_path).read_text(encoding="utf-8"))
 
     def test_existing_outputs_block_launch(self):
         job = self.prepare()
@@ -791,7 +835,10 @@ class ExecuteJobCancellationTests(unittest.TestCase):
             def popen(command, **kwargs):
                 return real_popen([sys.executable, "-c", FAKE_SIRIL, "success"], **kwargs)
 
-            execution = execute_job(Context(), manifest, output_root=outputs, popen=popen)
+            with patch("lumen.astrodebrief.find_tool", return_value=None):
+                execution = execute_job(Context(), manifest, output_root=outputs, popen=popen)
             self.assertIsNone(execution)
             self.assertTrue((Path(manifest.job_dir) / "result.tif").is_file())
+            self.assertFalse((Path(manifest.job_dir) / "process").exists(), "Siril stopped, so its intermediates go")
+            self.assertTrue((Path(manifest.job_dir) / "frames.json").is_file())
             self.assertIn("cancelled by the photographer", (Path(manifest.job_dir) / "siril.log").read_text())

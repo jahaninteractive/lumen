@@ -30,6 +30,7 @@ from .geonames import Place, PlaceIndex, distance_km, online_lookup, parse_posit
 from . import ingest
 from .mapdata import MapIndex, parse_geojson, parse_gpx, position_at
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
+from .astrodebrief import output_stem, rename_outputs
 from .jobs import LocalJobRunner
 from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, DevelopAdvice, OmlxError,
                    OmlxTagger, get_server_status)
@@ -2195,8 +2196,8 @@ class Library:
             for artifact in self.catalog.list_artifacts():
                 if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id:
                     result = {"artifact_id": artifact.id, "name": Path(artifact.path).name}
-                    if (Path(artifact.path).parent / "preview.jpg").is_file():
-                        result["preview"] = "preview.jpg"
+                    if artifact.settings.get("preview"):
+                        result["preview"] = artifact.settings["preview"]
         return {"job_id": job.id, "kind": job.kind, "status": job.status, "progress": job.progress,
                 "label": job.label, "processed": job.processed, "total": job.total,
                 "error": public_message(job.error), "result": result, "log_tail": tail,
@@ -2210,6 +2211,7 @@ class Library:
                 return
             by_path = {Path(photo.path).resolve(): photo for photo in catalog.list_photos()}
             light_ids = [photo.id for frame in manifest.lights.frames if (photo := by_path.get(Path(frame.source)))]
+            tiff, preview = self._name_astro_outputs(manifest, execution, by_path)
             settings = {
                 "job_id": manifest.job_id, "manifest": "manifest.json", "script_sha256": manifest.script_sha256,
                 "siril_version": manifest.siril.version_text, "command": list(manifest.command),
@@ -2221,9 +2223,11 @@ class Library:
                 "bits_per_sample": list(execution.bits_per_sample),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            if preview is not None:
+                settings["preview"] = preview.name
             stack_identity = hashlib.sha256("\n".join(settings["light_fingerprints"]).encode()).hexdigest()
             artifact = catalog.save_artifact(None, f"astro-job-{manifest.job_id}", stack_identity, "astro_tiff",
-                                             str(execution.result), settings, output_fingerprint)
+                                             str(tiff), settings, output_fingerprint)
             try:
                 details = {"job_id": manifest.job_id, "artifact_id": artifact.id, "output": artifact.path,
                            "output_fingerprint": output_fingerprint, "created_at": settings["created_at"]}
@@ -2232,7 +2236,7 @@ class Library:
                     catalog.append_event(photo_id, "astro_stacked", details)
                 for photo_id in light_ids:
                     self._write_sidecar(photo_id, catalog=catalog)
-                catalog.update_job(job_id, result_path=str(execution.result))
+                catalog.update_job(job_id, result_path=str(tiff))
             except Exception:
                 catalog.discard_export(artifact.id, kind="astro_stacked")
                 for photo_id in light_ids:  # Sidecars must not keep events the catalog no longer has.
@@ -2241,6 +2245,27 @@ class Library:
                     except Exception:
                         pass
                 raise
+
+    @staticmethod
+    def _name_astro_outputs(manifest, execution, by_path) -> tuple[Path, Path | None]:
+        """Rename the stack from frames.json and the first light's catalog capture time; a refusal keeps Siril's names."""
+        job = Path(manifest.job_dir)
+        try:
+            frames = json.loads((job / "frames.json").read_text(encoding="utf-8"))["frames"]
+        except (OSError, ValueError, KeyError, TypeError):
+            frames = []
+        first = by_path.get(Path(manifest.lights.frames[0].source)) if manifest.lights.frames else None
+        stem = output_stem(frames, first.captured_at if first else None)
+        if stem is None:
+            return execution.result, execution.preview
+        try:
+            outputs = rename_outputs(job, stem)
+            line = f"named the stack {stem}"
+        except ValueError as error:
+            outputs, line = (execution.result, execution.preview), f"kept Siril's names: {error}"
+        with (job / manifest.log).open("a", encoding="utf-8") as log:
+            log.write(f"lumen: {line}\n")
+        return outputs
 
     def get_photo(self, photo_id: int) -> dict | None:
         photo = self.catalog.get_photo(photo_id)

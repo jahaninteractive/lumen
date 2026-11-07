@@ -15,6 +15,7 @@ from typing import Any, Callable, Collection, Mapping, Sequence
 
 from PIL import Image
 
+from .astrodebrief import remove_process, write_frames_json
 from .pipelines import SirilPipeline
 from .previews import fingerprint_file
 from .tools import find_tool
@@ -333,6 +334,7 @@ class AstroExecution:
     result: Path
     bits_per_sample: tuple[int, ...]
     returncode: int
+    preview: Path | None = None
 
 
 def stage_progress(line: str) -> float | None:
@@ -465,21 +467,32 @@ def execute_job(context: Any, manifest: AstroManifest, *, output_root: Path, tim
         returncode = process.poll()
         if returncode is not None:
             context.clear_process(process)
-        if context.cancelled:
-            note("cancelled by the photographer; no result was recorded")
-            return None
-        if timed_out:
-            note(f"timed out after {timeout_seconds:g} seconds")
-            raise RuntimeError(f"Siril timed out after {timeout_seconds:g} seconds")
-        if returncode != 0:
-            raise RuntimeError(f"Siril failed with exit code {returncode}; see {manifest.log}")
-        if not result.is_file():
-            raise RuntimeError(f"Siril exited successfully but did not produce {manifest.result}")
-        bits = verify_tiff(result)
-        note(f"verified {manifest.result} ({'x'.join(map(str, bits))} bits per sample)")
-        note(copy_metadata(manifest, [result, job / "preview.jpg"]))
-        context.update_progress(0.95)
-        return AstroExecution(result, bits, returncode)
+        try:
+            if context.cancelled:
+                note("cancelled by the photographer; no result was recorded")
+                return None
+            if timed_out:
+                note(f"timed out after {timeout_seconds:g} seconds")
+                raise RuntimeError(f"Siril timed out after {timeout_seconds:g} seconds")
+            if returncode != 0:
+                raise RuntimeError(f"Siril failed with exit code {returncode}; see {manifest.log}")
+            if not result.is_file():
+                raise RuntimeError(f"Siril exited successfully but did not produce {manifest.result}")
+            bits = verify_tiff(result)
+            note(f"verified {manifest.result} ({'x'.join(map(str, bits))} bits per sample)")
+            preview = job / "preview.jpg"
+            note(copy_metadata(manifest, [result, preview]))
+            context.update_progress(0.95)
+            return AstroExecution(result, bits, returncode, preview if preview.is_file() else None)
+        finally:
+            if returncode is not None:  # Siril has stopped: keep what the debrief needs, drop its intermediates.
+                try:
+                    record = write_frames_json(job, manifest)
+                    note(f"wrote frames.json ({len(record['frames'])} frames, originals "
+                         f"{'online' if record['originals_online'] else 'offline'})")
+                except Exception as error:  # Never fails the job; the debrief then has the log alone.
+                    note(f"could not write frames.json: {error}")
+                note(remove_process(job))
 
 
 def _stop(process: Any) -> None:

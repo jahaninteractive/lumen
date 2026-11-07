@@ -882,6 +882,7 @@ class AstroCliTests(unittest.TestCase):
             ("lumen.library.find_tool", {"return_value": SIRIL.executable}),
             ("lumen.library.probe_siril", {"return_value": SIRIL}),
             ("lumen.astro.find_tool", {"return_value": None}),  # exiftool would run through the patched Popen
+            ("lumen.astrodebrief.find_tool", {"return_value": None}),
             ("lumen.astro.subprocess.Popen", {"side_effect": lambda command, **kw: real_popen(
                 [sys.executable, "-c", FAKE_SIRIL, self.scenario], **kw)}),
         ):
@@ -922,7 +923,8 @@ class AstroCliTests(unittest.TestCase):
         _, prepared = self.run_cli("prepare", str(self.group["id"]), "--confirm")
         code, finished = self.run_cli("run", str(prepared["job_id"]))
         self.assertEqual(0, code)
-        self.assertEqual(("succeeded", 1.0, "result.tif"), (finished["status"], finished["progress"], finished["result"]["name"]))
+        self.assertEqual(("succeeded", 1.0, "2026-10-21_2200_ILCE-7CM2_28mm_f4_3x15s_ISO3200.tif"),
+                         (finished["status"], finished["progress"], finished["result"]["name"]))
         self.assertNotIn(str(self.root), json.dumps(finished))
         code, again = self.run_cli("run", str(prepared["job_id"]))
         self.assertEqual(2, code)

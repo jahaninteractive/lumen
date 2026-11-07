@@ -6320,6 +6320,7 @@ class AstroWebTests(unittest.TestCase):
             ("lumen.library.find_tool", {"return_value": SIRIL.executable}),
             ("lumen.library.probe_siril", {"return_value": SIRIL}),
             ("lumen.astro.find_tool", {"return_value": None}),
+            ("lumen.astrodebrief.find_tool", {"return_value": None}),
             ("lumen.astro.subprocess.Popen", {"side_effect": lambda command, **kw: real_popen(
                 [sys.executable, "-c", FAKE_SIRIL, self.scenario], **kw)}),
         ):
@@ -6430,11 +6431,12 @@ class AstroWebTests(unittest.TestCase):
         self.assert_safe(finished)
         with Library(self.settings) as library:
             [artifact] = library.catalog.list_artifacts()
-        self.assertEqual({"artifact_id": artifact.id, "name": "result.tif", "preview": "preview.jpg"}, finished["result"])
+        stem = "2026-10-21_2200_ILCE-7CM2_28mm_f4_3x15s_ISO3200"
+        self.assertEqual({"artifact_id": artifact.id, "name": f"{stem}.tif", "preview": f"{stem}.jpg"}, finished["result"])
         with patch("lumen.web.sys.platform", "darwin"), patch("lumen.web.subprocess.run") as run:
             run.return_value = subprocess.CompletedProcess([], 0, "", "")
             code, payload = self.post_json(f"/api/astro/jobs/{job_id}/reveal", {})
-        result = (self.settings.output_dir / "astro" / str(job_id) / "result.tif").resolve()
+        result = (self.settings.output_dir / "astro" / str(job_id) / f"{stem}.tif").resolve()
         self.assertEqual((200, str(result)), (code, payload["path"]))
         self.assertEqual(["/usr/bin/open", "-R", str(result)], run.call_args.args[0], "a finished stack selects its TIFF")
         code, body = self.post_json(f"/api/astro/jobs/{job_id}/run", {})
