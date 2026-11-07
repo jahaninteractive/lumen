@@ -24,7 +24,8 @@ _MIGRATIONS = {
     "metrics": {"dhash": "TEXT"},
     "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT",
                "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'", "exposure_seconds": "REAL", "merged_into": "TEXT",
-               "latitude": "REAL", "longitude": "REAL", "altitude": "REAL", "place": "TEXT", "place_country": "TEXT"},
+               "latitude": "REAL", "longitude": "REAL", "altitude": "REAL", "place": "TEXT", "place_country": "TEXT",
+               "model_pick": "INTEGER NOT NULL DEFAULT 0"},
 }
 
 
@@ -686,7 +687,7 @@ class Catalog:
                 if row and keep is None:
                     keep = int(row["id"])
                 elif row:
-                    self.connection.execute("UPDATE photos SET manual_pick = 0 WHERE group_id = ?", (group_id,))
+                    self.connection.execute("UPDATE photos SET manual_pick = 0, model_pick = 0 WHERE group_id = ?", (group_id,))
             for group_id in source_ids:
                 self.connection.execute("UPDATE photos SET group_id = ?, merged_into = ? WHERE group_id = ?",
                                         (target_id, target["stable_key"], group_id))
@@ -751,8 +752,9 @@ class Catalog:
         typed = last.get("location_set")
         position_typed = typed is not None and (typed["latitude"], typed["longitude"]) == (old["latitude"], old["longitude"])
         with self.connection:
-            self.connection.execute("UPDATE photos SET rating = ?, decision = ?, manual_pick = ? WHERE id = ?",
-                                    (old["rating"], old["decision"], old["manual_pick"], photo_id))
+            self.connection.execute("UPDATE photos SET rating = ?, decision = ?, manual_pick = ?, model_pick = ? WHERE id = ?",
+                                    (old["rating"], old["decision"], old["manual_pick"],
+                                     old["model_pick"] if "model_pick" in old.keys() else 0, photo_id))
             if last_place == "place_edited":
                 self.connection.execute("UPDATE photos SET place = ?, place_country = ? WHERE id = ?",
                                         (old["place"], old["place_country"], photo_id))
@@ -977,13 +979,13 @@ class Catalog:
         self.connection.execute("UPDATE photos SET group_id = NULL")
         self.connection.commit()
 
-    def set_manual_pick(self, photo_id: int) -> int:
+    def set_manual_pick(self, photo_id: int, *, by_model: bool = False) -> int:
         row = self.connection.execute("SELECT group_id FROM photos WHERE id = ?", (photo_id,)).fetchone()
         if not row or row["group_id"] is None:
             raise ValueError(f"photo {photo_id} is not in a group")
         group_id = int(row["group_id"])
-        self.connection.execute("UPDATE photos SET manual_pick = 0 WHERE group_id = ?", (group_id,))
-        self.connection.execute("UPDATE photos SET manual_pick = 1 WHERE id = ?", (photo_id,))
+        self.connection.execute("UPDATE photos SET manual_pick = 0, model_pick = 0 WHERE group_id = ?", (group_id,))
+        self.connection.execute("UPDATE photos SET manual_pick = 1, model_pick = ? WHERE id = ?", (int(by_model), photo_id))
         self.connection.execute("UPDATE photo_groups SET automatic_pick_id = ? WHERE id = ?", (photo_id, group_id))
         self.connection.commit()
         return group_id
@@ -1137,6 +1139,7 @@ class Catalog:
             format=row["format"],
             group_id=row["group_id"],
             manual_pick=bool(row["manual_pick"]),
+            model_pick=bool(row["model_pick"]),
             decision=row["decision"],
             rating=int(row["rating"]),
             mirror_path=row["mirror_path"],

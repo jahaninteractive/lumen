@@ -741,11 +741,14 @@ class Library:
                     if context.cancelled:
                         break
                     label = Path(group["photos"][0]["path"]).name
-                    for name in worker._cull_group(group, review, job, redo=redo):
+                    try:  # one burst never ends the job
+                        names = worker._cull_group(group, review, job, redo=redo)
+                    except Exception as error:
+                        worker._log_job(job, f"{label}: {type(error).__name__}: {error}")
+                        names = ("failed",)
+                    for name in names:
                         counts[name] += 1
                     context.update_progress(index / len(groups), label=label[:200], processed=index, total=len(groups))
-                with worker._mutation():
-                    worker._regroup_and_write_sidecars()
                 worker._write_job_files(job.id, manifest | {"summary": counts})
 
         self._submit_job(runner, job, work)
@@ -757,7 +760,9 @@ class Library:
         if not kept:
             return ("skipped",)
         names: list[str] = []
-        chosen = kept[0] if len(kept) == 1 else None  # a lone keeper is its own best frame
+        # A frame the photographer chose by hand is never critiqued or replaced, even with redo.
+        hand_pick = next((photo for photo in kept if photo["manual_pick"] and not photo["model_pick"]), None)
+        chosen = hand_pick or (kept[0] if len(kept) == 1 else None)  # a lone keeper is its own best frame
         if chosen is None:
             critique = None if redo else self.latest_critique(group["id"])
             if critique is None:
@@ -767,11 +772,17 @@ class Library:
                     self._log_job(job, f"{Path(kept[0]['path']).name}: pick {type(error).__name__}: {error}")
                     return ("failed",)
                 names.append("picked")
-            chosen = next(photo for photo in kept if photo["id"] == critique["photo_id"])
-        # A stored critique never overrides a frame the photographer chose by hand; a fresh one is this job's own answer.
-        hand_picked = any(self.catalog.get_photo(photo["id"]).manual_pick for photo in kept)
-        if group["automatic_pick_id"] != chosen["id"] and ("picked" in names or not hand_picked):
-            self.set_pick(chosen["id"])
+            chosen = next((photo for photo in kept if photo["id"] == critique["photo_id"]), None)
+            if chosen is None:
+                self._log_job(job, f"{Path(kept[0]['path']).name}: pick skipped: the burst changed while the job ran")
+                return (*names, "failed")
+        if group["automatic_pick_id"] != chosen["id"]:
+            try:
+                self.set_pick(chosen["id"], by_model={"job_id": job.id, "model": review.model,
+                                                      "role": getattr(review, "role", None)})
+            except ValueError as error:  # the frame left its burst since the snapshot
+                self._log_job(job, f"{Path(chosen['path']).name}: pick {type(error).__name__}: {error}")
+                return (*names, "failed")
         if redo or self.latest_develop_advice(chosen["id"]) is None:
             try:
                 self.suggest_develop(chosen["id"], review, settings=self.develop_for(chosen["id"]) or DevelopSettings())
@@ -2385,11 +2396,15 @@ class Library:
         return {"photo_id": photo_id, "subjects": data["subjects"], "suggested": data["suggested"]}
 
     @_coordinated
-    def set_pick(self, photo_id: int) -> None:
-        group_id = self.catalog.set_manual_pick(photo_id)
+    def set_pick(self, photo_id: int, *, by_model: dict | None = None) -> None:
+        """Make `photo_id` its burst's pick; `by_model` ({job_id, model, role}) records it as a cull job's, not the photographer's."""
+        group_id = self.catalog.set_manual_pick(photo_id, by_model=by_model is not None)
         if self.catalog.get_photo(photo_id).decision == "reject":  # Choosing a frame as best overrides its rejection.
             self.catalog.set_decision(photo_id, "none", reason="manual_pick")
-        self.catalog.append_event(photo_id, "manual_pick", {"group_id": group_id})
+        if by_model is None:
+            self.catalog.append_event(photo_id, "manual_pick", {"group_id": group_id})
+        else:
+            self.catalog.append_event(photo_id, "model_pick", {"group_id": group_id} | by_model)
         group = next(group for group in self.catalog.list_groups() if group["id"] == group_id)
         for item in group["photos"]:
             self._write_sidecar(int(item["id"]), selected=int(item["id"]) == photo_id)

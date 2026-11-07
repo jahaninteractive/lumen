@@ -3431,7 +3431,10 @@ class LibraryTests(unittest.TestCase):
                 status = library.job_status(job.id)
                 burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
                 self.assertEqual(last, burst["automatic_pick_id"], "the model's frame becomes the pick")
-                self.assertIn("manual_pick", [event.kind for event in library.catalog.events_for(last)])
+                kinds = [event.kind for event in library.catalog.events_for(last)]
+                self.assertIn("model_pick", kinds)
+                self.assertNotIn("manual_pick", kinds, "the model's pick is never recorded as the photographer's")
+                self.assertTrue(library.catalog.get_photo(last).model_pick)
                 self.assertEqual({"exposure": 0.3}, library.latest_develop_advice(last)["settings"])
                 self.assertIsNone(library.develop_for(last), "advice is never saved as settings")
                 library.set_pick(burst["photos"][0]["id"])  # the photographer overrules the model
@@ -3443,12 +3446,76 @@ class LibraryTests(unittest.TestCase):
                 redo = library.start_cull_job(FakeReview(), redo=True)
                 library.wait_for_job(redo.id)
                 redone = library.job_status(redo.id)["result"]
+                burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
+                self.assertEqual(burst["photos"][0]["id"], burst["automatic_pick_id"], "redo never replaces a hand pick")
         self.assertEqual(("cull", "succeeded", 2), (status["kind"], status["status"], status["processed"]))
         self.assertEqual({"picked": 1, "advised": 2, "skipped": 0, "failed": 0}, status["result"])
-        self.assertEqual({"picked": 0, "advised": 0, "skipped": 2, "failed": 0}, rerun, "a rerun does no model work")
-        self.assertEqual({"picked": 1, "advised": 2, "skipped": 0, "failed": 0}, redone)
-        self.assertEqual((2, 4), (FakeReview.critiques, FakeReview.advice))
-        self.assertEqual(4, len(calls), "one advice render per advised frame")
+        self.assertEqual({"picked": 0, "advised": 1, "skipped": 1, "failed": 0}, rerun,
+                         "a rerun critiques nothing; it advises only the hand pick, which had no advice yet")
+        self.assertEqual({"picked": 0, "advised": 2, "skipped": 0, "failed": 0}, redone)
+        self.assertEqual((1, 5), (FakeReview.critiques, FakeReview.advice), "a hand-picked burst is never critiqued")
+        self.assertEqual(5, len(calls), "one advice render per advised frame")
+
+    def test_cull_job_logs_a_burst_that_changed_and_carries_on(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._burst(root)
+            for index in range(3):
+                exif = Image.Exif(); exif[36867] = f"2026:10:22 21:00:0{index}"
+                Image.new("RGB", (120, 90), (0, index * 30, 0)).save(root / f"c{index}.jpg", exif=exif)
+            Image.new("RGB", (120, 90)).save(root / "lone.jpg")
+            settings = Settings(library_dir=root / "library")
+
+            class FakeReview:
+                model, role, calls, target = "review-model", "review", 0, None
+                def critique_burst(self, frames):
+                    FakeReview.calls += 1
+                    if FakeReview.calls == 1:  # another window un-rejects X while the job runs
+                        with Library(settings) as other:
+                            other.set_decision(FakeReview.target, "none")
+                        return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
+                    return BurstCritique(str(FakeReview.target), "X is best.", 0.72, "{}")
+                def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None):
+                    return DevelopAdvice({"exposure": 0.3}, "Lift the shadows.", "{}")
+
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])), Library(settings) as library:
+                library.import_path(root)
+                second = next(group for group in library.list_groups()
+                              if Path(group["photos"][0]["path"]).name.startswith("c"))
+                FakeReview.target = second["photos"][-1]["id"]
+                library.set_decision(FakeReview.target, "reject")
+                lone = next(group for group in library.list_groups() if len(group["photos"]) == 1)["photos"][0]["id"]
+                job = library.start_cull_job(FakeReview())
+                library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+                log = Path(library.catalog.get_job(job.id).log_path).read_text()
+                lone_advice = library.latest_develop_advice(lone)
+        self.assertEqual("succeeded", status["status"], (log, status))
+        self.assertEqual(1, status["result"]["failed"], status["result"])
+        self.assertIsNotNone(lone_advice, "the lone frame after the changed burst is still advised")
+        self.assertIn("changed", log)
+
+    def test_cull_job_does_not_regroup_the_catalog(self):
+        from unittest.mock import Mock
+
+        class FakeReview:
+            model, role = "review-model", "review"
+            def critique_burst(self, frames):
+                return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
+            def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None):
+                return DevelopAdvice({"exposure": 0.3}, "Lift the shadows.", "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self._burst(root)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])), \
+                    Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                regroup = Mock()
+                with patch.object(Library, "_regroup_and_write_sidecars", regroup):
+                    job = library.start_cull_job(FakeReview())
+                    library.wait_for_job(job.id)
+                status = library.job_status(job.id)
+        self.assertEqual("succeeded", status["status"])
+        regroup.assert_not_called()
 
     def test_low_confidence_species_named_in_subjects_stays_suggested(self):
         class FakeTagger:

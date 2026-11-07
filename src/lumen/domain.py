@@ -115,6 +115,7 @@ class Photo:
     format: str = "ARW"
     group_id: int | None = None
     manual_pick: bool = False
+    model_pick: bool = False  # the manual_pick was set by a cull job's model, not the photographer
     decision: str = "none"
     rating: int = 0
     mirror_path: str | None = None

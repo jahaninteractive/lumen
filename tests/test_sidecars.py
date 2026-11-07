@@ -48,6 +48,15 @@ class SidecarTests(unittest.TestCase):
             self.assertIn("Bird &amp; branch", xmp_path.read_text())
             self.assertFalse(any(Path(directory).glob("*.tmp")))
 
+    def test_selection_says_a_model_pick_is_the_model_s(self):
+        with tempfile.TemporaryDirectory() as directory:
+            photo = Photo(id=7, path="/photos/a.ARW", fingerprint="abcdef123456", captured_at=None, camera_id="A1",
+                          manual_pick=True, model_pick=True)
+            json_path, _ = SidecarWriter(Path(directory)).write(photo, PhotoMetrics(sharpness=0.8, exposure=0.7, clipping=0.01),
+                                                                [], selected=True)
+            payload = json.loads(json_path.read_text())
+        self.assertEqual({"best_in_group": True, "manual": False, "model": True}, payload["selection"])
+
     def test_xmp_carries_alt_text_in_iptc_core_only_when_present(self):
         with_alt = SidecarWriter._xmp("d", [], rating=0, alt_text="Two penguins on ice")
         self.assertIn('xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"', with_alt)

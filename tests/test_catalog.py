@@ -148,6 +148,30 @@ class CatalogTests(unittest.TestCase):
         with closing(sqlite3.connect(snapshot)) as saved:
             self.assertEqual([(photo_id, "/photos/a.ARW")], saved.execute("SELECT id, path FROM photos").fetchall())
 
+    def test_set_manual_pick_by_model_marks_model_pick_and_a_hand_pick_clears_it(self):
+        a, b = (self.catalog.upsert_photo(Photo(path=f"/photos/{name}.ARW", fingerprint=name, captured_at=None,
+                                                camera_id="A")) for name in "ab")
+        self.catalog.assign_group("g", "A", None, [a, b], a, {})
+        self.catalog.set_manual_pick(a, by_model=True)
+        first = self.catalog.get_photo(a)
+        self.assertEqual((True, True), (first.manual_pick, first.model_pick))
+        self.catalog.set_manual_pick(b)
+        hand, model = self.catalog.get_photo(b), self.catalog.get_photo(a)
+        self.assertEqual((True, False), (hand.manual_pick, hand.model_pick))
+        self.assertEqual((False, False), (model.manual_pick, model.model_pick))
+
+    def test_merge_groups_dropping_a_pick_clears_model_pick_too(self):
+        a, b = (self.catalog.upsert_photo(Photo(path=f"/photos/{name}.ARW", fingerprint=name, captured_at=None,
+                                                camera_id="A")) for name in "ab")
+        target = self.catalog.assign_group("g1", "A", None, [a], a, {})
+        source = self.catalog.assign_group("g2", "A", None, [b], b, {})
+        self.catalog.set_manual_pick(a)
+        self.catalog.set_manual_pick(b, by_model=True)
+        self.catalog.merge_groups(target, [source])
+        dropped = self.catalog.get_photo(b)
+        self.assertEqual((False, False), (dropped.manual_pick, dropped.model_pick))
+        self.assertTrue(self.catalog.get_photo(a).manual_pick)
+
     def test_explicit_group_ids_remove_empty_groups_without_removing_other_groups(self):
         photo_id = self.catalog.upsert_photo(
             Photo(path="/photos/a.ARW", fingerprint="a", captured_at=None, camera_id="A")
