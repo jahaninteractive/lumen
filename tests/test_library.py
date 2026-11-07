@@ -19,7 +19,7 @@ from PIL import Image
 from lumen.config import Settings
 from lumen.vocabulary import load_blocked as load_vocabulary_blocked, load_vocabulary
 from lumen.catalog import GroupFilters
-from lumen.library import Library
+from lumen.library import Library, _stable_key
 from lumen.previews import preview_version
 from lumen.omlx import AstroTriage, BurstCritique, BurstResponseError, Caption, CaptionResponseError, DigestNarrative
 from lumen import geonames as geonames_module
@@ -807,6 +807,52 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual([first], [group["id"] for group in after])
             self.assertEqual(3, len(after[0]["photos"]))
             self.assertEqual(third_photo, after[0]["automatic_pick_id"])
+
+    def write_timed_frames(self, seconds):
+        for second in seconds:
+            exif = Image.Exif(); exif[36867] = f"2026:10:21 12:00:{second:02d}"
+            Image.new("RGB", (320, 240), (90, 90, 90)).save(self.source_dir / f"T{second:02d}.jpg", exif=exif, quality=95)
+
+    def bursts_of(self, library, seconds):
+        """Each burst holding any of these frames, as the sorted capture seconds it holds."""
+        second_of = {library.catalog.photo_by_path(str((self.source_dir / f"T{s:02d}.jpg").resolve())).id: s for s in seconds}
+        return sorted(sorted(second_of[photo["id"]] for photo in group["photos"] if photo["id"] in second_of)
+                      for group in library.list_groups() if {photo["id"] for photo in group["photos"]} & set(second_of))
+
+    def group_holding(self, library, second):
+        photo_id = library.catalog.photo_by_path(str((self.source_dir / f"T{second:02d}.jpg").resolve())).id
+        return next(group["id"] for group in library.list_groups() if photo_id in {photo["id"] for photo in group["photos"]})
+
+    def test_merge_survives_a_wider_burst_gap_that_moves_the_target_start(self):
+        seconds = (0, 1, 4, 5, 20, 21)  # bursts A0, A and B at a 2 s gap
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            self.assertEqual([[0, 1], [4, 5], [20, 21]], self.bursts_of(library, seconds))
+            library.merge_groups([self.group_holding(library, 4), self.group_holding(library, 20)])
+
+            library.set_burst_gap(4)  # A joins A0, so A's first frame is no longer the burst's first
+            self.assertEqual([[0, 1, 4, 5, 20, 21]], self.bursts_of(library, seconds))
+            library.set_burst_gap(2)
+            self.assertEqual([[0, 1], [4, 5, 20, 21]], self.bursts_of(library, seconds))
+
+    def test_chained_merges_survive_a_regroup(self):
+        seconds = (0, 1, 4, 5, 20, 21, 40, 41)  # bursts A0, A, B and C at a 2 s gap
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            library.merge_groups([self.group_holding(library, 20), self.group_holding(library, 40)])  # C into B
+            library.merge_groups([self.group_holding(library, 4), self.group_holding(library, 20)])  # B into A
+            # merge_groups rewrites every frame of B, C's included, to A's key; point C back at B's first
+            # frame, the chain a merge onto a burst whose own target vanished leaves behind.
+            b_first = library.catalog.photo_by_path(str((self.source_dir / "T20.jpg").resolve()))
+            c_ids = [library.catalog.photo_by_path(str((self.source_dir / f"T{s}.jpg").resolve())).id for s in (40, 41)]
+            library.catalog.connection.executemany("UPDATE photos SET merged_into = ? WHERE id = ?",
+                                                   [(_stable_key(b_first), photo_id) for photo_id in c_ids])
+            library.catalog.connection.commit()
+
+            library.set_burst_gap(4)
+            self.assertEqual([list(seconds)], self.bursts_of(library, seconds))
 
     def test_remove_group_stages_only_its_managed_files_and_keeps_originals_and_exports(self):
         second = self.source_dir / "second.jpg"

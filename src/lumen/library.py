@@ -2512,12 +2512,20 @@ class Library:
         hashes = {photo_id: metrics.dhash if metrics else None for photo_id, metrics in metrics_by_id.items()}
         groups = [cluster for group in groups
                   for cluster in split_near_duplicates(group, hashes, self.settings.near_duplicate_distance)]
-        keyed = {_stable_key(group[0]): group for group in groups}  # Merges attach after splitting, so they are never split.
-        for photo in sorted((photo for photo in photos if photo.merged_into), key=lambda item: item.path):
-            if photo.merged_into in keyed:
-                keyed[photo.merged_into].append(photo)
-            else:  # ponytail: a merge whose target burst no longer exists falls back to a burst of its own.
-                groups.append([photo])
+        # Merges attach after splitting, so they are never split. A merge names its target burst's first frame
+        # at merge time; a wider gap can move that frame inside a burst, so every placed frame answers for its burst.
+        by_key = {_stable_key(photo): group for group in groups for photo in group}
+        pending = sorted((p for p in photos if p.merged_into and p.merged_into != Catalog.SPLIT_KEY), key=lambda p: p.path)
+        while pending:  # chains (C into B into A) resolve once their target frame is placed
+            placed = [p for p in pending if p.merged_into in by_key]
+            if not placed:
+                break
+            for photo in placed:
+                by_key[photo.merged_into].append(photo)
+                by_key[_stable_key(photo)] = by_key[photo.merged_into]
+            pending = [p for p in pending if p not in placed]
+        # ponytail: a merge whose target frame no longer exists falls back to a burst of its own; split frames too.
+        groups += [[photo] for photo in pending + [p for p in photos if p.merged_into == Catalog.SPLIT_KEY]]
         self.catalog.clear_group_assignments()
         selected_ids: set[int] = set()
         for group in groups:
