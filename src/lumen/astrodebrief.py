@@ -427,9 +427,6 @@ def debrief(run: SirilRun, frames: dict | None, manifest: Any, place: str) -> di
         detail = "FWHMx {:g} against FWHMy {:g} on the reference".format(*run.reference_fwhm_xy)
     else:
         detail = None
-    if detail:
-        happened.append(f"Stars are stretched one way ({detail}): the camera moved during each exposure.")
-        fired["stretched"] = detail
     shifts = [(math.hypot(m.dx or 0, m.dy or 0), abs(m.rotation or 0)) for m in run.matches]
     if shifts:
         pixels, degrees = max(s for s, _ in shifts), max(r for _, r in shifts)
@@ -455,6 +452,12 @@ def debrief(run: SirilRun, frames: dict | None, manifest: Any, place: str) -> di
             happened.append(f"{_frames([p for p, _ in over]).capitalize()} ran {_range([e for _, e in over], ' s')}; "
                             f"stars trail past about {_seconds(limit)} at {focal:g} mm f/{shot_aperture:g}.")
             fired["trail"] = f"{_range([e for _, e in over], ' s')} ran past the {_seconds(limit)} star-trail limit"
+    if detail:  # after the trail rule: on a still tripod, exposures past the limit are the likelier cause
+        mover = "the deck" if place == "ship" else "the camera"
+        cause = (f"exposures past the star-trail limit trail stars, and {mover} may also have moved"
+                 if "trail" in fired else f"{mover} moved during each exposure")
+        happened.append(f"Stars are stretched one way ({detail}): {cause}.")
+        fired["stretched"] = detail
     if frames is not None and shot and not frames.get("originals_online"):
         happened.append("SteadyShot and the lens's widest aperture need the originals; the drive is offline.")
     elif place in _TRIPOD and any(frame.get("stabilization") == "On" for frame in shot):
@@ -495,9 +498,10 @@ def debrief(run: SirilRun, frames: dict | None, manifest: Any, place: str) -> di
         parts.append(f"{table['darks']} darks")
     parts.append(f"SteadyShot {table['steadyshot']}")
     shorter = "Half a second" if place == "handheld" else "Shorter"
+    deck = " and the deck moved" if place == "ship" else ""
     stretched = "stretched by deck motion" if place == "ship" else "stretched one way"
     if "trail" in fired and "stretched" in fired:
-        reasons.append(f"{shorter}: {fired['trail']} and the stars were {stretched} ({fired['stretched']})")
+        reasons.append(f"{shorter}: {fired['trail']}, so the stars trailed ({fired['stretched']}){deck}")
     elif "trail" in fired:
         reasons.append(f"{shorter}: {fired['trail']}")
     elif "stretched" in fired:

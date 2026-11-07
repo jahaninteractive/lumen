@@ -277,6 +277,24 @@ class DebriefTests(unittest.TestCase):
         for place in ("ship", "handheld"):
             self.assertNotIn("darks", "\n".join(d(place)["happened"]), place)
 
+    def test_stretched_stars_put_down_to_trailing_when_over_the_limit(self) -> None:
+        run = parse_siril_log(fixture("tracked-ok.log"))
+
+        def stretched(exposures, place: str = "dark_site") -> dict:
+            result = debrief(run, debrief_frames(exposures, JOB_163[1]), debrief_manifest(), place)
+            return next(line for line in result["happened"] if "stretched" in line), result["next_time"]["reasons"]
+
+        line, reasons = stretched(JOB_163[0])
+        self.assertIn("trail", line)
+        self.assertNotIn("camera moved during", line)
+        self.assertIn("trailed", reasons[0])
+        line, reasons = stretched(JOB_163[0], "ship")
+        self.assertNotIn("deck motion", reasons[0])
+        self.assertIn("trailed", reasons[0])
+        line, _ = stretched((3.0, 3.0, 3.0, 3.0))
+        self.assertIn("the camera moved during each exposure", line)
+        self.assertNotIn("trail", line)
+
     def test_aperture_uses_max_aperture_then_shot(self) -> None:
         run = parse_siril_log(fixture("tracked-ok.log"))
         wide = debrief(run, debrief_frames(*JOB_163, max_aperture=2.8), debrief_manifest(), "dark_site")
