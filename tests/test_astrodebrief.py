@@ -161,6 +161,8 @@ class OutputNameTests(unittest.TestCase):
         self.assertEqual("2026-10-18_2129_ILCE-7CM2_28mm_f2.8_1x15s_ISO3200",
                          output_stem(self.frames(15.0, aperture=2.8), self.captured))
         self.assertEqual("ILCE-7CM2_28mm_f4_1x15s_ISO3200", output_stem(self.frames(15.0), None))
+        self.assertEqual("2026-10-18_2129_ILCE-7CM2_28mm_f4_3x13-20s_ISO3200",
+                         output_stem(self.frames(20.0, 13.0, 15.0, 15.0), self.captured, count=3))
         self.assertEqual("2026-10-18_2129_ILCE-7CM2x_28mm_f4_1x15s_ISO3200",
                          output_stem(self.frames(15.0, instrument="Sony ILCE-7CM2/x"), self.captured))
 

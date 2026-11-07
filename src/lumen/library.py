@@ -30,7 +30,7 @@ from .geonames import Place, PlaceIndex, distance_km, online_lookup, parse_posit
 from . import ingest
 from .mapdata import MapIndex, parse_geojson, parse_gpx, position_at
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
-from .astrodebrief import output_stem, rename_outputs
+from .astrodebrief import output_stem, parse_siril_log, rename_outputs
 from .jobs import LocalJobRunner
 from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, DevelopAdvice, OmlxError,
                    OmlxTagger, get_server_status)
@@ -2196,8 +2196,12 @@ class Library:
             for artifact in self.catalog.list_artifacts():
                 if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id:
                     result = {"artifact_id": artifact.id, "name": Path(artifact.path).name}
-                    if artifact.settings.get("preview"):
-                        result["preview"] = artifact.settings["preview"]
+                    if "preview" not in artifact.settings:  # Stacks recorded before the preview was named in settings.
+                        preview = "preview.jpg" if (Path(artifact.path).parent / "preview.jpg").is_file() else None
+                    else:
+                        preview = artifact.settings["preview"]
+                    if preview:
+                        result["preview"] = preview
         return {"job_id": job.id, "kind": job.kind, "status": job.status, "progress": job.progress,
                 "label": job.label, "processed": job.processed, "total": job.total,
                 "error": public_message(job.error), "result": result, "log_tail": tail,
@@ -2255,7 +2259,11 @@ class Library:
         except (OSError, ValueError, KeyError, TypeError):
             frames = []
         first = by_path.get(Path(manifest.lights.frames[0].source)) if manifest.lights.frames else None
-        stem = output_stem(frames, first.captured_at if first else None)
+        try:
+            stacked = parse_siril_log((job / manifest.log).read_text(encoding="utf-8", errors="replace")).stacked
+        except OSError:
+            stacked = None
+        stem = output_stem(frames, first.captured_at if first else None, count=stacked)
         if stem is None:
             return execution.result, execution.preview
         try:

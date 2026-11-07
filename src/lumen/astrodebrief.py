@@ -232,7 +232,7 @@ def remove_process(job: Path) -> str:
     return "removed Siril's process/ folder"
 
 
-def output_stem(frames: list[dict], captured_at: datetime | None) -> str | None:
+def output_stem(frames: list[dict], captured_at: datetime | None, *, count: int | None = None) -> str | None:
     """YYYY-MM-DD_HHMM_<camera>_<focal>mm_f<aperture>_<count>x<exposure>s_ISO<iso>; missing values drop out."""
     if not frames:
         return None
@@ -251,7 +251,8 @@ def output_stem(frames: list[dict], captured_at: datetime | None) -> str | None:
     exposures = sorted(frame["exposure"] for frame in frames if frame.get("exposure") is not None)
     if exposures:
         low, high = exposures[0], exposures[-1]
-        fields.append(f"{len(frames)}x{low:g}s" if low == high else f"{len(frames)}x{low:g}-{high:g}s")
+        count = len(frames) if count is None else count  # the lights Siril stacked, when its log says
+        fields.append(f"{count}x{low:g}s" if low == high else f"{count}x{low:g}-{high:g}s")
     if (iso := first("iso")) is not None:
         fields.append(f"ISO{iso:g}")
     stem = "_".join(field for field in (_STEM_FIELD.sub("", field) for field in fields) if field)

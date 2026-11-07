@@ -489,7 +489,9 @@ if scenario == "hang":
     Image.new("I;16", (8, 6)).save("result.tif")
     time.sleep(60)
 print("log: Running command: savetif", flush=True)
-if scenario == "success":
+if scenario == "stacked_two":
+    print("log: 2 images have been stacked", flush=True)
+if scenario in ("success", "stacked_two"):
     Image.new("I;16", (8, 6)).save("result.tif")
     Image.new("RGB", (8, 6)).save("preview.jpg")
 elif scenario == "eight_bit":
@@ -690,6 +692,33 @@ class AstroJobTests(unittest.TestCase):
             sidecar = json.loads(self.library.sidecars.paths(self.library.catalog.get_photo(photo_id))[0].read_text())
             self.assertNotIn("astro_stacked", [event["kind"] for event in sidecar["provenance"]])
         self.assertEqual([], [event for event in self.library.catalog.events_for(None) if event.kind == "astro_stacked"])
+
+    def test_process_stays_when_frames_json_cannot_be_written(self):
+        job = self.prepare()
+        with patch("lumen.astro.write_frames_json", side_effect=OSError("disk full")):
+            self.assertEqual("succeeded", self.run_and_wait(job.id).status)
+        job_dir = Path(job.manifest_path).parent
+        self.assertTrue((job_dir / "process" / "light_00001.fit").is_file())
+        self.assertIn("could not write frames.json: disk full; kept process/", Path(job.log_path).read_text(encoding="utf-8"))
+
+    def test_status_of_an_older_stack_finds_preview_on_disk(self):
+        job = self.prepare()
+        self.run_and_wait(job.id)
+        [artifact] = self.library.catalog.list_artifacts()
+        job_dir = Path(job.manifest_path).parent
+        (job_dir / artifact.settings["preview"]).rename(job_dir / "preview.jpg")
+        older = {key: value for key, value in artifact.settings.items() if key != "preview"}
+        with patch.object(self.library.catalog, "list_artifacts", return_value=[dataclasses.replace(artifact, settings=older)]):
+            self.assertEqual("preview.jpg", self.library.job_status(job.id)["result"]["preview"])
+            (job_dir / "preview.jpg").unlink()
+            self.assertNotIn("preview", self.library.job_status(job.id)["result"])
+
+    def test_the_stem_counts_the_lights_siril_stacked(self):
+        self.scenario = "stacked_two"
+        job = self.prepare()
+        self.assertEqual("succeeded", self.run_and_wait(job.id).status)
+        [artifact] = self.library.catalog.list_artifacts()
+        self.assertEqual("2026-10-21_2200_ILCE-7CM2_28mm_f4_2x15s_ISO3200.tif", Path(artifact.path).name)
 
     def test_a_taken_stem_keeps_siril_names(self):
         job = self.prepare()

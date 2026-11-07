@@ -488,11 +488,12 @@ def execute_job(context: Any, manifest: AstroManifest, *, output_root: Path, tim
             if returncode is not None:  # Siril has stopped: keep what the debrief needs, drop its intermediates.
                 try:
                     record = write_frames_json(job, manifest)
+                except Exception as error:  # Never fails the job; process/ stays so the evidence is not lost.
+                    note(f"could not write frames.json: {error}; kept process/ for that reason")
+                else:
                     note(f"wrote frames.json ({len(record['frames'])} frames, originals "
                          f"{'online' if record['originals_online'] else 'offline'})")
-                except Exception as error:  # Never fails the job; the debrief then has the log alone.
-                    note(f"could not write frames.json: {error}")
-                note(remove_process(job))
+                    note(remove_process(job))
 
 
 def _stop(process: Any) -> None:
