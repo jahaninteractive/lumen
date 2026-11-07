@@ -3470,8 +3470,8 @@ burstGap.addEventListener('input', () => { document.querySelector('#burst-gap-va
 // One regroup at a time and never disabled (that drops keyboard focus): steps taken while one runs coalesce into a single trailing request.
 let gapInFlight = false;
 let gapPending = false;
-async function applyBurstGap() {
-  const seconds = Number(burstGap.value);
+let gapWanted = null;  // the last value a change asked for; load() may reset the slider meanwhile
+async function applyBurstGap(seconds = Number(burstGap.value)) {
   gapInFlight = true;
   burstGap.setAttribute('aria-busy', 'true');
   try {
@@ -3485,11 +3485,12 @@ async function applyBurstGap() {
     burstGap.removeAttribute('aria-busy');
     if (gapPending) {
       gapPending = false;
-      if (Number(burstGap.value) !== seconds) await applyBurstGap();
+      if (gapWanted !== seconds) await applyBurstGap(gapWanted);
     }
   }
 }
 burstGap.addEventListener('change', () => {
+  gapWanted = Number(burstGap.value);
   if (gapInFlight) gapPending = true;
   else applyBurstGap();
 });
