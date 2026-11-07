@@ -1,0 +1,121 @@
+Tprogress: 100.00%
+log: Conversion succeeded, 3 file(s) created for 3 input file(s) (3 image(s) converted, 0 failed)
+progress: , 100.00%
+log: Execution time: 1.82 s
+log: Running command: cd
+1794057355: running command cd
+log: Setting CWD (Current Working Directory) to '<job>/process'
+log: Running command: register
+1794057355: running command register
+log: Checking sequences in the directory: <job>/process.
+Reading sequence failed, file cannot be opened: light.seq.
+Tprogress: 100.00%
+Tprogress: 100.00%
+Writing sequence file light_.seq
+Sequence found: light_ 1->3
+Reading sequence file `light.seq'.
+Reading sequence file `light_.seq'.
+bitpix for the sequence is set as 20
+log: Registration: processing using method: Two-Pass Global Star Alignment (deep-sky)
+progress: Registration: processing using method: Two-Pass Global Star Alignment (deep-sky), 0.00%
+Tprogress: 0.00%
+Memory per image: 1 MB. Max memory: 8237 MB
+log: FindStar: with the current memory and thread limits, up to 3 thread(s) can be used
+log: FindStar: processing...
+log: Reading FITS: file light_00002.fit, 3 layer(s), 7028x4688 pixels, 16 bits
+log: Findstar: processing for channel 1...
+log: Reading FITS: file light_00003.fit, 3 layer(s), 7028x4688 pixels, 16 bits
+log: Findstar: processing for channel 1...
+log: Reading FITS: file light_00001.fit, 3 layer(s), 7028x4688 pixels, 16 bits
+log: Findstar: processing for channel 1...
+log: Found 59 Gaussian profile stars in image, channel #1 (FWHM 12.959269)
+progress: FindStar. Processing image 3 (light_00003.fit), 30.30%
+log: Found 62 Gaussian profile stars in image, channel #1 (FWHM 12.991581)
+progress: FindStar. Processing image 2 (light_00002.fit), 60.61%
+log: Found 69 Gaussian profile stars in image, channel #1 (FWHM 12.993987)
+progress: FindStar. Processing image 1 (light_00001.fit), 90.91%
+progress: Sequence processing succeeded., 0.00%
+log: Sequence processing succeeded.
+log: Execution time: 709.86 ms
+findstar_args have been freed
+log: Trial #1: After sequence analysis, we are choosing image 1 as new reference for registration
+log: Recomputing already existing registration for this layer
+log: Matching stars in image 3: done
+log: Initial pair matches: 45
+log: Pair matches after fitting: 45
+log: Inliers:      1.000
+log: scaleX:       0.997
+log: scaleY:       0.997
+log: scale:        0.997
+log: rotation:    -0.178 deg
+log: dx:         -24.26 px
+log: dy:         -11.21 px
+log: FWHM:        12.96 px
+log: roundness:    0.73
+log: Matching stars in image 2: done
+log: Initial pair matches: 43
+log: Pair matches after fitting: 43
+log: Inliers:      1.000
+log: scaleX:       0.998
+log: scaleY:       0.999
+log: scale:        0.998
+log: rotation:    -0.089 deg
+log: dx:         -14.58 px
+log: dy:          -6.25 px
+log: FWHM:        12.99 px
+log: roundness:    0.74
+log: After sequence alignment, we find that image 1 is 9.2px away from sequence cog, i.e. within allowable bounds
+log: Total: 0 failed, 3 registered.
+log: Execution time: 711.78 ms
+Writing sequence file light_.seq
+log: Running command: seqapplyreg
+Reading sequence failed, file cannot be opened: light.seq.
+1794057356: running command seqapplyreg
+Reading sequence file `light.seq'.
+Reading sequence file `light_.seq'.
+bitpix for the sequence is set as 20
+log: Interpolation clamping active
+progress: Registration: Applying existing data, 0.00%
+number of filtered-in images: 3
+log: Processing all images in the sequence (3)
+number of filtered-in images: 3
+Tprogress: 0.00%
+Memory per image: 377 MB. Max memory: 7004 MB
+log: Apply registration: with the current memory and thread limits, up to 3 thread(s) can be used
+log: Applying existing registration from layer #1 to transform the images
+log: Apply registration: processing...
+log: Reading FITS: file light_00003.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Reading FITS: file light_00002.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Reading FITS: file light_00001.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Saving FITS: file r_light_00003.fit, 3 layer(s), 7004x4669 pixels, 32 bits
+progress: Apply registration. Processing image 3 (light_00003.fit), 30.30%
+log: Saving FITS: file r_light_00001.fit, 3 layer(s), 7004x4669 pixels, 32 bits
+progress: Apply registration. Processing image 1 (light_00001.fit), 60.61%
+log: Saving FITS: file r_light_00002.fit, 3 layer(s), 7004x4669 pixels, 32 bits
+progress: Apply registration. Processing image 2 (light_00002.fit), 90.91%
+progress: Sequence processing succeeded., 0.00%
+log: Sequence processing succeeded.
+log: Execution time: 2.92 s
+log: Applying registration completed.
+log: 3 images processed.
+log: Total: 0 failed, 3 exported.
+Writing sequence file r_light_.seq
+Writing sequence file light_.seq
+log: Running command: stack
+Reading sequence failed, file cannot be opened: r_light.seq.
+1794057359: running command stack
+Reading sequence file `r_light.seq'.
+Reading sequence file `r_light_.seq'.
+bitpix for the sequence is set as -32
+Reading sequence file `r_light_.seq'.
+bitpix for the sequence is set as -32
+log: Stacking sequence r_light_
+log: Using star weighted FWHM images filter (below 16.715599)
+log: Using star roundness images filter (above 0.729606)
+created multiple filter (2 filters)
+number of filtered-in images: 3
+number of filtered-in images: 3
+number of filtered-in images: 3
+number of filtered-in images: 3
+log: Processing images of the sequence with a weighted FWHM lower or equal than 16.7156 (3), processing images of the sequence with a roundness higher or equal than 0.729606 (3), for a total of images processed of 3)
+log: Stacking result will be stored as a 32-bit image

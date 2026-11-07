@@ -2195,6 +2195,8 @@ class Library:
             for artifact in self.catalog.list_artifacts():
                 if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id:
                     result = {"artifact_id": artifact.id, "name": Path(artifact.path).name}
+                    if (Path(artifact.path).parent / "preview.jpg").is_file():
+                        result["preview"] = "preview.jpg"
         return {"job_id": job.id, "kind": job.kind, "status": job.status, "progress": job.progress,
                 "label": job.label, "processed": job.processed, "total": job.total,
                 "error": public_message(job.error), "result": result, "log_tail": tail,

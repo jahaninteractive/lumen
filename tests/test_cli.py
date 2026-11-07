@@ -881,6 +881,7 @@ class AstroCliTests(unittest.TestCase):
         for target, kwargs in (
             ("lumen.library.find_tool", {"return_value": SIRIL.executable}),
             ("lumen.library.probe_siril", {"return_value": SIRIL}),
+            ("lumen.astro.find_tool", {"return_value": None}),  # exiftool would run through the patched Popen
             ("lumen.astro.subprocess.Popen", {"side_effect": lambda command, **kw: real_popen(
                 [sys.executable, "-c", FAKE_SIRIL, self.scenario], **kw)}),
         ):

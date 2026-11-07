@@ -2442,7 +2442,7 @@ async function fetch(url, options = {}) {
     polls += 1;
     if (polls < 3 || scenario === 'astro-cancel') payload = jobPayload('running', polls === 1 ? 0.1 : 0.12);
     else if (scenario === 'astro-fail') payload = jobPayload('failed', 0.5, { error: 'Siril exited with exit code 3' });
-    else payload = jobPayload('succeeded', 1, { result: { artifact_id: 1, name: 'result.tif' } });
+    else payload = jobPayload('succeeded', 1, { result: { artifact_id: 1, name: 'result.tif', preview: 'preview.jpg' } });
   } else throw new Error('Unexpected request: ' + url);
   if (deferGroups && url.startsWith('/api/groups')) { const reply = { ok, json: async () => payload }; return new Promise(resolve => pendingGroups.push(() => resolve(reply))); }
   return { ok, json: async () => payload };
@@ -4368,6 +4368,8 @@ const regression = `
         assert.equal(element('#reveal-astro').disabled, false, 'failed jobs keep their folder reachable');
       } else {
         assert.ok(pathsText().includes('/managed/outputs/astro/7/result.tif'));
+        assert.ok(pathsText().includes('/managed/outputs/astro/7/preview.jpg'));
+        assert.equal(element('#reveal-astro').textContent, 'Show result in Finder');
         assert.ok(element('#announcer').textContent.includes('finished'));
         assert.equal(element('#astro-progress').value, 100);
         await element('#reveal-astro').listeners.click();
@@ -6317,6 +6319,7 @@ class AstroWebTests(unittest.TestCase):
         for target, kwargs in (
             ("lumen.library.find_tool", {"return_value": SIRIL.executable}),
             ("lumen.library.probe_siril", {"return_value": SIRIL}),
+            ("lumen.astro.find_tool", {"return_value": None}),
             ("lumen.astro.subprocess.Popen", {"side_effect": lambda command, **kw: real_popen(
                 [sys.executable, "-c", FAKE_SIRIL, self.scenario], **kw)}),
         ):
@@ -6427,7 +6430,13 @@ class AstroWebTests(unittest.TestCase):
         self.assert_safe(finished)
         with Library(self.settings) as library:
             [artifact] = library.catalog.list_artifacts()
-        self.assertEqual({"artifact_id": artifact.id, "name": "result.tif"}, finished["result"])
+        self.assertEqual({"artifact_id": artifact.id, "name": "result.tif", "preview": "preview.jpg"}, finished["result"])
+        with patch("lumen.web.sys.platform", "darwin"), patch("lumen.web.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            code, payload = self.post_json(f"/api/astro/jobs/{job_id}/reveal", {})
+        result = (self.settings.output_dir / "astro" / str(job_id) / "result.tif").resolve()
+        self.assertEqual((200, str(result)), (code, payload["path"]))
+        self.assertEqual(["/usr/bin/open", "-R", str(result)], run.call_args.args[0], "a finished stack selects its TIFF")
         code, body = self.post_json(f"/api/astro/jobs/{job_id}/run", {})
         self.assertEqual(400, code)
         code, body = self.post_json(f"/api/astro/jobs/{job_id}/run", {"force": True})

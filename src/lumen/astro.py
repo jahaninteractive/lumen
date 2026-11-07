@@ -17,6 +17,7 @@ from PIL import Image
 
 from .pipelines import SirilPipeline
 from .previews import fingerprint_file
+from .tools import find_tool
 
 MANIFEST_SCHEMA = 1
 # Script syntax below was validated against Siril 1.4.4; `requires` refuses other series too.
@@ -146,7 +147,9 @@ def siril_script(siril: SirilCapabilities, *, darks: bool, flats: bool, biases: 
     else:
         lines.append(f"register {sequence}")
     lines += [f"stack r_{sequence} {STACK_OPTIONS}",
-              "load result", "mirrorx -bottomup", "savetif ../result", "cd ..", "close"]
+              "load result", "mirrorx -bottomup", "savetif ../result",
+              # The TIFF stays linear for developing; the preview is Siril's auto-stretch so the stack is judgeable at a glance.
+              "autostretch -linked", "savejpg ../preview 90", "cd ..", "close"]
     return "\n".join(lines) + "\n"
 
 
@@ -367,6 +370,28 @@ def verify_tiff(path: Path) -> tuple[int, ...]:
     return bits
 
 
+def copy_metadata(manifest: Any, outputs: Sequence[Path], *,
+                  runner: Callable[..., Any] = subprocess.run) -> str:
+    """Copy the reference light's EXIF/maker notes onto the stack outputs; returns a log line, never raises."""
+    files = [path for path in outputs if path.is_file()]
+    exiftool = find_tool("exiftool")
+    if not exiftool:
+        return "exiftool not found; the stack carries no camera metadata"
+    reference = Path(manifest.job_dir) / manifest.lights.frames[0].link
+    description = f"Siril stack of {len(manifest.lights.frames)} lights; exposure tags are the reference frame's"
+    # Lumen's tag precedes -TagsFromFile; embedded raw previews would only bloat the stack.
+    command = [exiftool, "-q", "-overwrite_original", f"-ImageDescription={description}",
+               "-TagsFromFile", str(reference), "-all:all",
+               "--ImageDescription", "--PreviewImage", "--ThumbnailImage", "--JpgFromRaw", *map(str, files)]
+    try:
+        completed = runner(command, capture_output=True, text=True, timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"could not copy camera metadata: {error}"
+    if completed.returncode:
+        return f"could not copy camera metadata: {completed.stderr.strip() or 'exiftool failed'}"
+    return f"copied camera metadata from {reference.name} to {', '.join(path.name for path in files)}"
+
+
 def execute_job(context: Any, manifest: AstroManifest, *, output_root: Path, timeout_seconds: float = 7200.0,
                 popen: Callable[..., Any] | None = None) -> AstroExecution | None:
     """Run a prepared job's Siril command under the job runner; returns None when cancelled.
@@ -452,6 +477,7 @@ def execute_job(context: Any, manifest: AstroManifest, *, output_root: Path, tim
             raise RuntimeError(f"Siril exited successfully but did not produce {manifest.result}")
         bits = verify_tiff(result)
         note(f"verified {manifest.result} ({'x'.join(map(str, bits))} bits per sample)")
+        note(copy_metadata(manifest, [result, job / "preview.jpg"]))
         context.update_progress(0.95)
         return AstroExecution(result, bits, returncode)
 

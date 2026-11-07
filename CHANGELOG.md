@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.3.3 (2026-11-07)
+
+- Astro: a stack also writes `preview.jpg`, Siril's auto-stretch of the linear TIFF; both outputs carry the first light's camera EXIF and maker notes (exiftool; a missing exiftool is logged, not fatal); the Finder button selects the finished TIFF; How this works explains the linear result and how to shoot for a clean stack.
+
 ## 0.3.2 (2026-11-07)
 
 The **Burst gap** slider reaches 30 s (it stopped at 10 s), for slow sequences such as a bird working a nest or a long run of handheld frames. A burst merged into a frame you had split off now keeps that merge through every regroup; before, the next regroup at any gap scattered it into single frames. Splitting off the frame a burst was merged into now works: the rest of the burst stays together around its earliest remaining frame, where before the split undid itself (or, in 0.3.1, broke the rest into single frames).

@@ -2210,6 +2210,7 @@ function setAstroJob(job) {
   paths.replaceChildren();
   const files = [['Manifest', 'manifest.json'], ['Siril log', 'siril.log']];
   if (job.result) files.push(['Result (16-bit TIFF)', job.result.name]);
+  if (job.result?.preview) files.push(['Preview (auto-stretched JPEG)', job.result.preview]);
   for (const [label, name] of files) {
     const caption = document.createElement('p');
     caption.textContent = label;
@@ -2221,7 +2222,7 @@ function setAstroJob(job) {
   const text = {
     queued: 'Stack prepared and queued. Review the warnings, then choose Run stack. Cancel this stack to change the selection.',
     running: `Stacking… about ${Math.floor(percent / 10) * 10}% complete. Cancel stack stops only this job's Siril process.`,
-    succeeded: 'Stack finished. The 16-bit result TIFF and provenance are recorded; open the job folder to develop it further.',
+    succeeded: 'Stack finished. The 16-bit TIFF is linear, so it opens almost black: stretch it in darktable or Siril. The preview JPEG shows it auto-stretched. Both carry the first light\'s camera metadata.',
     failed: `Stack failed: ${job.error || 'unknown error'}. The manifest and Siril log remain in the job folder for review.`,
     cancelled: 'Stack cancelled. No result was recorded; the manifest and log remain in the job folder.',
     interrupted: 'Stack was interrupted by a Lumen restart. Prepare a new stack; the manifest and log remain for review.',
@@ -2262,7 +2263,7 @@ document.querySelector('#cancel-astro').addEventListener('click', () => astroAct
 }));
 document.querySelector('#reveal-astro').addEventListener('click', () => astroAction('Finder reveal', async () => {
   const result = await post(`/api/astro/jobs/${state.astro.job.job_id}/reveal`);
-  document.querySelector('#astro-status').textContent = `Opened job folder in Finder: ${result.path}`;
+  document.querySelector('#astro-status').textContent = `Shown in Finder: ${result.path}`;
 }));
 document.querySelector('#astro-confirm').addEventListener('change', updateWorkflow);
 for (const kind of ['darks', 'flats', 'biases']) {
@@ -2369,6 +2370,7 @@ function updateWorkflow() {
   jobButton.textContent = jobActive ? 'Cancel job' : 'Clear';
   jobButton.className = jobActive ? 'danger' : 'secondary';
   document.querySelector('#reveal-astro').disabled = state.busy || !job;
+  document.querySelector('#reveal-astro').textContent = job?.result ? 'Show result in Finder' : 'Show job folder in Finder';
   for (const kind of ['card', 'primary', 'mirror']) document.querySelector(`#browse-ingest-${kind}`).disabled = state.busy;
   document.querySelector('#reset-ingest-mirror').disabled = state.busy || !state.ingest.mirror;
   document.querySelector('#start-ingest').disabled = state.busy || !state.ingest.card || !state.ingest.primary;

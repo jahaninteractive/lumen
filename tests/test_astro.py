@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from lumen.astro import (
@@ -39,6 +40,8 @@ stack r_pp_light rej w 3 3 -norm=addscale -output_norm -rgb_equal -filter-wfwhm=
 load result
 mirrorx -bottomup
 savetif ../result
+autostretch -linked
+savejpg ../preview 90
 cd ..
 close
 """
@@ -52,6 +55,8 @@ stack r_light rej w 3 3 -norm=addscale -output_norm -rgb_equal -filter-wfwhm=3k 
 load result
 mirrorx -bottomup
 savetif ../result
+autostretch -linked
+savejpg ../preview 90
 cd ..
 close
 """
@@ -419,6 +424,45 @@ class SirilProbeTests(unittest.TestCase):
         self.assertFalse(report["tools"]["siril-cli"]["supported"])
 
 
+class AstroMetadataTests(unittest.TestCase):
+    def manifest(self, job: Path):
+        from lumen.astro import AstroFrame, AstroFrameSet
+        frames = tuple(AstroFrame("light", f"/card/{n}.ARW", f"lights/light_0000{n}.arw", "f", 1, 1) for n in (1, 2, 3))
+        return SimpleNamespace(job_dir=str(job), lights=AstroFrameSet("light", None, frames))
+
+    def test_copies_the_reference_frames_exif_onto_each_output(self):
+        from lumen.astro import copy_metadata
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            for name in ("result.tif", "preview.jpg"):
+                (job / name).write_bytes(b"x")
+            with patch("lumen.astro.find_tool", return_value="/bin/exiftool"):
+                outcome = copy_metadata(self.manifest(job), [job / "result.tif", job / "preview.jpg", job / "missing.jpg"],
+                                        runner=lambda command, **kwargs: calls.append(command) or SimpleNamespace(returncode=0, stderr=""))
+        self.assertEqual("copied camera metadata from light_00001.arw to result.tif, preview.jpg", outcome)
+        command = calls[0]
+        self.assertEqual("/bin/exiftool", command[0])
+        description = command.index("-ImageDescription=Siril stack of 3 lights; exposure tags are the reference frame's")
+        self.assertLess(description, command.index("-TagsFromFile"), "Lumen's tags precede -TagsFromFile")
+        self.assertEqual(str(job / "lights" / "light_00001.arw"), command[command.index("-TagsFromFile") + 1])
+        for excluded in ("--ImageDescription", "--PreviewImage", "--ThumbnailImage", "--JpgFromRaw"):
+            self.assertIn(excluded, command)
+        self.assertEqual([str(job / "result.tif"), str(job / "preview.jpg")], command[-2:])
+
+    def test_reports_rather_than_fails(self):
+        from lumen.astro import copy_metadata
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            (job / "result.tif").write_bytes(b"x")
+            with patch("lumen.astro.find_tool", return_value=None):
+                self.assertIn("exiftool not found", copy_metadata(self.manifest(job), [job / "result.tif"]))
+            with patch("lumen.astro.find_tool", return_value="/bin/exiftool"):
+                outcome = copy_metadata(self.manifest(job), [job / "result.tif"],
+                                        runner=lambda command, **kwargs: SimpleNamespace(returncode=1, stderr="bad"))
+            self.assertIn("could not copy camera metadata: bad", outcome)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -426,6 +470,7 @@ if __name__ == "__main__":
 FAKE_SIRIL = """
 import sys, time
 from pathlib import Path
+from types import SimpleNamespace
 from PIL import Image
 scenario = sys.argv[1]
 print("log: Welcome to siril 1.4.4 for macos (aarch64) - CLI", flush=True)
@@ -437,6 +482,7 @@ if scenario == "hang":
 print("log: Running command: savetif", flush=True)
 if scenario == "success":
     Image.new("I;16", (8, 6)).save("result.tif")
+    Image.new("RGB", (8, 6)).save("preview.jpg")
 elif scenario == "eight_bit":
     Image.new("RGB", (8, 6)).save("result.tif")
 elif scenario == "nonzero":
@@ -478,6 +524,9 @@ class AstroJobTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         patcher = patch("lumen.astro.subprocess.Popen", side_effect=self.fake_popen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch("lumen.astro.find_tool", return_value=None)  # no exiftool: the stack still succeeds
         patcher.start()
         self.addCleanup(patcher.stop)
 

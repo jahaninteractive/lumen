@@ -176,7 +176,7 @@ def choose_macos_xmp() -> str | None:
     raise RuntimeError(f"Could not open the XMP picker: {result.stderr.strip() or 'unknown macOS error'}")
 
 
-def reveal_outputs(settings: Settings, destination: Path | None = None) -> str:
+def reveal_outputs(settings: Settings, destination: Path | None = None, select: str | None = None) -> str:
     root = settings.output_dir.resolve()
     destination = (destination or settings.jpeg_output_dir).resolve()
     if not root.is_relative_to(settings.library_dir.resolve()) or destination == root or not destination.is_relative_to(root):
@@ -186,13 +186,14 @@ def reveal_outputs(settings: Settings, destination: Path | None = None) -> str:
     destination.mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
-            ["/usr/bin/open", str(destination)], capture_output=True, text=True, timeout=30, check=False,
+            ["/usr/bin/open", "-R", str(destination / select)] if select else ["/usr/bin/open", str(destination)],
+            capture_output=True, text=True, timeout=30, check=False,
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError("Finder reveal timed out") from error
     if result.returncode:
         raise RuntimeError(f"Could not show outputs in Finder: {result.stderr.strip() or 'unknown macOS error'}")
-    return str(destination)
+    return str(destination / select) if select else str(destination)
 
 
 def reveal_astro_job(settings: Settings, job_id: int) -> str:
@@ -202,7 +203,8 @@ def reveal_astro_job(settings: Settings, job_id: int) -> str:
     job_dir = settings.output_dir / "astro" / str(job_id)
     if not job_dir.is_dir():
         raise ValueError("astro job folder is unavailable")
-    return reveal_outputs(settings, job_dir)
+    # A finished stack opens with its TIFF selected; otherwise the folder, so the manifest and log stay reachable.
+    return reveal_outputs(settings, job_dir, "result.tif" if (job_dir / "result.tif").is_file() else None)
 
 
 class LumenServer(ThreadingHTTPServer):

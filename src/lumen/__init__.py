@@ -1,4 +1,4 @@
 """Lumen: a local, non-destructive RAW photography manager."""
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
