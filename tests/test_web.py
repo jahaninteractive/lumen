@@ -2094,7 +2094,7 @@ async function tick() { for (const cb of [...timers.values()]) await cb(); await
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
 const location = { search: '', pathname: '/' };
 const history = { replaceState(_state, _title, url) { const at = url.indexOf('?'); location.search = at < 0 ? '' : url.slice(at); } };
-const localStorage = { getItem: key => stored[key] ?? (scenario === 'astro-resume' && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'fold-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'fold-remembered' && key === 'lumen-panel-collapsed' ? '1' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : scenario === 'rail-remembered' && key === 'lumen-rail-hidden' ? '1' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
+const localStorage = { getItem: key => stored[key] ?? (scenario.startsWith('astro-resume') && key === 'lumen-astro-job' ? '7' : scenario === 'tabs-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'tabs-remembered' && key === 'lumen-add-source' ? 'ingest' : scenario === 'fold-remembered' && key === 'lumen-tab' ? 'export-tab' : scenario === 'fold-remembered' && key === 'lumen-panel-collapsed' ? '1' : scenario === 'frame-view' && key === 'lumen-tab' ? 'compose-tab' : scenario === 'tiles-remembered' && key === 'lumen-tile-size' ? 'small' : scenario === 'rail-remembered' && key === 'lumen-rail-hidden' ? '1' : null), setItem(key, value) { stored[key] = value; }, removeItem(key) { delete stored[key]; } };
 const photo = id => ({ id, name: 'photo-' + id + '.jpg', total_score: 0.8, preview_url: '/preview/' + id, decision: 'none', rating: 0 });
 const decisionPosts = [];
 const decisions = { 1: 'none', 2: 'none' };
@@ -2444,7 +2444,7 @@ async function fetch(url, options = {}) {
   else if (url === '/api/astro/jobs/7/reveal') { assert.deepEqual(JSON.parse(options.body), {}); payload = { path: '/managed/outputs/astro/7' }; }
   else if (url === '/api/astro/jobs/7' || url === '/api/jobs/7') {
     polls += 1;
-    if (polls < 3 || scenario === 'astro-cancel') payload = jobPayload('running', polls === 1 ? 0.1 : 0.12);
+    if ((polls < 3 && scenario !== 'astro-resume-done') || scenario === 'astro-cancel') payload = jobPayload('running', polls === 1 ? 0.1 : 0.12);
     else if (scenario === 'astro-fail') payload = jobPayload('failed', 0.5, { error: 'Siril exited with exit code 3' });
     else payload = jobPayload('succeeded', 1, { result: { artifact_id: 1, name: 'result.tif', preview: 'preview.jpg' } });
   } else throw new Error('Unexpected request: ' + url);
@@ -4294,6 +4294,14 @@ const regression = `
     assert.deepEqual(photoDetailRequests, []);
     return;
   }
+  if (scenario === 'astro-resume-done') {
+    await load();
+    assert.equal(state.astro.job.status, 'succeeded', 'a finished stack comes back after a reload');
+    assert.equal(element('#astro-debrief').hidden, false, 'and so does its debrief');
+    assert.equal(element('#astro-next-settings').textContent, '5 s · f/4 · ISO 6400 · 25 lights');
+    assert.equal(stored['lumen-astro-job'], '7');
+    return;
+  }
   if (scenario === 'astro-resume') {
     await load();
     assert.equal(state.astro.job.status, 'running', 'a remembered job is refetched on load');
@@ -4381,6 +4389,7 @@ const regression = `
         assert.ok(element('#astro-status').textContent.includes('/managed/outputs/astro/7'));
         if (scenario === 'astro-debrief') {
           const texts = selector => element(selector).children.map(child => child.textContent);
+          assert.equal(stored['lumen-astro-job'], '7', 'a finished stack is remembered for the next visit');
           assert.deepEqual(debriefGets, ['dark_site'], 'the debrief is fetched once when the job ends, for the default place');
           assert.equal(element('#astro-debrief').hidden, false);
           assert.deepEqual(texts('#astro-happened'), ['Frame 1 (a.ARW) trailed: dark_site.']);
@@ -5780,7 +5789,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertRegex(styles, r"select:focus-visible")
 
     def test_javascript_astro_tab_confirms_includes_polls_and_retains_failure_context(self):
-        for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume", "astro-recipe", "astro-debrief"):
+        for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume", "astro-recipe", "astro-debrief", "astro-resume-done"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
 

@@ -2231,10 +2231,8 @@ function setAstroJob(job) {
   if (job.status !== previous) announce(ASTRO_WORDS[job.status] || `Stack ${job.status}.`);
   if (!ASTRO_RAN.includes(job.status)) document.querySelector('#astro-debrief').hidden = true;
   else if (job.status !== previous) loadAstroDebrief();  // once per run's end, including a resumed job
-  try {
-    if (JOB_ACTIVE.includes(job.status)) localStorage.setItem('lumen-astro-job', String(job.job_id));
-    else localStorage.removeItem('lumen-astro-job');
-  } catch { /* per-visit only */ }
+  // Kept after the job ends too, so a reload brings back the last stack and its debrief; the next prepare replaces it.
+  try { localStorage.setItem('lumen-astro-job', String(job.job_id)); } catch { /* per-visit only */ }
   updateWorkflow();
 }
 
