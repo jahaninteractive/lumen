@@ -574,3 +574,36 @@ class DevelopAdviceTests(unittest.TestCase):
         prompt = captured["content"][0]["text"]
         self.assertNotIn("The photographer says", prompt)
         self.assertIn("No control has been changed", prompt)
+
+
+class StackReviewTests(unittest.TestCase):
+    def test_parse_stack_review_keeps_up_to_five_short_notes(self):
+        from lumen.omlx import STACK_NOTE_CHARS, StackReviewResponseError, parse_stack_review
+        self.assertEqual(["Cloud on the left."], parse_stack_review('{"notes": ["Cloud on the left."]}').notes)
+        self.assertEqual([], parse_stack_review('{"notes": []}').notes)
+        long = parse_stack_review(json.dumps({"notes": ["word " * 60]})).notes[0]
+        self.assertLessEqual(len(long), STACK_NOTE_CHARS)
+        self.assertEqual(200, STACK_NOTE_CHARS)
+        self.assertTrue(issubclass(StackReviewResponseError, OmlxError))
+        for bad in ({"notes": ["a"] * 6}, {"notes": [""]}, {"notes": [" "]}, {"notes": [3]}, {"notes": "a"}, {}, ["a"]):
+            with self.subTest(bad=bad), self.assertRaises(StackReviewResponseError) as caught:
+                parse_stack_review(json.dumps(bad))
+            self.assertEqual(json.dumps(bad), caught.exception.raw_response)
+
+    def test_review_stack_prompt_carries_the_debrief_and_forbids_settings(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "stack.jpg"
+            Image.new("RGB", (2048, 1024)).save(preview)
+            reply = '{"notes": ["The horizon tilts down to the right."]}'
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), reply)[1]):
+                review = tagger.review_stack(preview, "What happened:\n- No darks.")
+        self.assertEqual(["The horizon tilts down to the right."], review.notes)
+        self.assertEqual(reply, review.raw_response)
+        prompt = captured["content"][0]["text"]
+        self.assertIn("What happened:\n- No darks.", prompt)
+        self.assertIn("Do not give camera settings", prompt)
+        data = base64.b64decode(captured["content"][1]["image_url"]["url"].split(",", 1)[1])
+        with Image.open(io.BytesIO(data)) as sent:
+            self.assertEqual(omlx.MODEL_IMAGE_LONG_EDGE, max(sent.size))

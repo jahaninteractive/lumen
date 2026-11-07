@@ -25,6 +25,8 @@ CAPTION_MAX = 200
 ALT_TEXT_MAX = 125
 NARRATIVE_MAX = 1500
 MODEL_IMAGE_LONG_EDGE = 1024  # measured: the 27B tags as well at 1024 as at 1616 in two-thirds of the time; 768 starts inventing species
+STACK_NOTES_MAX = 5
+STACK_NOTE_CHARS = 200
 DEVELOP_RATIONALE_MAX = 600  # two or three sentences: the explanation is the product, not the numbers
 
 
@@ -81,6 +83,12 @@ class DigestResponseError(OmlxError):
 
 
 class ExpandResponseError(OmlxError):
+    def __init__(self, message: str, raw_response: str | None = None):
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
+class StackReviewResponseError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
@@ -144,6 +152,12 @@ class DigestNarrative:
 class DevelopAdvice:
     settings: dict  # a DevelopSettings-valid subset of the renderer's controls; empty means "needs nothing"
     rationale: str
+    raw_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class StackReview:
+    notes: list[str]
     raw_response: str
 
 
@@ -272,6 +286,14 @@ def parse_develop_response(raw: str) -> DevelopAdvice:
         raise DevelopAdviceError(f"oMLX proposed develop settings Lumen cannot apply: {error}", raw) from error
     rationale = _clip_text(payload["rationale"], DEVELOP_RATIONALE_MAX, DevelopAdviceError, raw)
     return DevelopAdvice(settings.to_dict(), rationale, raw)
+
+
+def parse_stack_review(raw: str) -> StackReview:
+    payload = _json_object(raw, StackReviewResponseError)
+    notes = payload.get("notes")
+    if not isinstance(notes, list) or len(notes) > STACK_NOTES_MAX:
+        raise StackReviewResponseError(f"oMLX stack review must contain notes, at most {STACK_NOTES_MAX}", raw)
+    return StackReview([_clip_text(note, STACK_NOTE_CHARS, StackReviewResponseError, raw, "note") for note in notes], raw)
 
 
 def parse_digest_response(raw: str) -> str:
@@ -509,6 +531,19 @@ class OmlxTagger:
             prompt += f" The photographer says of your previous attempt: {feedback}"
         content = [{"type": "text", "text": prompt}, self._image_content(preview)]
         return parse_develop_response(self._complete(content, timeout, max_tokens=600))
+
+    def review_stack(self, preview: Path, debrief_text: str, timeout: float = 240) -> StackReview:
+        """Advisory notes on a stacked night-sky preview: only what eyes catch, never numbers or settings."""
+        prompt = (
+            "This is the stacked result of a night-sky shoot. The debrief below already decided every number and "
+            "setting. Look at the image and add only what is visible and the debrief cannot know: cloud or haze, a "
+            "smeared or doubled foreground, a tilting horizon, light pollution, gradients, stray light. Do not give "
+            "camera settings, exposure times, ISO, apertures, or frame counts. Return JSON only, shaped "
+            f'{{"notes": ["..."]}}, with at most {STACK_NOTES_MAX} notes, each one plain sentence about something '
+            "visible; an empty array when there is nothing to add. Do not identify a person.\n\n" + debrief_text
+        )
+        content = [{"type": "text", "text": prompt}, self._image_content(preview)]
+        return parse_stack_review(self._complete(content, timeout, max_tokens=400))
 
     def write_digest(self, facts_markdown: str, timeout: float = 240) -> DigestNarrative:
         """Text only: the facts table goes to the model, never an image."""

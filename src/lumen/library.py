@@ -32,7 +32,7 @@ from .mapdata import MapIndex, parse_geojson, parse_gpx, position_at
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .astrodebrief import debrief, output_stem, parse_siril_log, rename_outputs
 from .jobs import LocalJobRunner
-from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, DevelopAdvice, OmlxError,
+from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, DevelopAdvice, OmlxError, StackReview,
                    OmlxTagger, get_server_status)
 from .pipelines import EXPORT_PRESETS, RAW_EXTENSIONS, PipelineRegistry, validate_watermark
 from .tools import find_tool
@@ -84,6 +84,13 @@ def _check_caption(caption: str | None, alt_text: str | None) -> None:
         raise ValueError(f"caption must contain at most {CAPTION_MAX} characters and no hashtags")
     if alt_text and len(alt_text) > ALT_TEXT_MAX:
         raise ValueError(f"alt text must contain at most {ALT_TEXT_MAX} characters")
+
+
+def _astro_preview_name(artifact) -> str | None:
+    """The stack's preview JPEG beside the artifact; stacks recorded before it was named in settings used preview.jpg."""
+    if "preview" in artifact.settings:
+        return artifact.settings["preview"]
+    return "preview.jpg" if (Path(artifact.path).parent / "preview.jpg").is_file() else None
 
 
 def _stable_key(first: Photo) -> str:
@@ -2161,7 +2168,43 @@ class Library:
             frames = json.loads(frames_path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             frames = None
-        return debrief(parse_siril_log(text), frames if isinstance(frames, dict) else None, manifest, place) | {"review": None}
+        return (debrief(parse_siril_log(text), frames if isinstance(frames, dict) else None, manifest, place)
+                | {"review": self.latest_astro_review(job_id)})
+
+    def review_astro_stack(self, job_id: int, tagger, *, place: str) -> StackReview:
+        """Advisory: the review model's notes on the stacked preview, with the rules' debrief as its context."""
+        rules = self.astro_debrief(job_id, place)  # Refuses an unknown, unrun, or wrong-place job first.
+        preview = next((Path(artifact.path).parent / name for artifact in self.catalog.list_artifacts()
+                        if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id
+                        and (name := _astro_preview_name(artifact))), None)
+        if preview is None or not preview.is_file():
+            raise ValueError("this stack has no preview to look at")
+        text = "\n".join(["What happened:", *(f"- {line}" for line in rules["happened"]),
+                          "Try now:", *(f"- {line}" for line in rules["try_now"]),
+                          "Next time: " + rules["next_time"]["settings"],
+                          *(f"- {line}" for line in rules["next_time"]["reasons"])])
+        model, role = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None)
+        try:
+            review = tagger.review_stack(preview, text)
+        except Exception as error:
+            with self._mutation():
+                self.catalog.append_event(None, "astro_review_failed", {
+                    "job_id": job_id, "place": place, "model": model, "role": role, "error": str(error),
+                    "raw_response": getattr(error, "raw_response", None)})
+            raise
+        with self._mutation():
+            self.catalog.append_event(None, "astro_reviewed", {
+                "job_id": job_id, "place": place, "notes": review.notes, "model": model, "role": role})
+        return review
+
+    def latest_astro_review(self, job_id: int) -> dict | None:
+        """The newest stored stack review for this job, notes only."""
+        row = self.catalog.connection.execute("""
+            SELECT details_json FROM provenance
+            WHERE kind = 'astro_reviewed' AND json_extract(details_json, '$.job_id') = ?
+            ORDER BY id DESC LIMIT 1
+        """, (job_id,)).fetchone()
+        return {"notes": json.loads(row["details_json"])["notes"]} if row else None
 
     def cancel_job(self, job_id: int) -> bool:
         if self._runner is not None:
@@ -2223,11 +2266,7 @@ class Library:
             for artifact in self.catalog.list_artifacts():
                 if artifact.kind == "astro_tiff" and artifact.settings.get("job_id") == job_id:
                     result = {"artifact_id": artifact.id, "name": Path(artifact.path).name}
-                    if "preview" not in artifact.settings:  # Stacks recorded before the preview was named in settings.
-                        preview = "preview.jpg" if (Path(artifact.path).parent / "preview.jpg").is_file() else None
-                    else:
-                        preview = artifact.settings["preview"]
-                    if preview:
+                    if preview := _astro_preview_name(artifact):
                         result["preview"] = preview
         return {"job_id": job.id, "kind": job.kind, "status": job.status, "progress": job.progress,
                 "label": job.label, "processed": job.processed, "total": job.total,

@@ -22,6 +22,7 @@ from .diagnostics import doctor_report, stale_sources
 from .digest import parse_day
 from .domain import MANUAL_CROP_ID, DevelopSettings
 from .jobs import LocalJobRunner
+from .astrodebrief import PLACES
 from .library import CleanupError, ExportRequest, Library, public_message
 from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS, validate_watermark
@@ -1087,6 +1088,19 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 if path == "/api/astro/jobs":
                     self._send_json(self._prepare_astro(payload), status=HTTPStatus.CREATED)
+                    return
+                match = re.fullmatch(r"/api/astro/jobs/(\d+)/review", path)
+                if match:  # An advice call: no heavy-job lock, and the model runs with the mutation lock released.
+                    if payload.keys() != {"place"} or payload["place"] not in PLACES:
+                        raise ValueError("stack review requires exactly a place: " + ", ".join(PLACES))
+                    with Library(settings) as library:
+                        tagger = library.tagger_for("review")  # A not-loaded refusal reaches the browser verbatim.
+                        try:
+                            review = library.review_astro_stack(int(match.group(1)), tagger, place=payload["place"])
+                        except LookupError:
+                            self._send_json({"error": "astro job is unavailable"}, status=HTTPStatus.NOT_FOUND)
+                            return
+                    self._send_json({"notes": review.notes})  # The raw model output stays in provenance.
                     return
                 match = re.fullmatch(r"/api/astro/jobs/(\d+)/(run|cancel|reveal)", path)
                 if match:

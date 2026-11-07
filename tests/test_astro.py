@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from PIL import Image
+
 from lumen.astro import (
     SirilCapabilities, UnsupportedSirilVersion, load_manifest, prepare_siril_job, probe_siril, siril_script,
 )
@@ -712,6 +714,78 @@ class AstroJobTests(unittest.TestCase):
             self.assertEqual("preview.jpg", self.library.job_status(job.id)["result"]["preview"])
             (job_dir / "preview.jpg").unlink()
             self.assertNotIn("preview", self.library.job_status(job.id)["result"])
+
+    def review_tagger(self, outcome):
+        test = self
+
+        class Tagger:
+            model, role = "local-vision", "review"
+
+            def review_stack(self, preview, debrief_text, timeout=240):
+                test.assertTrue(preview.is_file())
+                self.seen = (preview.name, debrief_text)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        return Tagger()
+
+    def review_events(self, kind):
+        return [json.loads(row["details_json"]) for row in self.library.catalog.connection.execute(
+            "SELECT details_json FROM provenance WHERE kind = ? ORDER BY id", (kind,))]
+
+    def test_review_astro_stack_stores_and_reads_back(self):
+        from lumen.omlx import StackReview
+        job = self.prepare()
+        self.run_and_wait(job.id)
+        [artifact] = self.library.catalog.list_artifacts()
+        self.assertIsNone(self.library.latest_astro_review(job.id))
+        tagger = self.review_tagger(StackReview(["Cloud on the left."], '{"secret": 1}'))
+        review = self.library.review_astro_stack(job.id, tagger, place="ship")
+        self.assertEqual(["Cloud on the left."], review.notes)
+        name, text = tagger.seen
+        self.assertEqual(artifact.settings["preview"], name)
+        rules = self.library.astro_debrief(job.id, "ship")
+        for line in (*rules["happened"], *rules["try_now"], rules["next_time"]["settings"], *rules["next_time"]["reasons"]):
+            self.assertIn(line, text)
+        [event] = self.review_events("astro_reviewed")
+        self.assertEqual({"job_id": job.id, "place": "ship", "notes": ["Cloud on the left."], "model": "local-vision",
+                          "role": "review"}, event)
+        self.assertEqual({"notes": ["Cloud on the left."]}, self.library.latest_astro_review(job.id))
+        self.assertEqual({"notes": ["Cloud on the left."]}, self.library.astro_debrief(job.id, "city")["review"])
+        self.assertIsNone(self.library.latest_astro_review(job.id + 1))
+
+    def test_review_failure_leaves_debrief_intact(self):
+        from lumen.omlx import StackReviewResponseError
+        job = self.prepare()
+        self.run_and_wait(job.id)
+        before = self.library.astro_debrief(job.id, "ship")
+        with self.assertRaises(StackReviewResponseError):
+            self.library.review_astro_stack(job.id, self.review_tagger(StackReviewResponseError("bad", "nonsense")), place="ship")
+        [event] = self.review_events("astro_review_failed")
+        self.assertEqual({"job_id": job.id, "place": "ship", "model": "local-vision", "role": "review", "error": "bad",
+                          "raw_response": "nonsense"}, event)
+        self.assertEqual([], self.review_events("astro_reviewed"))
+        self.assertEqual(before, self.library.astro_debrief(job.id, "ship"))
+        self.assertIsNone(before["review"])
+
+    def test_review_needs_a_preview(self):
+        from lumen.omlx import StackReview
+        job = self.prepare()
+        self.run_and_wait(job.id)
+        [artifact] = self.library.catalog.list_artifacts()
+        (Path(artifact.path).parent / artifact.settings["preview"]).unlink()
+        tagger = self.review_tagger(StackReview(["x"], "{}"))
+        with self.assertRaisesRegex(ValueError, "this stack has no preview to look at"):
+            self.library.review_astro_stack(job.id, tagger, place="ship")
+        older = {key: value for key, value in artifact.settings.items() if key != "preview"}
+        Image.new("RGB", (8, 6)).save(Path(artifact.path).parent / "preview.jpg")
+        with patch.object(self.library.catalog, "list_artifacts", return_value=[dataclasses.replace(artifact, settings=older)]):
+            self.library.review_astro_stack(job.id, tagger, place="ship")
+        self.assertEqual("preview.jpg", tagger.seen[0])
+        unrun = self.prepare()
+        with self.assertRaises(ValueError):
+            self.library.review_astro_stack(unrun.id, tagger, place="ship")
 
     def test_the_stem_counts_the_lights_siril_stacked(self):
         self.scenario = "stacked_two"

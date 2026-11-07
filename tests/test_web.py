@@ -6385,6 +6385,34 @@ class AstroWebTests(unittest.TestCase):
                 self.assertEqual(400, code)
                 self.assert_safe(body)
 
+    def test_review_route_returns_only_notes(self):
+        from lumen.omlx import StackReview
+
+        class Tagger:
+            model, role = "local-vision", "review"
+
+            def review_stack(self, preview, debrief_text, timeout=240):
+                return StackReview(["Cloud on the left."], '{"secret": 1}')
+
+        _, prepared = self.prepare()
+        job_id = prepared["job_id"]
+        self.assertEqual(202, self.post_json(f"/api/astro/jobs/{job_id}/run", {})[0])
+        self.poll(job_id, {"succeeded"})
+        with patch("lumen.library.get_server_status", return_value={"loaded_models": []}):
+            code, body = self.post_json(f"/api/astro/jobs/{job_id}/review", {"place": "ship"})
+        self.assertEqual((400, {"error": f"review model {self.settings.review_model} is not loaded in oMLX"}), (code, body))
+        with patch("lumen.library.get_server_status", return_value={"loaded_models": [self.settings.review_model]}), \
+                patch("lumen.library.OmlxTagger", return_value=Tagger()):
+            code, payload = self.post_json(f"/api/astro/jobs/{job_id}/review", {"place": "ship"})
+            self.assertEqual((200, {"notes": ["Cloud on the left."]}), (code, payload))
+            for bad in ({}, {"place": "moon"}, {"place": "ship", "extra": 1}, {"place": ["ship"]}):
+                with self.subTest(bad=bad):
+                    code, body = self.post_json(f"/api/astro/jobs/{job_id}/review", bad)
+                    self.assertEqual(400, code, body)
+            code, body = self.post_json("/api/astro/jobs/999/review", {"place": "ship"})
+            self.assertEqual(404, code, body)
+        self.assertEqual({"notes": ["Cloud on the left."]}, self.get_json(f"/api/astro/jobs/{job_id}/debrief?place=ship")[1]["review"])
+
     def test_debrief_refuses_unrun_and_unknown(self):
         _, prepared = self.prepare()
         code, body = self.get_json(f"/api/astro/jobs/{prepared['job_id']}/debrief?place=ship")
