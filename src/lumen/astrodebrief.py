@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 from typing import Any, Callable
 
 from .tools import find_tool
@@ -271,3 +273,248 @@ def rename_outputs(job: Path, stem: str) -> tuple[Path, Path | None]:
     for source, target in moves:
         source.rename(target)
     return moves[0][1], moves[1][1] if len(moves) > 1 else None
+
+
+# Debrief thresholds, named after the design's rules.
+ODD_STARS_RATIO = 0.5  # reference stars under half the others' median
+ODD_EXPOSURE = 0.25  # reference exposure more than 25% from the others' median
+GAP_SECONDS = 120
+MIXED_EXPOSURE = 1.25  # longest over shortest
+SHARP_FWHM_PX = 6
+ROUNDNESS_MIN = 0.8
+FWHM_XY_MAX = 1.25
+DRIFT_PX = 20
+DRIFT_DEG = 0.5
+FEW_LIGHTS = 10
+SHIP_MAX_S = 3
+HANDHELD_S = 0.5
+ASSUMED_PIXEL_UM = 4.0
+
+PLACES = ("dark_site", "city", "ship", "handheld")
+PLACE_SETTINGS = {
+    "dark_site": {"max_s": None, "iso": 6400, "lights": 25, "darks": 10, "steadyshot": "off",
+                  "also": "10 darks at the same exposure, ISO and temperature; SteadyShot off on a tripod"},
+    "city": {"max_s": None, "iso": 1600, "lights": 25, "darks": 10, "steadyshot": "off",
+             "also": "Flats matter more: the glow is uneven. SteadyShot off"},
+    "ship": {"max_s": SHIP_MAX_S, "iso": 12800, "lights": 40, "darks": None, "steadyshot": "off",
+             "also": "One unbroken burst, SteadyShot off on a tripod, braced against the roll; Untracked recipe"},
+    "handheld": {"max_s": HANDHELD_S, "iso": 12800, "lights": 40, "darks": None, "steadyshot": "on",
+                 "also": "SteadyShot on; Untracked recipe"},
+}
+_TRIPOD = ("dark_site", "city", "ship")
+
+
+def npf_seconds(aperture: float, focal_mm: float, pixel_um: float) -> float:
+    """NPF star-trail limit at declination 0 (the worst case)."""
+    return (16.856 * aperture + 0.0997 * focal_mm + 13.713 * pixel_um) / focal_mm
+
+
+def _seconds(value: float) -> str:
+    return f"{value:.1f} s" if value < 1 else f"{max(1, round(value))} s"
+
+
+def _range(values: list[float], unit: str = "") -> str:
+    low, high = min(values), max(values)
+    return f"{low:g}{unit}" if low == high else f"{low:g}-{high:g}{unit}"
+
+
+def _frames(positions: list[int]) -> str:
+    if len(positions) == 1:
+        return f"frame {positions[0]}"
+    return "frames " + ", ".join(map(str, positions[:-1])) + f" and {positions[-1]}"
+
+
+def _gap(seconds: float) -> str:
+    minutes, rest = divmod(round(seconds), 60)
+    return f"{minutes} min {rest} s" if minutes and rest else f"{minutes} min" if minutes else f"{rest} s"
+
+
+def _time(frame: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat(frame["date_obs"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def debrief(run: SirilRun, frames: dict | None, manifest: Any, place: str) -> dict:
+    """What happened, what to try with this set, and settings for next time at `place`. Rules only, no I/O."""
+    if place not in PLACES:
+        raise ValueError(f"unknown place: {place}")
+    table = PLACE_SETTINGS[place]
+    lights = [Path(frame.link).name for frame in manifest.lights.frames]
+
+    def frame_name(k: int) -> str:
+        return f"frame {k} ({lights[k - 1]})" if 0 < k <= len(lights) else f"frame {k}"
+
+    shot = [frame for frame in (frames or {}).get("frames") or [] if isinstance(frame, dict)]
+    by_position = {frame.get("position"): frame for frame in shot}
+    happened: list[str] = []
+    fired: dict[str, str] = {}  # rule -> the value its reason quotes
+    reasons: list[str] = []
+
+    # Registration.
+    if run.skipped:
+        pairs = [pairs for _, pairs in run.skipped]
+        happened.append(f"{_frames([image for image, _ in run.skipped]).capitalize()} did not match the reference "
+                        f"({_range(pairs)} shared stars; Siril needs more) and "
+                        f"{'was' if len(pairs) == 1 else 'were'} skipped.")
+    elif run.registered and not run.failed:
+        happened.append(f"All {run.registered} frames matched the reference.")
+    if run.aborted:
+        happened.append("Nothing was stacked: registration aborted.")
+    if run.registered and run.stacked is not None and run.stacked < run.registered:
+        happened.append(f"The stack's FWHM and roundness filters dropped {run.registered - run.stacked} of "
+                        f"{run.registered} registered frames.")
+
+    # Reference odd one out.
+    odd: list[str] = []
+    odd_pair: tuple[int, int] | None = None
+    reference = run.reference
+    if reference is not None:
+        others = list(run.star_counts)
+        if run.reference_stars is not None and run.reference_stars in others:
+            others.remove(run.reference_stars)
+            if others and run.reference_stars < ODD_STARS_RATIO * median(others):
+                odd.append(f"{run.reference_stars} stars against a median of {median(others):g}")
+        ref = by_position.get(reference)
+        other_frames = [frame for frame in shot if frame is not ref]
+        exposures = [frame["exposure"] for frame in other_frames if frame.get("exposure")]
+        if ref and ref.get("exposure") and exposures:
+            middle = median(exposures)
+            if abs(ref["exposure"] - middle) > ODD_EXPOSURE * middle:
+                odd.append(f"{ref['exposure']:g} s against {middle:g} s")
+        if ref and (ref_time := _time(ref)):
+            timed = [(abs((t - ref_time).total_seconds()), (t - ref_time).total_seconds(), frame["position"])
+                     for frame in other_frames if (t := _time(frame))]
+            if timed:
+                distance, signed, neighbour = min(timed)
+                if distance > GAP_SECONDS:
+                    odd.append(f"taken {_gap(distance)} {'before' if signed > 0 else 'after'} frame {neighbour}")
+                    odd_pair = tuple(sorted((reference, neighbour)))
+        if odd:
+            happened.append(f"{frame_name(reference).capitalize()}, the reference, is the odd one out: "
+                            + "; ".join(odd) + ".")
+
+    # Exposures and timing.
+    exposed = [(frame["position"], frame["exposure"]) for frame in shot if frame.get("exposure")]
+    if exposed and max(e for _, e in exposed) / min(e for _, e in exposed) > MIXED_EXPOSURE:
+        values = [e for _, e in exposed]
+        happened.append(f"Exposures were mixed ({_range(values, ' s')}): "
+                        + ", ".join(f"{e:g}" for e in values[:-1]) + f" and {values[-1]:g} s for "
+                        + _frames([p for p, _ in exposed]) + ".")
+        fired["mixed"] = _range(values, " s")
+    timed = sorted((t, frame["position"]) for frame in shot if (t := _time(frame)))
+    gaps = []
+    for (t1, p1), (t2, p2) in zip(timed, timed[1:]):
+        seconds = (t2 - t1).total_seconds()
+        if seconds > GAP_SECONDS and tuple(sorted((p1, p2))) != odd_pair:
+            gaps.append(f"frames {p1} and {p2} are {_gap(seconds)} apart")
+    if gaps:
+        happened.append("The burst has a gap: " + "; ".join(gaps) + " (the sky rotates"
+                        + (" and the ship turns" if place == "ship" else "") + " in between).")
+        fired["gap"] = gaps[0]
+
+    # Stars.
+    fwhm = (sum(run.reference_fwhm_xy) / 2 if run.reference_fwhm_xy
+            else median(m.fwhm for m in run.matches if m.fwhm) if any(m.fwhm for m in run.matches) else None)
+    if fwhm and fwhm > SHARP_FWHM_PX:
+        happened.append(f"Stars are about {fwhm:.0f} px wide; sharp stars are under {SHARP_FWHM_PX} px.")
+    roundness = [m.roundness for m in run.matches if m.roundness is not None]
+    if roundness and median(roundness) < ROUNDNESS_MIN:
+        detail = f"roundness {_range(roundness)}"
+    elif not roundness and run.reference_fwhm_xy and min(run.reference_fwhm_xy) > 0 \
+            and max(run.reference_fwhm_xy) / min(run.reference_fwhm_xy) > FWHM_XY_MAX:
+        detail = "FWHMx {:g} against FWHMy {:g} on the reference".format(*run.reference_fwhm_xy)
+    else:
+        detail = None
+    if detail:
+        happened.append(f"Stars are stretched one way ({detail}): the camera moved during each exposure.")
+        fired["stretched"] = detail
+    shifts = [(math.hypot(m.dx or 0, m.dy or 0), abs(m.rotation or 0)) for m in run.matches]
+    if shifts:
+        pixels, degrees = max(s for s, _ in shifts), max(r for _, r in shifts)
+        if pixels > DRIFT_PX or degrees > DRIFT_DEG:
+            cause = "the deck turning" if place == "ship" else "the sky turning past a fixed camera"
+            happened.append(f"The frame moved up to {pixels:.0f} px and {degrees:.1f}° between shots: {cause}.")
+            fired["drift"] = f"{pixels:.0f} px"
+
+    # Settings shot, and the next ones.
+    def first(key: str) -> Any:
+        return next((frame[key] for frame in shot if frame.get(key) is not None), None)
+
+    focal, shot_aperture, widest = first("focal"), first("aperture"), first("max_aperture")
+    pixel = first("pixel_um")
+    aperture = widest or shot_aperture
+    pitch = pixel or ASSUMED_PIXEL_UM
+    if shot and focal and not pixel:
+        reasons.append(f"pixel size unknown; assumed {ASSUMED_PIXEL_UM:g} µm")
+    if focal and shot_aperture and exposed:
+        limit = npf_seconds(shot_aperture, focal, pitch)
+        over = [(p, e) for p, e in exposed if e > limit]
+        if over:
+            happened.append(f"{_frames([p for p, _ in over]).capitalize()} ran {_range([e for _, e in over], ' s')}; "
+                            f"stars trail past about {_seconds(limit)} at {focal:g} mm f/{shot_aperture:g}.")
+            fired["trail"] = f"{_range([e for _, e in over], ' s')} ran past the {_seconds(limit)} star-trail limit"
+    if frames is not None and shot and not frames.get("originals_online"):
+        happened.append("SteadyShot and the lens's widest aperture need the originals; the drive is offline.")
+    elif place in _TRIPOD and any(frame.get("stabilization") == "On" for frame in shot):
+        happened.append("SteadyShot is on; on a tripod it can add blur.")
+        fired["steadyshot"] = ""
+    count = len(lights)
+    if 0 < count < FEW_LIGHTS:
+        target = table["lights"]
+        happened.append(f"{count} lights only cut the noise to about 1/{round(math.sqrt(count))}; "
+                        f"{target} cut it to about 1/{round(math.sqrt(target))}.")
+        fired["few"] = ""
+    if not manifest.darks.frames and table["darks"]:
+        happened.append("No darks: hot pixels and amp glow stay in the stack.")
+        fired["darks"] = ""
+
+    # Try now.
+    try_now = []
+    recipe = getattr(manifest, "recipe", "") or run.recipe
+    failed = bool(run.skipped or run.aborted)
+    if odd and failed:
+        try_now.append(f"Exclude {frame_name(reference)} and prepare the stack again.")
+    if ((failed and not odd) or gaps) and recipe != "untracked":
+        try_now.append("Prepare again with the Untracked recipe, which picks the best frame as the reference.")
+    if "darks" in fired:
+        try_now.append("Add darks if you shot any.")
+    if not try_now:
+        try_now.append("Nothing to change in this set.")
+
+    # Next time.
+    npf = npf_seconds(aperture, focal, pitch) if focal and aperture else None
+    if npf is None:
+        exposure = _seconds(table["max_s"]) if table["max_s"] else "star-trail limit"
+    else:
+        exposure = _seconds(min(npf, table["max_s"]) if table["max_s"] else npf)
+    parts = [exposure, f"f/{aperture:g}" if aperture else "widest aperture", f"ISO {table['iso']}",
+             f"{table['lights']} lights"]
+    if table["darks"]:
+        parts.append(f"{table['darks']} darks")
+    parts.append(f"SteadyShot {table['steadyshot']}")
+    shorter = "Half a second" if place == "handheld" else "Shorter"
+    stretched = "stretched by deck motion" if place == "ship" else "stretched one way"
+    if "trail" in fired and "stretched" in fired:
+        reasons.append(f"{shorter}: {fired['trail']} and the stars were {stretched} ({fired['stretched']})")
+    elif "trail" in fired:
+        reasons.append(f"{shorter}: {fired['trail']}")
+    elif "stretched" in fired:
+        reasons.append(f"{shorter}: the stars were {stretched} ({fired['stretched']})")
+    if "drift" in fired and place in ("ship", "handheld"):
+        reasons.append(f"One unbroken burst, Untracked recipe: the frame drifted up to {fired['drift']}")
+    if "gap" in fired:
+        reasons.append(f"One unbroken burst: {fired['gap']}")
+    if "mixed" in fired:
+        reasons.append(f"One exposure for every frame: this set mixed {fired['mixed']}")
+    if "few" in fired:
+        reasons.append(f"{table['lights']} lights: {count} leave the noise high")
+    if "darks" in fired:
+        reasons.append(f"{table['darks']} darks: this set had none")
+    if "steadyshot" in fired:
+        reasons.append("SteadyShot off: it can add blur on a tripod")
+    if not reasons:
+        reasons.append(table["also"])
+    return {"place": place, "happened": happened, "try_now": try_now,
+            "next_time": {"settings": " · ".join(parts), "reasons": reasons[:3]}}

@@ -7,8 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from lumen.astrodebrief import (output_stem, parse_siril_log, read_fits_header, remove_process, rename_outputs,
-                                write_frames_json)
+from lumen.astrodebrief import (debrief, npf_seconds, output_stem, parse_siril_log, read_fits_header,
+                                remove_process, rename_outputs, write_frames_json)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "siril"
 
@@ -217,3 +217,99 @@ class RemoveProcessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def debrief_manifest(lights: int = 4, darks: int = 0, recipe: str = "tracked") -> SimpleNamespace:
+    def group(kind: str, count: int) -> SimpleNamespace:
+        return SimpleNamespace(frames=[SimpleNamespace(link=f"{kind}s/{kind}_{n:05d}.arw") for n in range(1, count + 1)])
+    return SimpleNamespace(lights=group("light", lights), darks=group("dark", darks), flats=group("flat", 0),
+                           biases=group("bias", 0), recipe=recipe)
+
+
+def debrief_frames(exposures, times, *, online: bool = True, max_aperture=None, stabilization="On") -> dict:
+    frames = [{
+        "position": n, "name": f"light_{n:05d}.arw", "date_obs": time, "exposure": exposure, "iso": 3200,
+        "aperture": 4.0, "focal": 28.0, "pixel_um": 5.07, "instrument": "Sony ILCE-7CM2",
+        "stabilization": stabilization if online else None, "max_aperture": max_aperture if online else None,
+    } for n, (exposure, time) in enumerate(zip(exposures, times), 1)]
+    return {"frames": frames, "originals_online": online}
+
+
+JOB_165 = ((6.0, 13.0, 15.0, 13.0),
+           ("2026-11-05T21:23:43", "2026-11-05T21:26:31", "2026-11-05T21:26:59", "2026-11-05T21:27:23"))
+JOB_163 = ((20.0, 13.0, 15.0, 15.0),
+           ("2026-10-19T00:29:40", "2026-10-19T00:30:05", "2026-10-19T00:30:25", "2026-10-19T00:30:45"))
+
+
+class DebriefTests(unittest.TestCase):
+    def test_npf(self) -> None:
+        self.assertEqual(round(npf_seconds(4, 28, 5.07), 2), 4.99)
+
+    def test_failed_job_165(self) -> None:
+        result = debrief(parse_siril_log(fixture("tracked-skipped.log")), debrief_frames(*JOB_165),
+                         debrief_manifest(), "dark_site")
+        happened = "\n".join(result["happened"])
+        self.assertIn("Frames 2, 3 and 4", happened)
+        self.assertIn("6-7 shared stars", happened)
+        self.assertIn("Nothing was stacked", happened)
+        odd = next(line for line in result["happened"] if "odd one out" in line)
+        for reason in ("Frame 1", "light_00001.arw", "26 stars against a median of 62", "6 s against 13 s",
+                       "2 min 48 s before frame 2"):
+            self.assertIn(reason, odd)
+        self.assertTrue(result["try_now"][0].startswith("Exclude frame 1 (light_00001.arw)"))
+        self.assertEqual(result["place"], "dark_site")
+
+    def test_next_time_per_place(self) -> None:
+        run = parse_siril_log(fixture("tracked-ok.log"))
+
+        def d(place: str) -> dict:
+            return debrief(run, debrief_frames(*JOB_163), debrief_manifest(), place)
+
+        assert d("dark_site")["next_time"]["settings"] == "5 s · f/4 · ISO 6400 · 25 lights · 10 darks · SteadyShot off"
+        assert d("city")["next_time"]["settings"] == "5 s · f/4 · ISO 1600 · 25 lights · 10 darks · SteadyShot off"
+        assert d("ship")["next_time"]["settings"] == "3 s · f/4 · ISO 12800 · 40 lights · SteadyShot off"
+        assert d("handheld")["next_time"]["settings"] == "0.5 s · f/4 · ISO 12800 · 40 lights · SteadyShot on"
+        for place in ("dark_site", "city", "ship", "handheld"):
+            self.assertTrue(1 <= len(d(place)["next_time"]["reasons"]) <= 3, place)
+        happened = "\n".join(d("dark_site")["happened"])
+        for phrase in ("mixed", "13-20 s", "5 s", "stretched", "0.73", "4 lights", "darks"):
+            self.assertIn(phrase, happened)
+        for place in ("ship", "handheld"):
+            self.assertNotIn("darks", "\n".join(d(place)["happened"]), place)
+
+    def test_aperture_uses_max_aperture_then_shot(self) -> None:
+        run = parse_siril_log(fixture("tracked-ok.log"))
+        wide = debrief(run, debrief_frames(*JOB_163, max_aperture=2.8), debrief_manifest(), "dark_site")
+        self.assertIn(" · f/2.8 · ", wide["next_time"]["settings"])
+        self.assertTrue(wide["next_time"]["settings"].startswith(f"{round(npf_seconds(2.8, 28, 5.07))} s · "))
+        shot = debrief(run, debrief_frames(*JOB_163), debrief_manifest(), "dark_site")
+        self.assertIn(" · f/4 · ", shot["next_time"]["settings"])
+
+    def test_debrief_without_frames_uses_log_rules_only(self) -> None:
+        run = parse_siril_log(fixture("tracked-skipped.log"))
+        ship = debrief(run, None, debrief_manifest(), "ship")
+        self.assertEqual(ship["next_time"]["settings"], "3 s · widest aperture · ISO 12800 · 40 lights · SteadyShot off")
+        self.assertIn("Nothing was stacked", "\n".join(ship["happened"]))
+        dark = debrief(run, None, debrief_manifest(), "dark_site")
+        self.assertEqual(dark["next_time"]["settings"],
+                         "star-trail limit · widest aperture · ISO 6400 · 25 lights · 10 darks · SteadyShot off")
+
+    def test_pixel_pitch_unknown_assumes_4um(self) -> None:
+        frames = debrief_frames(*JOB_163)
+        for frame in frames["frames"]:
+            frame["pixel_um"] = None
+        result = debrief(parse_siril_log(fixture("tracked-ok.log")), frames, debrief_manifest(), "dark_site")
+        self.assertIn("pixel size unknown; assumed 4 µm", result["next_time"]["reasons"])
+
+    def test_originals_offline_line(self) -> None:
+        result = debrief(parse_siril_log(fixture("tracked-ok.log")), debrief_frames(*JOB_163, online=False),
+                         debrief_manifest(), "dark_site")
+        self.assertEqual(len([line for line in result["happened"] if "offline" in line]), 1)
+        self.assertFalse([line for line in result["happened"] if "SteadyShot is on" in line])
+        online = debrief(parse_siril_log(fixture("tracked-ok.log")), debrief_frames(*JOB_163),
+                         debrief_manifest(), "dark_site")
+        self.assertTrue([line for line in online["happened"] if "SteadyShot is on" in line])
+
+    def test_unknown_place_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            debrief(parse_siril_log(""), None, debrief_manifest(), "moon")
