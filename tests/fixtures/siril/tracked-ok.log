@@ -1,0 +1,174 @@
+log: Running command: cd
+1794057293: running command cd
+log: Setting CWD (Current Working Directory) to '<job>/process'
+log: Running command: register
+1794057293: running command register
+log: Checking sequences in the directory: <job>/process.
+Reading sequence failed, file cannot be opened: light.seq.
+T
+progress: 100.00%
+T
+progress: 100.00%
+Writing sequence file light_.seq
+Sequence found: light_ 1->4
+Reading sequence file `light.seq'.
+Reading sequence file `light_.seq'.
+bitpix for the sequence is set as 20
+log: Registration: processing using method: Global Star Alignment (deep-sky)
+log: Interpolation clamping active
+progress: Interpolation clamping active
+, 0.00%
+T
+progress: 0.00%
+Memory per image: 377 MB. Max memory: 5148 MB
+log: Global star registration: with the current memory and thread limits, up to 3 thread(s) can be used
+log: Reading FITS: file light_00001.fit, 3 layer(s), 7028x4688 pixels, 16 bits
+log: Reference Image:
+log: Findstar: processing for channel 1...
+log: Found 63 Gaussian profile stars in image, channel #1 (FWHM 14.061813)
+log: Found 63 stars in reference, channel #1
+log: FWHMx:       14.06 "
+log: FWHMy:       10.38 "
+log: Global star registration: processing...
+log: Reading FITS: file light_00001.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Reading FITS: file light_00003.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Findstar: processing for channel 1...
+log: Reading FITS: file light_00002.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Findstar: processing for channel 1...
+log: Found 38 Gaussian profile stars in image, channel #1 (FWHM 13.561904)
+log: Matching stars in image 2: done
+log: Initial pair matches: 33
+log: Pair matches after fitting: 33
+log: Inliers:      1.000
+log: scaleX:       0.998
+log: scaleY:       0.998
+log: scale:        0.998
+log: rotation:    -0.117 deg
+log: dx:         -16.72 px
+log: dy:          -7.30 px
+log: FWHM:        13.56 px
+log: roundness:    0.73
+log: Found 55 Gaussian profile stars in image, channel #1 (FWHM 13.834522)
+log: Matching stars in image 3: done
+log: Initial pair matches: 40
+log: Pair matches after fitting: 40
+log: Inliers:      1.000
+log: scaleX:       0.996
+log: scaleY:       0.997
+log: scale:        0.997
+log: rotation:    -0.210 deg
+log: dx:         -29.51 px
+log: dy:         -12.52 px
+log: FWHM:        13.83 px
+log: roundness:    0.74
+log: Saving FITS: file r_light_00001.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+progress: Global star registration. Processing image 1 (light_00001.fit), 23.26%
+log: Reading FITS: file light_00004.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Findstar: processing for channel 1...
+log: Found 60 Gaussian profile stars in image, channel #1 (FWHM 13.990517)
+log: Matching stars in image 4: done
+log: Initial pair matches: 38
+log: Pair matches after fitting: 38
+log: Inliers:      1.000
+log: scaleX:       0.995
+log: scaleY:       0.996
+log: scale:        0.995
+log: rotation:    -0.299 deg
+log: dx:         -44.37 px
+log: dy:         -19.36 px
+log: FWHM:        13.99 px
+log: roundness:    0.74
+log: Saving FITS: file r_light_00002.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+progress: Global star registration. Processing image 2 (light_00002.fit), 46.51%
+log: Saving FITS: file r_light_00003.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+progress: Global star registration. Processing image 3 (light_00003.fit), 69.77%
+log: Saving FITS: file r_light_00004.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+progress: Global star registration. Processing image 4 (light_00004.fit), 93.02%
+progress: Sequence processing succeeded., 0.00%
+log: Sequence processing succeeded.
+log: Execution time: 4.22 s
+log: Registration finished.
+log: 4 images processed.
+log: Total: 0 failed, 4 registered.
+Writing sequence file r_light_.seq
+Writing sequence file light_.seq
+log: Running command: stack
+Reading sequence failed, file cannot be opened: r_light.seq.
+1794057297: running command stack
+Reading sequence file `r_light.seq'.
+Reading sequence file `r_light_.seq'.
+bitpix for the sequence is set as -32
+Reading sequence file `r_light_.seq'.
+bitpix for the sequence is set as -32
+log: Stacking sequence r_light_
+log: Using star weighted FWHM images filter (below 26.478001)
+log: Using star roundness images filter (above 0.730225)
+created multiple filter (2 filters)
+number of filtered-in images: 4
+number of filtered-in images: 4
+number of filtered-in images: 4
+number of filtered-in images: 4
+log: Processing images of the sequence with a weighted FWHM lower or equal than 26.478 (4), processing images of the sequence with a roundness higher or equal than 0.730225 (4), for a total of images processed of 4)
+log: Stacking result will be stored as a 32-bit image
+log: Computing normalization...
+progress: Computing normalization..., 0.00%
+Memory per image: 628 MB. Max memory: 6267 MB
+log: With the current memory and thread (16) limits, up to 9 thread(s) can be used for sequence normalization
+T
+progress: 25.00%
+T
+progress: 99.76%
+T
+progress: 99.87%
+T
+progress: 99.99%
+progress: Finalizing stacking..., 99.99%
+log: Pixel rejection in channel #0: 0.000% - 0.000%
+log: Pixel rejection in channel #1: 0.000% - 0.000%
+log: Pixel rejection in channel #2: 0.000% - 0.000%
+free and close (0)
+progress: Rejection stacking complete., 100.00%
+log: Rejection stacking complete. 4 images have been stacked.
+log: Integration of 4 images on 4 of the sequence:
+log: Pixel combination ......... average
+log: Input normalization ....... additive + scaling
+log: Output normalization ...... enabled
+log: Pixel rejection ........... winsorized sigma clipping
+log: Rejection parameters ...... low=3.000 high=3.000
+log: Creating rejection maps ... no
+log: Image weighting ........... disabled
+log: RGB equalization .......... enabled
+log: Background noise value (channel: #0): 141.029 (2.152e-03)
+log: Background noise value (channel: #1): 65.680 (1.002e-03)
+log: Background noise value (channel: #2): 83.607 (1.276e-03)
+log: Saving FITS: file result.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Stacked sequence successfully.
+log: Execution time: 2.63 s
+log: Running command: load
+1794057300: running command load
+HDU 1: type=0, EXTNAME=
+log: Reading FITS: file result.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Running command: mirrorx
+1794057300: running command mirrorx
+log: Image data is already bottom-up
+log: Running command: savetif
+1794057300: running command savetif
+log: Saving TIFF: 16-bit file ../result.tif, 3 layer(s), 7028x4688 pixels
+log: Running command: autostretch
+1794057300: running command autostretch
+log: Computing linked auto-stretch with values -2.800000 and 0.250000
+log: Applying MTF with values 0.037665, 0.069373, 1.000000
+log: Running command: savejpg
+1794057301: running command savejpg
+log: Saving JPG: file ../preview.jpg, quality=90%, 3 layer(s), 7028x4688 pixels
+log: Running command: cd
+1794057301: running command cd
+log: Setting CWD (Current Working Directory) to '<job>'
+log: Running command: close
+1794057301: running command close
+log: Setting CWD (Current Working Directory) to '<job>'
+log: Script execution finished successfully.
+log: Total execution time: 8.78 s
+closing pipes
+lumen: verified result.tif (16x16x16 bits per sample)
+lumen: copied camera metadata from light_00001.arw to result.tif, preview.jpg

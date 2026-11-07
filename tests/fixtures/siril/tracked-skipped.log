@@ -1,0 +1,62 @@
+log: Running command: cd
+1794056377: running command cd
+log: Setting CWD (Current Working Directory) to '<job>/process'
+log: Running command: register
+1794056377: running command register
+log: Checking sequences in the directory: <job>/process.
+Reading sequence failed, file cannot be opened: light.seq.
+T
+progress: 100.00%
+T
+progress: 100.00%
+Writing sequence file light_.seq
+Sequence found: light_ 1->4
+Reading sequence file `light.seq'.
+Reading sequence file `light_.seq'.
+bitpix for the sequence is set as 20
+log: Registration: processing using method: Global Star Alignment (deep-sky)
+log: Interpolation clamping active
+progress: Interpolation clamping active
+, 0.00%
+T
+progress: 0.00%
+Memory per image: 377 MB. Max memory: 4352 MB
+log: Global star registration: with the current memory and thread limits, up to 3 thread(s) can be used
+log: Reading FITS: file light_00001.fit, 3 layer(s), 7028x4688 pixels, 16 bits
+log: Reference Image:
+log: Findstar: processing for channel 1...
+log: Found 26 Gaussian profile stars in image, channel #1 (FWHM 13.399276)
+log: Found 26 stars in reference, channel #1
+log: FWHMx:       13.40 "
+log: FWHMy:        9.72 "
+log: Global star registration: processing...
+log: Reading FITS: file light_00001.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Reading FITS: file light_00003.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Findstar: processing for channel 1...
+log: Reading FITS: file light_00002.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Findstar: processing for channel 1...
+log: Saving FITS: file r_light_00001.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+progress: Global star registration. Processing image 1 (light_00001.fit), 23.26%
+log: Reading FITS: file light_00004.fit, 3 layer(s), 7028x4688 pixels, 32 bits
+log: Findstar: processing for channel 1...
+log: Found 69 Gaussian profile stars in image, channel #1 (FWHM 12.990716)
+log: Not enough star pairs (7): Image 2 skipped
+T
+progress: 46.51%
+log: Found 62 Gaussian profile stars in image, channel #1 (FWHM 12.988431)
+log: Not enough star pairs (7): Image 3 skipped
+T
+progress: 69.77%
+log: Found 59 Gaussian profile stars in image, channel #1 (FWHM 12.953198)
+log: Not enough star pairs (6): Image 4 skipped
+T
+progress: 93.02%
+progress: Sequence processing partially succeeded. Check the log., 0.00%
+log: Sequence processing partially succeeded, with 3 images that failed.
+log: Execution time: 1.51 s
+log: No image was registered to the reference
+log: Registration aborted.
+log: Finalizing sequence processing failed.
+log: Setting CWD (Current Working Directory) to '<job>'
+log: Script execution failed.
+progress: Script execution failed., 100.00%
