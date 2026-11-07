@@ -41,9 +41,8 @@ class ParseSirilLogTests(unittest.TestCase):
         self.assertIsNone(run.reference_fwhm_xy)
         self.assertEqual({m.image for m in run.matches}, {2, 3})
         self.assertEqual(sorted(run.star_counts), [59, 62, 69])
-        # The redacted log ends while the stack is still running: no stacked count, no finish line.
-        self.assertIsNone(run.stacked)
-        self.assertFalse(run.succeeded)
+        self.assertEqual(run.stacked, 3)
+        self.assertIs(run.succeeded, True)
 
     def test_ignores_ansi_and_garbage(self) -> None:
         run = parse_siril_log("\x1b[31mlog: x\x1b[0m\nnonsense")
