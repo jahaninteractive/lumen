@@ -450,7 +450,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
   .batch-rail, main { overflow: visible; }
   .batch-rail { border-right: 0; border-bottom: 1px solid var(--line); }
   .rail-strip { flex-direction: row; padding: .4rem 1.25rem; }
-  .rail-strip button { writing-mode: horizontal-tb; padding: .2rem .6rem; }
+  .rail-strip button { writing-mode: horizontal-tb; min-height: 44px; padding: .2rem .8rem; }  /* a phone row keeps full tap height */
   .input-row { align-items: stretch; flex-direction: column; }
   .contact-top { position: static; }  /* on a phone the bar is too tall to pin */
   .segmented { gap: .4rem; }
