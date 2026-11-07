@@ -1808,6 +1808,26 @@ console.log(JSON.stringify([panel.hidden, store]));
             self.assertEqual(group["automatic_pick_id"], self.get_json("/api/groups")[1]["groups"][0]["automatic_pick_id"])
             self.assertEqual(body, self.get_json(f"/api/groups/{group['id']}/critique")[1]["critique"])
 
+    def test_photo_payload_marks_a_model_pick(self):
+        for index in range(2):
+            image = Image.new("RGB", (120, 90), (index * 60, 0, 0)); exif = Image.Exif(); exif[36867] = f"2026:10:22 20:00:0{index}"
+            image.save(self.root / f"m{index}.jpg", exif=exif)
+        self.wait_job(self.post_json("/api/import", {"path": str(self.root)})[1]["job_id"])
+        photo_id = self.get_json("/api/groups")[1]["groups"][0]["photos"][-1]["id"]
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            library.set_pick(photo_id, by_model={"job_id": 1, "model": "secret-model-name", "role": "review"})
+        for path in (f"/api/photos/{photo_id}", "/api/groups"):
+            with urllib.request.urlopen(self.base + path, timeout=3) as response:
+                self.assertNotIn("secret-model-name", response.read().decode())
+        self.assertIs(True, self.get_json(f"/api/photos/{photo_id}")[1]["photo"]["model_pick"])
+        grouped = {photo["id"]: photo for photo in self.get_json("/api/groups")[1]["groups"][0]["photos"]}
+        self.assertIs(True, grouped[photo_id]["model_pick"])
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            library.set_pick(photo_id)
+        self.assertIs(False, self.get_json(f"/api/photos/{photo_id}")[1]["photo"]["model_pick"])
+        grouped = {photo["id"]: photo for photo in self.get_json("/api/groups")[1]["groups"][0]["photos"]}
+        self.assertIs(False, grouped[photo_id]["model_pick"])
+
     def test_triage_routes_and_groups_cue_never_switch_mode_or_change_exclusions(self):
         class FakeTagger:
             def __init__(self, *args, **kwargs): self.model, self.role = "fast-model", kwargs.get("role", "review")

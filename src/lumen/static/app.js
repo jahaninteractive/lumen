@@ -418,7 +418,7 @@ function burstSection(group, groupIndex, frames) {
   const facts = document.createElement('span');
   facts.className = 'quiet';
   facts.textContent = frames.length === 1 ? startTime(group)  // the day heading in the rail carries the date; the tile names the frame
-    : [frameCount(group.frame_count), startTime(group, true), bestFrame(group) ? `best ${bestFrame(group).name}` : null].filter(Boolean).join(' · ');
+    : [frameCount(group.frame_count), startTime(group, true), bestFrame(group) ? `best ${bestFrame(group).name}${bestFrame(group).model_pick ? " (model's pick)" : ''}` : null].filter(Boolean).join(' · ');
   const selected = document.createElement('span');
   selected.className = 'burst-selected';
   const toggle = document.createElement('label');

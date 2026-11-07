@@ -493,6 +493,7 @@ def _serializable_groups(groups: list[dict]) -> list[dict]:
             for key in ("path", "fingerprint", "preview_path", "mirror_path", "crop_selected_at"):
                 item.pop(key, None)
             item.pop("astro_json", None)
+            item["model_pick"] = bool(item.get("model_pick"))  # a cull job's pick, not the photographer's
             serialized["photos"].append(item)
         result.append(serialized)
     return result
