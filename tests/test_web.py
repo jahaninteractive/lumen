@@ -870,7 +870,9 @@ class WebTests(unittest.TestCase):
         with Library(Settings(library_dir=self.root / "library", near_duplicate_distance=0)) as library:
             library.import_path(self.root)
         self.assertEqual(2.0, self.get_json("/api/groups")[1]["burst_gap_seconds"])
-        for payload in ({}, {"seconds": "2"}, {"seconds": 0}, {"seconds": 11}, {"seconds": 2, "extra": 1}):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        self.assertIn('id="burst-gap" min="0.5" max="30"', html, "the slider travels the server's whole range")
+        for payload in ({}, {"seconds": "2"}, {"seconds": 0}, {"seconds": 31}, {"seconds": 2, "extra": 1}):
             with self.subTest(payload=payload):
                 self.assertEqual(400, self.post_json("/api/burst-gap", payload)[0])
         self.assertEqual(403, self.post_json("/api/burst-gap", {"seconds": 1}, headers={"Origin": "https://attacker.example"})[0])

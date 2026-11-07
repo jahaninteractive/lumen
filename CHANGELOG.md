@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.3.2 (2026-11-07)
+
+The **Burst gap** slider reaches 30 s (it stopped at 10 s), for slow sequences such as a bird working a nest or a long run of handheld frames. A burst merged into a frame you had split off now keeps that merge through every regroup; before, the next regroup at any gap scattered it into single frames. Splitting off the frame a burst was merged into now works: the rest of the burst stays together around its earliest remaining frame, where before the split undid itself (or, in 0.3.1, broke the rest into single frames).
+
 ## 0.3.1 (2026-11-07)
 
 Fixes from a review of 0.3.0. **Pick and develop every burst** no longer stops when a burst changes while it runs: that burst is logged as failed and the rest carry on. A frame you chose by hand is never critiqued or replaced, Redo or not, and the job's own pick is recorded as the model's (`model_pick` in the catalog, a `model_pick` event, `"model": true` in the sidecar, "(model's pick)" in the burst line), so it no longer passes for yours. Picks a 0.3.0 cull run made still count as hand picks, because nothing recorded the difference. The job no longer rewrites every sidecar at the end. Merged frames now stay with their burst when the **Burst gap** moves that burst's first frame, chains of merges included. The Burst gap slider keeps keyboard focus, and arrow steps taken during a regroup become one more request with the last value. A burst shown with only some of its frames (under Keepers, or at a page edge) keeps its frame count and best frame. A dropped Overpass download in `lumen map-region` is reported as incomplete instead of a traceback. Hiding the rail now leaves a narrow strip whose **Models** and **Batches** buttons reopen it at the model selects or the batch list (a row of full-height buttons on a phone). **More filters** opens when a folded filter becomes set and otherwise stays as you left it.

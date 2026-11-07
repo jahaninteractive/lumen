@@ -45,7 +45,7 @@ from .vocabulary import forget_keyword as forget_vocabulary_keyword, learn_keywo
 
 
 DEVELOP_ADVICE_LONG_EDGE = 1024  # all the vision model needs; it is not judging single pixels
-BURST_GAP_RANGE = (0.5, 10.0)  # seconds; the slider's travel
+BURST_GAP_RANGE = (0.5, 30.0)  # seconds; the slider's travel
 NEARBY_PLACE_KM = 5.0  # fixes this close share one name: a drifting boat's bursts are all the same spot
 NEARBY_PLACE_RANGE = (1.0, 20.0)  # the photographer's radius; the slider's own bounds
 OVERLAY_SUFFIXES = (".gpx", ".geojson")
@@ -1670,10 +1670,25 @@ class Library:
         if type(photo_id) is not int or photo_id <= 0:
             raise ValueError("split needs a positive photo ID")
         from_group = self.catalog.split_photo(photo_id)
+        self._reanchor_merges(photo_id, from_group)
         self._regroup_and_write_sidecars()  # the pass an import runs, so the result is what the next re-import keeps
         group_id = self.catalog.get_photo(photo_id).group_id
         self.catalog.append_event(photo_id, "burst_split", {"group_id": group_id, "from_group_id": from_group})
         return {"photo_id": photo_id, "group_id": group_id, "from_group_id": from_group}
+
+    def _reanchor_merges(self, photo_id: int, group_id: int) -> None:
+        """A merge names a frame, not a burst: once `photo_id` leaves, every merge that named a frame of its old burst
+        names the burst's earliest remaining frame instead, and that anchor groups by time unless merged elsewhere."""
+        photos = self.catalog.list_photos()
+        members = [photo for photo in photos if photo.group_id == group_id and photo.id != photo_id]
+        inside = {_stable_key(photo) for photo in photos if photo.group_id == group_id}
+        if not members or not any(photo.merged_into in inside for photo in members):
+            return
+        anchor = min(members, key=lambda photo: (photo.captured_at is None, photo.captured_at.isoformat() if photo.captured_at else "", photo.path))
+        pointers = [(photo.id, _stable_key(anchor)) for photo in members if photo.id != anchor.id and photo.merged_into in inside]
+        if anchor.merged_into in inside:
+            pointers.append((anchor.id, None))
+        self.catalog.set_merged_into(pointers)
 
     @_coordinated
     def remove_group(self, group_id: int) -> CleanupResult:
@@ -2514,6 +2529,7 @@ class Library:
                   for cluster in split_near_duplicates(group, hashes, self.settings.near_duplicate_distance)]
         # Merges attach after splitting, so they are never split. A merge names its target burst's first frame
         # at merge time; a wider gap can move that frame inside a burst, so every placed frame answers for its burst.
+        groups += [[photo] for photo in photos if photo.merged_into == Catalog.SPLIT_KEY]  # before merges, which may target one
         by_key = {_stable_key(photo): group for group in groups for photo in group}
         pending = sorted((p for p in photos if p.merged_into and p.merged_into != Catalog.SPLIT_KEY), key=lambda p: p.path)
         while pending:  # chains (C into B into A) resolve once their target frame is placed
@@ -2524,8 +2540,8 @@ class Library:
                 by_key[photo.merged_into].append(photo)
                 by_key[_stable_key(photo)] = by_key[photo.merged_into]
             pending = [p for p in pending if p not in placed]
-        # ponytail: a merge whose target frame no longer exists falls back to a burst of its own; split frames too.
-        groups += [[photo] for photo in pending + [p for p in photos if p.merged_into == Catalog.SPLIT_KEY]]
+        # ponytail: a merge whose target frame no longer exists falls back to a burst of its own.
+        groups += [[photo] for photo in pending]
         self.catalog.clear_group_assignments()
         selected_ids: set[int] = set()
         for group in groups:

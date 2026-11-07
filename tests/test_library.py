@@ -854,6 +854,42 @@ class LibraryTests(unittest.TestCase):
             library.set_burst_gap(4)
             self.assertEqual([list(seconds)], self.bursts_of(library, seconds))
 
+    def test_merge_into_a_split_frame_survives_a_burst_gap_round_trip(self):
+        seconds = (0, 3, 6, 9, 30, 33)  # bursts A and B at a 10 s gap
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            library.set_burst_gap(10)
+            split = library.catalog.photo_by_path(str((self.source_dir / "T06.jpg").resolve())).id
+            library.split_photo(split)
+            library.merge_groups([self.group_holding(library, 6), self.group_holding(library, 30)])  # B into the split frame
+            shaped = [[0, 3, 9], [6, 30, 33]]
+            self.assertEqual(shaped, self.bursts_of(library, seconds))
+            for gap in (2, 30, 10):
+                library.set_burst_gap(gap)
+                self.assertIn([6, 30, 33], self.bursts_of(library, seconds), f"the merge holds at {gap} s")
+            self.assertEqual(shaped, self.bursts_of(library, seconds), "back at 10 s, every burst is as it was left")
+
+    def test_splitting_the_frame_a_merge_names_leaves_the_rest_of_the_burst_together(self):
+        seconds = (0, 20, 40, 41)  # bursts X, Y and Z at a 2 s gap
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            library.merge_groups([self.group_holding(library, 0), self.group_holding(library, 20), self.group_holding(library, 40)])
+            # The chain a photographer's merges leave behind: Y names X, and Z names Y (merged after X was once split off).
+            frame = lambda second: library.catalog.photo_by_path(str((self.source_dir / f"T{second:02d}.jpg").resolve()))  # noqa: E731
+            library.catalog.connection.executemany("UPDATE photos SET merged_into = ? WHERE id = ?",
+                                                   [(_stable_key(frame(20)), frame(s).id) for s in (40, 41)])
+            library.catalog.connection.commit()
+            library.set_burst_gap(2)
+            self.assertEqual([list(seconds)], self.bursts_of(library, seconds))
+
+            library.split_photo(frame(0).id)
+            self.assertEqual([[0], [20, 40, 41]], self.bursts_of(library, seconds), "the split frame leaves; the rest stay together")
+            for gap in (10, 30, 2):
+                library.set_burst_gap(gap)
+                self.assertEqual([[0], [20, 40, 41]], self.bursts_of(library, seconds), f"and stay so at {gap} s")
+
     def test_remove_group_stages_only_its_managed_files_and_keeps_originals_and_exports(self):
         second = self.source_dir / "second.jpg"
         Image.new("RGB", (40, 30), "blue").save(second)
@@ -1777,13 +1813,14 @@ class LibraryTests(unittest.TestCase):
             timed = lambda: [{photo["id"] for photo in group["photos"]} for group in library.list_groups()  # noqa: E731
                              if {photo["id"] for photo in group["photos"]} & set(ids)]
             self.assertEqual([set(ids)], timed())
-            for bad in (0, 0.4, 10.5, "2", True, None, float("nan")):
+            for bad in (0, 0.4, 30.5, "2", True, None, float("nan")):
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     library.set_burst_gap(bad)
             library.set_pick(ids[1])
 
             self.assertEqual({"burst_gap_seconds": 0.5, "groups": 4}, library.set_burst_gap(0.5))  # plus the untimed base frame
             self.assertEqual([{ids[0]}, {ids[1]}, {ids[2]}], timed())
+            self.assertEqual({"burst_gap_seconds": 30, "groups": 2}, library.set_burst_gap(30))  # the top of the range
             self.assertEqual({"burst_gap_seconds": 10, "groups": 2}, library.set_burst_gap(10))
             (burst,) = [group for group in library.list_groups() if len(group["photos"]) == 3]
             self.assertEqual(ids[1], burst["automatic_pick_id"], "a hand pick survives regrouping")

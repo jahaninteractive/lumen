@@ -707,6 +707,12 @@ class Catalog:
         self.connection.commit()
         return int(row["group_id"])
 
+    def set_merged_into(self, pointers: list[tuple[int, str | None]]) -> None:
+        """Re-aim (photo_id, merged_into) pointers in one transaction; None lets a frame group by time again."""
+        with self.connection:
+            self.connection.executemany("UPDATE photos SET merged_into = ? WHERE id = ?",
+                                        [(merged_into, photo_id) for photo_id, merged_into in pointers])
+
     def list_group_ids(self) -> list[int]:
         return [int(row["id"]) for row in self.connection.execute("SELECT id FROM photo_groups ORDER BY id")]
 
