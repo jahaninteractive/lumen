@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.4.0 (2026-11-07)
+
+- Astro debrief: after a stack runs (succeeded or failed) the Astro tab shows What happened, Try now and Next time, written by Lumen's rules from the frames' EXIF and Siril's log, so it needs no AI; a "Where you shot" select (Dark site, City or light pollution, Ship or boat, Handheld; remembered per browser) changes only the advice. An optional "Look at the stack" asks the local review model for notes on the preview; it never changes the settings. A job keeps `frames.json` (what the converted lights' headers and EXIF say), drops Siril's multi-GB `process/` folder after a run, and names its outputs from the EXIF, e.g. `2026-10-18_2129_ILCE-7CM2_28mm_f4_4x15s_ISO3200.tif`.
+
 ## 0.3.3 (2026-11-07)
 
 - Astro: a stack also writes `preview.jpg`, Siril's auto-stretch of the linear TIFF; both outputs carry the first light's camera EXIF and maker notes (exiftool; a missing exiftool is logged, not fatal); the Finder button selects the finished TIFF; How this works explains the linear result and how to shoot for a clean stack.

@@ -2127,6 +2127,8 @@ const triagePayload = () => ({ group_id: 1, astro_cue: scenario === 'astro-triag
   photo_id: id, name: 'photo-' + id + '.jpg', sky: { class: id === 2 ? 'cloud' : 'night_sky', confidence: 0.91 }, confidence: 0.91,
   issues: id === 2 ? ['cloud_band'] : [], star_count: 40, trailing_warning: false, flagged: scenario === 'astro-triage' && id === 2 })) });
 const astroPosts = [];
+const debriefGets = [];
+const reviewPosts = [];
 let polls = 0;
 let cancels = 0;
 let runs = 0;
@@ -2437,6 +2439,8 @@ async function fetch(url, options = {}) {
   else if (url === '/api/astro/jobs') { assert.equal(options.method, 'POST'); astroPosts.push(JSON.parse(options.body)); payload = jobPayload('queued', 0, { recipe: astroPosts.at(-1).recipe }); }
   else if (url === '/api/astro/jobs/7/run') { assert.deepEqual(JSON.parse(options.body), {}); runs += 1; payload = jobPayload('queued', 0); }
   else if (url === '/api/astro/jobs/7/cancel') { assert.deepEqual(JSON.parse(options.body), {}); cancels += 1; payload = jobPayload('cancelled', 0.5); }
+  else if (url.startsWith('/api/astro/jobs/7/debrief?place=')) { const place = url.split('=')[1]; debriefGets.push(place); payload = { place, happened: ['Frame 1 (a.ARW) trailed: ' + place + '.'], try_now: ['Exclude frame 1 and prepare again.'], next_time: { settings: place === 'ship' ? '1 s · f/2 · ISO 12800 · 40 lights' : '5 s · f/4 · ISO 6400 · 25 lights', reasons: ['Reason for ' + place + '.'] }, review: null }; }
+  else if (url === '/api/astro/jobs/7/review') { assert.equal(options.method, 'POST'); reviewPosts.push(JSON.parse(options.body)); payload = { notes: ['Thin cloud low on the left.', 'The horizon tilts.'] }; }
   else if (url === '/api/astro/jobs/7/reveal') { assert.deepEqual(JSON.parse(options.body), {}); payload = { path: '/managed/outputs/astro/7' }; }
   else if (url === '/api/astro/jobs/7' || url === '/api/jobs/7') {
     polls += 1;
@@ -4335,6 +4339,7 @@ const regression = `
     assert.equal(confirm.disabled, true);
     assert.equal(element('#browse-astro-darks').disabled, true);
     assert.ok(element('#astro-status').textContent.includes('Cancel this stack to change'));
+    if (scenario === 'astro-debrief') assert.equal(element('#astro-debrief').hidden, true, 'a queued job shows no debrief');
     await element('#run-astro').listeners.click();
     assert.equal(runs, 1);
     assert.equal(state.astro.job.status, 'queued', 'the server answers run with the still-queued row');
@@ -4374,6 +4379,32 @@ const regression = `
         assert.equal(element('#astro-progress').value, 100);
         await element('#reveal-astro').listeners.click();
         assert.ok(element('#astro-status').textContent.includes('/managed/outputs/astro/7'));
+        if (scenario === 'astro-debrief') {
+          const texts = selector => element(selector).children.map(child => child.textContent);
+          assert.deepEqual(debriefGets, ['dark_site'], 'the debrief is fetched once when the job ends, for the default place');
+          assert.equal(element('#astro-debrief').hidden, false);
+          assert.deepEqual(texts('#astro-happened'), ['Frame 1 (a.ARW) trailed: dark_site.']);
+          assert.deepEqual(texts('#astro-try-now'), ['Exclude frame 1 and prepare again.']);
+          assert.equal(element('#astro-next-settings').textContent, '5 s · f/4 · ISO 6400 · 25 lights');
+          assert.deepEqual(texts('#astro-next-reasons'), ['Reason for dark_site.']);
+          const place = element('#astro-place');
+          place.value = 'ship';
+          await place.listeners.change();
+          assert.deepEqual(debriefGets, ['dark_site', 'ship']);
+          assert.equal(stored['lumen-astro-place'], 'ship');
+          assert.equal(element('#astro-next-settings').textContent, '1 s · f/2 · ISO 12800 · 40 lights');
+          const review = element('#review-astro');
+          state.status.omlx_roles.review.loaded = false;
+          updateWorkflow();
+          assert.equal(review.disabled, true, 'no review model, no look');
+          state.status.omlx_roles.review.loaded = true;
+          updateWorkflow();
+          assert.equal(review.disabled, false);
+          await review.listeners.click();
+          assert.deepEqual(reviewPosts, [{ place: 'ship' }]);
+          assert.deepEqual(texts('#astro-review-notes'), ['Thin cloud low on the left.', 'The horizon tilts.']);
+          assert.equal(element('#astro-review-task').textContent, 'Stack review ready');
+        }
       }
     }
     assert.equal(element('#cancel-astro').disabled, true);
@@ -5749,7 +5780,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertRegex(styles, r"select:focus-visible")
 
     def test_javascript_astro_tab_confirms_includes_polls_and_retains_failure_context(self):
-        for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume", "astro-recipe"):
+        for scenario in ("astro", "astro-fail", "astro-cancel", "astro-resume", "astro-recipe", "astro-debrief"):
             with self.subTest(scenario=scenario):
                 self.run_javascript_cleanup_regression(scenario)
 
@@ -5908,6 +5939,13 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual([("radio", "tracked"), ("radio", "untracked")], [(node["attrs"].get("type"), node["attrs"].get("value")) for node in radios])
         self.assertTrue(all(by_id["astro-recipe"] in node["parents"] for node in radios))
         self.assertIn("checked", radios[0]["attrs"])
+        place = by_id["astro-place"]
+        self.assertEqual("select", place["tag"])
+        self.assertEqual(["dark_site", "city", "ship", "handheld"], [node["attrs"].get("value") for node in parser.nodes if place in node["parents"] and node["tag"] == "option"])
+        self.assertTrue(any(node["tag"] == "label" and node["attrs"].get("for") == "astro-place" and "where you shot" in node["text"].lower() for node in parser.nodes))
+        self.assertEqual(("section", "ai-availability"), (by_id["astro-debrief"]["tag"], by_id["review-astro"]["attrs"].get("aria-describedby")))
+        self.assertIn(by_id["astro-debrief"], by_id["review-astro"]["parents"])
+        self.assertNotIn("aria-live", by_id["astro-debrief"]["attrs"])
         self.assertIn("legend", [child["tag"] for child in parser.nodes if by_id["astro-lights-group"] in child["parents"]])
         for kind in ("darks", "flats", "biases"):
             browse = by_id[f"browse-astro-{kind}"]

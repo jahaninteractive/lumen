@@ -67,7 +67,7 @@ function aiStatus(phase, text) {
   aiStatusLine.textContent = text;
 }
 // Advice never sets busy: the panel that asked shows its own line, updated in place, and finds it again on return.
-const AI_TASK_LABELS = { critique: 'Burst pick', composition: 'Crop suggestion', develop: 'Develop suggestion', caption: 'Caption', tag: 'Tags' };
+const AI_TASK_LABELS = { critique: 'Burst pick', composition: 'Crop suggestion', develop: 'Develop suggestion', caption: 'Caption', tag: 'Tags', astro: 'Stack review' };
 const aiTaskNodes = new Map();
 function paintAiTask(node, key) {
   const task = state.aiTasks.get(key);
@@ -2229,12 +2229,69 @@ function setAstroJob(job) {
   }[job.status] || `Stack status: ${job.status}.`;
   if (status.textContent !== text) status.textContent = text;  // polite live region: no identical rewrites each poll
   if (job.status !== previous) announce(ASTRO_WORDS[job.status] || `Stack ${job.status}.`);
+  if (!ASTRO_RAN.includes(job.status)) document.querySelector('#astro-debrief').hidden = true;
+  else if (job.status !== previous) loadAstroDebrief();  // once per run's end, including a resumed job
   try {
     if (JOB_ACTIVE.includes(job.status)) localStorage.setItem('lumen-astro-job', String(job.job_id));
     else localStorage.removeItem('lumen-astro-job');
   } catch { /* per-visit only */ }
   updateWorkflow();
 }
+
+// The debrief is rules over the job's own files, so it shows with or without a model; only a job Siril ran has one.
+const ASTRO_RAN = ['succeeded', 'failed'];
+const astroPlace = document.querySelector('#astro-place');
+try { const saved = localStorage.getItem('lumen-astro-place'); if (saved) astroPlace.value = saved; } catch { /* per-visit only */ }
+if (!astroPlace.value) astroPlace.value = 'dark_site';  // an unknown remembered place leaves a native select empty
+
+function fillList(selector, items) {
+  document.querySelector(selector).replaceChildren(...items.map(text => {
+    const item = document.createElement('li');
+    item.textContent = text;
+    return item;
+  }));
+}
+
+async function loadAstroDebrief() {
+  const job = state.astro.job;
+  const section = document.querySelector('#astro-debrief');
+  try {
+    const debrief = await request(`/api/astro/jobs/${job.job_id}/debrief?place=${encodeURIComponent(astroPlace.value)}`);
+    if (state.astro.job?.job_id !== job.job_id) return;  // another job took the panel meanwhile
+    fillList('#astro-happened', debrief.happened);
+    fillList('#astro-try-now', debrief.try_now);
+    document.querySelector('#astro-next-settings').textContent = debrief.next_time.settings;
+    fillList('#astro-next-reasons', debrief.next_time.reasons);
+    fillList('#astro-review-notes', debrief.review?.notes || []);
+    aiTaskLine(`astro:${job.job_id}`, document.querySelector('#astro-review-task'));
+    section.hidden = false;
+  } catch {
+    section.hidden = true;  // the status line already says how the stack ended
+  }
+  updateWorkflow();
+}
+
+astroPlace.addEventListener('change', () => {
+  try { localStorage.setItem('lumen-astro-place', astroPlace.value); } catch { /* per-visit only */ }
+  return ASTRO_RAN.includes(state.astro.job?.status) ? loadAstroDebrief() : undefined;
+});
+
+// Advice only: the notes sit under the debrief and never touch Next time.
+document.querySelector('#review-astro').addEventListener('click', async () => {
+  const jobId = state.astro.job.job_id;
+  const asking = aiCall('Stack review', () => post(`/api/astro/jobs/${jobId}/review`, { place: astroPlace.value }), `astro:${jobId}`);
+  updateWorkflow();
+  try {
+    const { notes } = await asking;
+    if (state.astro.job?.job_id !== jobId) return;
+    fillList('#astro-review-notes', notes);
+    announce(`${notes.length} ${notes.length === 1 ? 'note' : 'notes'} on the stack.`);
+  } catch (error) {
+    announce(`Stack review failed: ${error.message}`);
+  } finally {
+    updateWorkflow();
+  }
+});
 
 async function astroAction(label, action) {
   state.busy = true;
@@ -2370,6 +2427,7 @@ function updateWorkflow() {
   jobButton.textContent = jobActive ? 'Cancel job' : 'Clear';
   jobButton.className = jobActive ? 'danger' : 'secondary';
   document.querySelector('#reveal-astro').disabled = state.busy || !job;
+  document.querySelector('#review-astro').disabled = !roleReady('review') || job?.status !== 'succeeded' || !job.result?.preview || document.querySelector('#astro-debrief').hidden || aiRunning(`astro:${job.job_id}`);
   document.querySelector('#reveal-astro').textContent = job?.result ? 'Show result in Finder' : 'Show job folder in Finder';
   for (const kind of ['card', 'primary', 'mirror']) document.querySelector(`#browse-ingest-${kind}`).disabled = state.busy;
   document.querySelector('#reset-ingest-mirror').disabled = state.busy || !state.ingest.mirror;

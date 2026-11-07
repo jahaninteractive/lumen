@@ -168,6 +168,7 @@
           <p class="quiet">Lumen links the selected batch into its own library folder and runs one reviewed Siril script. Camera originals are never changed. Darks, flats, and biases are optional; missing sets only add a warning.</p>
           <p class="quiet">Local AI triage is advice only. Flagged means cloud, not sky, trailing, or a cloud band; no light is unchecked until you confirm.</p>
           <p class="quiet">The result is a linear 16-bit TIFF for developing: it opens almost black until you stretch it in darktable or Siril and set white balance on the sky. Beside it, preview.jpg is Siril's auto-stretch, so you can judge the stack at a glance. Both carry the first light's camera metadata. Stars are aligned, so a foreground smears; blend it back from a single frame.</p>
+          <p class="quiet">After a stack, the debrief reads the frames' EXIF and Siril's log; Lumen's rules write it, so it needs no AI. Look at the stack asks the local model for notes on what it sees in the preview; it never changes the settings.</p>
           <p class="quiet">Shooting for a good stack: keep every light at the same exposure, ISO and aperture. Keep exposures short enough that stars stay points, about 5 seconds at 28 mm f/4 on a high-resolution body (the NPF rule; the 500 rule is too long for these sensors). Take more frames rather than longer ones: 15 to 30 lights, since noise falls with the square root of the count, so 4 frames only halve it. Add about 10 darks with the lens cap on, at the same exposure, ISO and temperature.</p>
           </details>
           <p id="astro-availability" class="quiet">Checking Siril…</p>
@@ -201,6 +202,7 @@
             </div>
           </fieldset>
           <fieldset id="astro-recipe"><legend>Recipe</legend><div class="scope-options"><label><input type="radio" name="astro-recipe" value="tracked" checked> Tracked (global star alignment)</label><label><input type="radio" name="astro-recipe" value="untracked"> Untracked wide-field (two-pass alignment, keeps the common area)</label></div></fieldset>
+          <p><label for="astro-place">Where you shot <select id="astro-place"><option value="dark_site">Dark site</option><option value="city">City or light pollution</option><option value="ship">Ship or boat</option><option value="handheld">Handheld</option></select></label></p>
           <div class="scope-options">
             <label for="astro-confirm"><input type="checkbox" id="astro-confirm"> I confirm these lights are one astro sequence and Lumen may prepare a managed Siril stack</label>
           </div>
@@ -211,6 +213,21 @@
             <button type="button" id="reveal-astro" class="secondary" disabled>Show job folder in Finder</button>
           </div>
           <p id="astro-summary"></p>
+          <section id="astro-debrief" aria-labelledby="astro-debrief-heading" hidden>
+            <h3 id="astro-debrief-heading">Debrief</h3>
+            <h4 id="astro-happened-label">What happened</h4>
+            <ul id="astro-happened" aria-labelledby="astro-happened-label"></ul>
+            <h4 id="astro-try-now-label">Try now</h4>
+            <ul id="astro-try-now" aria-labelledby="astro-try-now-label"></ul>
+            <h4 id="astro-next-label">Next time</h4>
+            <p id="astro-next-settings"></p>
+            <ul id="astro-next-reasons" aria-labelledby="astro-next-label"></ul>
+            <div class="button-row">
+              <button type="button" id="review-astro" class="secondary ai" aria-describedby="ai-availability" disabled>Look at the stack</button>
+            </div>
+            <p id="astro-review-task" class="ai-task" hidden></p>
+            <ul id="astro-review-notes" aria-label="Notes on the stack"></ul>
+          </section>
           <ul id="astro-warnings" aria-label="Stacking warnings"></ul>
           <p id="astro-progress-label">Stack progress</p>
           <progress id="astro-progress" aria-labelledby="astro-progress-label" max="100" value="0"></progress>
