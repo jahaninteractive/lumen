@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from array import array
 from collections import deque
 from dataclasses import dataclass
 import json
@@ -157,7 +158,7 @@ def parse_vision_result(raw: str) -> dict[str, float | int | None]:
     if (
         not isinstance(schema_version, int)
         or isinstance(schema_version, bool)
-        or schema_version not in (1, 2)
+        or schema_version not in (1, 2, 3)
         or not isinstance(face_count, int)
         or isinstance(face_count, bool)
         or face_count < 0
@@ -221,7 +222,7 @@ def _parse_observation(value: object) -> RegionObservation | None:
 def parse_vision_regions(raw: str) -> SubjectRegions:
     payload = _vision_payload(raw)
     if (
-        payload.get("schema_version") != 2
+        payload.get("schema_version") not in (2, 3)
         or payload.get("coordinate_system") != "normalized_bottom_left"
         or not _valid_dimension(payload.get("image_width"))
         or not _valid_dimension(payload.get("image_height"))
@@ -247,7 +248,25 @@ def apply_vision_result(metrics: PhotoMetrics, result: dict[str, float | int | N
     metrics.eye_quality = result.get("eye_quality")  # type: ignore[assignment]
 
 
-def analyze_faces(path: Path, executable: Path) -> dict[str, float | int | None] | None:
+def parse_feature_print(raw: str) -> bytes | None:
+    """The helper's image feature print as float32 bytes, or None when absent or invalid."""
+    try:
+        values = _vision_payload(raw).get("feature_print")
+    except ValueError:
+        return None
+    if (
+        not isinstance(values, list)
+        or not values
+        or any(not isinstance(value, (int, float)) or isinstance(value, bool) for value in values)
+    ):
+        return None
+    vector = array("f", values)
+    if not all(math.isfinite(value) for value in vector):
+        return None
+    return vector.tobytes()
+
+
+def analyze_faces(path: Path, executable: Path) -> dict[str, float | int | bytes | None] | None:
     if not executable.is_file():
         return None
     try:
@@ -260,9 +279,33 @@ def analyze_faces(path: Path, executable: Path) -> dict[str, float | int | None]
         )
         if completed.returncode != 0:
             return None
-        return parse_vision_result(completed.stdout)
+        result: dict[str, float | int | bytes | None] = dict(parse_vision_result(completed.stdout))
+        result["feature_print"] = parse_feature_print(completed.stdout)
+        return result
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
+
+
+def feature_prints(paths: list[Path], executable: Path) -> dict[Path, bytes] | None:
+    """Feature prints for every path from one helper run; None when the helper cannot batch."""
+    if not paths:
+        return {}
+    if not executable.is_file():
+        return None
+    try:
+        completed = subprocess.run(
+            [str(executable), *map(str, paths)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    lines = completed.stdout.splitlines()
+    if completed.returncode != 0 or len(lines) != len(paths):
+        return None
+    return {path: vector for path, line in zip(paths, lines) if (vector := parse_feature_print(line)) is not None}
 
 
 def analyze_subject_regions(path: Path, executable: Path) -> SubjectRegions | None:

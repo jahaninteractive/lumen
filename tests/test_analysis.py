@@ -1,3 +1,4 @@
+from array import array
 import json
 import tempfile
 import unittest
@@ -8,11 +9,14 @@ from PIL import Image, ImageDraw
 from lumen.analysis import (
     SubjectRegions,
     analyze_astro,
+    analyze_faces,
     analyze_subject_regions,
     apply_vision_result,
     difference_hash,
+    feature_prints,
     hamming,
     measure_image,
+    parse_feature_print,
     parse_vision_result,
     parse_vision_regions,
 )
@@ -204,6 +208,70 @@ class AnalysisTests(unittest.TestCase):
         executable.write_text("#!/bin/sh\nexit 4\n")
         executable.chmod(0o755)
         self.assertIsNone(analyze_subject_regions(self.root / "photo.jpg", executable))
+
+    SCHEMA_3 = (
+        '{"schema_version":3,"coordinate_system":"normalized_bottom_left",'
+        '"image_width":64,"image_height":48,"face_count":0,'
+        '"faces":[],"saliency_objects":[],"feature_print":[0.5,-0.25]}'
+    )
+
+    def _script(self, body: str) -> Path:
+        executable = self.root / "vision"
+        executable.write_text("#!/bin/sh\n" + body)
+        executable.chmod(0o755)
+        return executable
+
+    def test_parse_vision_result_accepts_schema_3_and_regions_accept_it_too(self):
+        self.assertEqual(0, parse_vision_result(self.SCHEMA_3)["face_count"])
+        regions = parse_vision_regions(self.SCHEMA_3)
+        self.assertEqual((64, 48), (regions.image_width, regions.image_height))
+        schema_4 = self.SCHEMA_3.replace('"schema_version":3', '"schema_version":4')
+        with self.assertRaises(ValueError):
+            parse_vision_result(schema_4)
+        with self.assertRaises(ValueError):
+            parse_vision_regions(schema_4)
+
+    def test_parse_feature_print_round_trips_float32_and_rejects_bad_vectors(self):
+        self.assertEqual(array("f", [0.5, -0.25]).tobytes(), parse_feature_print(self.SCHEMA_3))
+        self.assertIsNone(parse_feature_print('{"schema_version":2,"face_count":0}'))
+        for bad in ("[]", '["x"]', "[true]"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(parse_feature_print('{"schema_version":3,"feature_print":%s}' % bad))
+
+    def test_analyze_faces_carries_the_feature_print(self):
+        executable = self._script("printf '%s' '" + self.SCHEMA_3 + "'\n")
+
+        result = analyze_faces(self.root / "photo.jpg", executable)
+
+        self.assertEqual(array("f", [0.5, -0.25]).tobytes(), result["feature_print"])
+
+    def test_feature_prints_runs_one_process_for_every_path_and_skips_failures(self):
+        counter = self.root / "runs"
+        line_1 = '{"schema_version":3,"face_count":0,"feature_print":[1.0,2.0]}'
+        line_3 = '{"schema_version":3,"face_count":0,"feature_print":[3.0,4.0]}'
+        executable = self._script(
+            f"echo run >> '{counter}'\n"
+            f"printf '%s\\n' '{line_1}' '{{\"error\": \"x\"}}' '{line_3}'\n"
+        )
+        paths = [self.root / f"{index}.jpg" for index in (1, 2, 3)]
+
+        prints = feature_prints(paths, executable)
+
+        self.assertEqual(
+            {paths[0]: array("f", [1.0, 2.0]).tobytes(), paths[2]: array("f", [3.0, 4.0]).tobytes()},
+            prints,
+        )
+        self.assertEqual(["run"], counter.read_text().splitlines())
+
+    def test_feature_prints_is_none_for_a_helper_without_batch_mode(self):
+        executable = self._script(
+            'if [ "$#" -gt 1 ]; then exit 2; fi\n'
+            "printf '%s' '" + self.SCHEMA_3 + "'\n"
+        )
+        paths = [self.root / "1.jpg", self.root / "2.jpg"]
+
+        self.assertIsNone(feature_prints(paths, executable))
+        self.assertIsNone(feature_prints(paths, self.root / "missing"))
 
 
 if __name__ == "__main__":
