@@ -146,6 +146,7 @@ main { min-width: 0; overflow-anchor: none; }  /* a panel that grows above the s
 .contact-sheet { display: flex; flex-wrap: wrap; gap: 0 1rem; align-items: flex-start; }
 .contact-sheet > * { flex: 1 1 100%; }
 .contact-sheet > .burst-single { flex: 0 1 var(--tile-min, 180px); }  /* the Tiles size, like a tile in a multi-frame burst; never grows to fill the row */
+.contact-sheet > .burst-single:has(.belongs-with) { flex-basis: 100%; }  /* B on a stray frame: one line per suggestion, not a tile-wide column */
 .burst-single .burst-header { gap: .25rem .5rem; margin-bottom: .4rem; font-size: .9rem; }
 .burst-single .burst-header h3 { font-size: .95rem; }
 .burst-single .burst-header .toggle { margin-left: auto; font-size: .85rem; }

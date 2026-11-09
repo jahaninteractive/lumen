@@ -5969,6 +5969,10 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
     def test_javascript_b_suggests_bursts_and_move_here_moves_the_frame(self):
         self.run_javascript_cleanup_regression("belongs-with")
 
+    def test_a_one_frame_burst_holding_belongs_with_takes_the_full_row(self):
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertIn(".contact-sheet > .burst-single:has(.belongs-with) { flex-basis: 100%; }", styles)
+
     def test_javascript_g_marks_bursts_for_merge_and_shift_g_marks_a_range(self):
         self.run_javascript_cleanup_regression("merge-keys")
 
