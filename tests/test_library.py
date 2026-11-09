@@ -1690,6 +1690,103 @@ class LibraryTests(unittest.TestCase):
             self.assertIn("catalog unavailable", result.message)
             self.assertEqual([], list(library.settings.jpeg_output_dir.rglob("*.jpg")))
 
+    def belongs_fixture(self, stamps: dict[str, str | None]) -> tuple[Library, dict[str, int], dict[str, int]]:
+        """Single-frame bursts named by stem; returns the open library, {stem: photo_id}, {stem: group_id}."""
+        self.image_path.unlink()
+        for index, (name, stamp) in enumerate(stamps.items()):
+            exif = Image.Exif()
+            if stamp:
+                exif[36867] = f"2026:10:22 {stamp}"
+            Image.new("RGB", (60, 40), (index * 40, 90, 200 - index * 30)).save(self.source_dir / f"{name}.jpg", exif=exif)
+        library = Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0))
+        library.import_path(self.source_dir)
+        photos = {Path(photo.path).stem: photo.id for photo in library.catalog.list_photos()}
+        groups = {Path(photo["path"]).stem: group["id"] for group in library.list_groups() for photo in group["photos"]}
+        return library, photos, groups
+
+    @staticmethod
+    def vector(*values: float) -> bytes:
+        from array import array
+        return array("f", values).tobytes()
+
+    def test_belongs_with_orders_nearby_bursts_by_feature_print_distance(self):
+        library, photos, groups = self.belongs_fixture({
+            "focus": "12:05:00", "a": "12:00:00", "b": "12:02:00", "c": "12:08:00", "d": "12:15:00", "far": "12:16:00"})
+        with library:
+            for name, values in {"focus": (0, 0), "a": (3, 0), "b": (1, 0), "c": (0, 2), "d": (4, 0), "far": (0.1, 0)}.items():
+                library.catalog.save_feature_print(photos[name], self.vector(*values))
+            with patch("lumen.library.feature_prints", side_effect=AssertionError("every print was stored")):
+                result = library.belongs_with(photos["focus"])
+        self.assertEqual({"photo_id": photos["focus"], "group_ids": [groups[n] for n in ("b", "c", "a", "d")]}, result)
+
+    def test_belongs_with_respects_filters(self):
+        library, photos, groups = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00", "b": "12:02:00"})
+        with library:
+            for name, values in {"focus": (0, 0), "a": (3, 0), "b": (1, 0)}.items():
+                library.catalog.save_feature_print(photos[name], self.vector(*values))
+            library.catalog.set_decision(photos["b"], "reject")
+            library.catalog.set_rating(photos["b"], 3)
+            self.assertEqual([groups["b"], groups["a"]], library.belongs_with(photos["focus"])["group_ids"],
+                             "rejects are candidates whatever the view hides")
+            self.assertEqual([groups["b"]], library.belongs_with(photos["focus"], GroupFilters(min_rating=3))["group_ids"])
+
+    def test_belongs_with_computes_missing_prints_in_one_batch_and_stores_them(self):
+        library, photos, groups = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00", "b": "12:02:00"})
+        with library:
+            previews = {Path(library.catalog.get_photo(photo_id).preview_path): name for name, photo_id in photos.items()}
+            values = {"focus": (0, 0), "a": (1, 0), "b": (2, 0)}
+            calls = []
+
+            def helper(paths, executable):
+                calls.append((sorted(paths), executable))
+                return {path: self.vector(*values[previews[path]]) for path in paths}
+
+            with patch("lumen.library.feature_prints", side_effect=helper):
+                result = library.belongs_with(photos["focus"])
+            self.assertEqual([(sorted(previews), library.settings.vision_analyzer_path)], calls)
+            self.assertEqual([groups["a"], groups["b"]], result["group_ids"])
+            self.assertEqual({photos[name]: self.vector(*v) for name, v in values.items()},
+                             library.catalog.feature_prints_for(photos.values()))
+
+    def test_belongs_with_refuses_when_the_helper_cannot_batch(self):
+        library, photos, _ = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00"})
+        with library, patch("lumen.library.feature_prints", return_value=None):
+            with self.assertRaisesRegex(ValueError, "scripts/bootstrap.sh"):
+                library.belongs_with(photos["focus"])
+
+    def test_belongs_with_refuses_when_the_helper_returns_no_print(self):
+        library, photos, _ = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00"})
+        with library, patch("lumen.library.feature_prints", return_value={}):
+            with self.assertRaisesRegex(ValueError, "scripts/bootstrap.sh"):
+                library.belongs_with(photos["focus"])
+
+    def test_belongs_with_skips_a_frame_the_helper_could_not_read(self):
+        library, photos, groups = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00", "b": "12:02:00"})
+        with library:
+            unreadable = Path(library.catalog.get_photo(photos["a"]).preview_path)
+            with patch("lumen.library.feature_prints",
+                       side_effect=lambda paths, _: {path: self.vector(1, 0) for path in paths if path != unreadable}):
+                self.assertEqual([groups["b"]], library.belongs_with(photos["focus"])["group_ids"])
+
+    def test_belongs_with_is_empty_without_a_capture_time(self):
+        library, photos, _ = self.belongs_fixture({"focus": None, "a": "12:00:00"})
+        with library, patch("lumen.library.feature_prints", side_effect=AssertionError("nothing to compare")):
+            self.assertEqual({"photo_id": photos["focus"], "group_ids": []}, library.belongs_with(photos["focus"]))
+
+    def test_belongs_with_skips_prints_of_another_length(self):
+        library, photos, groups = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00", "b": "12:02:00"})
+        with library:
+            for name, values in {"focus": (0, 0), "a": (1, 0, 0), "b": (2, 0)}.items():
+                library.catalog.save_feature_print(photos[name], self.vector(*values))
+            self.assertEqual([groups["b"]], library.belongs_with(photos["focus"])["group_ids"])
+
+    def test_belongs_with_rejects_unknown_ids(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            for bad in (0, "1", True, 99999):
+                with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "unknown photo ID"):
+                    library.belongs_with(bad)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)

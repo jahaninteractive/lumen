@@ -4,22 +4,25 @@ import hashlib
 import re
 import fcntl
 import json
+import math
 import os
 import shutil
 import sqlite3
 import subprocess
 import tempfile
 import threading
+from array import array
 from collections.abc import Sequence
 from contextlib import closing, contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 
 from PIL import Image
 
-from .analysis import analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, difference_hash, measure_image
+from .analysis import (analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, difference_hash, feature_prints,
+                       measure_image)
 from .catalog import Catalog, GroupFilters
 from .config import Settings
 from .composition import CropCandidate, generate_candidates
@@ -49,6 +52,8 @@ DEVELOP_ADVICE_LONG_EDGE = 1024  # all the vision model needs; it is not judging
 BURST_GAP_RANGE = (0.5, 30.0)  # seconds; the slider's travel
 NEARBY_PLACE_KM = 5.0  # fixes this close share one name: a drifting boat's bursts are all the same spot
 NEARBY_PLACE_RANGE = (1.0, 20.0)  # the photographer's radius; the slider's own bounds
+BELONGS_WITH_WINDOW_SECONDS = 600  # Belongs with only offers bursts shot this close to the frame
+BELONGS_WITH_LIMIT = 4
 OVERLAY_SUFFIXES = (".gpx", ".geojson")
 CLOCK_OFFSET = re.compile(r"[+-](0\d|1[0-4]):[0-5]\d")
 
@@ -1201,6 +1206,52 @@ class Library:
 
     def list_groups(self, filters: GroupFilters | None = None) -> list[dict]:
         return self.catalog.list_groups(filters)
+
+    def belongs_with(self, photo_id: int, filters: GroupFilters | None = None) -> dict:
+        """Advisory: the nearby bursts (same camera, within BELONGS_WITH_WINDOW_SECONDS) whose frames look most like
+        this one by Vision feature-print distance, nearest first. Missing prints are computed in one helper run."""
+        if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        result = {"photo_id": photo_id, "group_ids": []}
+        if photo.captured_at is None:
+            return result
+        frames = {}  # photo id -> (group id, preview path)
+        for group in self.list_groups(replace(filters or GroupFilters(), show_rejected=True)):
+            if group["id"] == photo.group_id:
+                continue
+            for other in group["photos"]:
+                if (other["camera_id"] == photo.camera_id and other["captured_at"]
+                        and abs((datetime.fromisoformat(other["captured_at"]) - photo.captured_at).total_seconds())
+                        <= BELONGS_WITH_WINDOW_SECONDS):
+                    frames[int(other["id"])] = (group["id"], other["preview_path"])
+        if not frames:
+            return result
+        frames[photo_id] = (photo.group_id, photo.preview_path)
+        prints = self.catalog.feature_prints_for(frames)
+        missing = {Path(preview): frame_id for frame_id, (_, preview) in frames.items()
+                   if frame_id not in prints and preview and Path(preview).is_file()}
+        if missing:
+            computed = feature_prints(list(missing), self.settings.vision_analyzer_path)
+            # An old helper given several paths fails; given one it succeeds without a print. Either way, rebuild it.
+            # A print missing for some paths only is an unreadable preview: that frame is skipped.
+            if not computed:
+                raise ValueError("Belongs with needs the Vision helper's feature prints; run scripts/bootstrap.sh")
+            with self._mutation():
+                for path, data in computed.items():
+                    self.catalog.save_feature_print(missing[path], data)
+                    prints[missing[path]] = data
+        if photo_id not in prints:
+            return result
+        focus = array("f"); focus.frombytes(prints.pop(photo_id))
+        distances: dict[int, float] = {}
+        for frame_id, data in prints.items():
+            vector = array("f"); vector.frombytes(data)
+            if len(vector) == len(focus):
+                group_id = frames[frame_id][0]
+                distance = math.dist(focus, vector)
+                distances[group_id] = min(distance, distances.get(group_id, distance))
+        result["group_ids"] = sorted(distances, key=lambda group_id: (distances[group_id], group_id))[:BELONGS_WITH_LIMIT]
+        return result
 
     def cameras(self) -> list[str]:
         """Every camera in the catalog, unfiltered, for the filter menu."""
