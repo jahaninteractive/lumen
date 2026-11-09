@@ -6,7 +6,7 @@ const state = {
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
   develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null },
-  mergeSelection: new Set(), clearedFrames: 0,
+  mergeSelection: new Set(), mergeAnchor: null, clearedFrames: 0,
   aiTasks: new Map(),  // per-panel local AI status by key, e.g. critique:<groupId>; it outlives the panel that asked
   ingest: { card: null, primary: null, mirror: null },
   // Busy while a request is in flight or a background job is queued/running.
@@ -377,9 +377,27 @@ function scrollToGroup(groupId) {
   return Boolean(section);
 }
 
+// The selection keeps marking order, so the anchor for Shift+G is the latest burst still marked.
 function setMergeSelection(groupId, selected) {
-  state.mergeSelection[selected ? 'add' : 'delete'](groupId);
+  state.mergeSelection.delete(groupId);
+  if (selected) state.mergeSelection.add(groupId);
+  state.mergeAnchor = [...state.mergeSelection].at(-1) ?? null;
   updateWorkflow();
+}
+
+function toggleMergeMark(photo, { range = false } = {}) {
+  const index = state.groups.findIndex(group => group.photos.some(item => item.id === photo.id));
+  if (index < 0) return;
+  const id = state.groups[index].id;
+  const anchor = state.mergeSelection.has(state.mergeAnchor) ? state.groups.findIndex(group => group.id === state.mergeAnchor) : -1;
+  if (range && anchor >= 0) {
+    state.groups.slice(Math.min(anchor, index), Math.max(anchor, index) + 1).forEach(group => state.mergeSelection.add(group.id));
+    setMergeSelection(id, true);  // the focused burst becomes the next anchor
+    return announce(`${state.mergeSelection.size} bursts marked for merge`);
+  }
+  const marked = !range && state.mergeSelection.has(id);
+  setMergeSelection(id, !marked);
+  announce(`Burst ${index + 1} ${marked ? 'unmarked' : 'marked for merge'} (${state.mergeSelection.size} marked)`);
 }
 
 function mergeCheckbox(group, groupIndex, className) {
@@ -1264,7 +1282,7 @@ function toggleCompare(photo) {
   announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
 }
 
-const CULLING_KEYS = { p: 'pick', r: 'keepOnly', s: 'split', x: 'reject', f: 'flag', u: 'clear', c: 'compare', z: 'full', Enter: 'loupe', ' ': 'loupe', Escape: 'close' };
+const CULLING_KEYS = { p: 'pick', r: 'keepOnly', s: 'split', x: 'reject', f: 'flag', u: 'clear', c: 'compare', g: 'mergeMark', z: 'full', Enter: 'loupe', ' ': 'loupe', Escape: 'close' };
 const CULLING_ACTIONS = {
   pick: photo => decide(photo, 'pick'),
   keepOnly,
@@ -1273,6 +1291,7 @@ const CULLING_ACTIONS = {
   flag: photo => decide(photo, 'decision', 'flag'),
   clear: photo => decide(photo, 'decision', 'none'),
   compare: toggleCompare,
+  mergeMark: (photo, event) => toggleMergeMark(photo, { range: event.shiftKey }),
   loupe: photo => openLoupe(photo.id),
   close: () => closeView(),
   full: () => openView?.id === 'loupe' && toggleFullSize(),
@@ -1307,7 +1326,7 @@ function handleCullingKey(event) {
   if (!action) return;
   event.preventDefault();
   const photo = photoById(state.focusedId);
-  return photo ? action(photo) : undefined;
+  return photo ? action(photo, event) : undefined;
 }
 
 const PAGE = 200;
@@ -2383,6 +2402,7 @@ function updateWorkflow() {
   document.querySelectorAll('[data-burst]').forEach(section => {
     const selected = Number(section.dataset.burst) === state.selectedGroupId;
     section.dataset.selected = String(selected);
+    section.classList[state.mergeSelection.has(Number(section.dataset.burst)) ? 'add' : 'remove']('marked');
     section.children[0].children[2].textContent = selected ? 'Selected' : '';
   });
   document.querySelector('#clear-workspace').disabled = state.busy || !state.photoCount || document.querySelector('#clear-confirmation').value !== 'CLEAR';

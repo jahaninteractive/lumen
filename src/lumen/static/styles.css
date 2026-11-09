@@ -123,6 +123,7 @@ main { min-width: 0; overflow-anchor: none; }  /* a panel that grows above the s
 .tab-row .tab-rail { flex: 1 1 auto; border-bottom: 0; }
 .burst { scroll-margin-top: var(--sticky-top, 0px); margin-bottom: 1.5rem; padding: .25rem; border-radius: 6px; outline-offset: 2px; }
 .burst[data-selected="true"] { outline: 2px solid var(--amber); }
+.burst.marked { box-shadow: 0 0 0 2px var(--cyan); }  /* marked for merge (G); a shadow, so the amber selected outline still shows beside it */
 .burst-header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .75rem; }
 .burst-header h3 { margin: 0; font-size: 1.05rem; }
 .burst-header .quiet { font-variant-numeric: tabular-nums; }

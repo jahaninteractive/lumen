@@ -2155,7 +2155,7 @@ let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
-let groups = scenario === 'default-tab' ? [] : scenario === 'merge' || scenario === 'merge-batches' || scenario === 'rail-visibility' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'default-tab' ? [] : scenario === 'merge-keys' ? [group(1, [1]), group(2, [2]), group(3, [3])] : scenario === 'merge' || scenario === 'merge-batches' || scenario === 'rail-visibility' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
 if (scenario === 'export-watermark') Object.assign(stored, { 'lumen-watermark': '\u00a9 N. David', 'lumen-export-preset': 'web' });  // remembered from an earlier visit
 if (scenario === 'export-bad-preset') stored['lumen-export-preset'] = 'huge';
@@ -5172,6 +5172,43 @@ const regression = `
     assert.equal(element('#merge-batches').hidden, true, 'unticking hides it again');
     return;
   }
+  if (scenario === 'merge-keys') {
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const section = id => document.querySelectorAll('[data-burst]').find(item => Number(item.dataset.burst) === id);
+    const key = (id, extra = {}) => { state.focusedId = id; return element('#contact-sheet').listeners.keydown({ key: extra.shiftKey ? 'G' : 'g', shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, target: card(id), preventDefault() {}, ...extra }); };
+    const marked = () => [...state.mergeSelection].sort();
+    await key(1);
+    assert.deepEqual(marked(), [1]);
+    assert.ok(section(1).classList.contains('marked'), 'a marked burst carries the cyan outline');
+    assert.ok(!section(2).classList.contains('marked'));
+    assert.equal(document.querySelectorAll('.batch-select')[0].checked, true, 'the rail checkbox follows the key');
+    assert.equal(element('#merge-count').textContent, '1 batch selected');
+    assert.equal(element('#announcer').textContent, 'Burst 1 marked for merge (1 marked)');
+    assert.equal(state.mergeAnchor, 1);
+    await key(1);
+    assert.deepEqual(marked(), []);
+    assert.ok(!section(1).classList.contains('marked'));
+    assert.equal(element('#announcer').textContent, 'Burst 1 unmarked (0 marked)');
+    assert.equal(state.mergeAnchor, null);
+    await key(3, { shiftKey: true });
+    assert.deepEqual(marked(), [3], 'Shift+G with no anchor marks just this burst');
+    await key(3);
+    assert.deepEqual(marked(), []);
+    await key(1);
+    await key(3, { shiftKey: true });
+    assert.deepEqual(marked(), [1, 2, 3]);
+    assert.equal(element('#announcer').textContent, '3 bursts marked for merge');
+    assert.equal(element('#merge-batches').disabled, false);
+    assert.equal(state.mergeAnchor, 3);
+    await key(3);
+    assert.equal(state.mergeAnchor, 2, 'unmarking the anchor falls back to the latest still marked');
+    const input = document.createElement('input');
+    input.tagName = 'INPUT';
+    await key(1, { target: input });
+    assert.deepEqual(marked(), [1, 2], 'G in a text field does nothing');
+    return;
+  }
   if (scenario === 'merge-batches') {
     await load();
     const button = element('#merge-batches');
@@ -5671,11 +5708,13 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
             self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() == text for node in legend), text)
         self.assertIn("Z", keys)
         for key in keys:
-            self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down", "Enter", "Space", "Esc"}, key)
+            self.assertTrue(len(key) == 1 or key in {"Home", "End", "Page Up", "Page Down", "Enter", "Space", "Esc", "Shift"}, key)
         for key in ("Enter", "Esc"):
             self.assertIn(key, keys)
         for term in terms:
-            self.assertNotRegex(term["text"], r"Cmd|Ctrl|Option|Command|Control|Alt|Shift|[+⌘⌥⌃]")
+            # Shift is the only modifier: the browser and macOS keep Cmd, Ctrl and Option for themselves.
+            self.assertNotRegex(term["text"], r"Cmd|Ctrl|Option|Command|Control|Alt|[⌘⌥⌃]")
+            self.assertNotRegex(term["text"].replace("Shift+", ""), r"Shift|\+")
         self.assertTrue(any(node["tag"] == "dd" and node["text"].strip() for node in legend))
 
     def test_decision_and_rating_routes_validate_strictly_and_hide_rejected_by_default(self):
@@ -5852,6 +5891,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_clear_tab_counts_and_removes_previously_cleared_frames(self):
         self.run_javascript_cleanup_regression("remove-cleared")
+
+    def test_javascript_g_marks_bursts_for_merge_and_shift_g_marks_a_range(self):
+        self.run_javascript_cleanup_regression("merge-keys")
 
     def test_javascript_batch_rail_merges_selected_batches(self):
         self.run_javascript_cleanup_regression("merge-batches")
