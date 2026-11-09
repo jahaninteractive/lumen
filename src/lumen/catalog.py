@@ -711,6 +711,14 @@ class Catalog:
         self.connection.commit()
         return int(row["group_id"])
 
+    def move_photo(self, photo_id: int, group_id: int, pins: list[tuple[int, str]]) -> None:
+        """In one transaction: pin the old burst's frames, point `photo_id` at `group_id`'s key, and drop its picks."""
+        with self.connection:
+            self.connection.executemany("UPDATE photos SET merged_into = ? WHERE id = ?", [(key, pid) for pid, key in pins])
+            self.connection.execute(
+                "UPDATE photos SET merged_into = (SELECT stable_key FROM photo_groups WHERE id = ?), manual_pick = 0, model_pick = 0"
+                " WHERE id = ?", (group_id, photo_id))
+
     def set_merged_into(self, pointers: list[tuple[int, str | None]]) -> None:
         """Re-aim (photo_id, merged_into) pointers in one transaction; None lets a frame group by time again."""
         with self.connection:

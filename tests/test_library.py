@@ -821,6 +821,91 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(3, len(after[0]["photos"]))
             self.assertEqual(third_photo, after[0]["automatic_pick_id"])
 
+    def test_move_photo_joins_another_burst_and_survives_reimport(self):
+        seconds = (0, 1, 2, 40, 41)  # bursts A and B at a 20 s gap
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            library.set_burst_gap(20)
+            source, target = self.group_holding(library, 0), self.group_holding(library, 40)
+            moved = library.catalog.photo_by_path(str((self.source_dir / "T01.jpg").resolve())).id
+            library.set_pick(moved)
+
+            result = library.move_photo(moved, target)
+
+            self.assertEqual([[0, 2], [1, 40, 41]], self.bursts_of(library, seconds))
+            self.assertEqual(target, self.group_holding(library, 1))
+            pick = next(group["automatic_pick_id"] for group in library.list_groups() if group["id"] == target)
+            self.assertEqual({"photo_id": moved, "group_id": target, "from_group_id": source, "automatic_pick_id": pick}, result)
+            self.assertFalse(library.catalog.get_photo(moved).manual_pick)
+            events = [event.details for event in library.catalog.events_for(moved) if event.kind == "frame_moved"]
+            self.assertEqual([{"group_id": target, "from_group_id": source}], events)
+
+            library.import_path(self.source_dir)  # automatic regrouping must honour the move
+            self.assertEqual([[0, 2], [1, 40, 41]], self.bursts_of(library, seconds))
+
+    def test_move_photo_keeps_the_old_burst_together_when_the_frame_bridged_a_gap(self):
+        seconds = (0, 15, 30, 59)  # 15 bridges 0 and 30 at a 20 s gap; 59 is a burst of its own
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            library.set_burst_gap(20)
+            self.assertEqual([[0, 15, 30], [59]], self.bursts_of(library, seconds))
+            moved = library.catalog.photo_by_path(str((self.source_dir / "T15.jpg").resolve())).id
+
+            library.move_photo(moved, self.group_holding(library, 59))
+
+            self.assertEqual([[0, 30], [15, 59]], self.bursts_of(library, seconds))
+            library.import_path(self.source_dir)
+            self.assertEqual([[0, 30], [15, 59]], self.bursts_of(library, seconds))
+
+    def test_move_photo_of_the_anchor_frame_leaves_the_rest_together(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library, raw=False)  # every other frame is merged into the first
+            Image.new("RGB", (320, 240), (90, 90, 90)).save(self.source_dir / "DSC0005.jpg", quality=95)
+            library.import_path(self.source_dir)
+            other = next(group["id"] for group in library.list_groups() if ids[0] not in {p["id"] for p in group["photos"]})
+
+            library.move_photo(ids[0], other)
+
+            shape = sorted(sorted(photo["id"] for photo in group["photos"]) for group in library.list_groups())
+            self.assertIn(sorted(ids[1:]), shape)
+            self.assertEqual(2, len(shape))
+            library.import_path(self.source_dir)
+            self.assertEqual(shape, sorted(sorted(photo["id"] for photo in group["photos"]) for group in library.list_groups()))
+
+    def test_move_photo_of_the_last_frame_removes_the_old_burst(self):
+        seconds = (0, 40, 41)
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            library.set_burst_gap(20)
+            source, target = self.group_holding(library, 0), self.group_holding(library, 40)
+            moved = library.catalog.photo_by_path(str((self.source_dir / "T00.jpg").resolve())).id
+
+            library.move_photo(moved, target)
+
+            self.assertEqual([[0, 40, 41]], self.bursts_of(library, seconds))
+            self.assertNotIn(source, [group["id"] for group in library.list_groups()])
+
+    def test_move_photo_rejects_bad_input(self):
+        seconds = (0, 1, 40)
+        self.write_timed_frames(seconds)
+        with Library(Settings(library_dir=self.library_dir, near_duplicate_distance=0)) as library:
+            library.import_path(self.source_dir)
+            library.set_burst_gap(20)
+            own, other = self.group_holding(library, 0), self.group_holding(library, 40)
+            photo = library.catalog.photo_by_path(str((self.source_dir / "T00.jpg").resolve())).id
+            before = self.bursts_of(library, seconds)
+            for bad_photo, bad_group in ((0, other), ("1", other), (True, other), (99999, other),
+                                         (photo, 0), (photo, "2"), (photo, True), (photo, 99999)):
+                with self.subTest(photo=bad_photo, group=bad_group), self.assertRaises(ValueError):
+                    library.move_photo(bad_photo, bad_group)
+            with self.assertRaisesRegex(ValueError, f"photo {photo} is already in burst {own}"):
+                library.move_photo(photo, own)
+            self.assertEqual(before, self.bursts_of(library, seconds))
+            self.assertEqual([], [event for event in library.catalog.events_for(photo) if event.kind == "frame_moved"])
+
     def write_timed_frames(self, seconds):
         for second in seconds:
             exif = Image.Exif(); exif[36867] = f"2026:10:21 12:00:{second:02d}"

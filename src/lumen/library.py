@@ -102,6 +102,10 @@ def _stable_key(first: Photo) -> str:
     return hashlib.sha256(f"{first.camera_id}|{first.path}".encode()).hexdigest()[:24]
 
 
+def _earliest(photos: list[Photo]) -> Photo:
+    return min(photos, key=lambda photo: (photo.captured_at is None, photo.captured_at.isoformat() if photo.captured_at else "", photo.path))
+
+
 def _select(ranking: list[RankedPhoto]) -> RankedPhoto:
     """Manual unrejected pick, else best unrejected frame, else best frame (keeper filtering drops it)."""
     kept = [item for item in ranking if item.photo.decision != "reject"]
@@ -1739,6 +1743,31 @@ class Library:
         self.catalog.append_event(photo_id, "burst_split", {"group_id": group_id, "from_group_id": from_group})
         return {"photo_id": photo_id, "group_id": group_id, "from_group_id": from_group}
 
+    @_coordinated
+    def move_photo(self, photo_id: int, group_id: int) -> dict:
+        """Move one frame into another burst through `Photo.merged_into`, pinning its old burst's remaining frames to
+        that burst's earliest one so a frame that bridged a time gap does not split the burst it leaves."""
+        if type(photo_id) is not int or photo_id <= 0 or type(group_id) is not int or group_id <= 0:
+            raise ValueError("move needs a positive photo ID and a positive group ID")
+        photo = self.catalog.get_photo(photo_id)
+        if photo is None or photo.group_id is None:
+            raise ValueError(f"photo {photo_id} is not in a group")
+        if not self.catalog.group_photo_ids(group_id):
+            raise ValueError(f"group {group_id} does not exist")
+        from_group = photo.group_id
+        if from_group == group_id:
+            raise ValueError(f"photo {photo_id} is already in burst {group_id}")
+        self._reanchor_merges(photo_id, from_group)
+        rest = [p for p in self.catalog.list_photos() if p.group_id == from_group and p.id != photo_id]
+        anchor = _earliest(rest) if rest else None
+        pins = [(p.id, _stable_key(anchor)) for p in rest if p.id != anchor.id and not p.merged_into]
+        self.catalog.move_photo(photo_id, group_id, pins)
+        self._regroup_and_write_sidecars()
+        group = next(group for group in self.catalog.list_groups() if photo_id in {p["id"] for p in group["photos"]})
+        self.catalog.append_event(photo_id, "frame_moved", {"group_id": group["id"], "from_group_id": from_group})
+        return {"photo_id": photo_id, "group_id": group["id"], "from_group_id": from_group,
+                "automatic_pick_id": group["automatic_pick_id"]}
+
     def _reanchor_merges(self, photo_id: int, group_id: int) -> None:
         """A merge names a frame, not a burst: once `photo_id` leaves, every merge that named a frame of its old burst
         names the burst's earliest remaining frame instead, and that anchor groups by time unless merged elsewhere."""
@@ -1747,7 +1776,7 @@ class Library:
         inside = {_stable_key(photo) for photo in photos if photo.group_id == group_id}
         if not members or not any(photo.merged_into in inside for photo in members):
             return
-        anchor = min(members, key=lambda photo: (photo.captured_at is None, photo.captured_at.isoformat() if photo.captured_at else "", photo.path))
+        anchor = _earliest(members)
         pointers = [(photo.id, _stable_key(anchor)) for photo in members if photo.id != anchor.id and photo.merged_into in inside]
         if anchor.merged_into in inside:
             pointers.append((anchor.id, None))
