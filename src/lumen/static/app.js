@@ -550,6 +550,108 @@ async function splitFrame(photo) {
   }
 }
 
+// B: the bursts this frame most resembles, nearest first, in a panel under its own burst. The server answers with group IDs;
+// one this page has not loaded (filtered out) is skipped. Re-rendering the sheet drops the panel with everything else.
+let belongsWith = null;  // the open panel section
+let belongsRequest = 0;  // a newer B, or a close, makes an older reply stale
+
+function closeBelongsWith() {
+  belongsRequest += 1;
+  belongsWith?.remove();
+  belongsWith = null;
+}
+
+function belongsRow(photo, group, groupIndex) {
+  const row = document.createElement('div');
+  row.className = 'belongs-row';
+  const thumbs = document.createElement('span');
+  thumbs.className = 'belongs-thumbs';
+  thumbs.append(...group.photos.slice(0, 3).map(item => {
+    const image = document.createElement('img');
+    image.src = thumbUrl(item);
+    image.alt = '';
+    image.loading = 'lazy';
+    return image;
+  }));
+  const text = document.createElement('span');
+  text.className = 'belongs-text';
+  text.textContent = [`Burst ${groupIndex + 1}`, startTime(group), frameCount(group.frame_count)].filter(Boolean).join(' · ');
+  const move = document.createElement('button');
+  move.type = 'button';
+  move.textContent = 'Move here';
+  move.setAttribute('aria-label', `Move here, Burst ${groupIndex + 1}`);
+  move.addEventListener('click', () => moveFrame(photo, groupIndex + 1, group.id));
+  row.append(thumbs, text, move);
+  return row;
+}
+
+async function toggleBelongsWith(photo) {
+  if (openView) return;  // the panel lives on the sheet, behind an open frame view
+  const reopen = belongsWith && Number(belongsWith.dataset.photo) === photo.id;
+  closeBelongsWith();
+  if (reopen) return announce('Belongs with closed');
+  const group = state.groups.find(item => item.photos.includes(photo));
+  const section = group && document.querySelector(`[data-burst="${group.id}"]`);
+  if (!section) return;
+  const asked = belongsRequest;
+  let rows = [];
+  let message;
+  try {
+    const result = await request(`/api/photos/${photo.id}/belongs-with${location.search}`);  // the sheet's own filter query
+    rows = result.group_ids.map(id => state.groups.findIndex(item => item.id === id)).filter(index => index >= 0)
+      .map(index => belongsRow(photo, state.groups[index], index));
+    if (!rows.length) message = 'No similar bursts within 10 minutes.';
+  } catch (error) {
+    message = error.message;
+  }
+  if (asked !== belongsRequest) return;
+  const panel = document.createElement('section');
+  panel.className = 'belongs-with';
+  panel.dataset.photo = photo.id;
+  panel.dataset.group = group.id;
+  panel.setAttribute('aria-label', 'Belongs with');
+  const heading = document.createElement('h4');
+  heading.textContent = 'Belongs with…';
+  panel.append(heading, ...rows);
+  if (message) {
+    const note = document.createElement('p');
+    note.className = 'quiet';
+    note.textContent = message;
+    panel.append(note);
+  }
+  panel.addEventListener('keydown', event => {  // Escape from a Move here button returns to the frame
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeBelongsWith();
+    focusFrame(photo.id);
+  });
+  section.append(panel);  // after the burst's frame grid
+  belongsWith = panel;
+  announce(message || `Belongs with ${rows.map(row => row.children[1].textContent.split(' · ')[0]).join(', ')}. Tab to Move here.`);
+}
+
+// Move here: like S, the server regroups, so the sheet reloads and selection follows the frame.
+async function moveFrame(photo, burstNumber, groupId) {
+  if (state.cullingBlocked) return announce(cullingBlockedText());
+  state.busy = true;
+  updateWorkflow();
+  try {
+    const result = await post(`/api/photos/${photo.id}/move`, { group_id: groupId });
+    state.selectedId = photo.id;
+    state.selectedGroupId = result.group_id;
+    await load();
+    focusFrame(photo.id);
+    scrollToGroup(result.group_id);
+    const index = state.groups.findIndex(item => item.id === result.group_id);
+    announce(`${photo.name} moved to Burst ${index >= 0 ? index + 1 : burstNumber}`);
+  } catch (error) {
+    announce(error.message);
+  } finally {
+    state.busy = false;
+    updateWorkflow();
+  }
+}
+
 async function keepOnly(photo) {
   if (state.cullingBlocked) return announce(cullingBlockedText());
   const group = state.groups.find(item => item.photos.includes(photo));
@@ -1263,6 +1365,7 @@ function renderFrame(photo, group) {
 // Roving tabindex: only the focused frame is in the Tab order.
 function focusFrame(photoId, move = true) {
   state.focusedId = photoId;
+  if (belongsWith && !state.groups.some(group => group.id === Number(belongsWith.dataset.group) && group.photos.some(photo => photo.id === photoId))) closeBelongsWith();
   document.querySelectorAll('.frame').forEach(card => card.setAttribute('tabindex', Number(card.dataset.id) === photoId ? '0' : '-1'));
   if (move) frameCard(photoId)?.focus();
 }
@@ -1282,7 +1385,7 @@ function toggleCompare(photo) {
   announce(marked ? 'Unmarked' : `Marked for compare (${state.compare.length} of 2)`);
 }
 
-const CULLING_KEYS = { p: 'pick', r: 'keepOnly', s: 'split', x: 'reject', f: 'flag', u: 'clear', c: 'compare', g: 'mergeMark', z: 'full', Enter: 'loupe', ' ': 'loupe', Escape: 'close' };
+const CULLING_KEYS = { p: 'pick', r: 'keepOnly', s: 'split', x: 'reject', f: 'flag', u: 'clear', c: 'compare', g: 'mergeMark', b: 'belongsWith', z: 'full', Enter: 'loupe', ' ': 'loupe', Escape: 'close' };
 const CULLING_ACTIONS = {
   pick: photo => decide(photo, 'pick'),
   keepOnly,
@@ -1292,8 +1395,9 @@ const CULLING_ACTIONS = {
   clear: photo => decide(photo, 'decision', 'none'),
   compare: toggleCompare,
   mergeMark: (photo, event) => toggleMergeMark(photo, { range: event.shiftKey }),
+  belongsWith: toggleBelongsWith,
   loupe: photo => openLoupe(photo.id),
-  close: () => closeView(),
+  close: () => (belongsWith && !openView ? closeBelongsWith() : closeView()),
   full: () => openView?.id === 'loupe' && toggleFullSize(),
 };
 
@@ -1363,6 +1467,7 @@ function announceShowing() {
 
 // The rail groups bursts by capture day; the sheet renders PAGE frames at a time.
 function renderGroups() {
+  closeBelongsWith();
   sheet.replaceChildren();
   const rail = document.querySelector('#batch-list');
   rail.replaceChildren();

@@ -132,6 +132,15 @@ main { min-width: 0; overflow-anchor: none; }  /* a panel that grows above the s
 .astro-cue { color: var(--cyan); border: 1px solid var(--cyan); border-radius: 999px; padding: .1rem .5rem; font-size: .85rem; }
 #astro-lights .triage { margin-left: .5rem; }
 .burst-header .toggle { margin-left: auto; }
+/* B: suggestions under the burst, each row thumbnails, the burst, and Move here. */
+.belongs-with { margin-top: .75rem; padding: .75rem; border: 1px solid var(--cyan); border-radius: 6px; }
+.belongs-with h4 { margin: 0 0 .5rem; font-size: .95rem; }
+.belongs-with .quiet { margin: 0; }
+.belongs-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .25rem 0; }
+.belongs-thumbs { display: flex; gap: .25rem; }
+.belongs-thumbs img { width: 56px; height: 40px; object-fit: cover; border-radius: 3px; }
+.belongs-text { font-variant-numeric: tabular-nums; }
+.belongs-row button { margin-left: auto; }
 .burst-frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile-min, 180px), 1fr)); gap: 1rem; }
 /* One-frame bursts flow side by side like tiles, each with a one-line header, instead of a header and a row apiece. */
 .contact-sheet { display: flex; flex-wrap: wrap; gap: 0 1rem; align-items: flex-start; }

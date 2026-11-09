@@ -2050,6 +2050,7 @@ class Element {
   // A scenario sets box for a displayed size; otherwise scale 1: the width/height attributes, else the natural size (a fitted img smaller than its viewport).
   getBoundingClientRect() { return this.box || { left: 0, top: 0, width: this.width ?? this.naturalWidth, height: this.height ?? this.naturalHeight }; }
   setPointerCapture() {}
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); this.parent = null; }
   scrollIntoView(options) { scrolled.push([this, options]); }
   scrollTo(options) { scrolled.push([this, options]); }
 }
@@ -2144,6 +2145,10 @@ const ratings = { 1: 0, 2: 0 };
 const group = (id, ids) => ({ id, automatic_pick_id: ids[0], frame_count: ids.length, rejected_count: 0, photos: ids.map(photo) });
 const picks = [];
 const splitPosts = [];
+const belongsGets = [];
+const movePosts = [];
+let belongsIds = [2, 1];
+let belongsError = null;
 const critiqueRequests = [];
 const captionPosts = [];
 const expandPosts = [];
@@ -2155,7 +2160,7 @@ let deferGroups = false;
 const pendingGroups = [];
 const pendingCritiques = [];
 const storedCritique = { group_id: 1, photo_id: 3, name: 'b2.jpg', rationale: 'Best timing.', confidence: 0.72, candidate_ids: [1, 2, 3] };
-let groups = scenario === 'default-tab' ? [] : scenario === 'merge-keys' ? [group(1, [1]), group(2, [2]), group(3, [3])] : scenario === 'merge' || scenario === 'merge-batches' || scenario === 'rail-visibility' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
+let groups = scenario === 'default-tab' ? [] : scenario === 'belongs-with' ? [group(1, [1]), group(2, [2]), group(3, [3, 4])] : scenario === 'merge-keys' ? [group(1, [1]), group(2, [2]), group(3, [3])] : scenario === 'merge' || scenario === 'merge-batches' || scenario === 'rail-visibility' ? [group(1, [1]), group(2, [2])] : scenario.startsWith('astro') || scenario === 'critique' || scenario === 'advice-status' || scenario === 'loupe-strip' ? [group(1, [1, 2, 3])] : [group(1, [1, 2])];
 if (scenario === 'astro-triage') groups[0].astro_cue = true;
 if (scenario === 'export-watermark') Object.assign(stored, { 'lumen-watermark': '\u00a9 N. David', 'lumen-export-preset': 'web' });  // remembered from an earlier visit
 if (scenario === 'export-bad-preset') stored['lumen-export-preset'] = 'huge';
@@ -2285,6 +2290,17 @@ async function fetch(url, options = {}) {
     const id = Number(url.split('/')[3]);
     groups = [group(1, groups[0].photos.map(item => item.id).filter(item => item !== id)), group(9, [id])];
     payload = { photo_id: id, group_id: 9, from_group_id: 1 };
+  }
+  else if (/^\/api\/photos\/\d+\/belongs-with/.test(url)) {
+    belongsGets.push(url);
+    if (belongsError) { ok = false; payload = { error: belongsError }; }
+    else payload = { photo_id: Number(url.split('/')[3]), group_ids: belongsIds };
+  }
+  else if (/^\/api\/photos\/\d+\/move$/.test(url)) {
+    const body = JSON.parse(options.body);
+    movePosts.push({ url, body });
+    groups = [group(1, [1]), group(2, [2, 3]), group(3, [4])];
+    payload = { photo_id: 3, group_id: 2, from_group_id: 3, automatic_pick_id: 2 };
   }
   else if (/^\/api\/photos\/\d+\/pick$/.test(url)) { assert.deepEqual(JSON.parse(options.body), {}); picks.push(url); payload = { photo_id: Number(url.split('/')[3]), manual_pick: true }; }
   else if (url === '/api/jobs') payload = { jobs: resumeJobs };
@@ -5172,6 +5188,64 @@ const regression = `
     assert.equal(element('#merge-batches').hidden, true, 'unticking hides it again');
     return;
   }
+  if (scenario === 'belongs-with') {
+    location.search = '?min_rating=2';
+    await load();
+    const tree = node => [node, ...(node.children || []).flatMap(tree)];
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const section = id => document.querySelectorAll('[data-burst]').find(item => Number(item.dataset.burst) === id);
+    const panel = () => tree(element('#contact-sheet')).find(node => node.className === 'belongs-with') ?? null;
+    const rows = () => tree(panel()).filter(node => node.className === 'belongs-row');
+    const buttons = () => tree(panel()).filter(node => node.tagName === 'BUTTON');
+    const key = (name, id, target = card(id)) => { state.focusedId = id; return element('#contact-sheet').listeners.keydown({ key: name, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {} }); };
+    await key('b', 3);
+    assert.deepEqual(belongsGets, ['/api/photos/3/belongs-with?min_rating=2'], 'the request carries the sheet filter');
+    assert.equal(panel()?.tagName, 'SECTION');
+    assert.equal(panel().getAttribute('aria-label'), 'Belongs with');
+    assert.equal(panel().parent, section(3), 'the panel sits in the burst of the focused frame');
+    assert.equal(section(3).children.at(-1), panel(), 'after the burst-frames grid');
+    assert.ok(tree(panel()).some(node => node.textContent === 'Belongs with\u2026'));
+    assert.deepEqual(rows().map(row => tree(row).find(node => node.className === 'belongs-text').textContent.split(' \u00b7 ')[0]), ['Burst 2', 'Burst 1']);
+    assert.ok(tree(rows()[0]).some(node => node.tagName === 'IMG' && node.src === '/thumb/2'));
+    assert.deepEqual(buttons().map(button => button.textContent), ['Move here', 'Move here']);
+    const posts = decisionPosts.length;
+    await key('3', 3, buttons()[0]);
+    assert.equal(decisionPosts.length, posts, '3 on a Move here button does not rate');
+    await key('b', 3);
+    assert.equal(panel(), null, 'b again closes the panel');
+    belongsIds = [];
+    await key('b', 3);
+    assert.ok(tree(panel()).some(node => node.textContent === 'No similar bursts within 10 minutes.'));
+    await key('Escape', 3);
+    assert.equal(panel(), null, 'Escape closes the panel');
+    belongsError = 'The Vision helper is out of date. Run scripts/bootstrap.sh.';
+    await key('b', 3);
+    assert.ok(tree(panel()).some(node => node.textContent === belongsError), 'a 400 shows the server text');
+    await key('Escape', 3);
+    belongsError = null;
+    belongsIds = [2, 1];
+    await key('b', 3);
+    await key('ArrowRight', 3);
+    assert.notEqual(panel(), null, 'a frame of the same burst keeps the panel');
+    await key('ArrowLeft', 4);
+    await key('ArrowLeft', 3);
+    assert.equal(panel(), null, 'focus on another burst closes the panel');
+    await key('b', 3);
+    const loads = groupLoads;
+    await buttons()[0].listeners.click();
+    assert.deepEqual(movePosts, [{ url: '/api/photos/3/move', body: { group_id: 2 } }]);
+    assert.equal(groupLoads, loads + 1, 'a move reloads the bursts');
+    assert.equal(state.selectedGroupId, 2);
+    assert.equal(focused, card(3));
+    assert.equal(element('#announcer').textContent, 'photo-3.jpg moved to Burst 2');
+    await key('b', 3);
+    state.busy = true;
+    await buttons()[0].listeners.click();
+    assert.equal(movePosts.length, 1, 'no move while busy');
+    assert.equal(element('#announcer').textContent, 'Wait for the current change to finish.');
+    state.busy = false;
+    return;
+  }
   if (scenario === 'merge-keys') {
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
@@ -5891,6 +5965,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_clear_tab_counts_and_removes_previously_cleared_frames(self):
         self.run_javascript_cleanup_regression("remove-cleared")
+
+    def test_javascript_b_suggests_bursts_and_move_here_moves_the_frame(self):
+        self.run_javascript_cleanup_regression("belongs-with")
 
     def test_javascript_g_marks_bursts_for_merge_and_shift_g_marks_a_range(self):
         self.run_javascript_cleanup_regression("merge-keys")
