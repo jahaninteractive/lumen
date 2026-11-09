@@ -863,6 +863,48 @@ class WebTests(unittest.TestCase):
         code, result = self.post_json("/api/photos/2/split", {})
         self.assertEqual((400, "photo 2 is already in a burst of its own"), (code, result["error"]))
 
+    def import_two_bursts(self) -> dict[str, int]:
+        """Frames 2 and 3, a minute apart in bursts of their own, with stored feature prints; returns {stem: group_id}."""
+        from array import array
+        for name, stamp in (("near1", "12:00:00"), ("near2", "12:01:00")):
+            exif = Image.Exif(); exif[36867] = f"2026:10:21 {stamp}"
+            Image.new("RGB", (40, 30), "blue" if name == "near1" else "red").save(self.root / f"{name}.jpg", exif=exif)
+        with Library(Settings(library_dir=self.root / "library", near_duplicate_distance=0)) as library:
+            for name in ("near1", "near2"):
+                library.import_path(self.root / f"{name}.jpg")
+            for photo_id in (2, 3):
+                library.catalog.save_feature_print(photo_id, array("f", [photo_id, 0]).tobytes())
+            return {Path(photo["path"]).stem: group["id"] for group in library.list_groups() for photo in group["photos"]}
+
+    def test_belongs_with_route_returns_group_ids_only(self):
+        groups = self.import_two_bursts()
+        code, result = self.get_json("/api/photos/2/belongs-with?show_rejected=1")
+        self.assertEqual(200, code, result)
+        self.assertEqual({"photo_id": 2, "group_ids": [groups["near2"]]}, result)
+        self.assertNotIn(str(self.root), json.dumps(result))
+        code, result = self.get_json("/api/photos/2/belongs-with?nope=1")
+        self.assertEqual(400, code, result)
+        self.assertIn("error", result)
+        code, result = self.get_json("/api/photos/99999/belongs-with")
+        self.assertEqual((400, "unknown photo ID: 99999"), (code, result["error"]))
+
+    def test_move_route_validates_and_moves(self):
+        groups = self.import_two_bursts()
+        target = groups["near2"]
+        for path, payload in (("/api/photos/2/move", {}), ("/api/photos/2/move", {"group_id": str(target)}),
+                              ("/api/photos/2/move", {"group_id": target, "x": 1}), ("/api/photos/2/move", {"group_id": 99999}),
+                              ("/api/photos/99999/move", {"group_id": target})):
+            with self.subTest(path=path, payload=payload):
+                code, result = self.post_json(path, payload)
+                self.assertEqual(400, code, result)
+                self.assertIn("error", result)
+                self.assertNotIn(str(self.root), result["error"])
+        self.assertEqual(403, self.post_json("/api/photos/2/move", {"group_id": target}, headers={"Origin": "https://attacker.example"})[0])
+        code, result = self.post_json("/api/photos/2/move", {"group_id": target})
+        self.assertEqual(200, code, result)
+        self.assertEqual({"photo_id", "group_id", "from_group_id", "automatic_pick_id"}, set(result))
+        self.assertEqual((2, target, groups["near1"]), (result["photo_id"], result["group_id"], result["from_group_id"]))
+
     def test_burst_gap_route_validates_and_regroups(self):
         for index in (1, 2):  # three frames 1 s apart including the fixture frame's sibling
             exif = Image.Exif(); exif[36867] = f"2026:10:21 12:00:0{index}"

@@ -328,6 +328,17 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 groups = [group for group in groups if group["photos"] or group["rejected_count"] == group["frame_count"]]
                 self._send_json({"groups": groups, "rejected_count": rejected_count, **payload})
                 return
+            match = re.fullmatch(r"/api/photos/(\d+)/belongs-with", path)
+            if match:  # Advisory: group IDs only, never prints or paths.
+                try:
+                    filters = parse_group_filters(urlparse(self.path).query)
+                    with Library(settings) as library:
+                        result = library.belongs_with(int(match.group(1)), filters)
+                except ValueError as error:
+                    self._send_json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(result)
+                return
             if path == "/api/library/cleared":
                 try:
                     with Library(settings) as library:
@@ -1091,6 +1102,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("split requires an empty JSON object")
                     with Library(settings) as library:
                         self._send_json(library.split_photo(int(match.group(1))))
+                    return
+                match = re.fullmatch(r"/api/photos/(\d+)/move", path)
+                if match:
+                    if payload.keys() != {"group_id"} or type(payload["group_id"]) is not int:
+                        raise ValueError("move requires exactly an integer group_id")
+                    with Library(settings) as library:
+                        self._send_json(library.move_photo(int(match.group(1)), payload["group_id"]))
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/pick", path)
                 if match:
