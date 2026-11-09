@@ -87,6 +87,19 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(tagger.original_was_file)
         self.assertTrue(all(not path.exists() for _, path in tagger.candidates if path != tagger.original))
 
+    def test_import_stores_the_feature_print_from_the_vision_helper(self):
+        vision = {"face_count": 0, "face_quality": None, "eye_quality": None, "feature_print": b"\x00\x00\x80?"}
+        for feature_print, expected in ((b"\x00\x00\x80?", {b"\x00\x00\x80?"}), (None, set())):
+            with self.subTest(feature_print=feature_print), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "frame.jpg"
+                Image.new("RGB", (64, 48), "gray").save(source)
+                with Library(Settings(library_dir=Path(directory) / "library")) as library, \
+                        patch("lumen.library.analyze_faces", return_value=vision | {"feature_print": feature_print}):
+                    library.import_path(source)
+                    photo_id = library.catalog.list_photos()[0].id
+                    stored = library.catalog.feature_prints_for([photo_id])
+                self.assertEqual({photo_id: value for value in expected}, stored)
+
     def test_composition_review_does_not_replace_an_active_crop(self):
         class FakeTagger:
             model = "test-vlm"

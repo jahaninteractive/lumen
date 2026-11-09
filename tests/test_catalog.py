@@ -256,6 +256,18 @@ class CatalogTests(unittest.TestCase):
         finally:
             migrated.close()
 
+    def test_feature_prints_upsert_read_back_and_cascade_with_the_photo(self):
+        first = self.catalog.upsert_photo(Photo(path="/photos/f1.ARW", fingerprint="f1", captured_at=None, camera_id="A"))
+        second = self.catalog.upsert_photo(Photo(path="/photos/f2.ARW", fingerprint="f2", captured_at=None, camera_id="A"))
+        self.catalog.save_feature_print(first, b"\x00\x00\x80?")
+        self.catalog.save_feature_print(first, b"\x00\x00\x00@")
+        self.catalog.save_feature_print(second, b"\x00\x00@@")
+
+        self.assertEqual({first: b"\x00\x00\x00@", second: b"\x00\x00@@"},
+                         self.catalog.feature_prints_for([first, second, 999999]))
+        self.catalog.delete_photos([first])
+        self.assertEqual({second: b"\x00\x00@@"}, self.catalog.feature_prints_for([first, second]))
+
     def test_metrics_round_trip_dhash_and_migration_adds_the_column(self):
         photo_id = self.catalog.upsert_photo(Photo(path="/photos/h.ARW", fingerprint="h" * 8, captured_at=None, camera_id="A"))
         self.catalog.save_metrics(photo_id, PhotoMetrics(sharpness=0.5, exposure=0.5, clipping=0.0, dhash="00ff00ff00ff00ff"))

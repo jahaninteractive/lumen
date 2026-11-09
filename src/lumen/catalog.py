@@ -214,6 +214,10 @@ class Catalog:
                 source_fingerprint TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS feature_prints (
+                photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+                vector BLOB NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY,
                 kind TEXT NOT NULL,
@@ -874,6 +878,21 @@ class Catalog:
             ),
         )
         self.connection.commit()
+
+    def save_feature_print(self, photo_id: int, data: bytes) -> None:
+        self.connection.execute(
+            "INSERT INTO feature_prints (photo_id, vector) VALUES (?, ?)"
+            " ON CONFLICT(photo_id) DO UPDATE SET vector=excluded.vector",
+            (photo_id, data),
+        )
+        self.connection.commit()
+
+    def feature_prints_for(self, photo_ids: Iterable[int]) -> dict[int, bytes]:
+        rows = self.connection.execute(  # json_each: no bound-variable limit however many IDs come in.
+            "SELECT photo_id, vector FROM feature_prints WHERE photo_id IN (SELECT value FROM json_each(?))",
+            (json.dumps(list(photo_ids)),),
+        )
+        return {row["photo_id"]: bytes(row["vector"]) for row in rows}
 
     def get_metrics(self, photo_id: int) -> PhotoMetrics | None:
         row = self.connection.execute("SELECT * FROM metrics WHERE photo_id = ?", (photo_id,)).fetchone()

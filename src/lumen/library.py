@@ -1056,6 +1056,8 @@ class Library:
         previous = Path(photo.preview_path) if photo.preview_path else None
         self.catalog.update_preview(photo.id, str(destination), "refined")
         self.catalog.save_metrics(photo.id, metrics)  # total_score is kept until the group is re-ranked.
+        if vision and vision.get("feature_print") is not None:
+            self.catalog.save_feature_print(photo.id, vision["feature_print"])
         self.catalog.append_event(photo.id, "preview_refined", {
             "job_id": job.id, "preview_kind": "refined",
             "metrics": {key: getattr(metrics, key) for key in ("sharpness", "exposure", "clipping", "face_quality", "eye_quality")},
@@ -1405,6 +1407,8 @@ class Library:
         kind = "refined" if settings is None else "developed"
         self.catalog.update_preview(photo_id, str(destination), kind)
         self.catalog.save_metrics(photo_id, metrics)  # total_score is left as the last ranking wrote it.
+        if vision and vision.get("feature_print") is not None:
+            self.catalog.save_feature_print(photo_id, vision["feature_print"])
         details = {"preview_kind": kind, "metrics": {key: getattr(metrics, key) for key in
                    ("sharpness", "exposure", "clipping", "face_quality", "eye_quality")}}
         if settings is None:
@@ -2623,6 +2627,8 @@ class Library:
         if vision := analyze_faces(preview_path, self.settings.vision_analyzer_path):
             apply_vision_result(metrics, vision)
         self.catalog.save_metrics(photo_id, metrics)
+        if vision and vision.get("feature_print") is not None:
+            self.catalog.save_feature_print(photo_id, vision["feature_print"])
         self.catalog.append_event(
             photo_id,
             "imported",
