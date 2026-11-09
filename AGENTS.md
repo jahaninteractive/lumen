@@ -66,7 +66,7 @@ Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
 - Implemented design: `docs/superpowers/specs/2026-10-26-develop-controls-design.md`
 - Develop controls plan (complete, on `main`): `docs/superpowers/plans/2026-10-26-develop-controls.md`
 - Approved design: `docs/superpowers/specs/2026-11-01-map-tab-design.md`
-- Map tab plan (complete, on `feature/map-tab` pending merge): `docs/superpowers/plans/2026-11-01-map-tab.md`
+- Map tab plan (complete, on `main`): `docs/superpowers/plans/2026-11-01-map-tab.md`
 
 `GET /api/status` carries `stale`: reasons the running server no longer matches the tree, shown first in `#system-status` and marked `data-stale`. `diagnostics.source_digest()` hashes the package's `*.py` at import and again per request, so an edit after startup is caught while a `git checkout` that only touches mtimes is not; the Swift helper is compared by mtime against its source. The reasons reach the browser, so they name no absolute paths. This exists because static files are served from disk on every request while the Python stays as imported, which makes a stale server look current and fail as whatever validation error fires first.
 

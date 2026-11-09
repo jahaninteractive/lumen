@@ -33,7 +33,9 @@ goes:
   as one row, keep the one frame that matters, reject the rest with a single
   key, and move on. Lumen groups bursts, splits near-duplicates, measures
   sharpness, exposure, and eye/face quality, and explains why it proposes a
-  pick. The pick is advice; my choice always wins.
+  pick. The pick is advice; my choice always wins. Regrouping is keyboard
+  work too: `G` marks bursts to merge, and `B` points a stray frame at the
+  nearby bursts it most looks like.
 - **Originals are sacred.** Years of RAW files are the archive. Lumen never
   moves, renames, or writes into them; everything it makes lives in its own
   library and can be thrown away.
@@ -56,7 +58,8 @@ goes:
   one-job pass that picks and proposes develop settings for every burst run
   on local models through oMLX on the same Mac, offline, and only suggest.
 - **Night skies too.** Long trips mean dark skies, so sky-frame triage and a
-  reproducible Siril stack live in the same tool.
+  reproducible Siril stack live in the same tool, followed by a debrief that
+  reads the frames' EXIF and Siril's log and says what to change next night.
 - **Accessible and keyboard-driven.** Native controls, live announcements, and
   full keyboard operation are part of the design, not an afterthought.
 
@@ -208,14 +211,15 @@ Each step is a section of [docs/GUIDE.md](docs/GUIDE.md):
 - [Finish and clear a shoot](docs/GUIDE.md#finish-and-clear-a-shoot): crop,
   export presets, and recoverable removal.
 - [Refine previews](docs/GUIDE.md#refine-previews) and
-  [Stack a night sky](docs/GUIDE.md#stack-a-night-sky).
+  [Stack a night sky](docs/GUIDE.md#stack-a-night-sky), with its
+  [debrief](docs/GUIDE.md#debrief).
 - [Batch and automation commands](docs/GUIDE.md#batch-and-automation-commands),
   with the module map in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Tests
 
 ```sh
-uv run python -m unittest discover -s tests -v
+uv run python -W error -m unittest discover -s tests -v
 zsh scripts/smoke_test.sh
 ```
 

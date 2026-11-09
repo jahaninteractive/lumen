@@ -13,7 +13,7 @@ RAW/JPEG folder
     ├─ SQLite catalog ◀──── analysis / grouping / scoring
     │         │                        │
     │         ├─ provenance            ├─ Pillow measurements
-    │         ├─ groups + picks        ├─ macOS Vision faces/eyes
+    │         ├─ groups + picks        ├─ macOS Vision faces/eyes + feature prints
     │         ├─ tags + location       └─ astro screening
     │         └─ jobs
     │
@@ -30,7 +30,8 @@ RAW/JPEG folder
 - `config.py` owns filesystem and local-endpoint configuration.
 - `catalog.py` is the SQLite boundary and append-only provenance store.
 - `previews.py` fingerprints originals and creates bounded cached previews.
-- `analysis.py` contains measurable image and astrophotography signals.
+- `analysis.py` contains measurable image and astrophotography signals, and
+  the Vision helper adapter (`analyze_faces`, batch `feature_prints`).
 - `grouping.py` owns the replaceable burst policy.
 - `scoring.py` owns explainable ranking and missing-signal renormalization.
 - `sidecars.py` atomically writes portable JSON/XMP metadata.
@@ -56,7 +57,9 @@ RAW/JPEG folder
   destination, classifies reruns, and writes the resumable manifest.
 - `library.py` orchestrates imports and every job while keeping domain modules
   independent; `Library.tagger_for(role)` is the only `OmlxTagger` constructor
-  and refuses a model oMLX has not loaded.
+  and refuses a model oMLX has not loaded. `belongs_with` ranks nearby bursts
+  by feature-print distance (advisory) and `move_photo` moves one frame through
+  the same `merged_into` pointers merges and splits use.
 - `cli.py` and `web.py` are two interfaces over the same library facade.
 
 ## Previews

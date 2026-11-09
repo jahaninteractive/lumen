@@ -20,7 +20,10 @@ first run are in the [README](../README.md).
 - Embedded Sony RAW preview extraction through ExifTool, with `sips` and
   darktable fallbacks.
 - Deterministic burst grouping by camera and capture time, 2 s apart by
-  default, with a saved slider from 0.5 to 10 s that regroups the catalog.
+  default, with a saved slider from 0.5 to 30 s that regroups the catalog.
+- Regrouping from the keyboard: `G` / `Shift`+`G` mark bursts for merge, and
+  `B` ("Belongs with…") suggests the nearby bursts a stray frame most
+  resembles, by macOS Vision image feature print, and moves it on request.
 - Explainable best-shot scoring from sharpness, exposure, and optional macOS
   Vision face/eye quality.
 - Approximate sky background, highlight clipping, star count, and trailing
@@ -69,7 +72,9 @@ first run are in the [README](../README.md).
 - A status bar that says when the running server is older than the files on
   disk, so a stale `lumen serve` cannot look current.
 - Guided, reproducible Siril stacking of a confirmed night-sky batch with
-  optional darks/flats/biases, progress, cancellation, and retained job logs.
+  optional darks/flats/biases, progress, cancellation, and retained job logs,
+  followed by a rules-based debrief (what happened, what to try now, settings
+  for next time) and an auto-stretched preview of the stack.
 - Recoverable batch removal and workspace clearing that retain completed exports.
 - Keyboard-friendly local contact-sheet UI and JSON-capable CLI.
 
@@ -130,13 +135,22 @@ the web page.
 ## Cull
 
 Bursts are frames from one camera less than the **Burst gap** apart, 2 s by
-default. The slider beside **Tiles** moves it from 0.5 to 10 s; releasing it
+default. The slider beside **Tiles** moves it from 0.5 to 30 s; releasing it
 regroups every burst in the catalog at the new gap and announces the count.
 The gap is saved with the catalog, so imports and restarts keep it, and
 regrouping is the same pass an import runs: your merges, splits and hand picks
 survive it, and near-duplicate splitting still applies inside a burst. Widen
 it for slow sequences (a bird working a perch, a ship's bow coming round);
 narrow it when unrelated frames land together.
+
+Merges and splits also run from the CLI. `merge` takes group IDs from
+`lumen groups` and folds them into the earliest (long-exposure astro lights,
+for example); `split` takes a photo ID:
+
+```sh
+uv run lumen merge 12 13 14
+uv run lumen split 42
+```
 
 Each frame can be flagged, rejected, or cleared, and rated 0 to 5 stars.
 Rejecting is a decision, never a deletion. From the CLI:
@@ -155,8 +169,13 @@ In the contact sheet, with a frame focused (**Shortcuts** lists these):
   `0`–`5` set the rating.
 - `C` marks or unmarks a frame for compare (two at most); **Compare marked** opens
   both at 100 percent with panes that pan together.
+- `G` marks or unmarks the focused frame's burst for merging (a cyan ring, and
+  its **Select for merge** box ticks); `Shift`+`G` marks every burst from the
+  last one marked to this one.
 - `M` merges the batches ticked in the rail (the same as **Merge selected
   batches**); it works anywhere outside a text field.
+- `B` opens **Belongs with…** under the focused frame (see below); `B` again,
+  `Esc`, or moving to another burst closes it.
 - `S` moves the focused frame out of its burst into one of its own. Like a
   merge, the split survives re-importing the folder; merge the bursts to undo it.
 - `Enter` or `Space` opens the frame view (see below); `Esc` closes compare or the frame
@@ -175,6 +194,28 @@ best pick, when a frame's difference hash is more than 12 bits from its
 cluster's first frame. Set `LUMEN_NEAR_DUP_DISTANCE` to tune the threshold, or
 to `0` to keep whole bursts together; frames imported earlier are hashed on
 their next reimport.
+
+### Belongs with…
+
+A frame taken a minute after its burst, or of the same subject from a step to
+the side, often lands in a burst of its own. Press `B` on it: a panel under
+the frame lists up to four bursts from the same camera, shot within 10 minutes
+of it, whose frames look most like it, nearest first, each with thumbnails,
+its time and size, and **Move here** (`Tab` to it, `Enter` to move). Only
+bursts the sheet is showing under the current filters are offered.
+
+The likeness is the macOS Vision image feature print of each preview, kept in
+the catalog and never sent to the browser. New imports get one; frames
+imported earlier get theirs the first time **Belongs with…** needs them, in
+one pass that takes about a second for a trip. Nothing moves unless you choose
+it: Lumen never merges by likeness on its own, because how you group a moment
+is not something a picture's pixels decide. A moved frame stays in its new
+burst through regrouping and re-import, and the burst it left stays together
+even if that frame was bridging a time gap.
+
+After updating Lumen, run `zsh scripts/bootstrap.sh` once (add `--no-download`
+to fetch nothing) so the Vision helper is rebuilt; until then the panel says so
+instead of suggesting.
 
 Culling keeps working while an import or ingest runs. It pauses while tagging,
 preview refinement, or a stack runs.
@@ -729,17 +770,48 @@ working directory.
    **Untracked wide-field** (two-pass alignment that keeps only the area common
    to every frame, for untracked tripod shots). The CLI takes
    `--recipe tracked|untracked`.
-4. Tick the confirmation checkbox, then **Prepare stack**. The panel shows the
+4. Choose **Where you shot**: Dark site, City or light pollution, Ship or
+   boat, or Handheld. It changes only the debrief's advice (ship and handheld cap the
+   exposure and suggest the Untracked recipe), never the stack, and the browser
+   remembers it.
+5. Tick the confirmation checkbox, then **Prepare stack**. The panel shows the
    job number, counts of lights, excluded lights, and calibration frames, the
    warnings, and the managed manifest and log paths. Nothing runs yet.
-5. **Run stack** starts Siril. One heavy job runs at a time; a second run
+6. **Run stack** starts Siril. One heavy job runs at a time; a second run
    returns a clear conflict. Progress is announced and polled only while the job
    is queued or running. **Cancel stack** stops only this job's Siril process and
    can never produce a result.
-6. On success the panel shows `result.tif` (16-bit RGB, star-aligned, sigma
-   rejection, `-rgb_equal`), and **Show job folder in Finder** opens that job's
-   folder. Provenance (`astro_stacked`) is recorded for every light and in each
+7. On success the job folder holds the linear 16-bit RGB TIFF (star-aligned,
+   sigma rejection, `-rgb_equal`) and `preview.jpg`, Siril's auto-stretch of
+   it. Both carry the first light's EXIF and maker notes and are named from
+   the EXIF, for example
+   `2026-10-18_2129_ILCE-7CM2_28mm_f4_4x15s_ISO3200.tif` (date, time, camera,
+   focal length, aperture, count x exposure, ISO; mixed exposures read as a
+   range such as `13-20s`). The preview sits beside the debrief and opens full
+   size in a new tab; **Show job folder in Finder** selects the TIFF. The TIFF
+   is linear and looks dark until stretched in Siril or another editor.
+   Provenance (`astro_stacked`) is recorded for every light and in each
    light's sidecar.
+
+### Debrief
+
+After a run that reached Siril, succeeded or failed, the panel shows a
+**Debrief** with three parts: **What happened** (registration, rejected frames,
+trailing, missing calibration, SteadyShot left on), **Try now** (what to change
+on this stack), and **Next time** (exposure, ISO, light and dark counts and
+SteadyShot for the place you chose). Lumen's own rules write it from the
+frames' EXIF and Siril's log, so it needs no model. A job refused before Siril
+launched (an original offline or changed) gets no debrief.
+
+**Look at the stack** asks the local review model for notes on the preview. It
+is advice only and never changes the settings.
+
+A job keeps `frames.json` (each light's FITS header plus its EXIF
+stabilisation), which the debrief reads. Siril's working `process/` folder,
+often several gigabytes, is deleted after the run, but only once
+`frames.json` was written. The debrief has no CLI command; the web routes are
+`GET /api/astro/jobs/<id>/debrief?place=<dark_site|city|ship|handheld>` and
+`POST /api/astro/jobs/<id>/review`.
 
 Failed, cancelled, and interrupted jobs keep their `manifest.json` and
 `siril.log` in the job folder so you can review the exact command and Siril
