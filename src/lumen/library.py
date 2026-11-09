@@ -39,7 +39,7 @@ from .omlx import (ALT_TEXT_MAX, CAPTION_MAX, ROLES, BurstResponseError, Develop
                    OmlxTagger, get_server_status)
 from .pipelines import EXPORT_PRESETS, RAW_EXTENSIONS, PipelineRegistry, validate_watermark
 from .tools import find_tool
-from .grouping import TimeGapGroupingPolicy, split_near_duplicates
+from .grouping import TimeGapGroupingPolicy, _utc, split_near_duplicates
 from .rawdevelop import DevelopError, describe_histogram, render_raw
 from .previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, prune_cache, prune_thumbnails, read_image_dimensions,
                        preview_version, read_metadata, thumbnail_for)
@@ -1221,7 +1221,7 @@ class Library:
                 continue
             for other in group["photos"]:
                 if (other["camera_id"] == photo.camera_id and other["captured_at"]
-                        and abs((datetime.fromisoformat(other["captured_at"]) - photo.captured_at).total_seconds())
+                        and abs((_utc(datetime.fromisoformat(other["captured_at"])) - _utc(photo.captured_at)).total_seconds())
                         <= BELONGS_WITH_WINDOW_SECONDS):
                     frames[int(other["id"])] = (group["id"], other["preview_path"])
         if not frames:

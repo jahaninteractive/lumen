@@ -1768,6 +1768,15 @@ class LibraryTests(unittest.TestCase):
                        side_effect=lambda paths, _: {path: self.vector(1, 0) for path in paths if path != unreadable}):
                 self.assertEqual([groups["b"]], library.belongs_with(photos["focus"])["group_ids"])
 
+    def test_belongs_with_compares_naive_and_aware_capture_times(self):
+        library, photos, groups = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00"})
+        with library:
+            library.catalog.connection.execute("UPDATE photos SET captured_at = ? WHERE id = ?",
+                                               ("2026-10-22T12:00:00+00:00", photos["a"]))
+            for name in ("focus", "a"):
+                library.catalog.save_feature_print(photos[name], self.vector(0, 0))
+            self.assertEqual([groups["a"]], library.belongs_with(photos["focus"])["group_ids"])
+
     def test_belongs_with_is_empty_without_a_capture_time(self):
         library, photos, _ = self.belongs_fixture({"focus": None, "a": "12:00:00"})
         with library, patch("lumen.library.feature_prints", side_effect=AssertionError("nothing to compare")):
