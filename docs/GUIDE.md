@@ -1,5 +1,8 @@
 # Lumen user guide
 
+Website: [lumen.contact](https://lumen.contact), with a [step-by-step walk
+through one real trip](https://lumen.contact/guide.html).
+
 Everything a photographer does after install, in the order a shoot goes:
 ingest, cull, frame view, places, map, local AI, export, refine, stack. Install and
 first run are in the [README](../README.md).
@@ -30,7 +33,7 @@ first run are in the [README](../README.md).
   Vision face/eye quality.
 - Approximate sky background, highlight clipping, star count, and trailing
   checks for astrophotography frames.
-- Local oMLX image tagging using the OpenAI-compatible vision request format,
+- Local oMLX image tagging using the standard chat-completions vision request format,
   against a photographer-owned keyword vocabulary that learns from the model.
 - One-button local AI assist for keepers: tags, a problem scan with suggested
   rejects, and a draft caption plus alt text, all advisory and skipped when

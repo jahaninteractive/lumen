@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## Unreleased
+
+- Docs: the README and guide link the website, lumen.contact; the README opens with a plain-words description and ends with the licence, warranty disclaimer and photo rights; two sample `.ARW` frames now live in `Examples/`.
+
 ## 0.5.0 (2026-11-09)
 
 - Docs: screenshots in `docs/images/` through `README.md` and `docs/GUIDE.md`, a walkthrough recording in `docs/media/`, and two sample `.ARW` frames attached to the release for trying Lumen without a Sony camera.

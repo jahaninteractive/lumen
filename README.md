@@ -1,5 +1,21 @@
 # <img src="src/lumen/static/mark.svg" width="32" height="32" alt=""> Lumen
 
+**Website: [lumen.contact](https://lumen.contact)**
+
+**It turns 5,000 photos from a trip into the 50 worth showing anyone, without
+looking at every single one.**
+
+> When I'm photographing wildlife I hold the button down and the camera takes a
+> burst, ten or twenty almost identical shots in a couple of seconds. After a
+> trip I come home with thousands of them. Lumen sorts them for me. It puts each
+> burst together, shows me which shot is sharpest with the eyes open, and lets me
+> keep that one and bin the rest with a single key. Then it does the boring
+> jobs: it works out where each photo was taken, puts them on a map, labels
+> what's in them, and saves copies ready to share. It all runs on my own Mac, so
+> nothing gets uploaded, and it never changes the original photos.
+>
+> — Nasir David
+
 The Python package is `lumen-raw` and the command is `lumen`.
 
 Lumen is a fully local, non-destructive RAW photography workbench for Apple
@@ -29,9 +45,8 @@ burst culled from the keyboard, a frame opened for crop and develop advice,
 then the map of a South Georgia shoot and the Export tab. More screenshots are
 in [docs/GUIDE.md](docs/GUIDE.md).
 
-To try it without a Sony camera, download the two sample `.ARW` frames attached
-to the [latest release](https://github.com/jahaninteractive/lumen/releases/latest)
-and import their folder (see [First run](#first-run)).
+To try it without a Sony camera, import the two sample `.ARW` frames in
+[`Examples/`](Examples/) (see [First run](#first-run)).
 
 ## Why Lumen exists
 
@@ -280,3 +295,29 @@ docs so they can be re-run:
 
 A frank assessment of where Lumen stands against commercial tools, and what
 is still missing, is in [docs/ASSESSMENT.md](docs/ASSESSMENT.md).
+
+## Licence and disclaimer
+
+Lumen is released under the [MIT License](LICENSE). It is a personal tool
+built for one photographer's workflow and is shared as is, in the hope that it
+is useful to others.
+
+The software is provided "as is", without warranty of any kind, express or
+implied, including but not limited to the warranties of merchantability,
+fitness for a particular purpose and noninfringement. In no event shall the
+authors or copyright holders be liable for any claim, damages or other
+liability, whether in an action of contract, tort or otherwise, arising from,
+out of or in connection with the software or the use or other dealings in the
+software.
+
+Lumen never writes to, moves or deletes camera originals, but keep your own
+backups: you are responsible for your photographs and for checking any export
+before you rely on it. Optional tools Lumen can download or call (darktable,
+Siril, ExifTool, oMLX and the local models) are separate projects under their
+own licences.
+
+The photographs in [`Examples/`](Examples/), `docs/images/` and `docs/media/`
+are © Nasir David and are not covered by the MIT License; see
+[`Examples/README.md`](Examples/README.md). Sony, Apple, Mac and the other
+product names mentioned are trademarks of their owners; Lumen is not
+affiliated with or endorsed by any of them.
