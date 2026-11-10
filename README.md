@@ -23,7 +23,8 @@ Silicon Macs. It catalogs Sony `.ARW` files (and the camera's own JPEGs) without
 extracts previews, groups bursts, explains a best-shot choice, optionally tags
 previews through oMLX, writes portable sidecars, shows where the frames were
 taken on an offline map, checks astrophotography frames, and hands exports to
-local tools such as darktable.
+local tools such as darktable. Canon, Nikon and Leica raw support is coming
+soon.
 
 Lumen runs on any Apple Silicon Mac with 16 GB of memory using one oMLX
 model, the fast vision model (`Qwen3-VL-8B-Instruct-4bit`, about 6 GB loaded),

@@ -11,7 +11,8 @@ first run are in the [README](../README.md).
 
 ![Lumen open on a day's load: the batch rail lists 234 frames and 105 keepers, and the contact sheet shows three flagged frames of an expedition guide in a yellow hood in falling snow, the third marked Best as the model's pick.](images/hero.jpg)
 
-- Recursive `.ARW`, JPEG, PNG, TIFF, and HEIC import. A JPEG straight from
+- Recursive `.ARW`, JPEG, PNG, TIFF, and HEIC import (Canon, Nikon and Leica
+  raw support is coming soon). A JPEG straight from
   the camera is a first-class source: shoot JPEG in the body for its own
   rendering (Creative Look, lens corrections, noise handling) and cull, crop,
   tag, and export it as usual; only the Develop tab, which drives the raw
