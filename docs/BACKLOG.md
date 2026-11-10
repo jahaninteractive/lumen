@@ -14,8 +14,6 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 
 ## From the 2026-10-31 assessment (`docs/ASSESSMENT.md`)
 
-- **Screenshots and a demo recording.** The README has no pictures; nobody installs to find out what a tool does. Needs a real cull on a loaded library and a 60 to 90 second screen recording. Trigger: the next trip's card, or any day with a few hundred frames imported.
-- **Sample ARW files as a release asset.** The quick start needs a Sony camera today. Needs one or two frames the photographer is happy to publish. Trigger: same as above.
 - **16 GB test.** The README says the fast model needs about 6 GB and 16 GB is the minimum, but it has only run on a 48 GB M4. Needs another machine; confirm or change the claim to "untested".
 
 ## From the 2026-10-23 UI volume review
@@ -88,14 +86,6 @@ for every decoder.
 
 Trigger: wanting Sony-specific capture data (lens corrections, creative look,
 focus point) to survive into the JPEG.
-
-## README and GUIDE screenshots (parked 2026-10-30)
-
-Goal: real screenshots in `docs/images/` wired into `README.md` and `docs/GUIDE.md` so the repo reads as a working tool, not a spec.
-
-- **Waiting on:** a set of South Georgia `.ARW` frames from the photographer (penguins, ice landscapes): a few bursts of 5-10 near-identical frames for culling and the burst picker, one or two GPS-tagged scenes for Places, one under-exposed or flat-sky frame for a Develop before/after. Nothing in the set should be unwelcome on a public GitHub page.
-- **Plan:** import into a scratch library, run tagging and one burst critique against the loaded oMLX model, then drive the UI with the headless Chromium + stdlib CDP harness (no new dependency) to capture the contact sheet, frame view with burst advice, Crop, Develop, EXIF, Places, and the first-run card. Type any place name or caption wording the photographer wants shown rather than leaving it to the model.
-- **Trigger:** the photographer drops a folder path in the chat.
 
 ## Map: cleared thumbs and trash snapshot reads
 

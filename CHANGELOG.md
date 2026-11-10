@@ -7,6 +7,7 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 
 ## 0.5.0 (2026-11-09)
 
+- Docs: screenshots in `docs/images/` through `README.md` and `docs/GUIDE.md`, a walkthrough recording in `docs/media/`, and two sample `.ARW` frames attached to the release for trying Lumen without a Sony camera.
 - Regroup by key: `G` marks or unmarks the focused frame's burst for merging (the same state as its Select for merge box, now outlined in cyan), and `Shift`+`G` marks every burst from the last one marked to this one; `M` merges them as before.
 - Belongs with…: `B` on a frame opens a panel under its burst listing up to four bursts from the same camera, shot within 10 minutes, whose frames look most like it (nearest first by Vision feature print, under the sheet's current filters), each with thumbnails, its time and size, and a Move here button. Nothing moves until you choose; a move keeps the frame in its new burst through regrouping and re-import, and pins the burst it left together. `Esc`, `B` again, or moving to another burst closes it.
 - The Vision helper returns a feature print (helper schema 3) and takes several images in one run; prints are kept in the catalog and never sent to the browser. Frames imported earlier get theirs the first time Belongs with asks. Rerun `zsh scripts/bootstrap.sh` to rebuild the helper; an older one is refused with that instruction.

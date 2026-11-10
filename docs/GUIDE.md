@@ -6,6 +6,8 @@ first run are in the [README](../README.md).
 
 ## What is working
 
+![Lumen open on a day's load: the batch rail lists 234 frames and 105 keepers, and the contact sheet shows three flagged frames of an expedition guide in a yellow hood in falling snow, the third marked Best as the model's pick.](images/hero.jpg)
+
 - Recursive `.ARW`, JPEG, PNG, TIFF, and HEIC import. A JPEG straight from
   the camera is a first-class source: shoot JPEG in the body for its own
   rendering (Creative Look, lens corrections, noise handling) and cull, crop,
@@ -81,6 +83,8 @@ first run are in the [README](../README.md).
 
 ## Ingest or import?
 
+![The Add photos tab with Already on a drive chosen: a path field with Browse, a checkbox to include frames cleared in earlier sessions, and Import originals.](images/import.jpg)
+
 - **Ingest** is for a memory card that is still the only copy. It copies every
   file to a primary folder and an optional mirror on a second drive, reads each
   copy back and compares its SHA-256 checksum with the card, then imports the
@@ -95,6 +99,8 @@ opens this tab when the catalog is empty; once it has frames the page opens with
 the panel folded so the contact sheet leads.
 
 ## Ingest a card
+
+![Add photos with Still on the memory card chosen, with buttons to choose the card, the primary destination and an optional mirror.](images/ingest.jpg)
 
 ```sh
 uv run lumen ingest "/Volumes/PHOTO_CARD" --to "/Volumes/Travel SSD/2026-10" --mirror "/Volumes/Backup/2026-10"
@@ -133,6 +139,8 @@ second CLI process exit 2 and say the catalog is in use. Stop the server or use
 the web page.
 
 ## Cull
+
+![The contact sheet at a six-frame burst of a Zodiac in snow: one frame carries the amber Best badge, three are Flagged, and the filter bar offers All, Keepers, Flagged, Unsorted and Rejected.](images/flag.jpg)
 
 Bursts are frames from one camera less than the **Burst gap** apart, 2 s by
 default. The slider beside **Tiles** moves it from 0.5 to 30 s; releasing it
@@ -197,6 +205,8 @@ their next reimport.
 
 ### Belongs with…
 
+![A one-frame burst ringed in cyan for merging, and under the next burst the Belongs with panel listing four nearby bursts, each with a Move here button.](images/group.jpg)
+
 A frame taken a minute after its burst, or of the same subject from a step to
 the side, often lands in a burst of its own. Press `B` on it: a panel under
 the frame lists up to four bursts from the same camera, shot within 10 minutes
@@ -221,6 +231,8 @@ Culling keeps working while an import or ingest runs. It pauses while tagging,
 preview refinement, or a stack runs.
 
 ## Frame view
+
+![The frame view on the guide in the yellow hood: measured rank, the place Pinel Point, Antarctica, and the review model's burst critique with 95 percent confidence above a Use this pick button.](images/picks.jpg)
 
 Press `Enter` or `Space` on a focused frame to open it in a dialog over the sheet. The
 image fills two thirds of the dialog, fitted so the whole frame shows; **Full
@@ -261,6 +273,8 @@ you can keep deciding frames while the model works. Each panel that asked shows
 one status line, *<Task> running…*, *<Task> ready* or *<Task> failed: <reason>*,
 and the frame dialog states once at the top when the model it needs is not
 loaded.
+
+![The Develop tab: a four-channel histogram with a five-point tone curve, and Where to start reading the histogram median and channel means before proposing exposure, white balance, contrast and clarity.](images/develop.jpg)
 
 **Develop.** The Develop tab adjusts a raw frame without touching the file.
 **Where to start** is for the frame you can see needs help without knowing
@@ -311,11 +325,15 @@ any crop; the JPEG export honours it and the frame's contact-sheet tile shows
 it cropped. A small crop shows the resolution
 warning but is yours to keep; only the AI suggestions have an 8 MP floor.
 
+![The frame view scrolled to Keywords, each with a Remove button, a box to add one, and the drafted caption and alt text.](images/tags.jpg)
+
 **Keywords.** Type a word and press Enter or **Add**. Your words and the
 suggestions you accept are kept in front of the model's words when a frame is
 re-tagged; **Remove** drops a typed word and returns an accepted suggestion to
 the suggested list. **Forget** in the Assist tab still strips a word from every
 frame.
+
+![The Edit place form on the frame: Pinel Point, Antarctica, Apply to whole burst ticked, a radius slider at 5 km, a fill-this-day checkbox and Remember for nearby frames.](images/places.jpg)
 
 **Place.** **Edit place** opens a small form with the name and country, **Apply
 to whole burst** (on by default), and **Remember for nearby frames**, which
@@ -435,6 +453,8 @@ resolve offline without asking again.
 
 ## Map
 
+![The Map tab in the Natural dark style near the Antarctic Peninsula: a cluster of 227 frames fanned into thumbnails, Bransfield Strait labelled in the sea, and the style, frames and overlay controls.](images/map.jpg)
+
 The **Map** tab shows where the frames were taken, offline. Frames with a
 position (the camera's fix, a typed one, or one placed from a track) draw over
 an eleven-layer Natural Earth base map: coastline, borders, rivers, lakes,
@@ -495,6 +515,8 @@ found under `map`. Without the folder the tab still draws frames and tracks,
 over nothing. Natural Earth data is public domain.
 
 ## Local AI
+
+![The Assist tab: Review model and Fast model selects, then Pick and develop every burst, Tag, scan and caption keepers, Tag keepers, Learned keywords and Write today's digest.](images/assist.jpg)
 
 Everything below runs through your local oMLX server and is advisory: the
 models tag, suggest, draft, and explain, but never pick, reject, crop, export,
@@ -640,6 +662,8 @@ results and the ideas not yet tried.
 
 ## Finish and clear a shoot
 
+![The Crop tab on a cheetah on a termite mound: the review model recommends a tighter crop at 90 percent confidence and explains the headroom and lead room.](images/crop.jpg)
+
 In the contact sheet, select a frame (or select its batch in the left rail),
 press Enter on it to open the frame view, and use the **Crop** tab (see
 [Frame view](#frame-view) for drawing your own). Lumen uses Apple Vision face
@@ -657,6 +681,8 @@ for you, so manual choices still work when oMLX is unavailable. Lumen applies
 an approved crop to the full-resolution developed image only during JPEG
 export; the contact-sheet tile shows the same crop, so the sheet matches what
 export will write.
+
+![The Export tab, Finish as JPEG: All keepers chosen, a checkbox for the untouched version, date subfolders ticked, the Full resolution, Share and Web sizes, a watermark field and an optional darktable XMP profile.](images/export.jpg)
 
 Next use the **Export** tab. Choose **Current photo**, **All keepers**, or
 **Frames the contact sheet filters show**, which exports exactly what the
@@ -750,6 +776,8 @@ Refining never changes a manual pick, decision, or rating, and never touches the
 original. Frames whose original changed since import are skipped and logged.
 
 ## Stack a night sky
+
+![The Astro tab after a four-light stack: the debrief says the exposures ran past the star-trail limit, SteadyShot was on and no darks were used, and proposes next time's settings beside the stretched preview.](images/astro.jpg)
 
 The **Astro** tab turns the selected batch into one managed Siril stack. Lumen
 never changes the originals: it links the chosen lights into

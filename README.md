@@ -22,6 +22,17 @@ either role between the two while Lumen runs (see
 
 Install below; the workflow is in [docs/GUIDE.md](docs/GUIDE.md).
 
+![Lumen open on a day's load: the batch rail lists 234 frames and 105 keepers, and the contact sheet shows three flagged frames of an expedition guide in a yellow hood in falling snow, the third marked Best as the model's pick.](docs/images/hero.jpg)
+
+[Watch the walkthrough](docs/media/walkthrough.mp4) (MP4, 1.4 MB): a cheetah
+burst culled from the keyboard, a frame opened for crop and develop advice,
+then the map of a South Georgia shoot and the Export tab. More screenshots are
+in [docs/GUIDE.md](docs/GUIDE.md).
+
+To try it without a Sony camera, download the two sample `.ARW` frames attached
+to the [latest release](https://github.com/jahaninteractive/lumen/releases/latest)
+and import their folder (see [First run](#first-run)).
+
 ## Why Lumen exists
 
 I shoot nature and wildlife, often on trips to places like the South African
