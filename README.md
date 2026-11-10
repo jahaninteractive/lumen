@@ -175,7 +175,14 @@ Import a card or folder. Originals stay in place:
 uv run lumen import "/Volumes/PHOTO_CARD/DCIM"
 ```
 
-Sony `.ARW` and the body's own JPEGs are the sources Lumen is built for. Phone
+No card to hand? `Examples/` holds two Sony `.ARW` frames to try it on:
+
+```sh
+uv run lumen import Examples
+```
+
+Sony `.ARW` and the body's own JPEGs are the sources Lumen is built for; Canon,
+Nikon and Leica raw support is coming soon. Phone
 photos should be imported as HEIC, not as JPEGs exported from Photos; see
 [the guide](docs/GUIDE.md#what-is-working).
 
