@@ -2955,6 +2955,34 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(set(), ledger)
         self.assertEqual((0, 1, 0), (again.imported, again.updated, again.previously_cleared))
 
+    def test_import_with_include_cleared_restores_merged_bursts_from_the_same_path_or_a_backup(self):
+        shots = self.root / "shots"
+        shots.mkdir()
+        for name, hour in (("a.jpg", 10), ("b.jpg", 12), ("c.jpg", 14)):  # three bursts, hours apart
+            exif = Image.Exif(); exif[36867] = f"2026:10:22 {hour}:00:00"
+            Image.new("RGB", (120, 90), (hour * 10, 0, 0)).save(shots / name, exif=exif)
+        backup = self.root / "backup"
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(shots)
+            groups = library.catalog.list_groups()
+            library.merge_groups([groups[0]["id"], groups[1]["id"]])  # a and b become one burst; c stays alone
+
+            def bursts():
+                return sorted(sorted(Path(photo["path"]).name for photo in group["photos"])
+                              for group in library.catalog.list_groups())
+
+            merged = bursts()
+            library.clear_workspace("CLEAR")
+            library.import_path(shots, include_cleared=True)
+            same_path = bursts()
+            library.clear_workspace("CLEAR")
+            shutil.copytree(shots, backup)
+            library.import_path(backup, include_cleared=True)
+            moved_drive = bursts()
+        self.assertEqual([["a.jpg", "b.jpg"], ["c.jpg"]], merged)
+        self.assertEqual(merged, same_path, "a resume from the same path keeps the merge")
+        self.assertEqual(merged, moved_drive, "a resume from a backup re-aims the merge at the anchor's new path")
+
     def test_import_job_reports_previously_cleared_and_can_include_them(self):
         cleared = self.source_dir / "a.jpg"
         Image.new("RGB", (320, 240), (200, 40, 40)).save(cleared)
@@ -3691,7 +3719,7 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(["Mine.", "Lion at rest.", "Lion at rest."], redone_captions, "redo never replaces the photographer's caption")
         self.assertEqual((6, 6, 4), (FakeFast.tags, FakeFast.reviews, FakeReview.captions))
 
-    def test_cull_job_picks_each_burst_with_the_review_model_and_advises_develop_for_the_pick(self):
+    def test_cull_job_picks_each_burst_with_the_review_model_and_develops_the_pick(self):
         from lumen.omlx import DevelopAdvice
 
         class FakeReview:
@@ -3701,11 +3729,11 @@ class LibraryTests(unittest.TestCase):
                 return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
             def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None):
                 FakeReview.advice += 1
-                return DevelopAdvice({"exposure": 0.3}, "Lift the shadows.", "{}")
+                return DevelopAdvice({"exposure_ev": 0.3}, "Lift the shadows.", "{}")
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); self._burst(root)
-            Image.new("RGB", (120, 90)).save(root / "lone.jpg")  # a one-frame burst: no critique, still advised
+            Image.new("RGB", (120, 90)).save(root / "lone.jpg")  # a one-frame burst: no critique, still developed
             calls = []
             with patch("lumen.library.render_raw", side_effect=self.develop_render(calls)), \
                     Library(Settings(library_dir=root / "library")) as library:
@@ -3722,26 +3750,32 @@ class LibraryTests(unittest.TestCase):
                 self.assertIn("model_pick", kinds)
                 self.assertNotIn("manual_pick", kinds, "the model's pick is never recorded as the photographer's")
                 self.assertTrue(library.catalog.get_photo(last).model_pick)
-                self.assertEqual({"exposure": 0.3}, library.latest_develop_advice(last)["settings"])
-                self.assertIsNone(library.develop_for(last), "advice is never saved as settings")
+                self.assertEqual({"exposure_ev": 0.3}, library.latest_develop_advice(last)["settings"])
+                self.assertEqual({"exposure_ev": 0.3}, library.develop_for(last).to_dict(), "the pick is developed")
+                self.assertEqual("developed", library.catalog.get_photo(last).preview_kind)
+                lone = next(group for group in library.list_groups() if len(group["photos"]) == 1)["photos"][0]["id"]
+                self.assertEqual({"exposure_ev": 0.3}, library.develop_for(lone).to_dict(), "a lone frame is developed too")
+                library.clear_develop(lone)  # the photographer undoes the job's develop
                 library.set_pick(burst["photos"][0]["id"])  # the photographer overrules the model
                 again = library.start_cull_job(FakeReview())
                 library.wait_for_job(again.id)
                 rerun = library.job_status(again.id)["result"]
                 burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
                 self.assertEqual(burst["photos"][0]["id"], burst["automatic_pick_id"], "a rerun keeps the hand pick")
+                self.assertIsNone(library.develop_for(lone), "a rerun never redoes a develop the photographer cleared")
                 redo = library.start_cull_job(FakeReview(), redo=True)
                 library.wait_for_job(redo.id)
                 redone = library.job_status(redo.id)["result"]
                 burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
                 self.assertEqual(burst["photos"][0]["id"], burst["automatic_pick_id"], "redo never replaces a hand pick")
         self.assertEqual(("cull", "succeeded", 2), (status["kind"], status["status"], status["processed"]))
-        self.assertEqual({"picked": 1, "advised": 2, "skipped": 0, "failed": 0}, status["result"])
-        self.assertEqual({"picked": 0, "advised": 1, "skipped": 1, "failed": 0}, rerun,
-                         "a rerun critiques nothing; it advises only the hand pick, which had no advice yet")
-        self.assertEqual({"picked": 0, "advised": 2, "skipped": 0, "failed": 0}, redone)
+        self.assertEqual({"picked": 1, "advised": 2, "developed": 2, "skipped": 0, "failed": 0}, status["result"])
+        self.assertEqual({"picked": 0, "advised": 1, "developed": 1, "skipped": 1, "failed": 0}, rerun,
+                         "a rerun critiques nothing; it advises and develops only the hand pick, which had no advice yet")
+        self.assertEqual({"picked": 0, "advised": 2, "developed": 1, "skipped": 0, "failed": 0}, redone,
+                         "redo develops the cleared lone frame again but never overwrites the hand pick's settings")
         self.assertEqual((1, 5), (FakeReview.critiques, FakeReview.advice), "a hand-picked burst is never critiqued")
-        self.assertEqual(5, len(calls), "one advice render per advised frame")
+        self.assertEqual(5 + 4 + 1, len(calls), "one render per advice, per develop, and for the clear")
 
     def test_cull_job_logs_a_burst_that_changed_and_carries_on(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3762,7 +3796,7 @@ class LibraryTests(unittest.TestCase):
                         return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
                     return BurstCritique(str(FakeReview.target), "X is best.", 0.72, "{}")
                 def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None):
-                    return DevelopAdvice({"exposure": 0.3}, "Lift the shadows.", "{}")
+                    return DevelopAdvice({"exposure_ev": 0.3}, "Lift the shadows.", "{}")
 
             with patch("lumen.library.render_raw", side_effect=self.develop_render([])), Library(settings) as library:
                 library.import_path(root)
@@ -3789,7 +3823,7 @@ class LibraryTests(unittest.TestCase):
             def critique_burst(self, frames):
                 return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
             def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None):
-                return DevelopAdvice({"exposure": 0.3}, "Lift the shadows.", "{}")
+                return DevelopAdvice({"exposure_ev": 0.3}, "Lift the shadows.", "{}")
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); self._burst(root)
@@ -4026,6 +4060,33 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("too warm", tagger.seen["feedback"])
         self.assertIn("25.0% are blown at white", tagger.seen["note"])
         self.assertTrue(tagger.seen["preview"].is_relative_to(self.library_dir), "every render stays in the library")
+
+    def test_develop_advice_drops_lens_correction_for_a_file_without_a_profile(self):
+        class LensTagger:
+            model, role = "review-model", "review"
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                return DevelopAdvice({"exposure_ev": 0.3, "lens_correction": True}, "Lift it.", "{}")
+
+        def refuse_lens(source, destination, executable, *, settings=None, **kwargs):
+            if (settings or {}).get("lens_correction"):
+                raise library_module.DevelopError("this file has no lens correction profile")
+            return self.develop_render([])(source, destination, executable, settings=settings, **kwargs)
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=refuse_lens):  # the fake reports no lens profile
+                advice = library.suggest_develop(photo_id, LensTagger(), settings=DevelopSettings())
+                stored = library.latest_develop_advice(photo_id)["settings"]
+                # Advice stored before this fix still asks for it; the develop step saves the rest.
+                library.catalog.append_event(photo_id, "develop_advised", {
+                    "settings": {"exposure_ev": 0.3, "lens_correction": True}, "rationale": "Old."})
+                developed = library._develop_from_advice(photo_id)
+            saved = library.develop_for(photo_id)
+        self.assertEqual({"exposure_ev": 0.3}, advice.settings)
+        self.assertEqual({"exposure_ev": 0.3}, stored, "the browser never parks a box it must disable")
+        self.assertTrue(developed)
+        self.assertEqual({"exposure_ev": 0.3}, saved.to_dict())
 
     def test_suggest_develop_records_a_failure_and_refuses_an_offline_original(self):
         class FailingTagger:

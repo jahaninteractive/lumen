@@ -7,6 +7,12 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 
 ## Unreleased
 
+## 0.5.1 (2026-11-13)
+
+- Pick and develop every burst now saves the model's develop suggestion as each pick's develop settings, single-frame bursts included, instead of only storing it for the Develop tab. It never overwrites settings a frame already has, or a develop the photographer saved or reset after the suggestion; a rerun applies suggestions from earlier runs without asking the model again.
+- A develop suggestion never asks for lens correction on a file with no lens profile (the raw developer refuses it); a suggestion stored before this fix is saved without it.
+- Importing cleared frames back (Include frames cleared in earlier sessions) now restores the bursts they were merged, split or moved into, from the same path or a backup drive; before, every restored frame regrouped by time.
+
 - Docs: the README and guide link the website, lumen.contact; the README opens with a plain-words description and ends with the licence, warranty disclaimer and photo rights; two sample `.ARW` frames now live in `Examples/`.
 
 ## 0.5.0 (2026-11-09)

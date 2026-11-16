@@ -2032,7 +2032,7 @@ function jobText(job) {
   const summary = job.kind === 'import' && job.result ? ` ${result.imported} new, ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed${result.previously_cleared ? `, ${result.previously_cleared} previously cleared` : ''}${result.restored ? `, ${result.restored} restored with earlier work` : ''}.`
     : job.kind === 'tag' && job.result ? ` ${result.tagged} tagged, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'assist' && job.result ? ` ${result.tagged} tagged, ${result.reviewed} scanned (${result.suggested} suggested rejects), ${result.captioned} captioned, ${result.skipped} already done, ${result.failed} failed.`
-    : job.kind === 'cull' && job.result ? ` ${result.picked} picked, ${result.advised} develop suggestions, ${result.skipped} already done, ${result.failed} failed.`
+    : job.kind === 'cull' && job.result ? ` ${result.picked} picked, ${result.advised} develop suggestions, ${result.developed ?? 0} developed, ${result.skipped} already done, ${result.failed} failed.`
     : job.kind === 'triage' && job.result ? ` ${result.triaged} triaged, ${result.failed} failed.`
     : job.kind === 'review_rejects' && job.result ? ` ${result.reviewed} reviewed, ${result.suggested} suggested, ${result.skipped} skipped, ${result.failed} failed.`
     : job.kind === 'refine_previews' && job.result ? ` ${result.refined} refined, ${result.skipped} skipped, ${result.failed} failed.`

@@ -138,7 +138,7 @@
           <details class="how"><summary>How this works</summary>
           <p class="quiet">Run all: tags, a problem scan, and a caption for every keeper that lacks them. Already finished work is skipped, so run it again after more culling.</p>
           <p class="quiet">Tag all covers every frame, not only keepers. Tags come from the fast local model; progress appears in the strip at the foot of the page.</p>
-          <p class="quiet">Pick and develop every burst: the review model names the best frame of each burst, that frame becomes your best, and the model then suggests develop settings for it, parked on its Develop tab. Bursts already picked and advised are skipped unless Redo is ticked, and a rerun never undoes a frame you chose by hand.</p>
+          <p class="quiet">Pick and develop every burst: the review model names the best frame of each burst, that frame becomes your best, and the model then suggests develop settings for it, which are saved as that frame's develop. Bursts already picked and advised are skipped unless Redo is ticked, and a rerun never undoes a frame you chose by hand or a develop you saved or reset yourself.</p>
           </details>
           <div class="button-row">
             <button type="button" id="cull-bursts" class="ai" aria-describedby="ai-availability" disabled>Pick and develop every burst (0)</button>
@@ -336,7 +336,7 @@
           <p class="lead">Camera originals and finished exports remain. Working files move to recoverable library trash.</p>
           <details class="how"><summary>How this works</summary>
           <p class="quiet">Camera originals and completed exports remain. Lumen moves working files and a catalog snapshot into recoverable library trash.</p>
-          <p class="quiet">Frames whose content you removed or cleared in an earlier session. Removing them here is recoverable like any batch removal. A frame you bring back on purpose with "Include frames cleared in earlier sessions" returns with its earlier work (rating, decision, pick, tags, crop, develop settings, typed place and position) and leaves this list.</p>
+          <p class="quiet">Frames whose content you removed or cleared in an earlier session. Removing them here is recoverable like any batch removal. A frame you bring back on purpose with "Include frames cleared in earlier sessions" returns with its earlier work (rating, decision, pick, tags, crop, develop settings, typed place and position, and the burst you merged, split or moved it into) and leaves this list.</p>
           </details>
           <div class="cleanup-group">
             <h3>Selected batch</h3>

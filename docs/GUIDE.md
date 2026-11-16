@@ -125,7 +125,8 @@ Import and ingest skip frames you removed or cleared in an earlier session
 (matched by content, and still copied and verified by ingest) and report them as
 *previously cleared*. To bring them back on purpose, tick **Include frames
 cleared in earlier sessions** under **Already on a drive** in Add photos or pass
-`lumen import --include-cleared`.
+`lumen import --include-cleared`. They come back with their earlier work,
+including the bursts you merged, split or moved frames between.
 
 ## Jobs
 
@@ -612,14 +613,15 @@ The UI button is **Tag, scan and caption keepers (N)** in the Assist tab.
 
 **Pick and develop every burst (N)**, above it, runs one job over every burst
 on the review model: the model names the best frame of the burst, that frame
-becomes the pick, and the model then suggests develop settings for it, parked
-on its Develop tab as **Park the handles here**. A burst whose every frame is
-rejected is skipped and a lone keeper is its own pick. Bursts already picked
-and advised are skipped unless **Redo finished work** is ticked, and a rerun
-never undoes a frame you chose by hand. Nothing is developed or exported: the
-pick is the same advisory pick as **Pick the best frame**, and the settings
-wait for you to park and save them. A failing burst is logged and the next
-still runs.
+becomes the pick, and the model then suggests develop settings for it, which
+are saved as that frame's develop, so the contact sheet shows it developed;
+**Reset all** on its Develop tab undoes it. A burst whose every frame is
+rejected is skipped and a lone keeper is its own pick and is developed the
+same way. Bursts already picked and advised are not asked again unless
+**Redo finished work** is ticked, and a rerun never undoes a frame you chose
+by hand, never overwrites settings a frame already has, and never redoes a
+develop you saved or reset after the suggestion. Nothing is exported. A
+failing burst is logged and the next still runs.
 
 The other model actions, each also available from the UI:
 

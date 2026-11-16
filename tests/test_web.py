@@ -1781,7 +1781,7 @@ console.log(JSON.stringify([panel.hidden, store]));
             code, job = self.post_json("/api/photos/cull", {})
             self.assertEqual((202, "cull"), (code, job["kind"]))
             done = self.wait_job(job["job_id"])
-            self.assertEqual(("succeeded", {"picked": 0, "advised": 1, "skipped": 0, "failed": 0}), (done["status"], done["result"]))
+            self.assertEqual(("succeeded", {"picked": 0, "advised": 1, "developed": 0, "skipped": 0, "failed": 0}), (done["status"], done["result"]))
             self.assertEqual("Fine as is.", self.get_json("/api/photos/1")[1]["advice"]["rationale"])
         fast_only = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
         with patch("lumen.library.get_server_status", return_value=fast_only), patch("lumen.library.OmlxTagger", FakeTagger):

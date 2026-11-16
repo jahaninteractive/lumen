@@ -14,6 +14,7 @@ import threading
 from array import array
 from collections.abc import Sequence
 from contextlib import closing, contextmanager
+from types import SimpleNamespace
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
@@ -742,8 +743,9 @@ class Library:
 
     def start_cull_job(self, review, *, redo: bool = False) -> Job:
         """One job over every burst: the review model names the best frame, that frame becomes the pick, and the
-        same model proposes develop settings for it. A burst already critiqued, and a pick already advised, is
-        skipped unless `redo`. The proposal stays advisory: it is read back on the frame's Develop tab, never saved."""
+        same model proposes develop settings for it, which are saved as the pick's develop (see
+        `_develop_from_advice`). A burst already critiqued, and a pick already advised, is not asked again
+        unless `redo`."""
         if type(redo) is not bool:
             raise ValueError("redo must be true or false")
         manifest = {"kind": "cull", "redo": redo, "role": getattr(review, "role", None), "model": review.model}
@@ -753,7 +755,7 @@ class Library:
         def work(context) -> None:
             with Library(self.settings, job_runner=runner) as worker:
                 groups = worker.list_groups()
-                counts = {"picked": 0, "advised": 0, "skipped": 0, "failed": 0}
+                counts = {"picked": 0, "advised": 0, "developed": 0, "skipped": 0, "failed": 0}
                 for index, group in enumerate(groups, 1):
                     if context.cancelled:
                         break
@@ -808,7 +810,38 @@ class Library:
                 names.append("failed")
             else:
                 names.append("advised")
+        try:
+            if self._develop_from_advice(chosen["id"]):
+                names.append("developed")
+        except (DevelopError, ValueError, OSError) as error:
+            self._log_job(job, f"{Path(chosen['path']).name}: develop {type(error).__name__}: {error}")
+            names.append("failed")
         return tuple(names) or ("skipped",)
+
+    def _develop_from_advice(self, photo_id: int) -> bool:
+        """Save the newest develop suggestion as the frame's settings, unless the frame already has settings or
+        the photographer saved or cleared its develop after that suggestion: their choice is never redone."""
+        advice = self.latest_develop_advice(photo_id)
+        if not advice or not advice["settings"] or self.develop_for(photo_id) is not None:
+            return False
+        touched = self.catalog.connection.execute("""
+            SELECT 1 FROM provenance WHERE photo_id = ? AND kind IN ('develop_changed', 'develop_cleared')
+            AND id > (SELECT MAX(id) FROM provenance WHERE photo_id = ? AND kind = 'develop_advised')
+        """, (photo_id, photo_id)).fetchone()
+        if touched:
+            return False
+        try:
+            self.save_develop(photo_id, DevelopSettings(advice["settings"]))
+        except DevelopError:
+            if "lens_correction" not in advice["settings"]:
+                raise
+            # ponytail: advice stored before lens support was checked may ask for a profile the file lacks;
+            # one retry without it, drop once no such advice is left in any library.
+            rest = {key: value for key, value in advice["settings"].items() if key != "lens_correction"}
+            if not rest:
+                return False
+            self.save_develop(photo_id, DevelopSettings(rest))
+        return True
 
     def start_triage_job(self, tagger, *, group_id: int) -> Job:
         """Advisory sky triage of every frame in one group, whatever its exposure; exclusions never change."""
@@ -1397,6 +1430,10 @@ class Library:
                         "model": model, "role": role, "error": str(error),
                         "raw_response": getattr(error, "raw_response", None)})
                 raise
+        if not render.lens_correction_supported and "lens_correction" in advice.settings:
+            # The helper refuses lens correction on a file with no profile, and the panel disables that box.
+            advice = replace(advice, settings={key: value for key, value in advice.settings.items()
+                                               if key != "lens_correction"})
         with self._mutation():
             self.catalog.append_event(photo_id, "develop_advised", {
                 "model": model, "role": role, "settings": advice.settings, "rationale": advice.rationale,
@@ -2658,11 +2695,38 @@ class Library:
         holds it, and leaves the cleared ledger so the next plain import keeps it."""
         for path in sorted(self.settings.trash_dir.glob("*/catalog.sqlite3"), reverse=True):
             try:
-                if self.catalog.restore_work(photo_id, fingerprint, path):
-                    return True
+                if not self.catalog.restore_work(photo_id, fingerprint, path):
+                    continue
             except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
                 continue  # an unreadable snapshot is skipped, as seed_cleared_from_trash does
+            try:
+                self._restore_burst(photo_id, fingerprint, path)
+            except (sqlite3.Error, OSError):
+                pass  # the work is back; the frame just groups by time
+            return True
         return False
+
+    def _restore_burst(self, photo_id: int, fingerprint: str, snapshot: Path) -> None:
+        """Bring back a merge, move or split. The pointer names the burst's anchor frame by camera and path, so it
+        is re-aimed at the anchor's current key when the anchor is already back, kept as it was when this frame
+        came back at its old path (the anchor will too), and dropped otherwise so the frame groups by time."""
+        with closing(sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)) as source:
+            source.row_factory = sqlite3.Row
+            rows = source.execute("SELECT camera_id, path, fingerprint, merged_into FROM photos ORDER BY id").fetchall()
+        old = next((row for row in reversed(rows) if row["fingerprint"] == fingerprint), None)
+        key = old["merged_into"] if old else None
+        if not key or key == Catalog.SPLIT_KEY:
+            self.catalog.set_merged_into([(photo_id, key)])
+            return
+        anchor = next((row for row in rows if _stable_key(SimpleNamespace(**dict(row))) == key), None)
+        live = anchor and self.catalog.connection.execute(
+            "SELECT id FROM photos WHERE fingerprint = ? AND id != ? ORDER BY id LIMIT 1",
+            (anchor["fingerprint"], photo_id)).fetchone()
+        if live:
+            key = _stable_key(self.catalog.get_photo(live["id"]))
+        elif old["path"] != self.catalog.get_photo(photo_id).path:
+            key = None
+        self.catalog.set_merged_into([(photo_id, key)])
 
     def _import_one(self, source: Path, fingerprint: str | None = None, *, job_id: int | None = None) -> int:
         fingerprint = fingerprint or fingerprint_file(source)
