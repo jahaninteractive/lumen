@@ -2,6 +2,10 @@
 
 Deferred items with a known reason. Each entry says what, why it was deferred, and the trigger for picking it up. Keep `docs/HANDOFF.md` as the status ledger; this file only holds work nobody is doing yet.
 
+## From the 2026-11-21 settings and AI engine design
+
+- **JPEG exports outside the library.** The photographer wants exports on an external or shared drive because the Mac's disk is short. Taken out of the settings round because the export path needs investigating first. Known so far: three places pin exports to the library (`Library._prepare_export`, `web.reveal_outputs`, and `DarktablePipeline.export_jpeg`, which hard-codes `output_root / "jpeg"`); exports publish with `os.link` from a temp directory inside the destination, and exFAT and most network shares have no hard links; the contract line in `AGENTS.md` keeping derived JPEGs inside the library would need rewording; the destination must never be a folder holding catalogued originals, and a drive root above them needs a per-export check on the final dated directory; nobody has looked at what the Export tab and the contact sheet's exported state do when the drive is not connected. Trigger: the photographer asks again, or the Settings page has shipped and has a place for the folder.
+
 ## From the 2026-11-01 Map tab
 
 - **Time-scrubbing along a track.** A slider that walks a GPX track and highlights the frames taken near each moment. A non-goal of `docs/superpowers/specs/2026-11-01-map-tab-design.md`; the tab places frames and draws tracks but has no time axis. Trigger: the photographer asks where they were at a given hour more than once.
