@@ -12,6 +12,7 @@ from . import __version__
 from .astro import RECIPES
 from .catalog import GroupFilters
 from .config import Settings
+from . import preferences
 from .diagnostics import doctor_report
 from .digest import parse_day
 from .library import CleanupError, ExportRequest, Library, public_message
@@ -227,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings.from_environment()
     if args.library:
         settings = replace(settings, library_dir=args.library.expanduser())
+    settings = preferences.load(settings)
 
     if args.command == "doctor":
         report = doctor_report(settings)

@@ -20,6 +20,13 @@ class Settings:
     geonames_dir: Path | None = None  # set by from_environment; None means no place index
     map_dir: Path | None = None  # set by from_environment; None means no base map layers
     geocode_online: bool = False  # opt-in: send coordinates to Nominatim when the local index has no close place
+    ai_engine: str = "mac"  # mac, base or online; saved from the Settings view (preferences.SAVED)
+    base_url: str = ""
+    base_fast_model: str = ""
+    base_review_model: str = ""
+    online_url: str = ""
+    online_fast_model: str = ""
+    online_review_model: str = ""
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -46,6 +53,14 @@ class Settings:
     @property
     def review_model(self) -> str:
         return self.omlx_review_model or self.omlx_model
+
+    def model_for(self, role: str) -> str:
+        """The model the active engine runs for a role (fast or review)."""
+        if role not in ("fast", "review"):
+            raise ValueError(f"unknown model role: {role}")
+        if self.ai_engine == "mac":
+            return self.omlx_fast_model if role == "fast" else self.review_model
+        return getattr(self, f"{self.ai_engine}_{role}_model")
 
     @property
     def vocabulary_path(self) -> Path:

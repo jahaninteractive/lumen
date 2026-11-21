@@ -13,6 +13,7 @@ from unittest.mock import patch
 from PIL import Image, ImageCms
 
 from lumen import __version__
+from lumen.catalog import Catalog
 from lumen.cli import main
 from lumen.config import Settings
 from lumen.diagnostics import doctor_report
@@ -273,6 +274,20 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(0, code)
         self.assertTrue(json.loads(output.getvalue())["success"])
+
+    def test_saved_settings_reach_the_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library_dir = Path(directory) / "library"
+            with Catalog(library_dir / "catalog.sqlite3") as catalog:
+                catalog.set_preference("setting.near_duplicate_distance", "8")
+            env = {k: v for k, v in os.environ.items() if k != "LUMEN_NEAR_DUP_DISTANCE"}
+            with patch.dict(os.environ, env, clear=True), patch("lumen.cli.Library") as library, \
+                    redirect_stdout(io.StringIO()):
+                library.return_value.__enter__.return_value.list_job_status.return_value = []
+                code = main(["--library", str(library_dir), "jobs", "--json"])
+
+        self.assertEqual(0, code)
+        self.assertEqual(8, library.call_args.args[0].near_duplicate_distance)
 
     def test_doctor_recommendation_does_not_advertise_missing_flag(self):
         missing = ToolStatus(name="tool", available=False, path=None, version=None)
