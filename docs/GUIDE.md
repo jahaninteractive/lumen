@@ -717,6 +717,42 @@ gives the usual addresses of two home model servers.
 | Base | Ollama | `http://<your PC>:11434/v1` |
 | Base | LM Studio | `http://<your PC>:1234/v1` |
 
+### Setting up a Base server
+
+Lumen's prompts ask for a short, structured answer, so a model that reasons
+before it answers only costs time. Turn the model's reasoning (thinking) off
+in the server program's own settings for that model.
+
+Measured on 2026-11-21 against LM Studio on one home PC, with the same review
+model this Mac runs, picking the best frame of a burst:
+
+| Where | Reasoning | Burst pick |
+|-------|-----------|------------|
+| Base | on | about 58 s (4 frames): 690 of the 783 tokens written were reasoning |
+| Base | off | 14 s (3 frames) |
+| This Mac | off | 8 s (3 frames) |
+
+Tagging one frame with the fast model took 15 s on that PC against about 3 s
+on this Mac. So Base on a home PC is not necessarily faster than this Mac;
+what it buys is a Mac left free, cool and on battery while a batch runs.
+
+- Lumen asks Base not to reason, the same request it makes of this Mac, but a
+  server may ignore it. Whether LM Studio honours it has not been tested, so
+  set it in the program as well.
+- Lumen allows Base and Online 4000 tokens beyond each answer's usual limit,
+  so a reasoning model can still finish. If one runs out anyway, the message
+  is "Base model spent its token budget on reasoning and returned no answer".
+- A call is abandoned after 240 seconds. A reasoning model on a long burst can
+  reach that.
+- If a small model writes more slowly than a large one on the same PC, it is
+  probably not fully on the graphics card: check the program's GPU offload
+  setting for that model.
+- The server program's log shows each request with its timings and
+  `reasoning_tokens`. It is the quickest way to see where the time goes.
+- With reasoning off, the one rationale seen was vaguer than with it on. The
+  pick is what was measured (on this Mac, three right out of three); watch
+  whether the picks still agree with your eye.
+
 ### What leaves the Mac
 
 On Base and Online, and only there, each request sends:
