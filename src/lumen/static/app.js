@@ -1786,8 +1786,9 @@ async function load() {
   // A server older than this page answers without omlx_roles; the sheet must still render, so the status line only reports it.
   // The header reports health only; model names and their load state live in the footer strip.
   const systemStatus = document.querySelector('#system-status');
-  const missing = Object.entries(status.tools || {}).filter(([, tool]) => tool?.available === false).map(([name]) => `${name} missing`);
-  const health = [status.omlx_live?.online ? 'Local AI online' : 'Local AI offline', ...missing].join(' · ');
+  const remoteEngine = status.ai_engine === 'base' || status.ai_engine === 'online';  // off this Mac, oMLX's health is beside the point
+  const missing = Object.entries(status.tools || {}).filter(([name, tool]) => tool?.available === false && !(remoteEngine && name === 'omlx')).map(([name]) => `${name} missing`);
+  const health = [...(remoteEngine ? [] : [status.omlx_live?.online ? 'Local AI online' : 'Local AI offline']), ...missing].join(' · ');
   const tools = status.omlx_roles
     ? health
     : `${health} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
@@ -1799,7 +1800,11 @@ async function load() {
   // Off this Mac the line says where the advice goes, and whether it answered when last asked.
   const remote = ENGINE_LABELS[status.ai_engine] && status.ai_engine !== 'mac'
     ? [`AI: ${ENGINE_LABELS[status.ai_engine]}${status.ai_engine_reachable === false ? ' · not reachable' : ''}`] : [];
-  systemStatus.textContent = [...stale, ...remote, tools].join(' · ');
+  systemStatus.textContent = [...stale, ...remote, tools].filter(Boolean).join(' · ');
+  // The footer names where the advice runs; its idle line is the markup's on this Mac.
+  const aiLabel = remoteEngine ? ENGINE_LABELS[status.ai_engine] : 'Local AI';
+  document.querySelector('.ai-bar')?.setAttribute('aria-label', remoteEngine ? 'AI engine' : 'Local AI');
+  if (!aiStatusLine.dataset.phase) aiStatusLine.textContent = `${aiLabel} idle. Requests and their results are reported here.`;
   document.querySelector('#app-version').textContent = status.version ? `v${status.version}` : '';
   if (stale.length) systemStatus.setAttribute('data-stale', '');
   else systemStatus.removeAttribute('data-stale');
@@ -3769,11 +3774,23 @@ for (const engine of ['base', 'online']) {
     await loadSettings();
     await load().catch(error => announce(error.message));
   });
-  // Test asks the saved address, so an address typed but not saved is named rather than silently skipped.
+  // Test saves a typed address first (that one key only), so typing it and pressing Test does what it says.
   document.querySelector(`#${engine}-test`).addEventListener('click', async () => {
-    if (settingDirty(`${engine}_url`)) {
-      result.textContent = `Save the ${label} address first; Test asks the saved one.`;
-      return announce(result.textContent);
+    const urlKey = `${engine}_url`;
+    if (settingDirty(urlKey)) {
+      const section = document.querySelector('#settings-ai-panel');
+      clearSettingErrors(section);
+      try {
+        fillSettings(await post('/api/settings', { [urlKey]: readSetting(urlKey) }), [urlKey]);
+      } catch (error) {
+        const note = document.createElement('p');
+        note.className = 'setting-error';
+        note.textContent = error.message;
+        settingRow(urlKey).append(note);
+        result.textContent = '';
+        markSettings();
+        return announce(error.message);
+      }
     }
     result.textContent = `Testing ${label}…`;
     try {

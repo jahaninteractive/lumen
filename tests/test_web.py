@@ -652,6 +652,11 @@ class WebTests(unittest.TestCase):
         self.assertIn("Previews and prompts leave this Mac on Base and Online. Originals never do.", html)
         self.assertIn("Your own server's address, usually http://&lt;your PC&gt;:11434/v1", html)
         self.assertIn("The API address from your service's documentation", html)
+        for lead in ("A key is optional on Base.", "Online needs a key."):
+            self.assertIn(f"{lead} Add key and Remove act at once; the key is kept in the macOS Keychain and never shown. "
+                          "Test saves the address above, then asks it for its models.", html)
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertRegex(styles, r"\.setting-row \.applies \{[^}]*color: var\(--muted\)", "when a setting applies is plain text, not link-cyan")
 
     def test_javascript_header_reports_health_without_model_names(self):
         self.run_javascript_cleanup_regression("status-health")
@@ -5203,7 +5208,8 @@ const regression = `
   }
   if (scenario === 'remote-confirm') {
     await load();
-    assert.ok(element('#system-status').textContent.startsWith('AI: Base · not reachable · '), element('#system-status').textContent);
+    assert.equal(element('#system-status').textContent, 'AI: Base · not reachable', 'no oMLX health on a remote engine');
+    assert.equal(element('#ai-status').textContent, 'Base idle. Requests and their results are reported here.');
     const asked = element('#tag-keepers').listeners.click();
     await new Promise(setImmediate);
     assert.equal(element('#remote-confirm').hidden, false, 'a remote engine asks before sending');

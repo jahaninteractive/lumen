@@ -543,7 +543,7 @@ label[for="keyword-input"] { display: block; margin-bottom: .35rem; font-weight:
 .setting-row fieldset { margin: 0; }
 .setting-row .scope-options { margin: .25rem 0; }
 .workflow .setting-row p, .workflow .engine-key p { margin: 0; }
-.setting-row .applies { color: var(--cyan); font-size: .85rem; }
+.setting-row .applies { color: var(--muted); font-size: .85rem; }  /* cyan reads as a link here */
 .setting-error, .settings-error { color: var(--danger); }
 .settings-error:empty, .test-result:empty { display: none; }
 .engine-group { margin: 1.25rem 0; padding-top: 1rem; border-top: 1px solid var(--line); }
