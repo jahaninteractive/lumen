@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlsplit
 
-from . import preferences
+from . import keychain, preferences
 from .astro import RECIPES
 from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups, preview_version
@@ -271,7 +271,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
 
     def settings_body(library: Library) -> dict:
         return {"settings": preferences.describe(settings, library.catalog),
-                "keys": {"base": False, "online": False},  # placeholder until keys are stored
+                "keys": {engine: keychain.get_key(engine) is not None for engine in ("base", "online")},  # whether, never what
                 "presets": list(preferences.SERVICE_PRESETS)}
 
     class Handler(BaseHTTPRequestHandler):
@@ -620,6 +620,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 self._send_json({"removed": name})
                 return
+            if key := re.fullmatch(r"/api/settings/key/(base|online)", path):
+                keychain.delete_key(key.group(1))
+                self._send_json({"engine": key.group(1), "key_saved": False})
+                return
             match = re.fullmatch(r"/api/photos/(\d+)/develop", path)
             if not match:
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -692,6 +696,12 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         preferences.save(library.catalog, payload)
                         settings = preferences.overlay(settings, library.catalog)  # keeps a session role-model switch
                         self._send_json(settings_body(library))
+                    return
+                if path == "/api/settings/key":
+                    if payload.keys() != {"engine", "key"} or payload["engine"] not in {"base", "online"} or not isinstance(payload["key"], str):
+                        raise ValueError("a key needs an engine, Base or Online, and the key and nothing else")
+                    keychain.set_key(payload["engine"], payload["key"])  # its errors never carry the key
+                    self._send_json({"engine": payload["engine"], "key_saved": True})
                     return
                 if path in {"/api/browse-xmp", "/api/outputs/reveal"}:
                     if payload:

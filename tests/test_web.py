@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import socket
 import struct
 import subprocess
@@ -73,6 +74,15 @@ class WebTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        env = patch.dict(os.environ)  # the shell's saved-setting variables would fix those settings; restored on cleanup
+        env.start()
+        self.addCleanup(env.stop)
+        for variable in filter(None, preferences.SAVED.values()):
+            os.environ.pop(variable, None)
+        keys = patch("lumen.web.keychain")  # no test reaches the real Keychain
+        self.keychain = keys.start()
+        self.addCleanup(keys.stop)
+        self.keychain.get_key.return_value = None
         settings = Settings(library_dir=self.root / "library", map_dir=self.root / "map")
         source = self.root / "photo.jpg"
         Image.new("RGB", (120, 90), (80, 100, 120)).save(source)
@@ -1877,6 +1887,47 @@ console.log(JSON.stringify([panel.hidden, store]));
 
     def test_settings_never_reports_a_key(self):
         self.assertNotIn("api_key", json.dumps(self.get_json("/api/settings")[1]))
+
+    def test_settings_reports_which_keys_are_saved(self):
+        self.keychain.get_key.side_effect = lambda engine: "sk-abc12345" if engine == "online" else None
+        body = self.get_json("/api/settings")[1]
+        self.assertEqual({"base": False, "online": True}, body["keys"])
+        self.assertNotIn("sk-abc12345", json.dumps(body))
+
+    def test_key_route_saves_and_never_echoes(self):
+        status, body = self.post_json("/api/settings/key", {"engine": "online", "key": "sk-abc12345"})
+        self.assertEqual((200, {"engine": "online", "key_saved": True}), (status, body))
+        self.keychain.set_key.assert_called_once_with("online", "sk-abc12345")
+
+    def test_key_route_refuses_extra_fields_and_mac(self):
+        self.keychain.set_key.side_effect = ValueError("that does not look like an API key")
+        for payload in ({"engine": "online"}, {"engine": "online", "key": "sk-abc12345", "extra": 1},
+                        {"engine": "mac", "key": "sk-abc12345"}, {"engine": "online", "key": 12345678},
+                        {"engine": "online", "key": "bad key here"}, []):
+            with self.subTest(payload=payload):
+                status, body = self.post_json("/api/settings/key", payload)
+                self.assertEqual(400, status)
+                self.assertNotIn("sk-abc12345", json.dumps(body))
+                self.assertNotIn("bad key here", json.dumps(body))
+        self.keychain.set_key.assert_called_once_with("online", "bad key here")  # only a well-formed body reaches set_key
+
+    def test_key_route_failure_does_not_echo_the_key(self):
+        self.keychain.set_key.side_effect = RuntimeError("could not save the key to the Keychain")
+        status, body = self.post_json("/api/settings/key", {"engine": "base", "key": "sk-abc12345"})
+        self.assertEqual((400, {"error": "could not save the key to the Keychain"}), (status, body))
+
+    def test_delete_key_route(self):
+        self.assertEqual((200, {"engine": "base", "key_saved": False}), self.delete_json("/api/settings/key/base"))
+        self.keychain.delete_key.assert_called_once_with("base")
+        self.assertEqual(404, self.delete_json("/api/settings/key/mac")[0])
+        self.keychain.delete_key.assert_called_once()
+
+    def test_key_routes_are_refused_cross_origin(self):
+        hostile = {"Origin": "https://attacker.example"}
+        self.assertEqual(403, self.post_json("/api/settings/key", {"engine": "online", "key": "sk-abc12345"}, headers=hostile)[0])
+        self.assertEqual(403, self.delete_json("/api/settings/key/online", headers=hostile)[0])
+        self.keychain.set_key.assert_not_called()
+        self.keychain.delete_key.assert_not_called()
 
     def test_saved_settings_are_loaded_when_the_server_starts(self):
         self.assertEqual(200, self.post_json("/api/settings", {"geocode_online": True})[0])
