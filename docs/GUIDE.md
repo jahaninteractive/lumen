@@ -733,10 +733,18 @@ runs, picking the best frame of a burst:
 | Base | off | 14 s (3 frames) |
 | This Mac | off | 8 s (3 frames) |
 
-Tagging one frame with the fast model took 15 s on that PC against about 3 s
-on this Mac. So Base on a home PC is not necessarily faster than this Mac;
-what it buys is a Mac left free, cool and on battery while a batch runs.
+Tagging one frame with the fast model took 15 s on that PC while the review
+model was loaded beside it, and a second or two (by the photographer's watch)
+once the fast model had the graphics card to itself, against about 3 s on this
+Mac. The card has 16 GB: the fast model fits with room to spare, the review
+model does not, and the two cannot share it. So a home PC can out-tag this Mac
+and still be slower at picks and captions; either way it leaves the Mac free,
+cool and on battery while a batch runs.
 
+- Load one model at a time unless both fit in the graphics card's memory.
+  When a model spills over, everything on the card slows down. On a card this
+  size, pointing both the Fast model and the Review model at the fast model
+  keeps every call quick.
 - Lumen asks Base not to reason, the same request it makes of this Mac, but a
   server may ignore it. Whether LM Studio honours it has not been tested, so
   set it in the program as well.
