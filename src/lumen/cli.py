@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_filter_flags(refine)
     refine.add_argument("--json", action="store_true")
 
-    tag = commands.add_parser("tag", help="tag previews with the configured local oMLX model")
+    tag = commands.add_parser("tag", help="tag previews with the AI engine's fast model")
     selection = tag.add_mutually_exclusive_group(required=True)
     selection.add_argument("--photo", type=int)
     selection.add_argument("--all", action="store_true")
@@ -61,14 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument("--json", action="store_true")
     tag.add_argument("--yes", action="store_true", help=YES_HELP)
 
-    review = commands.add_parser("review-rejects", help="suggest rejects with the fast oMLX model (never rejects)")
+    review = commands.add_parser("review-rejects", help="suggest rejects with the AI engine's fast model (never rejects)")
     selection = review.add_mutually_exclusive_group()
     selection.add_argument("--keepers", action="store_true", help="review keepers (default)")
     selection.add_argument("--all", action="store_true")
     review.add_argument("--json", action="store_true")
     review.add_argument("--yes", action="store_true", help=YES_HELP)
 
-    assist = commands.add_parser("assist", help="tag, look for problems, and caption with the local oMLX models in one job")
+    assist = commands.add_parser("assist", help="tag, look for problems, and caption with the AI engine's fast and review models in one job")
     selection = assist.add_mutually_exclusive_group()
     selection.add_argument("--keepers", action="store_true", help="assist keepers (default)")
     selection.add_argument("--all", action="store_true")
@@ -83,11 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.add_argument("job_id", type=int)
     cancel.add_argument("--json", action="store_true")
 
-    critique = commands.add_parser("critique", help="ask the review oMLX model which burst frame is best (never picks)")
+    critique = commands.add_parser("critique", help="ask the AI engine's review model which burst frame is best (never picks)")
     critique.add_argument("group_id", type=int)
     critique.add_argument("--json", action="store_true")
 
-    caption = commands.add_parser("caption", help="draft a caption and alt text with the review oMLX model (advisory)")
+    caption = commands.add_parser("caption", help="draft a caption and alt text with the AI engine's review model (advisory)")
     caption.add_argument("photo_id", type=int)
     caption.add_argument("--json", action="store_true")
 
@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     digest.add_argument("--overwrite", action="store_true", help="replace an existing digest for this day")
     digest.add_argument("--json", action="store_true")
 
-    triage = commands.add_parser("triage", help="classify a group's sky frames with the fast oMLX model (never excludes)")
+    triage = commands.add_parser("triage", help="classify a group's sky frames with the AI engine's fast model (never excludes)")
     triage.add_argument("group_id", type=int)
     triage.add_argument("--json", action="store_true")
     triage.add_argument("--yes", action="store_true", help=YES_HELP)

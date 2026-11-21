@@ -283,8 +283,12 @@ host gets `/v1`. Keys are kept in the macOS Keychain (service `Lumen`), never
 shown again, and never sent to the page. **Test** saves the address and asks
 the engine for its models; the Fast model and Review model fields offer what
 it found, or take a typed name when the service lists none. Switching to an
-engine that does not answer is refused and nothing is saved. While Base or
-Online is in use, the header status line begins "AI: Base" or "AI: Online".
+engine that does not answer is refused and nothing is saved, and so is a
+switch while a batch is still running. While Base or Online is in use, the
+header status line begins "AI: Base" or "AI: Online", followed by the
+session's tokens once it has made calls. A saved key belongs to the address it
+was saved for: moving that engine to another host is refused until you remove
+or replace the key.
 
 The Online form's **Service** select fills in a documented address; **Other**
 leaves it for typing, and the address stays an ordinary field. The Base hint
@@ -306,9 +310,14 @@ On Base and Online, and only there, each request sends:
 - the preview the advice needs, resized to at most 1024 px on the long edge and
   re-encoded with no metadata (no EXIF, GPS position or serial number);
 - the prompt, which can carry the frame's place name, your keyword
-  vocabulary, develop settings and a summary of the histogram, the day
-  digest's facts including the top frames' file names, and the words you type
-  as feedback on a develop suggestion.
+  vocabulary, develop settings and a summary of the histogram, and the words
+  you type as feedback on a develop suggestion;
+- for **Expand search**, the words you typed, with your keyword vocabulary;
+- for the day digest, the day's date, its counts (frames, keepers, rejects,
+  bursts, astro jobs), its keywords and place names, and the top frames' file
+  names, scores and burst numbers;
+- for a stack review, the debrief's text (what happened, what to try now,
+  next time's settings) with the stacked preview.
 
 Never sent: camera originals, source paths, fingerprints, GPS coordinates, and
 oMLX's own key. The Base and Online keys go only to their own engine.

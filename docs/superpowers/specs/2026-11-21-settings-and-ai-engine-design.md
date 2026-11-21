@@ -139,7 +139,7 @@ The engine choice is saved and survives a restart. It is off (This Mac) until th
 
 ### Service presets
 
-The Online form has a Service select: Anthropic, Google, OpenAI, Qwen (Alibaba Cloud), and Other. Choosing a service fills the address field with that service's documented chat-compatible API base; Other leaves it for typing. The address stays an ordinary editable field and nothing else about the engine depends on the choice, which is not saved. The Base form has no select, because the host is the photographer's own machine: a hint line gives the usual addresses (`http://<your PC>:11434/v1` for Ollama, `http://<your PC>:1234/v1` for LM Studio). The list has one definition, served to the page with the settings. Each address is checked against the service's own documentation when it is added; a service whose address cannot be confirmed is left out.
+The Online form has a Service select: Anthropic, Google, OpenAI, and Other, matching `preferences.SERVICE_PRESETS`. Qwen (Alibaba Cloud) is not a preset because its address is per workspace; the photographer enters it through Other. Choosing a service fills the address field with that service's documented chat-compatible API base; Other leaves it for typing. The address stays an ordinary editable field and nothing else about the engine depends on the choice, which is not saved. The Base form has no select, because the host is the photographer's own machine: a hint line gives the usual addresses (`http://<your PC>:11434/v1` for Ollama, `http://<your PC>:1234/v1` for LM Studio). The list has one definition, served to the page with the settings. Each address is checked against the service's own documentation when it is added; a service whose address cannot be confirmed is left out.
 
 ### Keys
 
@@ -164,7 +164,7 @@ Error text names the engine in use ("Base request failed: …") in place of "Loc
 
 ### What leaves the Mac, and what never does
 
-Sent to the chosen engine: resized previews (long edge 1024), the prompts (which can carry a place name, the photographer's vocabulary, develop settings and a histogram summary, digest facts including the top frames' file names, and the photographer's typed feedback). A bare file name is not a source path and stays in the digest prompt.
+Sent to the chosen engine: resized previews (long edge 1024), the prompts (which can carry a place name, the photographer's vocabulary, develop settings and a histogram summary, and the photographer's typed feedback), the text typed into Expand search, the digest's facts (the day's date, its counts, keywords, place names, and the top frames' file names, scores and bursts), and a stack review's debrief text with the stacked preview. A bare file name is not a source path and stays in the digest prompt.
 
 Never sent: camera originals, source paths, fingerprints, coordinates, or image metadata. Today `_image_content` re-encodes only an image larger than the long edge; a smaller preview, and anything at `long_edge=0`, goes out as the file's own bytes with its EXIF. On Base and Online every image is re-encoded without metadata, and a test pins that the bytes carry no EXIF (so no GPS and no serial number).
 
