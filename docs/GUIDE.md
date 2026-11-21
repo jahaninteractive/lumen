@@ -717,6 +717,14 @@ gives the usual addresses of two home model servers.
 | Base | Ollama | `http://<your PC>:11434/v1` |
 | Base | LM Studio | `http://<your PC>:1234/v1` |
 
+### Online services tried
+
+| Service | Date | Fast model | Review model | Result |
+|---------|------|------------|--------------|--------|
+| Anthropic | 2026-11-21 | `claude-haiku-5-5` | `claude-sonnet-5-5` | Both worked through the address above and felt very fast to the photographer; no timings were recorded. Test passes with an empty model list, so the names are typed. |
+
+The other services in the table above have not been tried yet.
+
 ### Setting up a Base server
 
 Lumen's prompts ask for a short, structured answer, so a model that reasons
