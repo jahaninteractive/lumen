@@ -130,6 +130,14 @@ def _tag_scope(payload: dict) -> tuple[str | list[int], bool]:
     raise ValueError("scope must be keepers, all, or a list of distinct photo IDs")
 
 
+def _split_confirm(payload: dict) -> tuple[bool, dict]:
+    """A batch body's optional `confirm_remote` (strictly a bool), and the body without it."""
+    confirm = payload.get("confirm_remote", False)
+    if type(confirm) is not bool:
+        raise ValueError("confirm_remote must be true or false")
+    return confirm, {key: value for key, value in payload.items() if key != "confirm_remote"}
+
+
 def choose_macos_folder() -> str | None:
     if sys.platform != "darwin":
         raise RuntimeError("Folder browsing is only available on macOS")
@@ -790,16 +798,20 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path in ("/api/photos/tag", "/api/photos/tag-all"):
+                    confirm, payload = _split_confirm(payload)
                     if path.endswith("-all"):  # Older alias: the whole catalog.
                         if "scope" in payload:
                             raise ValueError("unexpected tag fields")
                         payload = payload | {"scope": "all"}
                     scope, retag = _tag_scope(payload)
                     with Library(settings, job_runner=self.server.job_runner()) as library:
+                        if self._remote_unconfirmed(library, confirm, "tag", scope=scope, retag=retag):
+                            return
                         job = library.start_tag_job(library.tagger_for("fast"), scope=scope, retag=retag)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/assist":
+                    confirm, payload = _split_confirm(payload)
                     if payload.keys() - {"scope", "redo"} or "scope" not in payload:
                         raise ValueError("assist requires scope and optional redo only")
                     redo = payload.get("redo", False)
@@ -807,25 +819,33 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError("redo must be true or false")
                     scope, _ = _tag_scope({"scope": payload["scope"]})
                     with Library(settings, job_runner=self.server.job_runner()) as library:
+                        if self._remote_unconfirmed(library, confirm, "assist", scope=scope, redo=redo):
+                            return
                         fast, review = library.tagger_for("fast"), library.tagger_for("review")  # refusals reach the browser verbatim
                         job = library.start_assist_job(fast, review, scope=scope, redo=redo)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/cull":
+                    confirm, payload = _split_confirm(payload)
                     if payload.keys() - {"redo"}:
                         raise ValueError("cull takes optional redo only")
                     redo = payload.get("redo", False)
                     if type(redo) is not bool:
                         raise ValueError("redo must be true or false")
                     with Library(settings, job_runner=self.server.job_runner()) as library:
+                        if self._remote_unconfirmed(library, confirm, "cull", redo=redo):
+                            return
                         job = library.start_cull_job(library.tagger_for("review"), redo=redo)  # a not-loaded refusal reaches the browser verbatim
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
                 if path == "/api/photos/review-rejects":
+                    confirm, payload = _split_confirm(payload)
                     if payload.keys() != {"scope"}:
                         raise ValueError("review-rejects requires only scope")
                     scope, _ = _tag_scope(payload)
                     with Library(settings, job_runner=self.server.job_runner()) as library:
+                        if self._remote_unconfirmed(library, confirm, "review_rejects", scope=scope):
+                            return
                         job = library.start_reject_review_job(library.tagger_for("fast"), scope=scope)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
@@ -1139,12 +1159,15 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     return
                 match = re.fullmatch(r"/api/groups/(\d+)/triage", path)
                 if match:
+                    confirm, payload = _split_confirm(payload)
                     if payload:
-                        raise ValueError("astro triage requires an empty JSON object")
+                        raise ValueError("astro triage takes optional confirm_remote only")
                     group_id = int(match.group(1))
                     with Library(settings, job_runner=self.server.job_runner()) as library:
                         if not any(group["id"] == group_id for group in library.list_groups()):
                             self._send_json({"error": "unknown burst"}, status=HTTPStatus.NOT_FOUND)
+                            return
+                        if self._remote_unconfirmed(library, confirm, "triage", group_id=group_id):
                             return
                         job = library.start_triage_job(library.tagger_for("fast"), group_id=group_id)
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
@@ -1304,6 +1327,15 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             if not isinstance(value, dict):
                 raise ValueError("request body must be an object")
             return value
+
+        def _remote_unconfirmed(self, library: Library, confirm: bool, kind: str, **scope) -> bool:
+            """On Base or Online, a batch the photographer has not confirmed answers 409 with its frame count."""
+            engine = library.settings.ai_engine
+            if engine == "mac" or confirm:
+                return False
+            self._send_json({"confirm_remote": {"engine": engine, "label": preferences.ENGINE_LABELS[engine],
+                                                "frames": library.batch_frame_count(kind, **scope)}}, status=HTTPStatus.CONFLICT)
+            return True
 
         def _send_json(self, payload, status: HTTPStatus = HTTPStatus.OK) -> None:
             self._send_bytes(json.dumps(payload, default=_json_default).encode(), "application/json; charset=utf-8", status)

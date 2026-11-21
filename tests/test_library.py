@@ -3493,6 +3493,52 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(2, len(FakeTagger.calls))
         self.assertIn("wildlife", FakeTagger.calls[0])
 
+    def test_batch_frame_count_matches_what_the_job_sends(self):
+        class FakeTagger:
+            model, role = "fast-model", "fast"
+            def __init__(self): self.sent = []
+            def tag(self, preview, *, vocabulary=None, place=None):
+                self.sent.append(preview)
+                return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+            def review_rejects(self, preview):
+                self.sent.append(preview)
+                return RejectReview([], False, 0.8, "{}")
+            def caption(self, preview, *, place=None):
+                self.sent.append(preview)
+                return Caption("Cap.", "Alt.", "{}")
+            def triage_astro(self, preview, *args, **kwargs):
+                self.sent.append(preview)
+                return AstroTriage("night_sky", 0.9, [], "{}")
+
+        def sent(start, **options):
+            tagger = FakeTagger()
+            job = start(tagger, **options)
+            self.assertEqual("succeeded", self.run_job(library, job)["status"])
+            return len(set(tagger.sent))  # a frame sent for several steps counts once
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(3):
+                Image.new("RGB", (120, 90), (index * 60, 0, 0)).save(root / f"p{index}.jpg")
+            with Library(Settings(library_dir=root / "library")) as library:
+                library.import_path(root)
+                photos = library.catalog.list_photos()
+                library.set_decision(photos[2].id, "reject")  # two keepers, one reject
+                library.tag_photo(photos[0].id, FakeTagger())  # one keeper already tagged
+                self.assertEqual(2, library.batch_frame_count("cull"))  # two lone keepers, neither advised yet
+                for kind, start, options in (
+                        ("tag", library.start_tag_job, {"scope": "keepers"}),
+                        ("tag", library.start_tag_job, {"scope": "all", "retag": True}),
+                        ("review_rejects", library.start_reject_review_job, {"scope": "all"}),
+                        ("assist", lambda tagger, **o: library.start_assist_job(tagger, tagger, **o), {"scope": "keepers"}),
+                        ("assist", lambda tagger, **o: library.start_assist_job(tagger, tagger, **o), {"scope": "keepers", "redo": True}),
+                        ("triage", library.start_triage_job, {"group_id": library.list_groups()[0]["id"]})):
+                    with self.subTest(kind=kind, options=options):
+                        count = library.batch_frame_count(kind, **options)
+                        self.assertEqual(count, sent(start, **options))
+                        self.assertGreater(count, 0)
+                self.assertEqual(0, library.batch_frame_count("assist", scope="keepers"))  # everything done now
+
     def test_tag_job_explicit_ids_validate_and_keyword_add_remove_round_trip(self):
         class FakeTagger:
             model, role = "fast-model", "fast"

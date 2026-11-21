@@ -59,12 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
     selection.add_argument("--keepers", action="store_true")
     tag.add_argument("--retag", action="store_true", help="with --all or --keepers, also re-tag photos that already have tags")
     tag.add_argument("--json", action="store_true")
+    tag.add_argument("--yes", action="store_true", help=YES_HELP)
 
     review = commands.add_parser("review-rejects", help="suggest rejects with the fast oMLX model (never rejects)")
     selection = review.add_mutually_exclusive_group()
     selection.add_argument("--keepers", action="store_true", help="review keepers (default)")
     selection.add_argument("--all", action="store_true")
     review.add_argument("--json", action="store_true")
+    review.add_argument("--yes", action="store_true", help=YES_HELP)
 
     assist = commands.add_parser("assist", help="tag, look for problems, and caption with the local oMLX models in one job")
     selection = assist.add_mutually_exclusive_group()
@@ -72,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     selection.add_argument("--all", action="store_true")
     assist.add_argument("--redo", action="store_true", help="repeat tagging, scanning, and model captions already done")
     assist.add_argument("--json", action="store_true")
+    assist.add_argument("--yes", action="store_true", help=YES_HELP)
 
     jobs = commands.add_parser("jobs", help="list recent background jobs")
     jobs.add_argument("--json", action="store_true")
@@ -96,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     triage = commands.add_parser("triage", help="classify a group's sky frames with the fast oMLX model (never excludes)")
     triage.add_argument("group_id", type=int)
     triage.add_argument("--json", action="store_true")
+    triage.add_argument("--yes", action="store_true", help=YES_HELP)
 
     pick = commands.add_parser("pick", help="make a frame the manual best shot for its group")
     pick.add_argument("photo_id", type=int)
@@ -223,6 +227,19 @@ def _job_error(error: Exception) -> str:
     return public_message(str(error))
 
 
+YES_HELP = "on Base or Online, send the frames without asking first"
+
+
+def _remote_unconfirmed(library: Library, args, kind: str, **scope) -> bool:
+    """On Base or Online, a batch without --yes names its frame count on stderr and starts nothing."""
+    engine = library.settings.ai_engine
+    if engine == "mac" or args.yes:
+        return False
+    print(f"This sends {library.batch_frame_count(kind, **scope)} frames to {preferences.ENGINE_LABELS[engine]}. "
+          "Run again with --yes to continue.", file=sys.stderr)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = Settings.from_environment()
@@ -271,14 +288,21 @@ def main(argv: list[str] | None = None) -> int:
                     elif args.command == "import":
                         job = library.start_import_job(args.path, include_cleared=args.include_cleared)
                     elif args.command == "review-rejects":
-                        job = library.start_reject_review_job(library.tagger_for("fast"),
-                                                              scope="all" if args.all else "keepers")
+                        scope = "all" if args.all else "keepers"
+                        if _remote_unconfirmed(library, args, "review_rejects", scope=scope):
+                            return 2
+                        job = library.start_reject_review_job(library.tagger_for("fast"), scope=scope)
                     elif args.command == "assist":
+                        scope = "all" if args.all else "keepers"
+                        if _remote_unconfirmed(library, args, "assist", scope=scope, redo=args.redo):
+                            return 2
                         job = library.start_assist_job(library.tagger_for("fast"), library.tagger_for("review"),
-                                                       scope="all" if args.all else "keepers", redo=args.redo)
+                                                       scope=scope, redo=args.redo)
                     else:
-                        job = library.start_tag_job(library.tagger_for("fast"), scope="all" if args.all else "keepers",
-                                                    retag=args.retag)
+                        scope = "all" if args.all else "keepers"
+                        if _remote_unconfirmed(library, args, "tag", scope=scope, retag=args.retag):
+                            return 2
+                        job = library.start_tag_job(library.tagger_for("fast"), scope=scope, retag=args.retag)
                     library.wait_for_job(job.id)
                     payload = library.job_status(job.id)
         except (ValueError, OverflowError, OSError, RuntimeError) as error:
@@ -349,6 +373,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "triage":
         try:
             with Library(settings) as library:
+                if _remote_unconfirmed(library, args, "triage", group_id=args.group_id):
+                    return 2
                 job = library.start_triage_job(library.tagger_for("fast"), group_id=args.group_id)
                 library.wait_for_job(job.id)
                 status = library.job_status(job.id)

@@ -1966,6 +1966,89 @@ console.log(JSON.stringify([panel.hidden, store]));
             status, body = self.post_json("/api/settings", {"ai_engine": "base"})
         self.assertEqual(200, status, body)
 
+    def remote_with_three_keepers(self):
+        for index in range(2):
+            Image.new("RGB", (120, 90), (index * 90, 0, 0)).save(self.root / f"p{index}.jpg")
+            with Library(Settings(library_dir=self.root / "library")) as library:
+                library.import_path(self.root / f"p{index}.jpg")
+        self.use_base()
+        self.assertEqual(200, self.post_json("/api/settings", {"base_fast_model": "small", "base_review_model": "big"})[0])
+
+    def test_remote_batch_without_confirmation_is_a_409_with_the_count(self):
+        self.remote_with_three_keepers()
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("asking never reaches Base")), \
+                patch("lumen.library.OmlxTagger", side_effect=AssertionError("no tagger before confirmation")):
+            for payload in ({"scope": "keepers"}, {"scope": "keepers", "confirm_remote": False}):
+                with self.subTest(payload=payload):
+                    self.assertEqual((409, {"confirm_remote": {"engine": "base", "label": "Base", "frames": 3}}),
+                                     self.post_json("/api/photos/tag", payload))
+        self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"])
+
+    def test_remote_batch_with_confirmation_starts(self):
+        from lumen.omlx import TagResult
+
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = args[1], kwargs.get("role")
+            def tag(self, preview, *, vocabulary=None, place=None): return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        self.remote_with_three_keepers()
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("the held listing is used")), \
+                patch("lumen.library.OmlxTagger", FakeTagger):
+            code, job = self.post_json("/api/photos/tag", {"scope": "keepers", "confirm_remote": True})
+            self.assertEqual(202, code, job)
+            done = self.wait_job(job["job_id"])
+        self.assertEqual(("succeeded", 3), (done["status"], done["result"]["tagged"]))
+
+    def test_confirm_remote_must_be_a_bool(self):
+        for engine in ("mac", "base"):
+            if engine == "base":
+                self.remote_with_three_keepers()
+            for value in ("yes", 1, None, [True]):
+                with self.subTest(engine=engine, value=value):
+                    self.assertEqual(400, self.post_json("/api/photos/tag", {"scope": "keepers", "confirm_remote": value})[0])
+                    self.assertEqual(400, self.post_json(f"/api/groups/1/triage", {"confirm_remote": value})[0])
+        self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"])
+
+    def test_mac_batches_need_no_confirmation(self):
+        from lumen.omlx import TagResult
+
+        class FakeTagger:
+            def __init__(self, *args, **kwargs): self.model, self.role = args[1], kwargs.get("role")
+            def tag(self, preview, *, vocabulary=None, place=None): return TagResult("d", ["ice"], "", [], 0.9, "{}", species=[], conditions=[])
+
+        loaded = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit"]}
+        with patch("lumen.library.get_server_status", return_value=loaded), patch("lumen.library.OmlxTagger", FakeTagger):
+            for payload in ({"scope": "keepers"}, {"scope": "keepers", "retag": True, "confirm_remote": False}):
+                with self.subTest(payload=payload):
+                    code, job = self.post_json("/api/photos/tag", payload)
+                    self.assertEqual(202, code, job)
+                    self.assertEqual("succeeded", self.wait_job(job["job_id"])["status"])
+
+    def test_one_burst_critique_never_asks(self):
+        self.post_json("/api/settings", {"online_url": "https://api.example.com/v1"})
+        self.keychain.get_key.side_effect = lambda engine: "sk-abc12345" if engine == "online" else None
+        with patch("lumen.omlx.list_models", return_value=["small"]):
+            self.assertEqual(200, self.post_json("/api/settings", {"ai_engine": "online"})[0])
+        group_id = self.get_json("/api/groups")[1]["groups"][0]["id"]
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("no listing")):
+            code, body = self.post_json(f"/api/groups/{group_id}/critique", {})
+        self.assertEqual((400, {"error": "choose a review model for Online in Settings"}), (code, body))
+
+    def test_every_batch_route_asks(self):
+        self.remote_with_three_keepers()
+        group_id = self.get_json("/api/groups")[1]["groups"][0]["id"]
+        routes = (("/api/photos/tag", {"scope": "keepers"}, 3), ("/api/photos/tag-all", {}, 3),
+                  ("/api/photos/assist", {"scope": "keepers", "redo": True}, 3), ("/api/photos/cull", {}, 3),
+                  ("/api/photos/review-rejects", {"scope": "all"}, 3), (f"/api/groups/{group_id}/triage", {}, 1))
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("asking never reaches Base")), \
+                patch("lumen.library.OmlxTagger", side_effect=AssertionError("no tagger before confirmation")):
+            for path, payload, frames in routes:
+                with self.subTest(path=path):
+                    self.assertEqual((409, {"confirm_remote": {"engine": "base", "label": "Base", "frames": frames}}),
+                                     self.post_json(path, payload))
+                    self.assertEqual(400, self.post_json(path, payload | {"confirm_remote": "yes"})[0])
+        self.assertEqual([], self.get_json("/api/jobs")[1]["jobs"])
+
     def test_mac_status_names_this_mac_and_makes_no_listing(self):
         with patch("lumen.omlx.list_models", side_effect=AssertionError("mac never lists")):
             body = self.status()[1]

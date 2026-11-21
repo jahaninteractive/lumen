@@ -79,6 +79,11 @@ def _develop_fields(develop: DevelopSettings | None) -> dict | None:
     return None if develop is None or develop.is_empty else develop.to_dict()
 
 
+def _critique_frames(kept: list[dict]) -> list[dict]:
+    """The frames of a burst a critique sends: its keepers in rank order, at most eight."""
+    return kept[:8]
+
+
 def _job_detail(job_id: int | None) -> dict:
     """Provenance link to the background job that did the work; synchronous calls record none."""
     return {} if job_id is None else {"job_id": job_id}
@@ -719,8 +724,7 @@ class Library:
             raise ValueError("retag must be true or false")
 
         def per_photo(worker, photo, job) -> tuple[str, ...]:
-            existing = worker.catalog.get_tags(photo.id)
-            if not retag and existing is not None and "description" in existing["data"]:  # A reject-only row is untagged.
+            if not worker._tag_needed(photo.id, retag=retag):
                 return ("skipped",)
             worker.tag_photo(photo.id, tagger, job_id=job.id)  # A model failure appends tag_failed itself.
             if photo.exposure_seconds is not None and photo.exposure_seconds >= 1.0:
@@ -737,8 +741,7 @@ class Library:
     def start_reject_review_job(self, tagger, *, scope: str | list[int] = "keepers") -> Job:
         """Advisory: stores problems and a reject suggestion per photo; never changes a decision."""
         def per_photo(worker, photo, job) -> tuple[str, ...]:
-            existing = worker.catalog.get_tags(photo.id)
-            if existing is not None and "problems" in existing["data"]:
+            if not worker._review_needed(photo.id):
                 return ("skipped",)
             review = worker._review_rejects_one(photo.id, tagger, job_id=job.id)
             return ("reviewed", "suggested") if review.suggest_reject else ("reviewed",)
@@ -752,13 +755,10 @@ class Library:
         runs; the photographer's own caption is never replaced, redo or not."""
         def per_photo(worker, photo, job) -> tuple[str, ...]:
             names: list[str] = []
-            data = (worker.catalog.get_tags(photo.id) or {"data": {}})["data"]
-            own_caption = bool(data.get("caption")) and data.get("caption_author") == "photographer"
-            steps = (
-                ("tagged", "description" in data and not redo, lambda: worker.tag_photo(photo.id, fast, job_id=job.id)),
-                ("reviewed", "problems" in data and not redo, lambda: worker._review_rejects_one(photo.id, fast, job_id=job.id)),
-                ("captioned", own_caption or (bool(data.get("caption")) and not redo), lambda: worker.caption_photo(photo.id, review)),
-            )
+            steps = zip(("tagged", "reviewed", "captioned"), worker._assist_done(photo.id, redo=redo), (
+                lambda: worker.tag_photo(photo.id, fast, job_id=job.id),
+                lambda: worker._review_rejects_one(photo.id, fast, job_id=job.id),
+                lambda: worker.caption_photo(photo.id, review)))
             for name, done, step in steps:
                 if done:
                     continue
@@ -776,6 +776,34 @@ class Library:
         return self._run_photo_job("assist", fast, scope, per_photo,
                                    counters=("tagged", "reviewed", "captioned", "skipped", "failed", "suggested"),
                                    manifest={"review_model": review.model, "redo": redo})
+
+    def _tag_needed(self, photo_id: int, *, retag: bool) -> bool:
+        existing = self.catalog.get_tags(photo_id)
+        return retag or existing is None or "description" not in existing["data"]  # A reject-only row is untagged.
+
+    def _review_needed(self, photo_id: int) -> bool:
+        existing = self.catalog.get_tags(photo_id)
+        return existing is None or "problems" not in existing["data"]
+
+    def _assist_done(self, photo_id: int, *, redo: bool) -> tuple[bool, bool, bool]:
+        """Whether the tag, problem scan, and caption steps are already done; a photographer's caption always is."""
+        data = (self.catalog.get_tags(photo_id) or {"data": {}})["data"]
+        own_caption = bool(data.get("caption")) and data.get("caption_author") == "photographer"
+        return ("description" in data and not redo, "problems" in data and not redo,
+                own_caption or (bool(data.get("caption")) and not redo))
+
+    def batch_frame_count(self, kind: str, **scope) -> int:
+        """How many frames the matching start_*_job would send to a model with the same arguments, from the
+        same selection and skip rules the job applies (a frame sent for several steps counts once)."""
+        if kind == "cull":
+            return sum(len(self._cull_frames(group, redo=scope.get("redo", False))) for group in self.list_groups())
+        if kind == "triage":
+            return len(self._triage_ids(scope["group_id"]))
+        retag, redo = scope.get("retag", False), scope.get("redo", False)
+        needed = {"tag": lambda photo_id: self._tag_needed(photo_id, retag=retag),
+                  "review_rejects": self._review_needed,
+                  "assist": lambda photo_id: not all(self._assist_done(photo_id, redo=redo))}[kind]
+        return sum(needed(photo.id) for photo in self._scope_photos(self._scope_ids(scope.get("scope", "keepers"))))
 
     def start_cull_job(self, review, *, redo: bool = False) -> Job:
         """One job over every burst: the review model names the best frame, that frame becomes the pick, and the
@@ -809,17 +837,35 @@ class Library:
         self._submit_job(runner, job, work)
         return job
 
-    def _cull_group(self, group: dict, review, job: Job, *, redo: bool) -> tuple[str, ...]:
-        """Pick, then advise, one burst; each step records its own failure event and the next burst still runs."""
+    def _cull_plan(self, group: dict, *, redo: bool) -> tuple[list[dict], dict | None, dict | None]:
+        """A burst's keepers, the frame chosen without asking the model, and the stored critique to reuse; both
+        None means the burst is critiqued."""
         kept = [photo for photo in group["photos"] if photo["decision"] != "reject"]
-        if not kept:
-            return ("skipped",)
-        names: list[str] = []
         # A frame the photographer chose by hand is never critiqued or replaced, even with redo.
         hand_pick = next((photo for photo in kept if photo["manual_pick"] and not photo["model_pick"]), None)
         chosen = hand_pick or (kept[0] if len(kept) == 1 else None)  # a lone keeper is its own best frame
+        critique = None if chosen is not None or redo or not kept else self.latest_critique(group["id"])
+        return kept, chosen, critique
+
+    def _cull_frames(self, group: dict, *, redo: bool) -> set[int]:
+        """The IDs of the frames `_cull_group` would send: the critiqued frames, or the pick it would advise."""
+        kept, chosen, critique = self._cull_plan(group, redo=redo)
+        if not kept:
+            return set()
+        if chosen is None and critique is None:  # the advised pick is one of the critiqued frames
+            return {photo["id"] for photo in _critique_frames(kept)}
+        chosen = chosen or next((photo for photo in kept if photo["id"] == critique["photo_id"]), None)
+        if chosen is None or not (redo or self.latest_develop_advice(chosen["id"]) is None):
+            return set()
+        return {chosen["id"]}
+
+    def _cull_group(self, group: dict, review, job: Job, *, redo: bool) -> tuple[str, ...]:
+        """Pick, then advise, one burst; each step records its own failure event and the next burst still runs."""
+        kept, chosen, critique = self._cull_plan(group, redo=redo)
+        if not kept:
+            return ("skipped",)
+        names: list[str] = []
         if chosen is None:
-            critique = None if redo else self.latest_critique(group["id"])
             if critique is None:
                 try:
                     critique = self.critique_burst(group["id"], review)
@@ -881,32 +927,41 @@ class Library:
 
     def start_triage_job(self, tagger, *, group_id: int) -> Job:
         """Advisory sky triage of every frame in one group, whatever its exposure; exclusions never change."""
-        group = self._group(group_id)
-        if group is None:
-            raise ValueError(f"unknown group ID: {group_id}")
-
         def per_photo(worker, photo, job) -> tuple[str, ...]:
             worker._triage_one(photo, tagger, job_id=job.id)
             return ("triaged",)
 
-        return self._run_photo_job("triage", tagger, [photo["id"] for photo in group["photos"]], per_photo,
+        return self._run_photo_job("triage", tagger, self._triage_ids(group_id), per_photo,
                                    counters=("triaged", "failed"), manifest={"group_id": group_id})
+
+    def _triage_ids(self, group_id: int) -> list[int]:
+        group = self._group(group_id)
+        if group is None:
+            raise ValueError(f"unknown group ID: {group_id}")
+        return [photo["id"] for photo in group["photos"]]
+
+    def _scope_ids(self, scope) -> list[int] | None:
+        """A per-photo job's scope as photo IDs; None is the whole catalog."""
+        if scope == "keepers":
+            return self.keeper_ids()
+        if scope == "all":
+            return None
+        if (isinstance(scope, list) and scope and all(type(item) is int for item in scope)
+                and len(set(scope)) == len(scope)):
+            for photo_id in scope:
+                if self.catalog.get_photo(photo_id) is None:
+                    raise ValueError(f"unknown photo ID: {photo_id}")
+            return list(scope)
+        raise ValueError("scope must be keepers, all, or a non-empty list of distinct photo IDs")
+
+    def _scope_photos(self, ids: list[int] | None) -> list:
+        return self.catalog.list_photos() if ids is None else [
+            photo for photo_id in ids if (photo := self.catalog.get_photo(photo_id))]
 
     def _run_photo_job(self, kind: str, tagger, scope, per_photo, *, counters: tuple[str, ...],
                        manifest: dict | None = None) -> Job:
         """One worker loop for per-photo model jobs; per_photo returns names from counters to increment ("failed" required)."""
-        if scope == "keepers":
-            ids = self.keeper_ids()
-        elif scope == "all":
-            ids = None
-        elif (isinstance(scope, list) and scope and all(type(item) is int for item in scope)
-              and len(set(scope)) == len(scope)):
-            for photo_id in scope:
-                if self.catalog.get_photo(photo_id) is None:
-                    raise ValueError(f"unknown photo ID: {photo_id}")
-            ids = list(scope)
-        else:
-            raise ValueError("scope must be keepers, all, or a non-empty list of distinct photo IDs")
+        ids = self._scope_ids(scope)
         manifest = {"kind": kind, "scope": scope} | (manifest or {}) | {
             "role": getattr(tagger, "role", None), "model": tagger.model}
         runner = self.job_runner
@@ -914,8 +969,7 @@ class Library:
 
         def work(context) -> None:
             with Library(self.settings, job_runner=runner) as worker:
-                photos = worker.catalog.list_photos() if ids is None else [
-                    photo for photo_id in ids if (photo := worker.catalog.get_photo(photo_id))]
+                photos = worker._scope_photos(ids)
                 counts = dict.fromkeys(counters, 0)
                 failed_photo_ids = []
                 for index, photo in enumerate(photos, 1):
@@ -1615,7 +1669,7 @@ class Library:
         kept = [photo for photo in group["photos"] if photo["decision"] != "reject"]  # rank order; rejected never sent
         if len(kept) < 2:
             raise ValueError("burst critique needs at least two frames that are not rejected")
-        frames = kept[:8]
+        frames = _critique_frames(kept)
         if any(not photo["preview_path"] or not Path(photo["preview_path"]).is_file() for photo in frames):
             raise ValueError(f"burst {group_id} has a frame without a preview")
         candidate_ids = [int(photo["id"]) for photo in frames]

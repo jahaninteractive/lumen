@@ -633,6 +633,42 @@ class CliTests(unittest.TestCase):
             self.assertEqual((2, "review model Qwen3.8-27B-4bit is not loaded in oMLX"), (code, json.loads(output.getvalue())["error"]))
 
 
+class RemoteBatchCliTests(unittest.TestCase):
+    def test_cli_batch_on_remote_engine_needs_yes(self):
+        from lumen import omlx, preferences
+        omlx.reset_models()
+        self.addCleanup(omlx.reset_models)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ), \
+                patch("lumen.library.keychain") as keychain, \
+                patch("lumen.omlx.list_models", side_effect=AssertionError("asking never reaches Base")):
+            for variable in filter(None, preferences.SAVED.values()):
+                os.environ.pop(variable, None)
+            keychain.get_key.return_value = None
+            root = Path(directory)
+            settings = Settings(library_dir=root / "library")
+            with Library(settings) as library:
+                for index in range(3):
+                    Image.new("RGB", (120, 90), (index * 60, 0, 0)).save(root / f"p{index}.jpg")
+                    library.import_path(root / f"p{index}.jpg")
+                group_id = library.list_groups()[0]["id"]
+                preferences.save(library.catalog, {"base_url": "http://pc.local:11434", "ai_engine": "base"})
+            for arguments, frames in ((["tag", "--keepers"], 3), (["tag", "--all", "--retag"], 3), (["assist"], 3),
+                                      (["review-rejects", "--all"], 3), (["triage", str(group_id)], 1)):
+                with self.subTest(arguments=arguments):
+                    out, err = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(err):
+                        code = main(["--library", str(root / "library"), *arguments])
+                    self.assertEqual((2, f"This sends {frames} frames to Base. Run again with --yes to continue.\n", ""),
+                                     (code, err.getvalue(), out.getvalue()))
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err), patch("lumen.omlx.list_models", return_value=["small"]):
+                code = main(["--library", str(root / "library"), "tag", "--keepers", "--yes", "--json"])  # past the ask
+            self.assertEqual((2, ""), (code, err.getvalue()))
+            self.assertEqual({"error": "choose a fast model for Base in Settings"}, json.loads(out.getvalue()))
+            with Library(settings) as library:
+                self.assertEqual([], library.list_job_status())
+
+
 class ExportCleanupCliTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
