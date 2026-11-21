@@ -135,8 +135,7 @@ def remote_engine_models(settings: Settings, engine: str, get_key, *, refresh: b
         try:
             models = omlx.refresh_models(engine, url, key)
         except OmlxError as error:
-            reason = str(error).replace(key, "<key>") if key else str(error)
-            reason = reason.removeprefix(f"{label} model list request failed: ")  # "did not answer" already says it
+            reason = str(error).removeprefix(f"{label} model list request failed: ")  # omlx masked the key; "did not answer" says the rest
             raise RuntimeError(f"{label} did not answer: {reason}") from None
     return models, key
 

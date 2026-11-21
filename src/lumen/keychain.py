@@ -46,6 +46,7 @@ def set_key(engine: str, key: str, run=subprocess.run) -> None:
 
 
 def delete_key(engine: str, run=subprocess.run) -> None:
-    """Removes the key; a key that was never saved is not an error."""
-    if _run(run, [SECURITY, "delete-generic-password", "-s", SERVICE, "-a", _engine(engine)]) is None:
+    """Removes the key; a key that was never saved is not an error. The read-back is the real check."""
+    if _run(run, [SECURITY, "delete-generic-password", "-s", SERVICE, "-a", _engine(engine)]) is None \
+            or get_key(engine, run) is not None:
         raise RuntimeError("could not remove the key from the Keychain")

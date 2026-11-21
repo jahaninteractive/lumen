@@ -3447,9 +3447,20 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("typed", tagger.call_args.args[1])
 
     def test_tagger_for_never_puts_the_key_in_a_refusal(self):
-        with self.assertRaises(RuntimeError) as refusal:
-            self.remote_tagger(key="sk-abc12345", listing=OmlxError("Base model list request failed: HTTP Error 401: bad key sk-abc12345"))
-        self.assertNotIn("sk-abc12345", str(refusal.exception))
+        import urllib.error
+        from lumen import omlx
+        omlx.reset_models()
+        self.addCleanup(omlx.reset_models)
+        body = io.BytesIO(json.dumps({"error": {"message": "bad key sk-abc12345"}}).encode())
+        refused = urllib.error.HTTPError("http://pc.local:11434/v1/models", 401, "Unauthorized", {}, body)
+        fields = {"ai_engine": "base", "base_url": "http://pc.local:11434", "base_fast_model": "small"}
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.library.keychain") as keychain, \
+                patch("lumen.omlx.urllib.request.build_opener") as opener:  # the real listing, a refusing service
+            opener.return_value.open.side_effect = refused
+            keychain.get_key.return_value = "sk-abc12345"
+            with Library(Settings(library_dir=Path(directory), **fields)) as library, self.assertRaises(RuntimeError) as refusal:
+                library.tagger_for("fast")
+        self.assertEqual("Base did not answer: HTTP Error 401: Unauthorized: bad key <key>", str(refusal.exception))
 
     def test_tag_job_keepers_scope_applies_vocabulary_and_high_confidence_species_only(self):
         class FakeTagger:

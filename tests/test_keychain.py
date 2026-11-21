@@ -79,6 +79,16 @@ class KeychainTests(unittest.TestCase):
         keychain.delete_key("online", run=run)
         self.assertEqual(["/usr/bin/security", "delete-generic-password", "-s", "Lumen", "-a", "online"], calls[0][0])
 
+    def test_delete_key_fails_when_the_key_is_still_there(self):
+        for returncode in (0, 1):
+            run, calls = runner(returncode=returncode, find=(0, "sk-abc12345\n"))
+            with self.subTest(returncode=returncode), self.assertRaises(RuntimeError) as caught:
+                keychain.delete_key("online", run=run)
+            self.assertEqual("could not remove the key from the Keychain", str(caught.exception))
+            self.assertEqual(["/usr/bin/security", "find-generic-password", "-s", "Lumen", "-a", "online", "-w"], calls[1][0])
+        run, _ = runner(returncode=0, find=(44, ""))
+        keychain.delete_key("online", run=run)  # gone: confirmed by the read-back
+
     def test_only_base_and_online_have_keys(self):
         run, calls = runner()
         for call in (lambda: keychain.get_key("mac", run=run), lambda: keychain.set_key("mac", "sk-abc12345", run=run),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import io
 import json
 import math
@@ -134,6 +135,14 @@ def normalise_engine_url(engine: str, url: str) -> str:
 
 def api_base(engine: str, url: str) -> str:
     return url + "/v1" if engine == "mac" else url
+
+
+NETWORK_ERRORS = (OSError, http.client.HTTPException, ValueError)  # a reset or TLS error mid-body, a broken status line, a non-UTF-8 body
+
+
+def _masked(text: str, key: str | None) -> str:
+    """text with the key in use replaced by <key>: a service's reason may echo it."""
+    return text.replace(key, "<key>") if key else text
 
 
 def _http_reason(error: urllib.error.HTTPError) -> str:
@@ -675,8 +684,11 @@ class OmlxTagger:
             with Image.open(io.BytesIO(data)) as image:
                 if remote or max(image.size) > long_edge:
                     image.thumbnail((long_edge, long_edge))
+                    pixels = image.convert("RGB")
+                    if remote:  # the JPEG writer falls back to info's comment (and XMP on older Pillow): only pixels leave
+                        pixels.info = {}
                     buffer = io.BytesIO()
-                    image.convert("RGB").save(buffer, "JPEG", quality=90)
+                    pixels.save(buffer, "JPEG", quality=90)
                     data, mime = buffer.getvalue(), "image/jpeg"
         image = base64.b64encode(data).decode("ascii")
         return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}}
@@ -707,10 +719,9 @@ class OmlxTagger:
         except urllib.error.HTTPError as error:
             reason = "" if self.engine == "mac" else _http_reason(error)
             error.close()
-            raise OmlxError(f"{prefix} request failed: {error}{reason}") from error
-        except (urllib.error.URLError, TimeoutError, KeyError, IndexError, TypeError, AttributeError,
-                json.JSONDecodeError) as error:
-            raise OmlxError(f"{prefix} request failed: {error}") from error
+            raise OmlxError(_masked(f"{prefix} request failed: {error}{reason}", self.api_key)) from error
+        except (*NETWORK_ERRORS, KeyError, IndexError, TypeError, AttributeError) as error:
+            raise OmlxError(_masked(f"{prefix} request failed: {error}", self.api_key)) from error
         record_usage(self.engine, result.get("usage"))
         if not isinstance(content, str):
             if isinstance(message, dict) and message.get("reasoning_content"):
@@ -779,9 +790,9 @@ def list_models(engine: str, url: str, api_key: str | None, timeout: float = 10)
             return []
         reason = "" if engine == "mac" else _http_reason(error)
         error.close()
-        raise OmlxError(f"{prefix} model list request failed: {error}{reason}") from error
-    except (urllib.error.URLError, TimeoutError, KeyError, TypeError, json.JSONDecodeError) as error:
-        raise OmlxError(f"{prefix} model list request failed: {error}") from error
+        raise OmlxError(_masked(f"{prefix} model list request failed: {error}{reason}", key)) from error
+    except (*NETWORK_ERRORS, KeyError, TypeError) as error:
+        raise OmlxError(_masked(f"{prefix} model list request failed: {error}", key)) from error
     if not isinstance(data, list):
         raise OmlxError(f"{prefix} model list was not a list")
     return sorted(item["id"] for item in data if isinstance(item, dict) and isinstance(item.get("id"), str))
@@ -800,7 +811,7 @@ def held_models(engine: str) -> list[str] | None:
 def refresh_models(engine: str, url: str, api_key: str | None, timeout: float = 10) -> list[str]:
     try:
         models = list_models(engine, url, api_key, timeout)
-    except OmlxError:
+    except Exception:  # any failure: the held list must never outlive it
         with _models_lock:
             _models.pop(engine, None)
         raise

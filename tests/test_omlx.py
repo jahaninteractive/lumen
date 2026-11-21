@@ -1,4 +1,5 @@
 import base64
+import http.client
 import io
 import unittest
 import urllib.error
@@ -7,7 +8,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageCms
 
 import lumen.omlx as omlx
 from lumen.omlx import (
@@ -661,9 +662,9 @@ class EngineTests(unittest.TestCase):
         reset_models()
 
     def taggers(self):
-        return {"mac": OmlxTagger("http://127.0.0.1:8000", "m", api_key="k"),
-                "base": OmlxTagger("http://pc.local:11434", "m", api_key="k", engine="base"),
-                "online": OmlxTagger("https://api.example.com/v1beta/compat", "m", api_key="k", engine="online")}
+        return {"mac": OmlxTagger("http://127.0.0.1:8000", "m", api_key="test-key-0123"),
+                "base": OmlxTagger("http://pc.local:11434", "m", api_key="test-key-0123", engine="base"),
+                "online": OmlxTagger("https://api.example.com/v1beta/compat", "m", api_key="test-key-0123", engine="online")}
 
     def send(self, tagger, *replies):
         opener = _Opener(*(replies or (_chat(),)))
@@ -733,15 +734,24 @@ class EngineTests(unittest.TestCase):
         exif = Image.Exif()
         exif[0xA431] = "SERIAL-12345"  # BodySerialNumber
         exif[0x8825] = {1: "N", 2: (51.0, 30.0, 0.0)}  # GPS IFD
-        Image.new("RGB", (640, 480), "gray").save(path, exif=exif)
+        icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+        xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/">PLANTED-XMP-PACKET</x:xmpmeta>'
+        Image.new("RGB", (640, 480), "gray").save(path, exif=exif, comment=b"PLANTED-COMMENT", xmp=xmp, icc_profile=icc)
         with Image.open(path) as original:
             self.assertEqual(2, len(original.getexif()))
+            self.assertTrue({"comment", "xmp", "icc_profile"} <= set(original.info))
         tagger = self.taggers()
         for engine in ("base", "online"):
             url = tagger[engine]._image_content(path)["image_url"]["url"]
             self.assertTrue(url.startswith("data:image/jpeg;base64,"))
-            sent = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+            raw = base64.b64decode(url.split(",", 1)[1])
+            self.assertFalse(b"PLANTED-COMMENT" in raw, b"PLANTED-COMMENT")
+            self.assertFalse(b"PLANTED-XMP" in raw, b"PLANTED-XMP")
+            self.assertFalse(b"adobe:ns:meta" in raw, b"adobe:ns:meta")
+            sent = Image.open(io.BytesIO(raw))
             self.assertEqual(len(sent.getexif()), 0)
+            for key in ("comment", "xmp", "icc_profile", "exif"):
+                self.assertNotIn(key, sent.info)
             self.assertEqual((640, 480), sent.size)
         self.assertEqual(tagger["mac"]._image_content(path)["image_url"]["url"].split(",", 1)[1],
                          base64.b64encode(path.read_bytes()).decode())
@@ -802,6 +812,61 @@ class EngineTests(unittest.TestCase):
             with self.assertRaises(OmlxError) as caught:
                 self.taggers()["online"].caption(self.preview)
         self.assertEqual("Online request failed: HTTP Error 500: Server Error", str(caught.exception))
+
+    def test_a_key_echoed_in_a_reason_is_masked(self):
+        body = json.dumps({"error": {"message": "Incorrect API key provided: sk-SECRET-123."}}).encode()
+        tagger = OmlxTagger("https://api.example.com/v1", "m", api_key="sk-SECRET-123", engine="online")
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(401, body))):
+            with self.assertRaises(OmlxError) as caught:
+                tagger.caption(self.preview)
+        self.assertNotIn("sk-SECRET-123", str(caught.exception))
+        self.assertIn("Incorrect API key provided: <key>.", str(caught.exception))
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(401, body))):
+            with self.assertRaises(OmlxError) as caught:
+                list_models("online", "https://api.example.com/v1", "sk-SECRET-123")
+        self.assertNotIn("sk-SECRET-123", str(caught.exception))
+        self.assertIn("<key>", str(caught.exception))
+        failure = urllib.error.URLError("refused for sk-SECRET-123")
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(failure)):
+            with self.assertRaises(OmlxError) as caught:
+                tagger.caption(self.preview)
+        self.assertNotIn("sk-SECRET-123", str(caught.exception))
+
+    def test_network_failures_while_reading_become_engine_errors(self):
+        class Unreadable(_Reply):
+            def read(self, *_):
+                raise ConnectionResetError(54, "Connection reset by peer")
+
+        class Opener(_Opener):
+            def open(self, request, timeout):
+                reply = self.replies[0]
+                if isinstance(reply, type):
+                    return reply(b"")
+                return super().open(request, timeout)
+
+        failures = (("reset", Opener(Unreadable)), ("incomplete", _Opener(http.client.IncompleteRead(b""))),
+                    ("status line", _Opener(http.client.BadStatusLine("x"))), ("not utf-8", _Opener(b"\xff\xfe\xfa")))
+        for name, opener in failures:
+            for engine, prefix in (("online", "Online "), ("mac", "Local oMLX ")):
+                with self.subTest(failure=name, engine=engine), \
+                        patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+                    with self.assertRaisesRegex(OmlxError, "^" + prefix + "request failed"):
+                        self.taggers()[engine]._complete([{"type": "text", "text": "hi"}], 5)
+                    with self.assertRaisesRegex(OmlxError, "^" + prefix + "model list request failed"):
+                        list_models(engine, self.taggers()[engine].base_url, "k")
+        with patch("lumen.omlx.list_models", return_value=["a"]):
+            refresh_models("base", "http://pc.local:11434", "k")
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(http.client.IncompleteRead(b""))):
+            with self.assertRaises(OmlxError):
+                refresh_models("base", "http://pc.local:11434", "k")
+        self.assertIsNone(held_models("base"))
+
+    def test_remote_chat_refuses_redirects(self):
+        redirect = urllib.error.HTTPError("https://elsewhere.example", 302, "Found", {}, None)
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(redirect)) as build:
+            with self.assertRaisesRegex(OmlxError, "^Online request failed: HTTP Error 302"):
+                self.taggers()["online"]._complete([{"type": "text", "text": "hi"}], 5)
+        self.assertIsInstance(build.call_args.args[0], NoRedirectHandler)
 
     def test_mac_error_text_is_unchanged(self):
         opener = _Opener(_http_error(404, json.dumps({"error": {"message": "nope"}}).encode()))
