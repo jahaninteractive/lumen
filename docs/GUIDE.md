@@ -723,8 +723,9 @@ Lumen's prompts ask for a short, structured answer, so a model that reasons
 before it answers only costs time. Turn the model's reasoning (thinking) off
 in the server program's own settings for that model.
 
-Measured on 2026-11-21 against LM Studio on one home PC, with the same review
-model this Mac runs, picking the best frame of a burst:
+Measured on 2026-11-21 against LM Studio on one home PC (Ryzen 9 9950X3D,
+Radeon RX 9070 XT, 64 GB of memory), with the same review model this Mac
+runs, picking the best frame of a burst:
 
 | Where | Reasoning | Burst pick |
 |-------|-----------|------------|
