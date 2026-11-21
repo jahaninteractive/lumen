@@ -295,7 +295,7 @@ gives the usual addresses of two home model servers.
 | Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one) |
 | Online | Google | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | Online | OpenAI | `https://api.openai.com/v1` |
-| Online | Qwen (Alibaba Cloud) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| Online | Qwen (Alibaba Cloud) | no preset: choose **Other** and paste your workspace's address, `https://<WorkspaceId>.<region>.maas.aliyuncs.com/compatible-mode/v1`, from the service's console |
 | Base | Ollama | `http://<your PC>:11434/v1` |
 | Base | LM Studio | `http://<your PC>:1234/v1` |
 

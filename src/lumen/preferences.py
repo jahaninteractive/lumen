@@ -34,7 +34,6 @@ SERVICE_PRESETS: tuple[dict, ...] = (
     {"name": "Anthropic", "url": "https://api.anthropic.com/v1"},
     {"name": "Google", "url": "https://generativelanguage.googleapis.com/v1beta/openai"},
     {"name": "OpenAI", "url": "https://api.openai.com/v1"},
-    {"name": "Qwen (Alibaba Cloud)", "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
 )
 
 MODEL_NAME_MAX = 200

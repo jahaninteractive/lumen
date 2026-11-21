@@ -93,7 +93,6 @@ class PreferencesTests(unittest.TestCase):
             {"name": "Anthropic", "url": "https://api.anthropic.com/v1"},
             {"name": "Google", "url": "https://generativelanguage.googleapis.com/v1beta/openai"},
             {"name": "OpenAI", "url": "https://api.openai.com/v1"},
-            {"name": "Qwen (Alibaba Cloud)", "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
         ))
 
     def test_every_service_preset_is_a_valid_online_address(self):
