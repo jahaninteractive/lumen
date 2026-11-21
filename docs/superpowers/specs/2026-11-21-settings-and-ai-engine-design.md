@@ -21,7 +21,7 @@ A signed, double-click installer is the third project in this round and gets its
 ## Non-goals
 
 - A different engine per model role (fast on this Mac, review elsewhere). The design leaves room; nothing is built.
-- Integrations written for one named service. One generic form covers them.
+- Integrations written for one named service. One generic form covers them; a named preset only fills in that form's address.
 - A spend ledger across sessions, prices or cost estimates in money. Tokens for the running server only.
 - Writing JPEG exports, or anything else derived, outside the library. Wanted (disk is short on the photographer's Mac) but taken out of this round on 2026-11-21: how exports are published needs its own investigation first. See `docs/BACKLOG.md`.
 - Changing the library folder from the page.
@@ -42,7 +42,7 @@ A signed, double-click installer is the third project in this round and gets its
 - The local HTTP server stays loopback-only; new mutation routes keep host/origin checks and strict JSON validation.
 - Source paths, fingerprints, keys and raw model output never reach the browser.
 - Camera originals are never edited, moved, renamed or deleted.
-- No AI vendor or model-family names in tracked files beyond those already there.
+- No AI vendor or model-family names in tracked files beyond those already there, with one exception the photographer agreed on 2026-11-21: the list of services Lumen can connect to (the Settings presets, their one definition in code, the tests that pin it, and the matching table in the README and guide). The rule exists to keep the project agnostic about what built it; naming what it can talk to is a different thing. Model names are still never preset.
 - No test contacts a network, the Keychain, or oMLX.
 - The product contract in `AGENTS.md` changes in one place and must be reworded as part of this work:
   - "Do not add network services or cloud processing" becomes: advice runs on this Mac unless the photographer has switched the AI engine in Settings; nothing else is sent anywhere.
@@ -136,6 +136,10 @@ The loopback rule lives in two places today, `OmlxTagger.__init__` and `get_serv
 Each remote engine stores its own URL and its own fast and review model names, so switching back and forth loses nothing. The existing Fast model and Review model selects in the rail offer the two configured names on This Mac, as today, and the engine's listed models on Base and Online. `cli.serve_settings` (start review on whichever model is loaded) applies to This Mac only.
 
 The engine choice is saved and survives a restart. It is off (This Mac) until the photographer changes it.
+
+### Service presets
+
+The Online form has a Service select: Anthropic, Google, OpenAI, Qwen (Alibaba Cloud), and Other. Choosing a service fills the address field with that service's documented chat-compatible API base; Other leaves it for typing. The address stays an ordinary editable field and nothing else about the engine depends on the choice, which is not saved. The Base form has no select, because the host is the photographer's own machine: a hint line gives the usual addresses (`http://<your PC>:11434/v1` for Ollama, `http://<your PC>:1234/v1` for LM Studio). The list has one definition, served to the page with the settings. Each address is checked against the service's own documentation when it is added; a service whose address cannot be confirmed is left out.
 
 ### Keys
 
