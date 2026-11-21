@@ -5,6 +5,11 @@
 **It turns 5,000 photos from a trip into the 50 worth showing anyone, without
 looking at every single one.**
 
+**New in 0.6: the AI runs where you are.** On this Mac in the field with no
+connection, on your own PC at home, or on an online service you hold a key
+for. One select switches between them; see
+[Settings and the AI engine](#settings-and-the-ai-engine).
+
 > When I'm photographing wildlife I hold the button down and the camera takes a
 > burst, ten or twenty almost identical shots in a couple of seconds. After a
 > trip I come home with thousands of them. Lumen sorts them for me. It puts each
@@ -36,6 +41,16 @@ develop advice, and keep it loaded for whatever else you use oMLX for, such as
 its chat. **Review model** and **Fast model** dropdowns at the top of the left rail move
 either role between the two while Lumen runs (see
 [Choosing the models](docs/GUIDE.md#choosing-the-models)).
+
+The same laptop works three ways, switched from one select at the top of the
+left rail. In the field the advice runs on **This Mac**, with no connection at
+all. At home it can run on **Base**, your own computer with a bigger graphics
+card (LM Studio or Ollama on a PC, say), so the frames stay on your own
+network and the Mac needs no model loaded. With good internet it can run on
+**Online**, a service you hold a key for, which felt quick when tried (no times recorded yet)
+and is the one where resized previews leave your network. Nothing else about the
+workflow changes. See
+[Settings and the AI engine](#settings-and-the-ai-engine).
 
 Install below; the workflow is in [docs/GUIDE.md](docs/GUIDE.md).
 
@@ -79,13 +94,15 @@ goes:
   print, a 2048 px version for sharing, or a web version with a watermark.
   Shoot JPEG in the body instead and the full export is the camera's own file,
   byte for byte, with the caption and keywords written in.
-- **AI where there is no internet.** Lodges, ships, and field camps have no or
-  painfully slow connections, and I do not want my frames uploaded anywhere.
-  Tagging, caption drafts, problem scans, burst critique, day digests, and a
-  one-job pass that picks and proposes develop settings for every burst run
-  on local models through oMLX on the same Mac, offline, and only suggest.
-  Settings can send that advice to my own computer at home or to an online
-  service instead, and says so while it does.
+- **AI where there is no internet, and more of it where there is.** Lodges,
+  ships, and field camps have no or painfully slow connections, and I do not
+  want my frames uploaded anywhere. Tagging, caption drafts, problem scans,
+  burst critique, day digests, and a one-job pass that picks and proposes
+  develop settings for every burst run on local models through oMLX on the
+  same Mac, offline, and only suggest. Back home the same laptop can send
+  that advice to my own PC, which is faster and still private, or to an
+  online service when I would rather have the speed; it says which while it
+  does, and asks before a batch goes.
 - **Night skies too.** Long trips mean dark skies, so sky-frame triage and a
   reproducible Siril stack live in the same tool, followed by a debrief that
   reads the frames' EXIF and Siril's log and says what to change next night.
@@ -216,7 +233,8 @@ The server listens only on `127.0.0.1:8765`. To use another library:
 uv run lumen --library "/Volumes/Photo Catalog/Lumen" serve --open
 ```
 
-The header reports tool health ("Local AI online" or "Local AI offline", then
+The header reports tool health ("Local AI online" or "Local AI offline", or
+"AI: Base" or "AI: Online" when Settings has switched the AI engine, then
 "<tool> missing" for each unavailable tool), and reports first when the
 running server is older than the files on disk: the browser is served fresh
 from disk on every request while the Python stays as it was imported, so an
@@ -370,6 +388,8 @@ user-session access to Apple's Vision model service.
   pretend-complete stubs.
 - The web server is local-only and has no authentication; do not modify it to
   bind to a LAN address without adding authentication and transport security.
+  The AI engine is a separate matter: on Base or Online, Lumen makes outgoing
+  requests to that one address and still accepts none from outside.
 
 ## How it was built
 

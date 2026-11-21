@@ -197,7 +197,7 @@ function cropCard(candidate) {
   warning.id = `crop-warning-${candidate.id}`;
   const marker = document.createElement('p');
   marker.className = 'crop-marker';
-  marker.textContent = `${active ? 'Current choice' : ''}${active && candidate.id === state.recommendedCropId ? ' · ' : ''}${candidate.id === state.recommendedCropId ? 'Local AI recommendation' : ''}`;
+  marker.textContent = `${active ? 'Current choice' : ''}${active && candidate.id === state.recommendedCropId ? ' · ' : ''}${candidate.id === state.recommendedCropId ? 'AI recommendation' : ''}`;
 
   const action = document.createElement('button');
   action.type = 'button';
@@ -307,7 +307,7 @@ async function askCompositionAI() {
   const compositionRequest = state.compositionRequest;
   const key = `composition:${photoId}`;
   document.querySelector('#ask-composition-ai').disabled = true;
-  document.querySelector('#compose-status').textContent = 'Asking the loaded local vision model…';
+  document.querySelector('#compose-status').textContent = 'Asking the review model…';
   // The server stores the review whether or not the frame is still shown; it is applied here only if it is.
   const current = () => requestId === state.reviewRequest && compositionRequest === state.compositionRequest && state.selectedId === photoId;
   try {
@@ -315,17 +315,17 @@ async function askCompositionAI() {
     if (!current()) return;
     const advice = showCompositionReview(review);
     if (!advice) {
-      document.querySelector('#compose-status').textContent = 'Crop choices changed while the local AI was reviewing them. Reloading current choices…';
+      document.querySelector('#compose-status').textContent = 'Crop choices changed while the AI was reviewing them. Reloading current choices…';
       announce('Crop choices changed. Reloading current choices.');
       await loadComposition();
       return;
     }
     renderComposition();
-    document.querySelector('#compose-status').textContent = 'Local AI advice is ready. It has not changed your crop.';
+    document.querySelector('#compose-status').textContent = 'AI advice is ready. It has not changed your crop.';
     announce(advice);
   } catch (error) {
     if (!current()) return;
-    const message = `Local AI advice is unavailable: ${error.message}. Manual crop choices still work.`;
+    const message = `AI advice is unavailable: ${error.message}. Manual crop choices still work.`;
     document.querySelector('#compose-status').textContent = message;
     announce(message);
   } finally {
@@ -773,14 +773,14 @@ function burstCritique(photo, group) {
   ask.setAttribute('aria-describedby', 'frame-ai-availability');
   const taskKey = `critique:${group.id}`;
   const running = aiRunning(taskKey);
-  ask.textContent = running ? 'Asking local AI…' : 'Pick the best frame';
+  ask.textContent = running ? 'Asking the AI…' : 'Pick the best frame';
   ask.disabled = running || !roleReady('review');
   if (running) ask.setAttribute('aria-busy', 'true');
   ask.addEventListener('click', async () => {
     ask.disabled = true;
     ask.setAttribute('aria-busy', 'true');  // the status bar is under the frame view, so the button shows the wait itself
-    ask.textContent = 'Asking local AI…';
-    announce('Asking local AI to compare this burst');
+    ask.textContent = 'Asking the AI…';
+    announce('Asking the AI to compare this burst');
     let data = null;
     try {
       data = await aiCall('Burst critique', () => post(`/api/groups/${group.id}/critique`), taskKey);
@@ -792,7 +792,7 @@ function burstCritique(photo, group) {
     const shown = state.selectedGroupId === group.id ? photoById(state.selectedId) : null;
     if (!shown) return;
     renderInspector(shown);
-    if (data) announce(document.querySelector('#burst-advice')?.textContent || `Local AI suggests ${data.name}`);
+    if (data) announce(document.querySelector('#burst-advice')?.textContent || `AI suggests ${data.name}`);
   });
   block.append(aiTaskLine(taskKey), ask);
   const data = state.critique?.groupId === group.id ? state.critique.data : null;
@@ -802,7 +802,7 @@ function burstCritique(photo, group) {
     const advice = document.createElement('p');
     advice.id = 'burst-advice';
     const rejected = suggested.decision === 'reject';
-    advice.textContent = `Local AI suggests frame ${index + 1} (${data.name}): ${data.rationale} (confidence ${Math.round(data.confidence * 100)}%)${rejected ? ' (frame is rejected)' : ''}`;
+    advice.textContent = `AI suggests frame ${index + 1} (${data.name}): ${data.rationale} (confidence ${Math.round(data.confidence * 100)}%)${rejected ? ' (frame is rejected)' : ''}`;
     block.append(advice);
     if (rejected) return block;
     const use = document.createElement('button');
@@ -1134,7 +1134,7 @@ function renderInspector(photo) {
   keepFrameViewFocus();
 }
 
-// Advisory: a local AI draft is stored as the model's and shown for editing; only the Share export uses it.
+// Advisory: an AI draft is stored as the model's and shown for editing; only the Share export uses it.
 function captionControls(photo, data) {
   const block = document.createElement('div');
   block.id = 'caption-controls';
@@ -1143,7 +1143,7 @@ function captionControls(photo, data) {
   const note = document.createElement('p');
   note.className = 'quiet';
   note.id = 'caption-note';
-  note.textContent = 'Used only by the Share and Web exports. A local AI draft is a suggestion: edit it, then save.';
+  note.textContent = 'Used only by the Share and Web exports. An AI draft is a suggestion: edit it, then save.';
   block.append(aiTaskLine(`caption:${photo.id}`), heading, note);
   const fields = [['caption-input', 'Caption', data.caption], ['alt-input', 'Alt text', data.alt_text]].map(([id, text, value]) => {
     const label = document.createElement('label');
@@ -1188,7 +1188,7 @@ function captionControls(photo, data) {
   ask.disabled = aiRunning(captionKey) || !roleReady('review');
   ask.addEventListener('click', async () => {
     ask.disabled = true;
-    announce(`Asking local AI to caption ${photo.name}`);
+    announce(`Asking the AI to caption ${photo.name}`);
     try {
       const drafted = await aiCall(`Caption for ${photo.name}`, () => post(`/api/photos/${photo.id}/caption`), captionKey);
       caption.value = drafted.caption || '';
@@ -1197,7 +1197,7 @@ function captionControls(photo, data) {
       if (state.selectedId === photo.id && state.details) {  // so a redraw, now or later, shows the draft
         state.details.tags = { ...state.details.tags, data: { ...state.details.tags?.data, caption: drafted.caption, alt_text: drafted.alt_text } };
       }
-      announce(`Local AI caption written for ${photo.name}; edit and save to change it`);
+      announce(`AI caption written for ${photo.name}; edit and save to change it`);
     } catch (error) {
       announce(error.message);
     }
@@ -1509,7 +1509,8 @@ function renderGroups() {
     heading.groups.push(group);
     const thumb = document.createElement('img');
     thumb.className = 'batch-thumb';
-    thumb.src = bestFrame(group) ? thumbUrl(bestFrame(group)) : '';
+    // An all-rejected burst has no frame to show: a blank pixel, because an empty src draws a broken-image mark.
+    thumb.src = bestFrame(group) ? thumbUrl(bestFrame(group)) : 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
     thumb.alt = '';
     thumb.loading = 'lazy';
     const batch = document.createElement('button');
@@ -2096,7 +2097,7 @@ document.querySelector('#reject-all-yes').addEventListener('click', () => {
   return decideSuggestions(rejectConfirm.dataset.ids.split(',').map(Number), 'reject');
 });
 
-const JOB_NAMES = { import: 'Import', export: 'Export', develop_group: 'Apply develop to burst', tag: 'Tagging', assist: 'Local AI assist', cull: 'Pick and develop bursts', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
+const JOB_NAMES = { import: 'Import', export: 'Export', develop_group: 'Apply develop to burst', tag: 'Tagging', assist: 'AI assist', cull: 'Pick and develop bursts', review_rejects: 'Reject review', triage: 'Sky triage', astro: 'Stack', ingest: 'Ingest', refine_previews: 'Refine previews' };
 
 function jobText(job) {
   const name = JOB_NAMES[job.kind] || 'Job';
@@ -4917,7 +4918,7 @@ async function askDevelopAdvice() {
   const before = JSON.stringify(develop.fields);
   const feedback = developNode('develop-feedback').value.trim();
   developNode('develop-ask').disabled = true;
-  developNode('develop-status').textContent = 'Asking the loaded local vision model where to start…';
+  developNode('develop-status').textContent = 'Asking the review model where to start…';
   try {
     const advice = await aiCall('Develop suggestion', () => post(`/api/photos/${photoId}/develop/suggest`,
       { settings: develop.fields, feedback: feedback || null }), `develop:${photoId}`);
@@ -4933,7 +4934,7 @@ async function askDevelopAdvice() {
     renderDevelopPreview();
   } catch (error) {
     if (develop.photoId !== photoId) return;
-    developNode('develop-status').textContent = `Local AI advice is unavailable: ${error.message}. The handles are untouched.`;
+    developNode('develop-status').textContent = `AI advice is unavailable: ${error.message}. The handles are untouched.`;
     announce(developNode('develop-status').textContent);
   } finally {
     syncDevelopControls();  // re-enables Ask for whichever frame the panel now holds

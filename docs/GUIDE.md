@@ -523,9 +523,13 @@ over nothing. Natural Earth data is public domain.
 
 ![The Assist tab: Review model and Fast model selects, then Pick and develop every burst, Tag, scan and caption keepers, Tag keepers, Learned keywords and Write today's digest.](images/assist.jpg)
 
-Everything below runs through your local oMLX server, unless Settings has
-switched the AI engine (see [Settings and the AI engine](#settings-and-the-ai-engine)),
-and is advisory: the
+The same buttons work on all three AI engines: **This Mac** (your local oMLX
+server, the default, and the only one that needs no connection), **Base**
+(your own model server at home) and **Online** (a service you hold a key
+for). The **AI engine** select at the top of the left rail switches between
+them; see [Settings and the AI engine](#settings-and-the-ai-engine) for what
+each one is sent. This section describes This Mac. Everything below is
+advisory on every engine: the
 models tag, suggest, draft, and explain, but never pick, reject, crop, export,
 or delete. Two model roles are used:
 

@@ -3322,7 +3322,7 @@ const regression = `
     const tree = node => [node, ...(node.children || []).flatMap(tree)];
     const byId = id => tree(element('#inspection')).find(node => node.id === id);
     await inspect(state.groups[0].photos[0]);
-    assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Best timing. (confidence 72%)');
+    assert.equal(byId('burst-advice').textContent, 'AI suggests frame 3 (b2.jpg): Best timing. (confidence 72%)');
     assert.equal(byId('ask-burst-ai').textContent, 'Pick the best frame');
     assert.equal(byId('ask-burst-ai').disabled, false);
     assert.deepEqual(picks, [], 'rendering stored advice never changes the pick');
@@ -3334,12 +3334,12 @@ const regression = `
     await new Promise(setImmediate);
     assert.equal(state.busy, false, 'a burst critique never sets busy');
     assert.equal(control('reject').disabled, false, 'culling continues while the review model answers');
-    assert.deepEqual([byId('ask-burst-ai').getAttribute('aria-busy'), byId('ask-burst-ai').textContent], ['true', 'Asking local AI…'], 'the button shows the wait where the status bar is hidden');
+    assert.deepEqual([byId('ask-burst-ai').getAttribute('aria-busy'), byId('ask-burst-ai').textContent], ['true', 'Asking the AI…'], 'the button shows the wait where the status bar is hidden');
     pendingCritiques.shift()();
     await asking;
     assert.equal(control('reject').disabled, false);
     assert.deepEqual(critiqueRequests.at(-1), ['/api/groups/1/critique', 'POST']);
-    assert.equal(byId('burst-advice').textContent, 'Local AI suggests frame 3 (b2.jpg): Fresh look. (confidence 72%)');
+    assert.equal(byId('burst-advice').textContent, 'AI suggests frame 3 (b2.jpg): Fresh look. (confidence 72%)');
     assert.deepEqual(picks, [], 'asking for advice never changes the pick');
     Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
     Object.assign(element('#loupe-viewport'), { tagName: 'DIV' });
@@ -5369,7 +5369,7 @@ const regression = `
     await button.listeners.click();
     assert.deepEqual(assistPosts, [{ scope: 'keepers' }]);
     assert.equal(state.job.kind, 'assist');
-    assert.ok(element('#job-label').textContent.startsWith('Local AI assist'), element('#job-label').textContent);
+    assert.ok(element('#job-label').textContent.startsWith('AI assist'), element('#job-label').textContent);
     assert.equal(element('#ai-status').dataset.phase, undefined, 'the job strip, not the AI line, reports the job');
     assert.equal(button.disabled, true, 'one job at a time');
     state.job = null;

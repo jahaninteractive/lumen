@@ -7,6 +7,10 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 
 ## Unreleased
 
+- A burst whose every frame is rejected no longer shows a broken-image mark in the batch list.
+- Advice wording no longer says "local" where the AI engine may be Base or Online: "AI suggests frame 3", "Asking the AI…", "AI assist". The header's "Local AI online/offline" is unchanged, since it only shows on This Mac.
+- `SECURITY.md`, the README, the guide and the architecture notes say what the AI engine sends when it is switched, and that one laptop works in the field, at home on Base, and on Online.
+
 ## 0.6.0 (2026-11-21)
 
 - Settings: a gear button at the far right of the tab row opens a Settings view with AI engine, Library, Places and map, and Server sections, each with its own Save and Discard. Saved settings live in the catalog and apply to the command line too; a setting fixed by a shell variable is shown read-only.

@@ -24,6 +24,11 @@ nothing else. The **Review model** and **Fast model** dropdowns move either
 role between the two for the running server only; the fast role always starts
 on the 8B. How to use the switch is in [GUIDE.md](GUIDE.md#choosing-the-models).
 
+These are the models for the This Mac engine. On Base or Online the model
+names are whatever that server or service offers, chosen in Settings; the
+times measured against a home PC and the services tried are in
+[GUIDE.md](GUIDE.md#setting-up-a-base-server).
+
 Models tried and not offered:
 
 | Model | Disk | Why not |

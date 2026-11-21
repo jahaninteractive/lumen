@@ -117,7 +117,17 @@ only create the job and return its ID. One-shot model calls (`critique_burst`,
 `caption_photo`, `digest_day`, `review_composition`) run inline under the
 mutation lock; the browser marks itself busy for their duration.
 
-## Local AI contract
+## AI contract
+
+One client, `OmlxTagger(..., engine=)`, talks to whichever engine Settings
+names: `mac` (oMLX on loopback, the default), `base` (the photographer's own
+server, `http` or `https`) or `online` (`https` only). Every tagger is built
+by `Library.tagger_for(role)`. A remote engine gets previews re-encoded from
+pixels only at no more than `omlx.MODEL_IMAGE_LONG_EDGE`, never the local
+oMLX key, and never a source path, fingerprint or position; its key comes from
+the Keychain (`lumen.keychain`) and is masked in every error. Batches on a
+remote engine answer 409 `confirm_remote` until the photographer confirms.
+The full rules are in `AGENTS.md`, Current tool state.
 
 Model output is advisory. `tags.data` is a read-modify-write JSON blob with
 optional keys (`description, subjects, scene, technical, confidence, species,
@@ -135,7 +145,8 @@ Prefer one of these seams instead of changing the import loop directly:
 - Add a preview decoder with the `create_preview(source, destination)` contract.
 - Add an analyzer that produces a normalized optional signal in `[0, 1]`.
 - Add a grouping policy returning deterministic `list[list[Photo]]` groups.
-- Add a local VLM by preserving `TagResult` and loopback-only transport.
+- Add a local VLM by preserving `TagResult` and the `mac` engine's loopback-only transport;
+  a new remote service is an address in Settings, not code.
 - Add a processor that validates its output root and returns `PipelineResult`.
 
 Every new machine decision must be visible in provenance and sidecars. Missing
