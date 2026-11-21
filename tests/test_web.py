@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from PIL import Image, ImageCms
 
+from lumen import preferences
 from lumen.config import Settings
 from lumen.domain import DEVELOP_FLAGS, DEVELOP_RANGES, DevelopSettings
 from lumen.library import Library
@@ -1838,6 +1839,57 @@ console.log(JSON.stringify([panel.hidden, store]));
         with patch("lumen.library.get_server_status", return_value=both), patch("lumen.library.Library.caption_photo",
                                                                                   lambda self, photo_id, tagger: {"model": tagger.model}):
             self.assertEqual((200, {"model": "Qwen3-VL-8B-Instruct-4bit"}), self.post_json("/api/photos/1/caption", {}))
+
+    def test_settings_round_trip_applies_to_the_running_server(self):
+        self.assertFalse(self.get_json("/api/status")[1]["geonames"]["online"])
+        status, body = self.post_json("/api/settings", {"geocode_online": True})
+        self.assertEqual(200, status, body)
+        row = next(r for r in body["settings"] if r["key"] == "geocode_online")
+        self.assertEqual((True, "saved"), (row["value"], row["source"]))
+        self.assertEqual({"base": False, "online": False}, body["keys"])
+        self.assertEqual(list(preferences.SERVICE_PRESETS), body["presets"])
+        self.assertEqual((200, body), self.get_json("/api/settings"))
+        self.assertTrue(self.get_json("/api/status")[1]["geonames"]["online"])  # the live server now uses it
+
+    def test_settings_save_keeps_a_session_role_model_switch(self):
+        both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
+        with patch("lumen.diagnostics.get_server_status", return_value=both):
+            self.assertEqual(200, self.post_json("/api/role-model", {"role": "review", "model": "Qwen3-VL-8B-Instruct-4bit"})[0])
+            self.assertEqual(200, self.post_json("/api/settings", {"near_duplicate_distance": 4})[0])
+            self.assertEqual("Qwen3-VL-8B-Instruct-4bit", self.get_json("/api/status")[1]["omlx_roles"]["review"]["model"])
+
+    def test_settings_refuses_unknown_empty_and_non_object(self):
+        for payload in ({}, [], "geocode_online", {"geocode_online": 1}, {"near_duplicate_distance": True}):
+            with self.subTest(payload=payload):
+                self.assertEqual(400, self.post_json("/api/settings", payload)[0])
+        self.assertEqual((400, {"error": "unknown setting: nope"}), self.post_json("/api/settings", {"nope": 1}))
+        self.assertEqual(400, self.post_json("/api/settings", None, raw=b"not json")[0])
+        rows = {row["key"]: row for row in self.get_json("/api/settings")[1]["settings"]}
+        self.assertEqual("default", rows["geocode_online"]["source"])  # nothing was saved by a refusal
+        self.assertEqual("default", rows["near_duplicate_distance"]["source"])
+
+    def test_settings_post_is_refused_cross_origin(self):
+        status, payload = self.post_json("/api/settings", {"geocode_online": True}, headers={"Origin": "https://attacker.example"})
+        self.assertEqual(403, status)
+        self.assertIn("cross-origin", payload["error"])
+        rows = {row["key"]: row for row in self.get_json("/api/settings")[1]["settings"]}
+        self.assertEqual("default", rows["geocode_online"]["source"])
+
+    def test_settings_never_reports_a_key(self):
+        self.assertNotIn("api_key", json.dumps(self.get_json("/api/settings")[1]))
+
+    def test_saved_settings_are_loaded_when_the_server_starts(self):
+        self.assertEqual(200, self.post_json("/api/settings", {"geocode_online": True})[0])
+        self.server.shutdown()  # one server per library: stop this one, then start afresh (tearDown stops the new one)
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.server = make_server(Settings(library_dir=self.root / "library", map_dir=self.root / "map"), port=0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        self.assertTrue(self.get_json("/api/status")[1]["geonames"]["online"])  # loaded at startup, not only described
+        row = next(r for r in self.get_json("/api/settings")[1]["settings"] if r["key"] == "geocode_online")
+        self.assertEqual((True, "saved"), (row["value"], row["source"]))
 
     def test_critique_routes_gate_on_review_model_and_never_change_the_pick(self):
         class FakeTagger:

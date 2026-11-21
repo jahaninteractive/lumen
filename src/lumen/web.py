@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlsplit
 
+from . import preferences
 from .astro import RECIPES
 from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups, preview_version
@@ -262,10 +263,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
     if host not in {"127.0.0.1", "::1", "localhost"}:
         raise ValueError("Lumen only binds to a loopback address")
     static_dir = Path(__file__).parent / "static"
+    settings = preferences.load(settings)  # saved settings apply from startup; the shell still wins
 
     # The switches offer the full and fast models only, never a typed name; fixed at startup so a switch cannot shrink the choice.
     role_models = list(dict.fromkeys((settings.omlx_model, settings.omlx_fast_model)))
     role_fields = {"fast": "omlx_fast_model", "review": "omlx_review_model"}  # role -> Settings field a switch rebinds
+
+    def settings_body(library: Library) -> dict:
+        return {"settings": preferences.describe(settings, library.catalog),
+                "keys": {"base": False, "online": False},  # placeholder until keys are stored
+                "presets": list(preferences.SERVICE_PRESETS)}
 
     class Handler(BaseHTTPRequestHandler):
         def handle_one_request(self) -> None:
@@ -299,6 +306,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     "ingest_output_dir": str((settings.output_dir / "ingest").resolve()),
                     "digest_dir": str(settings.digest_dir.resolve()),
                 })
+                return
+            if path == "/api/settings":
+                with Library(settings) as library:
+                    self._send_json(settings_body(library))
                 return
             if path == "/api/groups":
                 try:
@@ -673,6 +684,14 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         raise ValueError(f"model must be one of {', '.join(role_models)}")
                     settings = replace(settings, **{role_fields[payload["role"]]: payload["model"]})
                     self._send_json({"role": payload["role"], "model": payload["model"]})
+                    return
+                if path == "/api/settings":
+                    if not payload:
+                        raise ValueError("settings needs at least one setting")
+                    with Library(settings) as library:
+                        preferences.save(library.catalog, payload)
+                        settings = preferences.overlay(settings, library.catalog)  # keeps a session role-model switch
+                        self._send_json(settings_body(library))
                     return
                 if path in {"/api/browse-xmp", "/api/outputs/reveal"}:
                     if payload:
@@ -1158,7 +1177,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
                 job_route = path.startswith(("/api/map/", "/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist", "/api/photos/cull",
-                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/")) or re.search(r"/develop(/|$)", path)
+                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/", "/api/settings")) or re.search(r"/develop(/|$)", path)
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 
