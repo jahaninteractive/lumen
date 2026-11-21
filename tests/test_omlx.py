@@ -35,6 +35,10 @@ from lumen.omlx import (
     parse_expand_response,
     parse_reject_response,
     parse_tag_response,
+    list_models,
+    normalise_engine_url,
+    reset_usage,
+    usage_snapshot,
 )
 
 
@@ -466,9 +470,10 @@ class OmlxTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             big = Path(directory) / "big.jpg"; Image.new("RGB", (3000, 2000), "gray").save(big)
             small = Path(directory) / "small.png"; Image.new("RGB", (600, 400), "gray").save(small)
-            sent = OmlxTagger._image_content(big)["image_url"]["url"]
-            kept = OmlxTagger._image_content(small)["image_url"]["url"]
-            full = OmlxTagger._image_content(big, long_edge=0)["image_url"]["url"]
+            tagger = OmlxTagger("http://127.0.0.1:8000", "m", api_key="k")
+            sent = tagger._image_content(big)["image_url"]["url"]
+            kept = tagger._image_content(small)["image_url"]["url"]
+            full = tagger._image_content(big, long_edge=0)["image_url"]["url"]
         def size(url):
             return Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).size
         self.assertEqual(1024, omlx.MODEL_IMAGE_LONG_EDGE)
@@ -505,9 +510,6 @@ class OmlxTests(unittest.TestCase):
         self.assertEqual(1, sum(part["type"] == "image_url" for part in captured["content"]))
         self.assertEqual(200, captured["kw"]["max_tokens"])
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class DevelopAdviceTests(unittest.TestCase):
@@ -607,3 +609,237 @@ class StackReviewTests(unittest.TestCase):
         data = base64.b64decode(captured["content"][1]["image_url"]["url"].split(",", 1)[1])
         with Image.open(io.BytesIO(data)) as sent:
             self.assertEqual(omlx.MODEL_IMAGE_LONG_EDGE, max(sent.size))
+
+
+class _Reply(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+class _Opener:
+    """Answers every request with the next reply (bytes or an exception) and keeps the requests."""
+
+    def __init__(self, *replies):
+        self.replies, self.requests = list(replies), []
+
+    def open(self, request, timeout):
+        self.requests.append(request)
+        reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+        if isinstance(reply, Exception):
+            raise reply
+        return _Reply(reply)
+
+
+def _chat(text="ok", **extra):
+    return json.dumps({"choices": [{"message": {"content": text}}], **extra}).encode()
+
+
+def _http_error(code, body: bytes):
+    return urllib.error.HTTPError("https://api.example.com/v1/chat/completions", code, "Failed", {}, io.BytesIO(body))
+
+
+class EngineTests(unittest.TestCase):
+    """The same client talks to this Mac's oMLX, the photographer's Base server, or an Online service."""
+
+    def setUp(self):
+        reset_usage()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.preview = self.root / "p.jpg"
+        Image.new("RGB", (8, 8)).save(self.preview)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        reset_usage()
+
+    def taggers(self):
+        return {"mac": OmlxTagger("http://127.0.0.1:8000", "m", api_key="k"),
+                "base": OmlxTagger("http://pc.local:11434", "m", api_key="k", engine="base"),
+                "online": OmlxTagger("https://api.example.com/v1beta/compat", "m", api_key="k", engine="online")}
+
+    def send(self, tagger, *replies):
+        opener = _Opener(*(replies or (_chat(),)))
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+            tagger._complete([{"type": "text", "text": "hi"}], 5)
+        return opener.requests
+
+    def test_url_rules_per_engine(self):
+        self.assertEqual(normalise_engine_url("base", " http://pc.local:11434/v1/ "), "http://pc.local:11434/v1")
+        self.assertEqual(normalise_engine_url("base", "http://pc.local:11434"), "http://pc.local:11434/v1")
+        self.assertEqual(normalise_engine_url("online", "https://api.example.com/v1beta/compat/"), "https://api.example.com/v1beta/compat")
+        self.assertEqual(normalise_engine_url("mac", "http://127.0.0.1:8000/v1"), "http://127.0.0.1:8000")
+        for engine, url in (("online", "http://api.example.com"), ("base", "ftp://pc"), ("mac", "http://192.168.1.5:8000"),
+                            ("base", "http://user:pw@pc.local"), ("online", "https://api.example.com/v1?key=1"),
+                            ("online", "https://api.example.com/v1#x"), ("mac", "http://user@127.0.0.1:8000"),
+                            ("base", "http://"), ("base", "pc.local")):
+            with self.subTest(engine=engine, url=url), self.assertRaises(ValueError):
+                normalise_engine_url(engine, url)
+        with self.assertRaisesRegex(ValueError, "^Online needs an https address$"):
+            normalise_engine_url("online", "http://api.example.com")
+        with self.assertRaisesRegex(ValueError, "^Base needs an http or https address$"):
+            normalise_engine_url("base", "ftp://pc")
+        with self.assertRaisesRegex(ValueError, "^oMLX endpoint must be a loopback http\\(s\\) URL$"):
+            normalise_engine_url("mac", "http://192.168.1.5:8000")
+
+    def test_remote_request_omits_template_kwargs_and_mac_keeps_them(self):
+        payloads = {engine: json.loads(self.send(tagger)[0].data) for engine, tagger in self.taggers().items()}
+        self.assertEqual({"enable_thinking": False}, payloads["mac"]["chat_template_kwargs"])
+        self.assertNotIn("chat_template_kwargs", payloads["base"])
+        self.assertNotIn("chat_template_kwargs", payloads["online"])
+
+    def test_online_omits_temperature_and_base_and_mac_send_zero(self):
+        payloads = {engine: json.loads(self.send(tagger)[0].data) for engine, tagger in self.taggers().items()}
+        self.assertEqual(0, payloads["mac"]["temperature"])
+        self.assertEqual(0, payloads["base"]["temperature"])
+        self.assertNotIn("temperature", payloads["online"])
+
+    def test_requests_go_to_the_api_base(self):
+        urls = {engine: self.send(tagger)[0].full_url for engine, tagger in self.taggers().items()}
+        self.assertEqual("http://127.0.0.1:8000/v1/chat/completions", urls["mac"])
+        self.assertEqual("http://pc.local:11434/v1/chat/completions", urls["base"])
+        self.assertEqual("https://api.example.com/v1beta/compat/chat/completions", urls["online"])
+
+    def test_remote_never_reads_the_local_omlx_key(self):
+        with patch.object(OmlxTagger, "_local_api_key", return_value="local") as local:
+            base = OmlxTagger("http://pc.local:11434", "m", engine="base")
+            online = OmlxTagger("https://api.example.com", "m", engine="online")
+            mac = OmlxTagger("http://127.0.0.1:8000", "m")
+        self.assertIsNone(base.api_key)
+        self.assertIsNone(online.api_key)
+        self.assertEqual("local", mac.api_key)
+        self.assertEqual(1, local.call_count)
+        self.assertIsNone(self.send(base)[0].get_header("Authorization"))
+
+    def test_remote_image_is_always_reencoded_without_metadata(self):
+        path = self.root / "exif.jpg"
+        exif = Image.Exif()
+        exif[0xA431] = "SERIAL-12345"  # BodySerialNumber
+        exif[0x8825] = {1: "N", 2: (51.0, 30.0, 0.0)}  # GPS IFD
+        Image.new("RGB", (640, 480), "gray").save(path, exif=exif)
+        with Image.open(path) as original:
+            self.assertEqual(2, len(original.getexif()))
+        tagger = self.taggers()
+        for engine in ("base", "online"):
+            url = tagger[engine]._image_content(path)["image_url"]["url"]
+            self.assertTrue(url.startswith("data:image/jpeg;base64,"))
+            sent = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+            self.assertEqual(len(sent.getexif()), 0)
+            self.assertEqual((640, 480), sent.size)
+        self.assertEqual(tagger["mac"]._image_content(path)["image_url"]["url"].split(",", 1)[1],
+                         base64.b64encode(path.read_bytes()).decode())
+
+    def test_remote_png_is_sent_as_jpeg(self):
+        path = self.root / "small.png"
+        Image.new("RGBA", (60, 40)).save(path)
+        url = self.taggers()["base"]._image_content(path)["image_url"]["url"]
+        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
+
+    def test_remote_burst_frames_are_capped(self):
+        path = self.root / "big.jpg"
+        Image.new("RGB", (3000, 2000)).save(path)
+        tagger = self.taggers()
+        def size(engine):
+            url = tagger[engine]._image_content(path, long_edge=0)["image_url"]["url"]
+            return max(Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).size)
+        self.assertEqual(1024, size("online"))
+        self.assertEqual(1024, size("base"))
+        self.assertEqual(3000, size("mac"))
+
+    def test_remote_error_carries_the_services_reason_clipped(self):
+        body = json.dumps({"error": {"message": "Incorrect API key provided.\x1b[31m " + "x" * 500}}).encode()
+        opener = _Opener(_http_error(401, body))
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+            with self.assertRaises(OmlxError) as caught:
+                self.taggers()["online"].caption(self.preview)
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("Online request failed:"))
+        self.assertIn("Incorrect API key provided.", message)
+        self.assertNotIn("\x1b", message)
+        self.assertLess(len(message), 320)
+
+    def test_remote_error_reason_may_be_a_plain_string(self):
+        opener = _Opener(_http_error(400, json.dumps({"error": "model not found"}).encode()))
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+            with self.assertRaisesRegex(OmlxError, "^Base request failed: .*model not found$"):
+                self.taggers()["base"].caption(self.preview)
+
+    def test_remote_html_error_body_is_not_passed_on(self):
+        for body in (b"<html><body>Bad gateway</body></html>", b"{\"error\": ", b"[1]"):
+            opener = _Opener(_http_error(502, body))
+            with self.subTest(body=body), patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+                with self.assertRaises(OmlxError) as caught:
+                    self.taggers()["online"].caption(self.preview)
+                self.assertEqual("Online request failed: HTTP Error 502: Failed", str(caught.exception))
+
+    def test_unreadable_error_body_falls_back_to_the_status_line(self):
+        class Broken:
+            def read(self, *_):
+                raise OSError("connection reset")
+
+            def close(self):
+                pass
+
+        error = urllib.error.HTTPError("https://api.example.com", 500, "Server Error", {}, Broken())
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(error)):
+            with self.assertRaises(OmlxError) as caught:
+                self.taggers()["online"].caption(self.preview)
+        self.assertEqual("Online request failed: HTTP Error 500: Server Error", str(caught.exception))
+
+    def test_mac_error_text_is_unchanged(self):
+        opener = _Opener(_http_error(404, json.dumps({"error": {"message": "nope"}}).encode()))
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+            with self.assertRaises(OmlxError) as caught:
+                self.taggers()["mac"].caption(self.preview)
+        self.assertEqual("Local oMLX request failed: HTTP Error 404: Failed", str(caught.exception))
+
+    def test_usage_is_tallied_and_missing_usage_is_unreported(self):
+        online = self.taggers()["online"]
+        self.send(online, _chat(usage={"prompt_tokens": 1200, "completion_tokens": 80}))
+        self.send(online, _chat())
+        self.assertEqual(usage_snapshot()["online"], {"prompt_tokens": 1200, "completion_tokens": 80, "calls": 2, "unreported": 1})
+        self.assertNotIn("base", usage_snapshot())
+
+    def test_malformed_usage_never_raises_and_counts_as_unreported(self):
+        for usage in (None, [], "lots", {"prompt_tokens": -1, "completion_tokens": 2},
+                      {"prompt_tokens": True, "completion_tokens": 2}, {"prompt_tokens": 1.5, "completion_tokens": 2},
+                      {"prompt_tokens": 3}):
+            omlx.record_usage("base", usage)
+        self.assertEqual({"prompt_tokens": 0, "completion_tokens": 0, "calls": 7, "unreported": 7}, usage_snapshot()["base"])
+        usage_snapshot()["base"]["calls"] = 99
+        self.assertEqual(7, usage_snapshot()["base"]["calls"], "the snapshot is a copy")
+
+    def test_list_models_reads_ids_and_refuses_redirects(self):
+        opener = _Opener(json.dumps({"data": [{"id": "b"}, {"id": "a"}, {"object": "x"}]}).encode())
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=opener) as build:
+            models = list_models("online", "https://api.example.com/v1beta/compat", "secret")
+        self.assertEqual(["a", "b"], models)
+        self.assertIsInstance(build.call_args.args[0], NoRedirectHandler)
+        request = opener.requests[0]
+        self.assertEqual("https://api.example.com/v1beta/compat/models", request.full_url)
+        self.assertEqual("Bearer secret", request.get_header("Authorization"))
+        redirect = urllib.error.HTTPError("https://api.example.com", 302, "Found", {}, None)
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(redirect)):
+            with self.assertRaisesRegex(OmlxError, "^Online "):
+                list_models("online", "https://api.example.com", "secret")
+
+    def test_list_models_without_a_listing_is_empty_and_other_failures_raise(self):
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(404, b"not here"))):
+            self.assertEqual([], list_models("base", "http://pc.local:11434", None))
+        body = json.dumps({"error": {"message": "bad key"}}).encode()
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(401, body))):
+            with self.assertRaisesRegex(OmlxError, "^Base .*bad key$"):
+                list_models("base", "http://pc.local:11434", None)
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(b"[1, 2]")):
+            with self.assertRaisesRegex(OmlxError, "^Base "):
+                list_models("base", "http://pc.local:11434", None)
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(b'{"data": []}')) as build:
+            opener = build.return_value
+            list_models("mac", "http://127.0.0.1:8000", "k")
+        self.assertEqual("http://127.0.0.1:8000/v1/models", opener.requests[0].full_url)
+
+
+if __name__ == "__main__":
+    unittest.main()

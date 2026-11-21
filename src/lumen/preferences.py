@@ -9,6 +9,7 @@ import os
 import unicodedata
 from dataclasses import replace
 
+from . import omlx
 from .catalog import Catalog
 from .config import Settings
 
@@ -58,8 +59,10 @@ def validate(key: str, value) -> object:
         if type(value) is not str or len(value) > MODEL_NAME_MAX or any(unicodedata.category(c) == "Cc" for c in value):
             raise ValueError(f"A model name must be text of at most {MODEL_NAME_MAX} characters on one line.")
     elif key in _URL_KEYS:
-        if type(value) is not str:  # the address rule arrives with the engines
+        if type(value) is not str:
             raise ValueError("An address must be text.")
+        if value:  # "" clears it
+            value = omlx.normalise_engine_url(key.removesuffix("_url"), value)
     return value
 
 

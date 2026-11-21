@@ -5,6 +5,8 @@ import io
 import json
 import math
 import os
+import threading
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -92,6 +94,89 @@ class StackReviewResponseError(OmlxError):
     def __init__(self, message: str, raw_response: str | None = None):
         super().__init__(message)
         self.raw_response = raw_response
+
+
+ERROR_PREFIX = {"mac": "Local oMLX", "base": "Base", "online": "Online"}  # engine -> how its errors begin
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+ERROR_REASON_MAX = 200
+
+
+def normalise_engine_url(engine: str, url: str) -> str:
+    """The stored form of an engine's address, or ValueError with a sentence for the page.
+
+    `mac` is oMLX's root (a trailing /v1 is dropped); `base` and `online` are the service's API base,
+    path included, with /v1 added only when no path was typed.
+    """
+    url = url.strip().rstrip("/")
+    parsed = urlparse(url)
+    if engine == "mac":
+        valid = parsed.scheme in {"http", "https"} and parsed.hostname in _LOOPBACK
+        message = "oMLX endpoint must be a loopback http(s) URL"
+    elif engine == "base":
+        valid = parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+        message = "Base needs an http or https address"
+    elif engine == "online":
+        valid = parsed.scheme == "https" and bool(parsed.hostname)
+        message = "Online needs an https address"
+    else:
+        raise ValueError(f"unknown engine: {engine}")
+    if not valid:
+        raise ValueError(message)
+    if "@" in parsed.netloc or "?" in url or "#" in url or any(c.isspace() for c in url):
+        raise ValueError("An address must not carry a user name, password, query or fragment.")
+    parsed.port  # a malformed port raises ValueError here rather than at the first request
+    if engine == "mac":
+        return url[:-3] if url.endswith("/v1") else url
+    return url if parsed.path else url + "/v1"
+
+
+def api_base(engine: str, url: str) -> str:
+    return url + "/v1" if engine == "mac" else url
+
+
+def _http_reason(error: urllib.error.HTTPError) -> str:
+    """': <the service's own reason>' from a JSON error body, clipped and cleaned; '' when there is none."""
+    try:
+        body = json.loads(error.read(2000))
+        reason = body["error"]
+        if isinstance(reason, dict):
+            reason = reason["message"]
+    except Exception:  # an unreadable or non-JSON body must never mask the HTTP error itself
+        return ""
+    finally:
+        error.close()
+    if not isinstance(reason, str):
+        return ""
+    reason = "".join(c for c in reason if unicodedata.category(c)[0] != "C").strip()[:ERROR_REASON_MAX]
+    return f": {reason}" if reason else ""
+
+
+_usage_lock = threading.Lock()
+_usage: dict[str, dict[str, int]] = {}
+
+
+def record_usage(engine: str, usage) -> None:
+    """Add one reply's token counts to the engine's tally; a reply without readable counts is `unreported`."""
+    counts = (usage.get("prompt_tokens"), usage.get("completion_tokens")) if isinstance(usage, dict) else (None, None)
+    reported = all(type(n) is int and n >= 0 for n in counts)
+    with _usage_lock:
+        tally = _usage.setdefault(engine, {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0, "unreported": 0})
+        tally["calls"] += 1
+        if reported:
+            tally["prompt_tokens"] += counts[0]
+            tally["completion_tokens"] += counts[1]
+        else:
+            tally["unreported"] += 1
+
+
+def usage_snapshot() -> dict:
+    with _usage_lock:
+        return {engine: dict(tally) for engine, tally in _usage.items()}
+
+
+def reset_usage() -> None:
+    with _usage_lock:
+        _usage.clear()
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -410,14 +495,13 @@ def parse_composition_response(raw: str, candidate_ids: set[str]) -> Composition
 
 
 class OmlxTagger:
-    def __init__(self, base_url: str, model: str, api_key: str | None = None, *, role: str = "review"):
-        parsed = urlparse(base_url)
-        if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
-            raise ValueError("oMLX endpoint must be a loopback http(s) URL")
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str, model: str, api_key: str | None = None, *, role: str = "review",
+                 engine: str = "mac"):
+        self.base_url = normalise_engine_url(engine, base_url)
+        self.engine = engine
         self.model = model
         self.role = role
-        self.api_key = api_key or self._local_api_key()
+        self.api_key = api_key or (self._local_api_key() if engine == "mac" else None)  # never send oMLX's key away
 
     def tag(self, preview: Path, timeout: float = 240, *, vocabulary: dict[str, list[str]] | None = None,
             place: str | None = None) -> TagResult:
@@ -567,15 +651,17 @@ class OmlxTagger:
             content.extend(({"type": "text", "text": f"Frame {frame_id}"}, self._image_content(path, long_edge=0)))  # sharpness is compared per pixel
         return parse_burst_response(self._complete(content, timeout, max_tokens=400), set(ids))
 
-    @staticmethod
-    def _image_content(path: Path, *, long_edge: int = MODEL_IMAGE_LONG_EDGE) -> dict:
+    def _image_content(self, path: Path, *, long_edge: int = MODEL_IMAGE_LONG_EDGE) -> dict:
         if not isinstance(path, Path) or not path.is_file():
             raise ValueError(f"composition preview is unavailable: {path}")
         mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
         data = path.read_bytes()
+        remote = self.engine != "mac"
+        if remote:  # off this Mac: always capped, always re-encoded so no EXIF, GPS or serial number leaves
+            long_edge = long_edge or MODEL_IMAGE_LONG_EDGE
         if long_edge:
             with Image.open(io.BytesIO(data)) as image:
-                if max(image.size) > long_edge:
+                if remote or max(image.size) > long_edge:
                     image.thumbnail((long_edge, long_edge))
                     buffer = io.BytesIO()
                     image.convert("RGB").save(buffer, "JPEG", quality=90)
@@ -585,21 +671,21 @@ class OmlxTagger:
 
     def _complete(self, content: list[dict], timeout: float, *, max_tokens: int = 500, system: str | None = None) -> str:
         messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": content}]
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0,
-            "max_tokens": max_tokens,
-            "chat_template_kwargs": {"enable_thinking": False},  # Qwen-style thinking otherwise eats the budget and returns no content.
-        }
+        payload = {"model": self.model, "messages": messages}
+        if self.engine != "online":  # at least one large online service answers 400 to any temperature below 1
+            payload["temperature"] = 0
+        payload["max_tokens"] = max_tokens
+        if self.engine == "mac":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}  # Qwen-style thinking otherwise eats the budget and returns no content.
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(
-            f"{self.base_url}/v1/chat/completions",
+            f"{api_base(self.engine, self.base_url)}/chat/completions",
             data=json.dumps(payload).encode(),
             headers=headers,
         )
+        prefix = ERROR_PREFIX[self.engine]
         try:
             opener = urllib.request.build_opener(NoRedirectHandler())
             with opener.open(request, timeout=timeout) as response:
@@ -607,14 +693,17 @@ class OmlxTagger:
             message = result["choices"][0]["message"]
             content = message.get("content")
         except urllib.error.HTTPError as error:
+            reason = "" if self.engine == "mac" else _http_reason(error)
             error.close()
-            raise OmlxError(f"Local oMLX request failed: {error}") from error
-        except (urllib.error.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as error:
-            raise OmlxError(f"Local oMLX request failed: {error}") from error
+            raise OmlxError(f"{prefix} request failed: {error}{reason}") from error
+        except (urllib.error.URLError, TimeoutError, KeyError, IndexError, TypeError, AttributeError,
+                json.JSONDecodeError) as error:
+            raise OmlxError(f"{prefix} request failed: {error}") from error
+        record_usage(self.engine, result.get("usage"))
         if not isinstance(content, str):
             if isinstance(message, dict) and message.get("reasoning_content"):
-                raise OmlxError("Local oMLX model spent its token budget on reasoning and returned no answer; use a model that answers directly")
-            raise OmlxError("Local oMLX response did not contain text")
+                raise OmlxError(f"{prefix} model spent its token budget on reasoning and returned no answer; use a model that answers directly")
+            raise OmlxError(f"{prefix} response did not contain text")
         return content
 
     @staticmethod
@@ -660,3 +749,27 @@ def get_server_status(base_url: str, api_key: str | None = None, timeout: float 
         "loaded_models": loaded,
     }
 
+
+def list_models(engine: str, url: str, api_key: str | None, timeout: float = 10) -> list[str]:
+    """The model ids a service offers, sorted; [] when it is reachable but has no listing (404)."""
+    url = normalise_engine_url(engine, url)
+    key = api_key or (OmlxTagger._local_api_key() if engine == "mac" else None)
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    request = urllib.request.Request(f"{api_base(engine, url)}/models", headers=headers)
+    prefix = ERROR_PREFIX[engine]
+    try:
+        opener = urllib.request.build_opener(NoRedirectHandler())
+        with opener.open(request, timeout=timeout) as response:
+            data = json.load(response)["data"]
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            error.close()
+            return []
+        reason = "" if engine == "mac" else _http_reason(error)
+        error.close()
+        raise OmlxError(f"{prefix} model list request failed: {error}{reason}") from error
+    except (urllib.error.URLError, TimeoutError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise OmlxError(f"{prefix} model list request failed: {error}") from error
+    if not isinstance(data, list):
+        raise OmlxError(f"{prefix} model list was not a list")
+    return sorted(item["id"] for item in data if isinstance(item, dict) and isinstance(item.get("id"), str))

@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from lumen import preferences
+from lumen import omlx, preferences
 from lumen.catalog import Catalog
 from lumen.config import Settings
 
@@ -95,6 +95,24 @@ class PreferencesTests(unittest.TestCase):
             {"name": "OpenAI", "url": "https://api.openai.com/v1"},
             {"name": "Qwen (Alibaba Cloud)", "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"},
         ))
+
+    def test_every_service_preset_is_a_valid_online_address(self):
+        for preset in preferences.SERVICE_PRESETS:
+            with self.subTest(preset=preset["name"]):
+                self.assertEqual(omlx.normalise_engine_url("online", preset["url"]), preset["url"])
+
+    def test_validate_addresses_stores_the_normalised_form(self):
+        self.assertEqual(preferences.validate("base_url", " http://pc.local:11434/ "), "http://pc.local:11434/v1")
+        self.assertEqual(preferences.validate("online_url", "https://api.example.com/v1/"), "https://api.example.com/v1")
+        self.assertEqual(preferences.validate("base_url", ""), "")
+        self.assertEqual(preferences.validate("online_url", ""), "")
+        with self.assertRaisesRegex(ValueError, "^Online needs an https address$"):
+            preferences.validate("online_url", "http://api.example.com")
+        with self.assertRaisesRegex(ValueError, "^Base needs an http or https address$"):
+            preferences.validate("base_url", "ftp://pc")
+        for bad in (3, None, "https://k:s@api.example.com"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                preferences.validate("online_url", bad)
 
     def test_model_for_follows_the_engine(self):
         s = replace(self.settings, ai_engine="base", base_fast_model="small", base_review_model="big")
