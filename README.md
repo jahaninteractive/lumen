@@ -290,18 +290,28 @@ session's tokens once it has made calls. A saved key belongs to the address it
 was saved for: moving that engine to another host is refused until you remove
 or replace the key.
 
+In the AI engine section, **Base setup** and **Online setup** fold away under
+the engine choice, one open at a time. The chosen engine's setup opens by
+itself; open the other to set it up without switching to it.
+
 The Online form's **Service** select fills in a documented address; **Other**
 leaves it for typing, and the address stays an ordinary field. The Base hint
 gives the usual addresses of two home model servers.
 
 | Engine | Service or program | Address |
 |--------|--------------------|---------|
-| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one) |
+| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one). Its model list is not readable through this address, so type the model names |
 | Online | Google | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | Online | OpenAI | `https://api.openai.com/v1` |
 | Online | Qwen (Alibaba Cloud) | no preset: choose **Other** and paste your workspace's address, `https://<WorkspaceId>.<region>.maas.aliyuncs.com/compatible-mode/v1`, from the service's console |
 | Base | Ollama | `http://<your PC>:11434/v1` |
 | Base | LM Studio | `http://<your PC>:1234/v1` |
+
+Both remote engines have been run for real: Base against a home PC and
+Online against one service. The guide has the times measured, how to set up a
+home server (turn the model's reasoning off; keep to what fits in the graphics
+card's memory), and which services have been tried:
+[Setting up a Base server](docs/GUIDE.md#setting-up-a-base-server).
 
 ### What leaves the Mac
 
@@ -326,7 +336,9 @@ setting that sends a frame's coordinates to the place lookup service.)
 
 Online services charge for tokens. Lumen counts the tokens each engine
 reports for the running server, shown as "Tokens this session" in the AI
-engine section; a reply that reports none is counted as "not reported", and
+engine section with the input and output tokens and the number of calls (one
+total per engine, not per model; the service's own console is where cost is
+shown); a reply that reports none is counted as "not reported", and
 the count starts again when the server restarts.
 
 Batches ask first. On Base or Online, tagging, Tag, scan and caption, Pick and
