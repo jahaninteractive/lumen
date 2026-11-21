@@ -112,7 +112,15 @@ async function aiCall(label, action, key = null) {
     aiStatus('failed', `${label} failed: ${error.message}`);
     aiTask(key, 'failed', `failed: ${error.message}`);
     throw error;
+  } finally {
+    if (state.status?.ai_engine === 'base' || state.status?.ai_engine === 'online') {  // the marker's token count moved
+      request('/api/status').then(status => { state.status = status; renderSystemStatus(status); }).catch(() => {});
+    }
   }
+}
+// The session's token total for one engine, formatted as the Settings line shows it.
+function tokenTotal(item) {
+  return (item.prompt_tokens + item.completion_tokens).toLocaleString();
 }
 
 function announce(message) {
@@ -1730,10 +1738,11 @@ async function applyFilters(query = filterQuery()) {
 const roleSelects = [...document.querySelectorAll('#role-model-pair select[data-role]')];  // the engine switch beside them is not a role
 function syncRoleModels(status) {
   const models = Array.isArray(status.review_models) ? status.review_models : [];
-  const shown = models.length >= 2 || engineReady('base') || engineReady('online');  // the engine switch needs the pair once a remote engine is set up
+  const remote = status.ai_engine === 'base' || status.ai_engine === 'online';
+  // The engine switch needs the pair once a remote engine is set up, and always while one is in use: a lost key must not strand it.
+  const shown = remote || models.length >= 2 || engineReady('base') || engineReady('online');
   document.querySelector('#role-model-pair').hidden = !shown;
   document.querySelector('#rail-show-models').hidden = !shown;
-  const remote = status.ai_engine === 'base' || status.ai_engine === 'online';
   const loaded = status.omlx_live?.loaded_models || [];
   for (const select of roleSelects) {
     const current = status.omlx_roles?.[select.dataset.role]?.model ?? '';
@@ -1757,6 +1766,35 @@ for (const select of roleSelects) {
     }
     await load();
   });
+}
+
+// A server older than this page answers without omlx_roles; the sheet must still render, so the status line only reports it.
+// The header reports health only; model names and their load state live in the footer strip.
+function renderSystemStatus(status) {
+  const systemStatus = document.querySelector('#system-status');
+  const remoteEngine = status.ai_engine === 'base' || status.ai_engine === 'online';  // off this Mac, oMLX's health is beside the point
+  const missing = Object.entries(status.tools || {}).filter(([name, tool]) => tool?.available === false && !(remoteEngine && name === 'omlx')).map(([name]) => `${name} missing`);
+  const health = [...(remoteEngine ? [] : [status.omlx_live?.online ? 'Local AI online' : 'Local AI offline']), ...missing].join(' · ');
+  const tools = status.omlx_roles
+    ? health
+    : `${health} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
+  // Static files are read from disk on every request while the Python stays as it was
+  // imported, so a stale server looks current and fails as whatever validation error comes
+  // first. It goes ahead of the tool summary because nothing else here is actionable until
+  // it is dealt with.
+  const stale = Array.isArray(status.stale) ? status.stale : [];
+  // Off this Mac the line says where the advice goes, and whether it answered when last asked.
+  const usage = status.ai_usage?.[status.ai_engine];
+  const remote = ENGINE_LABELS[status.ai_engine] && status.ai_engine !== 'mac'
+    ? [`AI: ${ENGINE_LABELS[status.ai_engine]}${usage?.calls > 0 ? ` · ${tokenTotal(usage)} tokens` : ''}${status.ai_engine_reachable === false ? ' · not reachable' : ''}`] : [];
+  systemStatus.textContent = [...stale, ...remote, tools].filter(Boolean).join(' · ');
+  // The footer names where the advice runs; its idle line is the markup's on this Mac.
+  const aiLabel = remoteEngine ? ENGINE_LABELS[status.ai_engine] : 'Local AI';
+  document.querySelector('.ai-bar')?.setAttribute('aria-label', remoteEngine ? 'AI engine' : 'Local AI');
+  if (!aiStatusLine.dataset.phase) aiStatusLine.textContent = `${aiLabel} idle. Requests and their results are reported here.`;
+  document.querySelector('#app-version').textContent = status.version ? `v${status.version}` : '';
+  if (stale.length) systemStatus.setAttribute('data-stale', '');
+  else systemStatus.removeAttribute('data-stale');
 }
 
 let resumed = false;
@@ -1783,31 +1821,7 @@ async function load() {
     state.selectedId = null;
     inspection.textContent = 'Select a frame to see why it ranked where it did.';
   }
-  // A server older than this page answers without omlx_roles; the sheet must still render, so the status line only reports it.
-  // The header reports health only; model names and their load state live in the footer strip.
-  const systemStatus = document.querySelector('#system-status');
-  const remoteEngine = status.ai_engine === 'base' || status.ai_engine === 'online';  // off this Mac, oMLX's health is beside the point
-  const missing = Object.entries(status.tools || {}).filter(([name, tool]) => tool?.available === false && !(remoteEngine && name === 'omlx')).map(([name]) => `${name} missing`);
-  const health = [...(remoteEngine ? [] : [status.omlx_live?.online ? 'Local AI online' : 'Local AI offline']), ...missing].join(' · ');
-  const tools = status.omlx_roles
-    ? health
-    : `${health} · the running Lumen server is older than this page; restart lumen serve to enable AI tools`;
-  // Static files are read from disk on every request while the Python stays as it was
-  // imported, so a stale server looks current and fails as whatever validation error comes
-  // first. It goes ahead of the tool summary because nothing else here is actionable until
-  // it is dealt with.
-  const stale = Array.isArray(status.stale) ? status.stale : [];
-  // Off this Mac the line says where the advice goes, and whether it answered when last asked.
-  const remote = ENGINE_LABELS[status.ai_engine] && status.ai_engine !== 'mac'
-    ? [`AI: ${ENGINE_LABELS[status.ai_engine]}${status.ai_engine_reachable === false ? ' · not reachable' : ''}`] : [];
-  systemStatus.textContent = [...stale, ...remote, tools].filter(Boolean).join(' · ');
-  // The footer names where the advice runs; its idle line is the markup's on this Mac.
-  const aiLabel = remoteEngine ? ENGINE_LABELS[status.ai_engine] : 'Local AI';
-  document.querySelector('.ai-bar')?.setAttribute('aria-label', remoteEngine ? 'AI engine' : 'Local AI');
-  if (!aiStatusLine.dataset.phase) aiStatusLine.textContent = `${aiLabel} idle. Requests and their results are reported here.`;
-  document.querySelector('#app-version').textContent = status.version ? `v${status.version}` : '';
-  if (stale.length) systemStatus.setAttribute('data-stale', '');
-  else systemStatus.removeAttribute('data-stale');
+  renderSystemStatus(status);
   syncRoleModels(status);
   document.querySelector('#export-destination').textContent = status.jpeg_output_dir;
   renderGroups();
@@ -3597,7 +3611,8 @@ function clearSettingErrors(section) {
 }
 // A refusal that starts with a setting's key sits beside that field; any other sits under the buttons.
 function showSettingRefusal(section, message, keys) {
-  const key = keys.find(name => message.startsWith(name));
+  const keyed = /^(Base|Online) has a key saved/.exec(message)?.[1].toLowerCase();  // a saved key refusing a new address
+  const key = keys.find(name => message.startsWith(name) || name === `${keyed}_url`);
   const row = key && settingRow(key);
   if (!row) {
     section.querySelector('.settings-error').textContent = message;
@@ -3654,8 +3669,7 @@ function fillSettingsStatus(status) {
   const stale = Array.isArray(status.stale) && status.stale.length ? status.stale : ['Up to date'];
   document.querySelector('#settings-server-stale').replaceChildren(...stale.map(reason => Object.assign(document.createElement('li'), { textContent: reason })));
   const usage = Object.entries(status.ai_usage || {}).filter(([, item]) => item?.calls > 0).map(([engine, item]) => {
-    const tokens = (item.prompt_tokens + item.completion_tokens).toLocaleString();
-    return `${ENGINE_LABELS[engine] ?? engine} ${tokens} tokens${item.unreported > 0 ? ` (${plural(item.unreported, 'call')} not reported)` : ''}`;
+    return `${ENGINE_LABELS[engine] ?? engine} ${tokenTotal(item)} tokens${item.unreported > 0 ? ` (${plural(item.unreported, 'call')} not reported)` : ''}`;
   });
   const line = document.querySelector('#settings-usage');
   line.hidden = !usage.length;
@@ -3740,9 +3754,9 @@ for (const engine of ['base', 'online']) {
     document.querySelector(`#${engine}-key-add`).focus();
   });
   const saveKey = async () => {
-    const key = field.value;
+    const key = field.value.trim();  // a paste often carries a trailing newline or space
     field.value = '';  // cleared before the request is even sent; nothing else ever holds it
-    if (!key.trim()) {
+    if (!key) {
       result.textContent = 'Type or paste the key first.';
       return announce(result.textContent);
     }

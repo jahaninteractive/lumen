@@ -225,8 +225,23 @@ def _refresh_models_quietly(settings: Settings) -> None:
     engine = settings.ai_engine
     try:
         omlx.refresh_models(engine, getattr(settings, f"{engine}_url"), keychain.get_key(engine))
-    except (OmlxError, ValueError):
+    except Exception:  # a background thread: whatever went wrong, the status line already says not reachable
         pass
+
+
+MODEL_BATCHES = ("tag", "assist", "cull", "review_rejects", "triage")  # job kinds that call the AI engine per frame
+
+
+def _check_saved_change(before: Settings, after: Settings, catalog) -> None:
+    """Refuses, before any call, a switch under a running model batch and a saved key following a new host."""
+    engine = before.ai_engine
+    moved = after.ai_engine != engine or (engine != "mac" and getattr(after, f"{engine}_url") != getattr(before, f"{engine}_url"))
+    if moved and any(job.kind in MODEL_BATCHES and job.status in ("queued", "running") for job in catalog.list_jobs()):
+        raise ValueError(f"A batch is still running on {preferences.ENGINE_LABELS[engine]}: wait for it or cancel it first.")
+    for remote in ("base", "online"):
+        old, new = getattr(before, f"{remote}_url"), getattr(after, f"{remote}_url")
+        if old and new and urlparse(old).netloc != urlparse(new).netloc and keychain.get_key(remote) is not None:
+            raise ValueError(f"{omlx.ERROR_PREFIX[remote]} has a key saved for its current address: remove or replace the key first.")
 
 
 def _check_engine_change(before: Settings, after: Settings) -> None:
@@ -739,8 +754,10 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     if not payload:
                         raise ValueError("settings needs at least one setting")
                     # Checked on what the settings would become, before anything is saved.
-                    _check_engine_change(settings, replace(settings, **{key: preferences.validate(key, value)
-                                                                      for key, value in payload.items()}))
+                    after = replace(settings, **{key: preferences.validate(key, value) for key, value in payload.items()})
+                    with Library(settings) as library:
+                        _check_saved_change(settings, after, library.catalog)
+                    _check_engine_change(settings, after)
                     with Library(settings) as library:
                         preferences.save(library.catalog, payload)
                         settings = preferences.overlay(settings, library.catalog)  # keeps a session role-model switch
@@ -757,7 +774,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self._send_json({"ok": True, "models": models})
                     return
                 if path == "/api/settings/key":
-                    if payload.keys() != {"engine", "key"} or payload["engine"] not in {"base", "online"} or not isinstance(payload["key"], str):
+                    if payload.keys() != {"engine", "key"} or payload["engine"] not in ("base", "online") or not isinstance(payload["key"], str):
                         raise ValueError("a key needs an engine, Base or Online, and the key and nothing else")
                     keychain.set_key(payload["engine"], payload["key"])  # its errors never carry the key
                     self._send_json({"engine": payload["engine"], "key_saved": True})

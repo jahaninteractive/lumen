@@ -27,7 +27,7 @@ from lumen.previews import PreviewError
 from lumen.rawdevelop import DevelopRender
 from lumen.omlx import CompositionReview, OmlxError
 from lumen.pipelines import DarktablePipeline
-from lumen.web import make_server
+from lumen.web import _refresh_models_quietly, make_server
 
 try:
     from tests.test_astro import FAKE_SIRIL, SIRIL
@@ -2193,6 +2193,74 @@ console.log(JSON.stringify([panel.hidden, store]));
         with patch("lumen.omlx.list_models", side_effect=AssertionError("the empty listing is held")), \
                 patch("lumen.library.Library.caption_photo", lambda self, photo_id, tagger: {"model": tagger.model, "engine": tagger.engine}):
             self.assertEqual((200, {"model": "typed", "engine": "base"}), self.post_json("/api/photos/1/caption", {}))
+        roles = self.status()[1]["omlx_roles"]  # what tagger_for accepts, status calls loaded
+        self.assertEqual(({"model": "", "loaded": False}, {"model": "typed", "loaded": True}), (roles["fast"], roles["review"]))
+        omlx.reset_models()  # not reachable: nothing is loaded
+        self.assertFalse(self.status()[1]["omlx_roles"]["review"]["loaded"])
+
+    def model_batch(self, kind="tag", status="queued"):
+        with Library(Settings(library_dir=self.root / "library")) as library:
+            job = library.catalog.create_job(kind=kind, manifest_path=str(self.root / "m.json"), log_path=str(self.root / "l.log"))
+            if status != "queued":
+                library.catalog.update_job(job.id, status=status)
+        return job.id
+
+    def test_an_engine_switch_waits_for_a_running_model_batch(self):
+        self.use_base()
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("refused before any call")):
+            for kind, status in (("tag", "queued"), ("assist", "running"), ("cull", "running"),
+                                 ("review_rejects", "queued"), ("triage", "running")):
+                job_id = self.model_batch(kind, status)
+                with self.subTest(kind=kind):
+                    for payload in ({"ai_engine": "mac"}, {"base_url": "http://other.local:11434"}):
+                        self.assertEqual((400, {"error": "A batch is still running on Base: wait for it or cancel it first."}),
+                                         self.post_json("/api/settings", payload))
+                    self.assertEqual(200, self.post_json("/api/settings", {"near_duplicate_distance": 3})[0])  # other settings still save
+                with Library(Settings(library_dir=self.root / "library")) as library:
+                    library.catalog.update_job(job_id, status="cancelled")
+        self.assertEqual("base", self.status()[1]["ai_engine"])
+        self.model_batch("export", "running")  # not a model batch
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("switching to this Mac lists nothing")):
+            self.assertEqual(200, self.post_json("/api/settings", {"ai_engine": "mac"})[0])
+
+    def test_a_batch_on_this_mac_holds_the_switch_too(self):
+        self.post_json("/api/settings", {"base_url": "http://pc.local:11434"})
+        self.model_batch("tag", "running")
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("refused before any call")):
+            self.assertEqual((400, {"error": "A batch is still running on This Mac: wait for it or cancel it first."}),
+                             self.post_json("/api/settings", {"ai_engine": "base"}))
+            self.assertEqual(200, self.post_json("/api/settings", {"base_url": "http://elsewhere.local:11434"})[0])  # not in use
+
+    def test_a_saved_key_does_not_follow_a_new_host(self):
+        self.assertEqual(200, self.post_json("/api/settings", {"online_url": "https://api.example.com/v1"})[0])
+        self.keychain.get_key.side_effect = lambda engine: "sk-abc12345" if engine == "online" else None
+        refusal = (400, {"error": "Online has a key saved for its current address: remove or replace the key first."})
+        for url in ("https://other.example.com/v1", "https://api.example.com:8443/v1"):
+            with self.subTest(url=url):
+                self.assertEqual(refusal, self.post_json("/api/settings", {"online_url": url}))
+        rows = {row["key"]: row for row in self.get_json("/api/settings")[1]["settings"]}
+        self.assertEqual("https://api.example.com/v1", rows["online_url"]["value"])
+        self.assertEqual(200, self.post_json("/api/settings", {"online_url": "https://api.example.com/v2/compat"})[0])  # path only
+        self.assertEqual(200, self.post_json("/api/settings", {"online_url": ""})[0])  # clearing
+        self.assertEqual(200, self.post_json("/api/settings", {"online_url": "https://other.example.com/v1"})[0])  # no current address
+        self.assertEqual(200, self.post_json("/api/settings", {"base_url": "http://pc.local:11434"})[0])
+        self.assertEqual(200, self.post_json("/api/settings", {"base_url": "http://other.local:11434"})[0])  # Base has no key
+        self.keychain.get_key.side_effect = lambda engine: "k-base-1234"
+        self.assertEqual((400, {"error": "Base has a key saved for its current address: remove or replace the key first."}),
+                         self.post_json("/api/settings", {"base_url": "http://pc.local:11434"}))
+
+    def test_the_startup_listing_never_dies_with_a_traceback(self):
+        import http.client
+        settings = Settings(library_dir=self.root / "library", ai_engine="base", base_url="http://pc.local:11434/v1")
+        omlx._models["base"] = ["stale"]  # held from an earlier listing
+        for failure in (ConnectionResetError(54, "reset"), http.client.IncompleteRead(b""), RuntimeError("Keychain locked")):
+            with self.subTest(failure=type(failure).__name__), patch("lumen.omlx.list_models", side_effect=failure):
+                _refresh_models_quietly(settings)
+                self.assertIsNone(omlx.held_models("base"))
+
+    def test_key_route_refuses_an_unhashable_engine(self):
+        self.assertEqual(400, self.post_json("/api/settings/key", {"engine": ["online"], "key": "sk-abc12345"})[0])
+        self.keychain.set_key.assert_not_called()
 
     def test_status_and_settings_never_contain_the_key(self):
         self.keychain.get_key.side_effect = lambda engine: "sk-abc12345"
@@ -2201,9 +2269,14 @@ console.log(JSON.stringify([panel.hidden, store]));
             self.post_json("/api/settings/test", {"engine": "base"})
         for body in (self.status()[1], self.get_json("/api/settings")[1]):
             self.assertNotIn("sk-abc12345", json.dumps(body))
-        with patch("lumen.omlx.list_models", side_effect=OmlxError("Base model list request failed: bad key sk-abc12345")):
-            for path, payload in (("/api/settings/test", {"engine": "base"}), ("/api/settings", {"base_url": "http://x.local"})):
-                self.assertNotIn("sk-abc12345", json.dumps(self.post_json(path, payload)[1]))
+        body = json.dumps({"error": {"message": "bad key sk-abc12345"}}).encode()
+        with patch("lumen.omlx.urllib.request.build_opener") as opener:  # the real listing, a service echoing the key
+            opener.return_value.open.side_effect = lambda *a, **k: (_ for _ in ()).throw(
+                urllib.error.HTTPError("http://pc.local:11434/v1/models", 401, "Unauthorized", {}, io.BytesIO(body)))
+            for path, payload in (("/api/settings/test", {"engine": "base"}), ("/api/settings", {"base_url": "http://pc.local:11434/v2"})):
+                reply = self.post_json(path, payload)[1]
+                self.assertNotIn("sk-abc12345", json.dumps(reply))
+                self.assertIn("<key>", json.dumps(reply))
 
     def test_saved_settings_are_loaded_when_the_server_starts(self):
         self.assertEqual(200, self.post_json("/api/settings", {"geocode_online": True})[0])
@@ -2598,6 +2671,8 @@ let resumeJobs = [];
 let importPolls = 0;
 const importPosts = [];
 const tagPosts = [];
+const keyPosts = [];
+let remoteUsage = {};
 const assistPosts = [];
 let tagPolls = 0;
 const tagJob = (status, progress, extra = {}) => ({ job_id: 15, kind: 'tag', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
@@ -2649,7 +2724,7 @@ async function fetch(url, options = {}) {
   let status = 200;
   if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
   else if (url === '/api/status' && scenario === 'stale-server') payload = { omlx_live: { summary: 'Ready' }, stale: ['This server is running code older than the files on disk. Restart it with lumen serve, then reload this page.'], omlx_roles: { fast: { model: 'm', loaded: true }, review: { model: 'm', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
-  else if (url === '/api/status' && scenario === 'remote-confirm') payload = { omlx_live: { summary: 'Ready', online: true }, ai_engine: 'base', ai_engine_host: '127.0.0.1:9', ai_engine_reachable: false, review_models: [], omlx_roles: { fast: { model: 'f', loaded: true }, review: { model: 'r', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
+  else if (url === '/api/status' && scenario === 'remote-confirm') payload = { omlx_live: { summary: 'Ready', online: true }, ai_engine: 'base', ai_engine_host: '127.0.0.1:9', ai_engine_reachable: false, ai_usage: remoteUsage, review_models: [], omlx_roles: { fast: { model: 'f', loaded: true }, review: { model: 'r', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
   else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready', online: true }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
@@ -2733,6 +2808,7 @@ async function fetch(url, options = {}) {
     rejectRows = rejectRows.filter(row => !body.photo_ids.includes(row.photo_id));
     payload = { decided: body.photo_ids.map(id => ({ photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 })), remaining: rejectRows.length };
   }
+  else if (url === '/api/settings/key') { keyPosts.push(JSON.parse(options.body)); payload = { engine: 'online', key_saved: true }; }
   else if (url === '/api/photos/tag') {
     assert.equal(options.method, 'POST');
     tagPosts.push(JSON.parse(options.body));
@@ -5210,6 +5286,16 @@ const regression = `
     await load();
     assert.equal(element('#system-status').textContent, 'AI: Base · not reachable', 'no oMLX health on a remote engine');
     assert.equal(element('#ai-status').textContent, 'Base idle. Requests and their results are reported here.');
+    assert.equal(element('#role-model-pair').hidden, false, 'the engine switch stays reachable on a remote engine with no models');
+    remoteUsage = { base: { prompt_tokens: 1200, completion_tokens: 80, calls: 2, unreported: 0 } };
+    await aiCall('Caption', async () => 'ok');
+    await new Promise(setImmediate);  // the refresh is not awaited by the call
+    assert.equal(element('#system-status').textContent, 'AI: Base · 1,280 tokens · not reachable', 'an advice call refreshes the marker');
+    remoteUsage = {};
+    await load();
+    element('#online-key').value = '  sk-abc12345 ';
+    await element('#online-key-save').listeners.click();
+    assert.deepEqual(keyPosts, [{ engine: 'online', key: 'sk-abc12345' }], 'a pasted key is trimmed');
     const asked = element('#tag-keepers').listeners.click();
     await new Promise(setImmediate);
     assert.equal(element('#remote-confirm').hidden, false, 'a remote engine asks before sending');

@@ -122,7 +122,9 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         held = held_models(engine)
         engine_host = urlparse(getattr(settings, f"{engine}_url")).netloc or None
         engine_reachable = held is not None
-        roles = {role: {"model": (model := settings.model_for(role)), "loaded": model in (held or [])} for role in ROLES}
+        # an empty listing: the service lists nothing, so a typed name stands (as tagger_for accepts it)
+        roles = {role: {"model": (model := settings.model_for(role)),
+                        "loaded": held is not None and bool(model) and (model in held or not held)} for role in ROLES}
     geonames_dir = settings.geonames_dir
     geonames = {"dir": str(geonames_dir) if geonames_dir else None, "files": 0, "places": 0,
                 "online": settings.geocode_online}
