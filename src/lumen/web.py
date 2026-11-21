@@ -621,7 +621,11 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 self._send_json({"removed": name})
                 return
             if key := re.fullmatch(r"/api/settings/key/(base|online)", path):
-                keychain.delete_key(key.group(1))
+                try:
+                    keychain.delete_key(key.group(1))
+                except (ValueError, RuntimeError) as error:  # fixed messages, never the key
+                    self._send_json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                    return
                 self._send_json({"engine": key.group(1), "key_saved": False})
                 return
             match = re.fullmatch(r"/api/photos/(\d+)/develop", path)

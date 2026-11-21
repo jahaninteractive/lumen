@@ -1916,6 +1916,10 @@ console.log(JSON.stringify([panel.hidden, store]));
         status, body = self.post_json("/api/settings/key", {"engine": "base", "key": "sk-abc12345"})
         self.assertEqual((400, {"error": "could not save the key to the Keychain"}), (status, body))
 
+    def test_delete_key_route_failure_is_a_400(self):
+        self.keychain.delete_key.side_effect = RuntimeError("could not remove the key from the Keychain")
+        self.assertEqual((400, {"error": "could not remove the key from the Keychain"}), self.delete_json("/api/settings/key/online"))
+
     def test_delete_key_route(self):
         self.assertEqual((200, {"engine": "base", "key_saved": False}), self.delete_json("/api/settings/key/base"))
         self.keychain.delete_key.assert_called_once_with("base")
