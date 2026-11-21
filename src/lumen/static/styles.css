@@ -546,8 +546,10 @@ label[for="keyword-input"] { display: block; margin-bottom: .35rem; font-weight:
 .setting-row .applies { color: var(--muted); font-size: .85rem; }  /* cyan reads as a link here */
 .setting-error, .settings-error { color: var(--danger); }
 .settings-error:empty, .test-result:empty { display: none; }
-.engine-group { margin: 1.25rem 0; padding-top: 1rem; border-top: 1px solid var(--line); }
-.workflow .engine-group h3 { margin-bottom: .75rem; }
+.engine-group { border-top: 1px solid var(--line); }
+.engine-group:last-of-type { border-bottom: 1px solid var(--line); margin-bottom: 1.25rem; }
+.engine-group summary { min-height: 44px; padding: .65rem 0; color: var(--cyan); cursor: pointer; font-weight: 700; }
+.engine-group[open] summary { margin-bottom: .5rem; }
 .engine-key { margin: 0 0 1.25rem; }
 .engine-key .button-row { margin: .35rem 0; }
 .engine-key .input-row { max-width: 36rem; margin: .35rem 0; }

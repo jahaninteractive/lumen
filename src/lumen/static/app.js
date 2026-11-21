@@ -3676,12 +3676,19 @@ function fillSettingsStatus(status) {
   line.textContent = `Tokens this session: ${usage.join(' · ')}`;
 }
 
+// Base and Online setup fold away (one open at a time, by their shared name); the chosen engine's is the one shown.
+function openEngineGroup() {
+  const group = document.querySelector(`.engine-group[data-engine-group="${readSetting('ai_engine')}"]`);
+  if (group) group.open = true;
+}
+
 async function loadSettings() {
   try {
     const [body, status] = await Promise.all([request('/api/settings'), request('/api/status')]);
     state.status = status;
     fillSettingsStatus(status);
     fillSettings(body);
+    if (!document.querySelector('.engine-group[open]')) openEngineGroup();
   } catch (error) {
     announce(error.message);
   }
@@ -3718,7 +3725,10 @@ settingsPanel.addEventListener('input', event => {
   if (event.target.dataset?.setting === 'online_url') syncOnlineService();
   markSettings();
 });
-settingsPanel.addEventListener('change', () => markSettings());
+settingsPanel.addEventListener('change', event => {
+  markSettings();
+  if (event.target.name === 'ai_engine') openEngineGroup();
+});
 for (const section of settingSections()) {
   section.querySelector('[data-settings-save]').addEventListener('click', () => saveSettingsSection(section));
   section.querySelector('[data-settings-discard]').addEventListener('click', () => {

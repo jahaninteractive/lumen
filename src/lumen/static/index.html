@@ -388,8 +388,8 @@
                 <p class="applies">Applies now</p>
               </div>
 
-              <div class="engine-group">
-                <h3>Base</h3>
+              <details class="engine-group" name="engine-setup" data-engine-group="base">
+                <summary>Base setup</summary>
                 <div class="setting-row">
                   <label for="setting-base-url">Base address</label>
                   <input type="url" id="setting-base-url" data-setting="base_url" autocomplete="off" spellcheck="false" aria-describedby="setting-base-url-help">
@@ -425,10 +425,10 @@
                   <p class="applies">Applies now</p>
                 </div>
                 <datalist id="base-models"></datalist>
-              </div>
+              </details>
 
-              <div class="engine-group">
-                <h3>Online</h3>
+              <details class="engine-group" name="engine-setup" data-engine-group="online">
+                <summary>Online setup</summary>
                 <div class="setting-row">
                   <label for="online-service">Service</label>
                   <select id="online-service"><option value="">Other</option></select>
@@ -469,7 +469,7 @@
                   <p class="applies">Applies now</p>
                 </div>
                 <datalist id="online-models"></datalist>
-              </div>
+              </details>
 
               <p class="settings-note">Previews and prompts leave this Mac on Base and Online. Originals never do.</p>
               <p id="settings-usage" hidden></p>
