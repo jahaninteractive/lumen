@@ -13,7 +13,7 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 - AI engine: the advice can run on This Mac (the default, oMLX as before), on Base (your own model server on your network) or on Online (a service you hold a key for), chosen in Settings or in the rail's AI engine select. Any server that speaks the standard chat completions API works; the Online form offers three documented service addresses. Keys are kept in the macOS Keychain and never shown. Test asks an engine for its models, and a switch to an engine that does not answer is refused.
 - On Base and Online, previews go out resized and re-encoded with no metadata, and prompts go with them; originals, source paths, fingerprints and coordinates never do. The status line says "AI: Base" or "AI: Online" while one is in use, tokens reported by the engine are counted for the session, and batches name how many frames they would send and start only once confirmed (`--yes` on the command line).
 - The About dialog no longer says nothing is ever sent: it says nothing is sent unless the AI engine is switched in Settings.
-- Base and Online answers get 4000 extra tokens of room, because a model that reasons before it answers otherwise spends the whole limit reasoning; an empty answer after reasoning now says so instead of "did not return valid JSON".
+- Base and Online answers get 4000 extra tokens of room, because a model that reasons before it answers otherwise spends the whole limit reasoning; an empty answer after reasoning now says so instead of "did not return valid JSON". Base is also asked not to reason first, as This Mac already is.
 
 ## 0.5.1 (2026-11-13)
 

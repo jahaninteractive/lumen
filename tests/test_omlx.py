@@ -701,10 +701,10 @@ class EngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^oMLX endpoint must be a loopback http\\(s\\) URL$"):
             normalise_engine_url("mac", "http://192.168.1.5:8000")
 
-    def test_remote_request_omits_template_kwargs_and_mac_keeps_them(self):
+    def test_mac_and_base_ask_for_no_thinking_and_online_is_not_sent_the_field(self):
         payloads = {engine: json.loads(self.send(tagger)[0].data) for engine, tagger in self.taggers().items()}
         self.assertEqual({"enable_thinking": False}, payloads["mac"]["chat_template_kwargs"])
-        self.assertNotIn("chat_template_kwargs", payloads["base"])
+        self.assertEqual({"enable_thinking": False}, payloads["base"]["chat_template_kwargs"])
         self.assertNotIn("chat_template_kwargs", payloads["online"])
 
     def test_remote_engines_get_room_to_reason_before_the_answer(self):

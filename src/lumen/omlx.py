@@ -700,7 +700,7 @@ class OmlxTagger:
         if self.engine != "online":  # at least one large online service answers 400 to any temperature below 1
             payload["temperature"] = 0
         payload["max_tokens"] = max_tokens + (REMOTE_REASONING_TOKENS if self.engine != "mac" else 0)
-        if self.engine == "mac":
+        if self.engine != "online":  # a home server that does not know the field ignores it; an online service may refuse it
             payload["chat_template_kwargs"] = {"enable_thinking": False}  # Qwen-style thinking otherwise eats the budget and returns no content.
         headers = {"Content-Type": "application/json"}
         if self.api_key:

@@ -154,7 +154,7 @@ The page shows "saved" or "not set" and a Replace button. Tests inject the `secu
 
 One client keeps doing the work (`OmlxTagger._complete`); the engine decides the URL, key and two details:
 
-- `chat_template_kwargs` is sent to This Mac only; a strict service may refuse an unknown field.
+- `chat_template_kwargs` is sent to This Mac and Base, not Online; a strict service may refuse an unknown field. (Changed 2026-11-21 after a Base model spent a minute reasoning per burst.)
 - `temperature: 0` is sent to This Mac and Base only. One large online service's documentation says any temperature below 1 is a 400 on its current models, so Online omits it and takes the service's default.
 - Burst critique sends full-size frames today (`long_edge=0`). On Base and Online it is capped at `MODEL_IMAGE_LONG_EDGE`.
 
