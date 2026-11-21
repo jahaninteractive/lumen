@@ -25,7 +25,9 @@
         <button type="button" id="rail-show-batches" class="secondary" aria-controls="batch-rail" aria-expanded="false" title="Show the batch list">Batches</button>
       </div>
       <div id="rail-header" class="rail-header">
-        <div class="rail-models" id="role-model-pair" hidden><label for="review-model">Review model</label>
+        <div class="rail-models" id="role-model-pair" hidden><label for="ai-engine">AI engine</label>
+        <select id="ai-engine"><option value="mac">This Mac</option><option value="base">Base</option><option value="online">Online</option></select>
+        <label for="review-model">Review model</label>
         <select id="review-model" data-role="review"></select>
         <label for="fast-model">Fast model</label>
         <select id="fast-model" data-role="fast"></select></div>
@@ -47,6 +49,7 @@
           <button type="button" id="map-tab" role="tab" aria-controls="map-panel" aria-selected="false" tabindex="-1">Map</button>
           <button type="button" id="export-tab" role="tab" aria-controls="export-panel" aria-selected="false" tabindex="-1">Export</button>
           <button type="button" id="clear-tab" role="tab" aria-controls="clear-panel" aria-selected="false" tabindex="-1">Clear</button>
+          <button type="button" id="settings-tab" role="tab" aria-controls="settings-panel" aria-selected="false" tabindex="-1"><span aria-hidden="true">⚙ </span>Settings</button>
         </div>
       </div>
       </div>
@@ -361,6 +364,179 @@
           <p id="clear-status" role="status" aria-live="polite"></p>
           <div id="recovery-paths" class="recovery" aria-label="Cleanup recovery paths"></div>
         </section>
+        <section id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
+          <h2>Settings</h2>
+          <div class="settings-layout">
+            <div id="settings-sections" class="tab-rail settings-sections" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+              <button type="button" id="settings-ai-tab" role="tab" aria-controls="settings-ai-panel" aria-selected="true" tabindex="0">AI engine</button>
+              <button type="button" id="settings-library-tab" role="tab" aria-controls="settings-library-panel" aria-selected="false" tabindex="-1">Library</button>
+              <button type="button" id="settings-places-tab" role="tab" aria-controls="settings-places-panel" aria-selected="false" tabindex="-1">Places and map</button>
+              <button type="button" id="settings-server-tab" role="tab" aria-controls="settings-server-panel" aria-selected="false" tabindex="-1">Server</button>
+            </div>
+
+            <section id="settings-ai-panel" class="settings-section" role="tabpanel" aria-labelledby="settings-ai-tab" tabindex="0" data-section="AI engine">
+              <div class="setting-row">
+                <fieldset>
+                  <legend>Where the advice runs</legend>
+                  <div class="scope-options">
+                    <label><input type="radio" name="ai_engine" value="mac" data-setting="ai_engine"> This Mac</label>
+                    <label><input type="radio" name="ai_engine" value="base" data-setting="ai_engine"> Base</label>
+                    <label><input type="radio" name="ai_engine" value="online" data-setting="ai_engine"> Online</label>
+                  </div>
+                </fieldset>
+                <p class="quiet">This Mac runs oMLX here. Base is your own server on the network; Online is a service you hold a key for.</p>
+                <p class="applies">Applies now</p>
+              </div>
+
+              <div class="engine-group">
+                <h3>Base</h3>
+                <div class="setting-row">
+                  <label for="setting-base-url">Base address</label>
+                  <input type="url" id="setting-base-url" data-setting="base_url" autocomplete="off" spellcheck="false" aria-describedby="setting-base-url-help">
+                  <p class="quiet" id="setting-base-url-help">Your own server's address, usually http://&lt;your PC&gt;:11434/v1 for Ollama or http://&lt;your PC&gt;:1234/v1 for LM Studio</p>
+                  <p class="applies">Applies now</p>
+                </div>
+                <div class="engine-key" data-engine="base">
+                  <p>Key: <span id="base-key-status">not set</span></p>
+                  <div class="button-row">
+                    <button type="button" class="secondary" id="base-key-add">Add key</button>
+                    <button type="button" class="secondary" id="base-key-remove">Remove</button>
+                    <button type="button" class="secondary" id="base-test">Test</button>
+                  </div>
+                  <div class="input-row" id="base-key-entry" hidden>
+                    <label for="base-key" class="sr-only">Base key</label>
+                    <input type="password" id="base-key" autocomplete="off" spellcheck="false" placeholder="Base key">
+                    <button type="button" id="base-key-save">Save key</button>
+                    <button type="button" class="secondary" id="base-key-cancel">Cancel</button>
+                  </div>
+                  <p class="quiet">A key is optional on Base. Add key and Remove act at once; the key is kept in the macOS Keychain and never shown. Test asks the saved address for its models.</p>
+                  <p id="base-test-result" class="test-result"></p>
+                </div>
+                <div class="setting-row">
+                  <label for="setting-base-fast">Fast model</label>
+                  <input type="text" id="setting-base-fast" data-setting="base_fast_model" list="base-models" autocomplete="off" spellcheck="false">
+                  <p class="quiet">Tagging, the reject scan and astro triage. Pick a name found by Test, or type it.</p>
+                  <p class="applies">Applies now</p>
+                </div>
+                <div class="setting-row">
+                  <label for="setting-base-review">Review model</label>
+                  <input type="text" id="setting-base-review" data-setting="base_review_model" list="base-models" autocomplete="off" spellcheck="false">
+                  <p class="quiet">Burst critique, crop review, develop suggestions, captions and digests.</p>
+                  <p class="applies">Applies now</p>
+                </div>
+                <datalist id="base-models"></datalist>
+              </div>
+
+              <div class="engine-group">
+                <h3>Online</h3>
+                <div class="setting-row">
+                  <label for="online-service">Service</label>
+                  <select id="online-service"><option value="">Other</option></select>
+                  <p class="quiet">Fills in the address below; Other leaves it for you to type. The choice itself is not saved.</p>
+                </div>
+                <div class="setting-row">
+                  <label for="setting-online-url">Online address</label>
+                  <input type="url" id="setting-online-url" data-setting="online_url" autocomplete="off" spellcheck="false" aria-describedby="setting-online-url-help">
+                  <p class="quiet" id="setting-online-url-help">The API address from your service's documentation</p>
+                  <p class="applies">Applies now</p>
+                </div>
+                <div class="engine-key" data-engine="online">
+                  <p>Key: <span id="online-key-status">not set</span></p>
+                  <div class="button-row">
+                    <button type="button" class="secondary" id="online-key-add">Add key</button>
+                    <button type="button" class="secondary" id="online-key-remove">Remove</button>
+                    <button type="button" class="secondary" id="online-test">Test</button>
+                  </div>
+                  <div class="input-row" id="online-key-entry" hidden>
+                    <label for="online-key" class="sr-only">Online key</label>
+                    <input type="password" id="online-key" autocomplete="off" spellcheck="false" placeholder="Online key">
+                    <button type="button" id="online-key-save">Save key</button>
+                    <button type="button" class="secondary" id="online-key-cancel">Cancel</button>
+                  </div>
+                  <p class="quiet">Online needs a key. Add key and Remove act at once; the key is kept in the macOS Keychain and never shown. Test asks the saved address for its models.</p>
+                  <p id="online-test-result" class="test-result"></p>
+                </div>
+                <div class="setting-row">
+                  <label for="setting-online-fast">Fast model</label>
+                  <input type="text" id="setting-online-fast" data-setting="online_fast_model" list="online-models" autocomplete="off" spellcheck="false">
+                  <p class="quiet">Tagging, the reject scan and astro triage. Pick a name found by Test, or type it.</p>
+                  <p class="applies">Applies now</p>
+                </div>
+                <div class="setting-row">
+                  <label for="setting-online-review">Review model</label>
+                  <input type="text" id="setting-online-review" data-setting="online_review_model" list="online-models" autocomplete="off" spellcheck="false">
+                  <p class="quiet">Burst critique, crop review, develop suggestions, captions and digests.</p>
+                  <p class="applies">Applies now</p>
+                </div>
+                <datalist id="online-models"></datalist>
+              </div>
+
+              <p class="settings-note">Previews and prompts leave this Mac on Base and Online. Originals never do.</p>
+              <p id="settings-usage" hidden></p>
+              <div class="button-row">
+                <button type="button" data-settings-save disabled>Save</button>
+                <button type="button" class="secondary" data-settings-discard disabled>Discard</button>
+              </div>
+              <p class="settings-error"></p>
+            </section>
+
+            <section id="settings-library-panel" class="settings-section" role="tabpanel" aria-labelledby="settings-library-tab" tabindex="0" data-section="Library" hidden>
+              <div class="setting-row">
+                <label for="setting-library">Library folder</label>
+                <input type="text" id="setting-library" readonly>
+                <p class="quiet">Where Lumen keeps its catalog, previews and everything it makes. Set with LUMEN_LIBRARY when the server starts.</p>
+              </div>
+              <div class="setting-row">
+                <label for="setting-burst-gap">Burst gap (seconds)</label>
+                <input type="number" id="setting-burst-gap" data-setting="burst_gap_seconds" min="0.5" max="30" step="0.5">
+                <p class="quiet">Frames closer than this form one burst. Your merges, splits and picks are kept.</p>
+                <p class="applies">Applies now: regroups every burst</p>
+              </div>
+              <div class="setting-row" data-shell="LUMEN_NEAR_DUP_DISTANCE">
+                <label for="setting-near-dup">Near-duplicate distance</label>
+                <input type="number" id="setting-near-dup" data-setting="near_duplicate_distance" min="0" max="64" step="1">
+                <p class="quiet">How different two frames of a burst may look and stay in one cluster; larger keeps more together, 0 turns the split off.</p>
+                <p class="applies">Applies at the next regroup or import</p>
+              </div>
+              <div class="button-row">
+                <button type="button" data-settings-save disabled>Save</button>
+                <button type="button" class="secondary" data-settings-discard disabled>Discard</button>
+              </div>
+              <p class="settings-error"></p>
+            </section>
+
+            <section id="settings-places-panel" class="settings-section" role="tabpanel" aria-labelledby="settings-places-tab" tabindex="0" data-section="Places and map" hidden>
+              <div class="setting-row" data-shell="LUMEN_GEOCODE_ONLINE">
+                <label class="toggle" for="setting-geocode"><input type="checkbox" id="setting-geocode" data-setting="geocode_online"> Look up missing place names online</label>
+                <p class="quiet">Sends the frame's coordinates to the lookup service when the local index has no close place.</p>
+                <p class="applies">Applies now</p>
+              </div>
+              <div class="setting-row">
+                <label for="setting-geonames">GeoNames folder</label>
+                <input type="text" id="setting-geonames" readonly>
+                <p class="quiet">Place names come from here. Set with LUMEN_GEONAMES_DIR when the server starts.</p>
+              </div>
+              <div class="setting-row">
+                <label for="setting-map">Map folder</label>
+                <input type="text" id="setting-map" readonly>
+                <p class="quiet">The map's base layers come from here. Set with LUMEN_MAP_DIR when the server starts.</p>
+              </div>
+              <div class="button-row">
+                <button type="button" data-settings-save disabled>Save</button>
+                <button type="button" class="secondary" data-settings-discard disabled>Discard</button>
+              </div>
+              <p class="settings-error"></p>
+            </section>
+
+            <section id="settings-server-panel" class="settings-section" role="tabpanel" aria-labelledby="settings-server-tab" tabindex="0" hidden>
+              <dl class="settings-facts">
+                <dt>Address</dt><dd id="settings-server-address"></dd>
+                <dt>Version</dt><dd id="settings-server-version"></dd>
+                <dt>Running code</dt><dd><ul id="settings-server-stale"></ul></dd>
+              </dl>
+            </section>
+          </div>
+        </section>
       </section>
 
       <section aria-labelledby="contact-heading" class="contact-area">
@@ -534,6 +710,16 @@
       <p id="digest-confirm-text"></p>
       <div class="button-row">
         <button type="button" id="digest-confirm-yes">Confirm</button>
+        <button type="submit" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="remote-confirm" aria-labelledby="remote-confirm-text">
+    <form method="dialog">
+      <p id="remote-confirm-text"></p>
+      <div class="button-row">
+        <button type="button" id="remote-confirm-yes">Continue</button>
         <button type="submit" class="secondary">Cancel</button>
       </div>
     </form>

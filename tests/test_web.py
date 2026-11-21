@@ -617,8 +617,47 @@ class WebTests(unittest.TestCase):
             self.assertEqual("false", by_id[name]["attrs"].get("aria-expanded"))
         self.assertIn(rail, by_id["role-model-pair"]["parents"], "the model selects stay in the rail")
 
+    def test_settings_view_is_the_last_workflow_tab_with_vertical_sections(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        workflow = next(node for node in parser.nodes if node["attrs"].get("aria-label") == "Workflow")
+        tab = by_id["settings-tab"]
+        self.assertIn(workflow, tab["parents"])
+        self.assertEqual("settings-panel", tab["attrs"].get("aria-controls"))
+        self.assertEqual("Settings", tab["text"].strip().split()[-1])
+        workflow_tabs = [node["attrs"]["id"] for node in parser.nodes if workflow in node["parents"] and node["attrs"].get("role") == "tab"]
+        self.assertEqual("settings-tab", workflow_tabs[-1], "Settings sits at the right end of the tab row")
+        self.assertEqual("tabpanel", by_id["settings-panel"]["attrs"].get("role"))
+        sections = by_id["settings-sections"]
+        self.assertEqual("tablist", sections["attrs"].get("role"))
+        self.assertEqual("vertical", sections["attrs"].get("aria-orientation"))
+        self.assertIn(by_id["settings-panel"], sections["parents"])
+        for name, label in (("ai", "AI engine"), ("library", "Library"), ("places", "Places and map"), ("server", "Server")):
+            section_tab = by_id[f"settings-{name}-tab"]
+            self.assertIn(sections, section_tab["parents"])
+            self.assertEqual(label, section_tab["text"].strip())
+            panel = by_id[section_tab["attrs"]["aria-controls"]]
+            self.assertEqual("tabpanel", panel["attrs"].get("role"))
+            self.assertEqual(f"settings-{name}-tab", panel["attrs"].get("aria-labelledby"))
+        self.assertEqual("select", by_id["ai-engine"]["tag"])
+        self.assertIn(by_id["role-model-pair"], by_id["ai-engine"]["parents"], "the engine switch sits with the model selects")
+        self.assertEqual("dialog", by_id["remote-confirm"]["tag"])
+        for engine in ("base", "online"):
+            key = by_id[f"{engine}-key"]
+            self.assertEqual("password", key["attrs"].get("type"))
+            self.assertEqual("off", key["attrs"].get("autocomplete"))
+        self.assertEqual("select", by_id["online-service"]["tag"])
+        self.assertIn("Previews and prompts leave this Mac on Base and Online. Originals never do.", html)
+        self.assertIn("Your own server's address, usually http://&lt;your PC&gt;:11434/v1", html)
+        self.assertIn("The API address from your service's documentation", html)
+
     def test_javascript_header_reports_health_without_model_names(self):
         self.run_javascript_cleanup_regression("status-health")
+
+    def test_javascript_batch_on_a_remote_engine_asks_and_resends_confirmed(self):
+        self.run_javascript_cleanup_regression("remote-confirm")
 
     def test_javascript_job_strip_polls_import_disables_actions_and_refreshes_once(self):
         self.run_javascript_cleanup_regression("job-strip")
@@ -1109,8 +1148,8 @@ class WebTests(unittest.TestCase):
             parser = LandmarkParser()
             parser.feed(response.read().decode())
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
-        tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"]]
-        self.assertEqual(["Add photos", "Review", "Assist", "Astro", "Map", "Export", "Clear"], [node["text"].strip() for node in tabs], "tabs follow the workflow")
+        tabs = [node for node in parser.nodes if node["attrs"].get("role") == "tab" and by_id["loupe"] not in node["parents"] and by_id["settings-panel"] not in node["parents"]]
+        self.assertEqual(["Add photos", "Review", "Assist", "Astro", "Map", "Export", "Clear", "⚙ Settings"], [node["text"].strip() for node in tabs], "tabs follow the workflow, Settings set apart at the end")
         self.assertTrue(any(node["attrs"].get("role") == "tablist" and node["attrs"].get("aria-label") for node in parser.nodes))
         for tab in tabs:
             self.assertEqual("button", tab["tag"])
@@ -2602,8 +2641,10 @@ async function fetch(url, options = {}) {
   if (url.startsWith('/full/')) return { ok: false, status: fullStatus, json: async () => ({}) };
   let payload;
   let ok = true;
+  let status = 200;
   if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
   else if (url === '/api/status' && scenario === 'stale-server') payload = { omlx_live: { summary: 'Ready' }, stale: ['This server is running code older than the files on disk. Restart it with lumen serve, then reload this page.'], omlx_roles: { fast: { model: 'm', loaded: true }, review: { model: 'm', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
+  else if (url === '/api/status' && scenario === 'remote-confirm') payload = { omlx_live: { summary: 'Ready', online: true }, ai_engine: 'base', ai_engine_host: '127.0.0.1:9', ai_engine_reachable: false, review_models: [], omlx_roles: { fast: { model: 'f', loaded: true }, review: { model: 'r', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
   else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready', online: true }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
@@ -2687,7 +2728,12 @@ async function fetch(url, options = {}) {
     rejectRows = rejectRows.filter(row => !body.photo_ids.includes(row.photo_id));
     payload = { decided: body.photo_ids.map(id => ({ photo_id: id, decision: decisions[id], rating: ratings[id], group_id: 1, automatic_pick_id: decisions[1] === 'reject' ? 2 : 1 })), remaining: rejectRows.length };
   }
-  else if (url === '/api/photos/tag') { assert.equal(options.method, 'POST'); tagPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0); }
+  else if (url === '/api/photos/tag') {
+    assert.equal(options.method, 'POST');
+    tagPosts.push(JSON.parse(options.body));
+    if (scenario === 'remote-confirm' && !tagPosts.at(-1).confirm_remote) { ok = false; status = 409; payload = { confirm_remote: { engine: 'base', label: 'Base', frames: 2 } }; }
+    else payload = tagJob('queued', 0);
+  }
   else if (url === '/api/photos/assist') { assert.equal(options.method, 'POST'); assistPosts.push(JSON.parse(options.body)); payload = tagJob('queued', 0, { kind: 'assist' }); }
   else if (url === '/api/photos/1/tag') { assert.equal(options.method, 'POST'); return new Promise(resolve => pendingTags.push(() => resolve({ ok: true, json: async () => ({ photo_id: 1 }) }))); }
   else if (/^\/api\/photos\/[12]\/keywords$/.test(url)) {
@@ -2842,7 +2888,7 @@ async function fetch(url, options = {}) {
     else payload = jobPayload('succeeded', 1, { result: { artifact_id: 1, name: 'result.tif', preview: 'preview.jpg' } });
   } else throw new Error('Unexpected request: ' + url);
   if (deferGroups && url.startsWith('/api/groups')) { const reply = { ok, json: async () => payload }; return new Promise(resolve => pendingGroups.push(() => resolve(reply))); }
-  return { ok, json: async () => payload };
+  return { ok, status, json: async () => payload };
 }
 // Boxes the markup ships checked; the fake elements start unchecked.
 element('#export-dated-folder').checked = true;
@@ -5153,6 +5199,25 @@ const regression = `
     await new Promise(setImmediate);
     assert.deepEqual(days().map(day => day.open), [false, true], 'a rail click that reveals a deeper page keeps its own day open');
     assert.equal(state.selectedGroupId, 2);
+    return;
+  }
+  if (scenario === 'remote-confirm') {
+    await load();
+    assert.ok(element('#system-status').textContent.startsWith('AI: Base · not reachable · '), element('#system-status').textContent);
+    const asked = element('#tag-keepers').listeners.click();
+    await new Promise(setImmediate);
+    assert.equal(element('#remote-confirm').hidden, false, 'a remote engine asks before sending');
+    assert.equal(element('#remote-confirm-text').textContent, 'This sends 2 frames to Base. Continue?');
+    element('#remote-confirm-yes').listeners.click();
+    await asked;
+    assert.deepEqual(tagPosts, [{ scope: 'keepers' }, { scope: 'keepers', confirm_remote: true }], 'the same body again, confirmed');
+    await settle();
+    const declined = element('#tag-keepers').listeners.click();
+    await new Promise(setImmediate);
+    element('#remote-confirm').listeners.close();  // Cancel or Escape
+    await declined;
+    assert.equal(tagPosts.length, 3, 'nothing more is posted');
+    assert.equal(element('#announcer').textContent, 'Nothing was sent');
     return;
   }
   if (scenario === 'status-health') {

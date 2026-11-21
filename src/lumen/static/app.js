@@ -40,6 +40,7 @@ async function request(url, options = {}) {
     const stale = unreadable ? ' Lumen may be older than this page: restart lumen serve and reload.' : '';
     const error = new Error((payload.error || `Request failed (${response.status}).`) + stale);
     error.payload = payload;
+    error.status = response.status;
     throw error;
   }
   if (unreadable) throw new Error('Lumen sent a reply this page could not read.');
@@ -57,7 +58,11 @@ function roleReady(role) {
 
 function roleUnavailable(role) {
   const item = state.status?.omlx_roles?.[role];
-  return item && !item.loaded ? `${role === 'fast' ? 'Fast' : 'Review'} model ${item.model} is not loaded in oMLX. Load it in oMLX, then reload this page.` : '';
+  if (!item || item.loaded) return '';
+  const name = role === 'fast' ? 'Fast' : 'Review';
+  const engine = state.status?.ai_engine;
+  if (engine === 'base' || engine === 'online') return `${name} model ${item.model || '(none set)'} is not offered by ${ENGINE_LABELS[engine]} as last read. Use Test in Settings, then reload this page.`;
+  return `${name} model ${item.model} is not loaded in oMLX. Load it in oMLX, then reload this page.`;
 }
 
 // Bottom status bar: every local AI request reports running, finished, or failed with the reason, in one place.
@@ -1722,16 +1727,25 @@ async function applyFilters(query = filterQuery()) {
 }
 
 // Each model role (review, fast) runs on the full or the fast model; the switch is the server's, so a reload shows what it uses now.
-const roleSelects = [...document.querySelectorAll('#role-model-pair select')];
+const roleSelects = [...document.querySelectorAll('#role-model-pair select[data-role]')];  // the engine switch beside them is not a role
 function syncRoleModels(status) {
   const models = Array.isArray(status.review_models) ? status.review_models : [];
-  document.querySelector('#role-model-pair').hidden = models.length < 2;
-  document.querySelector('#rail-show-models').hidden = models.length < 2;
+  const shown = models.length >= 2 || engineReady('base') || engineReady('online');  // the engine switch needs the pair once a remote engine is set up
+  document.querySelector('#role-model-pair').hidden = !shown;
+  document.querySelector('#rail-show-models').hidden = !shown;
+  const remote = status.ai_engine === 'base' || status.ai_engine === 'online';
   const loaded = status.omlx_live?.loaded_models || [];
   for (const select of roleSelects) {
-    select.replaceChildren(...models.map(model => new Option(loaded.includes(model) ? model : `${model} (not loaded)`, model)));
-    select.value = status.omlx_roles?.[select.dataset.role]?.model ?? '';
+    const current = status.omlx_roles?.[select.dataset.role]?.model ?? '';
+    if (remote) {  // a service that lists no models still shows the saved name, so the rail is never blank
+      const names = models.includes(current) || !current ? models : [current, ...models];
+      select.replaceChildren(...(names.length ? names.map(model => new Option(model, model)) : [new Option('Not set: type it in Settings', '')]));
+    } else {
+      select.replaceChildren(...models.map(model => new Option(loaded.includes(model) ? model : `${model} (not loaded)`, model)));
+    }
+    select.value = current;
   }
+  syncEngineSelect();
 }
 for (const select of roleSelects) {
   select.addEventListener('change', async () => {
@@ -1755,6 +1769,10 @@ async function load() {
   state.rejectedCount = groups.rejected_count || 0;
   state.photoCount = groups.photo_count;
   state.keeperCount = groups.keeper_count;
+  if (groups.burst_gap_seconds !== undefined) {
+    state.burstGapSeconds = groups.burst_gap_seconds;
+    if (state.settings) fillSettings(state.settings);  // Settings' Library section reads it; unsaved fields stay as typed
+  }
   if (groups.burst_gap_seconds !== undefined && document.activeElement?.id !== 'burst-gap') showBurstGap(groups.burst_gap_seconds);
   if (!defaultTabChosen) { defaultTabChosen = true; chooseDefaultTab(); }
   syncFilters(groups.cameras);
@@ -1778,7 +1796,10 @@ async function load() {
   // first. It goes ahead of the tool summary because nothing else here is actionable until
   // it is dealt with.
   const stale = Array.isArray(status.stale) ? status.stale : [];
-  systemStatus.textContent = [...stale, tools].join(' · ');
+  // Off this Mac the line says where the advice goes, and whether it answered when last asked.
+  const remote = ENGINE_LABELS[status.ai_engine] && status.ai_engine !== 'mac'
+    ? [`AI: ${ENGINE_LABELS[status.ai_engine]}${status.ai_engine_reachable === false ? ' · not reachable' : ''}`] : [];
+  systemStatus.textContent = [...stale, ...remote, tools].join(' · ');
   document.querySelector('#app-version').textContent = status.version ? `v${status.version}` : '';
   if (stale.length) systemStatus.setAttribute('data-stale', '');
   else systemStatus.removeAttribute('data-stale');
@@ -1836,11 +1857,43 @@ document.querySelector('#import-form').addEventListener('submit', async event =>
   }
 });
 
+// Every batch goes through here. On Base or Online the server answers 409 with how many frames it would send,
+// and the batch starts only once the photographer confirms; the same body goes again with confirm_remote.
+const remoteConfirm = document.querySelector('#remote-confirm');
+let remoteAnswer = null;
+function askRemote(text) {
+  document.querySelector('#remote-confirm-text').textContent = text;
+  if (remoteConfirm.showModal) remoteConfirm.showModal();
+  else remoteConfirm.hidden = false;
+  return new Promise(resolve => { remoteAnswer = resolve; });
+}
+function answerRemote(yes) {
+  const resolve = remoteAnswer;
+  remoteAnswer = null;  // before close(): its close event answers no, and must not overrule a yes
+  if (remoteConfirm.close) remoteConfirm.close();
+  else remoteConfirm.hidden = true;
+  resolve?.(yes);
+}
+remoteConfirm.addEventListener('close', () => answerRemote(false));  // Cancel and Escape
+document.querySelector('#remote-confirm-yes').addEventListener('click', () => answerRemote(true));
+async function postBatch(url, payload) {
+  try {
+    return await post(url, payload);
+  } catch (error) {
+    const ask = error.status === 409 ? error.payload?.confirm_remote : null;
+    if (!ask) throw error;
+    if (!await askRemote(`This sends ${plural(ask.frames, 'frame')} to ${ask.label}. Continue?`)) return null;
+    return post(url, { ...payload, confirm_remote: true });
+  }
+}
+
 async function startTagJob(url, payload) {
   state.busy = true;
   updateWorkflow();
   try {
-    watchJob(await post(url, payload));
+    const job = await postBatch(url, payload);
+    if (job) watchJob(job);
+    else announce('Nothing was sent');
   } catch (error) {
     announce(error.message);
   } finally {
@@ -3440,6 +3493,7 @@ function showOnMap(photo, record) {
 // A click on the tab that is already selected calls onReselect instead, when given.
 function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = null) {
   const tabs = Array.from(document.querySelectorAll(`${selector} [role="tab"]`));
+  const vertical = document.querySelector(selector)?.getAttribute?.('aria-orientation') === 'vertical';  // a list down the side steps with Up and Down too
   const select = tab => {
     tabs.forEach(item => {
       const selected = item === tab;
@@ -3457,9 +3511,12 @@ function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = nul
       const at = usable.indexOf(tab);  // -1 while an unavailable tab holds the focus: step from where it sits among all the tabs
       const passed = usable.filter(item => tabs.indexOf(item) < tabs.indexOf(tab)).length;
       const last = usable.length - 1;
+      const forward = (at < 0 ? passed : at + 1) % usable.length;
+      const back = ((at < 0 ? passed : at) + last) % usable.length;
       const next = {
-        ArrowRight: (at < 0 ? passed : at + 1) % usable.length,
-        ArrowLeft: ((at < 0 ? passed : at) + last) % usable.length,
+        ArrowRight: forward,
+        ArrowLeft: back,
+        ...(vertical ? { ArrowDown: forward, ArrowUp: back } : {}),
         Home: 0,
         End: last,
       }[event.key];
@@ -3479,6 +3536,293 @@ function wireTablist(selector, storageKey, onSelect = () => {}, onReselect = nul
   return select;
 }
 
+// ---- Settings ----------------------------------------------------------------------------------------------------
+// One view, four sections. A section's settings change only when its Save is pressed; Discard puts the loaded values
+// back. Keys are actions: a typed key lives only in its password field until it is posted, and the field is then cleared.
+const ENGINE_LABELS = { mac: 'This Mac', base: 'Base', online: 'Online' };
+const settingsPanel = document.querySelector('#settings-panel');
+const settingsLoaded = {};  // key -> value as the server last reported it; a field that differs is unsaved
+const settingControls = key => [...document.querySelectorAll(`[data-setting="${key}"]`)];
+const settingSections = () => [...document.querySelectorAll('.settings-section[data-section]')];
+const sectionKeys = section => [...new Set([...section.querySelectorAll('[data-setting]')].map(control => control.dataset.setting))];
+const settingValue = key => (state.settings?.settings || []).find(row => row.key === key)?.value;
+
+function readSetting(key) {
+  const controls = settingControls(key);
+  const control = controls[0];
+  if (!control) return undefined;
+  if (control.type === 'radio') return controls.find(item => item.checked)?.value ?? null;
+  if (control.type === 'checkbox') return control.checked;
+  if (control.type === 'number') return control.value.trim() === '' ? control.value : Number(control.value);  // a blank number is sent and refused, not dropped
+  return control.value.trim();
+}
+function writeSetting(key, value) {
+  for (const control of settingControls(key)) {
+    if (control.type === 'radio') control.checked = control.value === value;
+    else if (control.type === 'checkbox') control.checked = Boolean(value);
+    else control.value = value ?? '';
+  }
+}
+const settingDirty = key => key in settingsLoaded && readSetting(key) !== settingsLoaded[key];
+const sectionChanges = section => Object.fromEntries(sectionKeys(section).filter(settingDirty).map(key => [key, readSetting(key)]));
+
+// Save and Discard wake up only when a field differs; the section's tab says so in words as well as with its mark.
+function markSettings() {
+  for (const section of settingSections()) {
+    const unsaved = Object.keys(sectionChanges(section)).length > 0;
+    section.querySelectorAll('[data-settings-save], [data-settings-discard]').forEach(button => { button.disabled = !unsaved; });
+    const tab = document.querySelector(`#${section.getAttribute('aria-labelledby')}`);
+    tab.toggleAttribute('data-unsaved', unsaved);
+    let mark = tab.querySelector('.unsaved-mark');
+    if (!mark) {
+      mark = document.createElement('span');
+      mark.className = 'sr-only unsaved-mark';
+      tab.append(mark);
+    }
+    mark.textContent = unsaved ? ' (unsaved)' : '';
+  }
+}
+
+function settingRow(key) {
+  return settingControls(key)[0]?.closest('.setting-row');
+}
+function clearSettingErrors(section) {
+  section.querySelectorAll('.setting-error').forEach(node => node.remove());
+  section.querySelector('.settings-error').textContent = '';
+}
+// A refusal that starts with a setting's key sits beside that field; any other sits under the buttons.
+function showSettingRefusal(section, message, keys) {
+  const key = keys.find(name => message.startsWith(name));
+  const row = key && settingRow(key);
+  if (!row) {
+    section.querySelector('.settings-error').textContent = message;
+    return;
+  }
+  const note = document.createElement('p');
+  note.className = 'setting-error';
+  note.textContent = message;
+  row.append(note);
+}
+
+// Fills every field that has no unsaved change, plus the keys just saved, from a GET or POST /api/settings body.
+function fillSettings(body, saved = []) {
+  state.settings = body;
+  const rows = [...body.settings, { key: 'burst_gap_seconds', value: state.burstGapSeconds, editable: true }];
+  for (const row of rows) {
+    if (row.value === undefined) continue;
+    const clean = !settingDirty(row.key) || saved.includes(row.key);
+    settingsLoaded[row.key] = row.value ?? '';
+    if (clean) writeSetting(row.key, row.value);
+    const container = settingRow(row.key);
+    settingControls(row.key).forEach(control => { control.disabled = !row.editable; });
+    const help = container?.querySelector('.quiet');
+    if (help) {
+      help.dataset.help ??= help.textContent;
+      help.textContent = row.editable ? help.dataset.help : `Set by your shell (${container.dataset.shell})`;
+    }
+  }
+  for (const engine of ['base', 'online']) {
+    const saved = Boolean(body.keys?.[engine]);
+    document.querySelector(`#${engine}-key-status`).textContent = saved ? 'saved' : 'not set';
+    document.querySelector(`#${engine}-key-add`).textContent = saved ? 'Replace' : 'Add key';
+    document.querySelector(`#${engine}-key-remove`).disabled = !saved;
+  }
+  const service = document.querySelector('#online-service');
+  if (service.options?.length === 1) service.append(...(body.presets || []).map(preset => new Option(preset.name, preset.url)));
+  syncOnlineService();
+  markSettings();
+  syncEngineSelect();
+}
+function syncOnlineService() {
+  const url = readSetting('online_url');
+  const service = document.querySelector('#online-service');
+  service.value = [...(service.options || [])].some(option => option.value && option.value === url) ? url : '';
+}
+
+// The parts of the view that come from /api/status: read-only folders, the server facts and the token tally.
+function fillSettingsStatus(status) {
+  document.querySelector('#setting-library').value = status.library ?? '';
+  document.querySelector('#setting-geonames').value = status.geonames?.dir ?? 'Not set';
+  document.querySelector('#setting-map').value = status.map?.dir ?? 'Not set';
+  document.querySelector('#settings-server-address').textContent = location.host;
+  document.querySelector('#settings-server-version').textContent = status.version ?? '';
+  const stale = Array.isArray(status.stale) && status.stale.length ? status.stale : ['Up to date'];
+  document.querySelector('#settings-server-stale').replaceChildren(...stale.map(reason => Object.assign(document.createElement('li'), { textContent: reason })));
+  const usage = Object.entries(status.ai_usage || {}).filter(([, item]) => item?.calls > 0).map(([engine, item]) => {
+    const tokens = (item.prompt_tokens + item.completion_tokens).toLocaleString();
+    return `${ENGINE_LABELS[engine] ?? engine} ${tokens} tokens${item.unreported > 0 ? ` (${plural(item.unreported, 'call')} not reported)` : ''}`;
+  });
+  const line = document.querySelector('#settings-usage');
+  line.hidden = !usage.length;
+  line.textContent = `Tokens this session: ${usage.join(' · ')}`;
+}
+
+async function loadSettings() {
+  try {
+    const [body, status] = await Promise.all([request('/api/settings'), request('/api/status')]);
+    state.status = status;
+    fillSettingsStatus(status);
+    fillSettings(body);
+  } catch (error) {
+    announce(error.message);
+  }
+}
+
+async function saveSettingsSection(section) {
+  const changes = sectionChanges(section);
+  const keys = Object.keys(changes);
+  if (!keys.length) return;
+  clearSettingErrors(section);
+  try {
+    if ('burst_gap_seconds' in changes) {  // its own route: a change regroups every burst at once
+      const result = await post('/api/burst-gap', { seconds: changes.burst_gap_seconds });
+      delete changes.burst_gap_seconds;
+      state.burstGapSeconds = result.burst_gap_seconds;
+      settingsLoaded.burst_gap_seconds = result.burst_gap_seconds;
+      writeSetting('burst_gap_seconds', result.burst_gap_seconds);
+      announce(`Bursts regrouped at ${burstGapText(result.burst_gap_seconds)}: ${plural(result.groups, 'burst')}`);
+    }
+    if (Object.keys(changes).length) {
+      fillSettings(await post('/api/settings', changes), Object.keys(changes));
+      announce(`${section.dataset.section} settings saved.`);
+    }
+  } catch (error) {
+    showSettingRefusal(section, error.message, keys);
+    announce(error.message);
+  }
+  markSettings();
+  await load().catch(error => announce(error.message));
+  if (state.status) fillSettingsStatus(state.status);
+}
+
+settingsPanel.addEventListener('input', event => {
+  if (event.target.dataset?.setting === 'online_url') syncOnlineService();
+  markSettings();
+});
+settingsPanel.addEventListener('change', () => markSettings());
+for (const section of settingSections()) {
+  section.querySelector('[data-settings-save]').addEventListener('click', () => saveSettingsSection(section));
+  section.querySelector('[data-settings-discard]').addEventListener('click', () => {
+    sectionKeys(section).forEach(key => writeSetting(key, settingsLoaded[key]));
+    clearSettingErrors(section);
+    syncOnlineService();
+    markSettings();
+    announce(`${section.dataset.section} changes discarded.`);
+  });
+}
+// A service only fills the address; Other leaves whatever is there.
+document.querySelector('#online-service').addEventListener('change', event => {
+  if (!event.target.value) return;
+  writeSetting('online_url', event.target.value);
+  markSettings();
+});
+
+for (const engine of ['base', 'online']) {
+  const label = ENGINE_LABELS[engine];
+  const entry = document.querySelector(`#${engine}-key-entry`);
+  const field = document.querySelector(`#${engine}-key`);
+  const result = document.querySelector(`#${engine}-test-result`);
+  const closeEntry = () => {
+    field.value = '';
+    entry.hidden = true;
+  };
+  document.querySelector(`#${engine}-key-add`).addEventListener('click', () => {
+    entry.hidden = false;
+    field.focus();
+  });
+  document.querySelector(`#${engine}-key-cancel`).addEventListener('click', () => {
+    closeEntry();
+    document.querySelector(`#${engine}-key-add`).focus();
+  });
+  const saveKey = async () => {
+    const key = field.value;
+    field.value = '';  // cleared before the request is even sent; nothing else ever holds it
+    if (!key.trim()) {
+      result.textContent = 'Type or paste the key first.';
+      return announce(result.textContent);
+    }
+    try {
+      await post('/api/settings/key', { engine, key });
+      entry.hidden = true;
+      result.textContent = `${label} key saved.`;
+      document.querySelector(`#${engine}-key-add`).focus();
+    } catch (error) {
+      result.textContent = error.message;
+    }
+    announce(result.textContent);
+    await loadSettings();
+    await load().catch(error => announce(error.message));
+  };
+  document.querySelector(`#${engine}-key-save`).addEventListener('click', saveKey);
+  field.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); saveKey(); }
+    if (event.key === 'Escape') { event.preventDefault(); closeEntry(); }
+  });
+  document.querySelector(`#${engine}-key-remove`).addEventListener('click', async () => {
+    try {
+      await request(`/api/settings/key/${engine}`, { method: 'DELETE' });
+      result.textContent = `${label} key removed.`;
+    } catch (error) {
+      result.textContent = error.message;
+    }
+    announce(result.textContent);
+    await loadSettings();
+    await load().catch(error => announce(error.message));
+  });
+  // Test asks the saved address, so an address typed but not saved is named rather than silently skipped.
+  document.querySelector(`#${engine}-test`).addEventListener('click', async () => {
+    if (settingDirty(`${engine}_url`)) {
+      result.textContent = `Save the ${label} address first; Test asks the saved one.`;
+      return announce(result.textContent);
+    }
+    result.textContent = `Testing ${label}…`;
+    try {
+      const answer = await post('/api/settings/test', { engine });
+      if (answer.ok) {
+        document.querySelector(`#${engine}-models`).replaceChildren(...answer.models.map(model => new Option(model, model)));
+        result.textContent = answer.models.length ? `${plural(answer.models.length, 'model')} found` : 'Connected; this service does not list its models, type their names';
+      } else {
+        result.textContent = answer.error;
+      }
+    } catch (error) {
+      result.textContent = error.message;
+    }
+    announce(result.textContent);
+    await load().catch(error => announce(error.message));  // the rail and the status line read what Test just found
+    if (state.status) fillSettingsStatus(state.status);
+  });
+}
+
+// The rail's quick switch: the same save as the AI engine radios, at once. An engine not set up says where to do it.
+const engineSelect = document.querySelector('#ai-engine');
+function engineReady(engine) {
+  if (engine === 'mac') return true;
+  return Boolean(settingValue(`${engine}_url`)) && (engine !== 'online' || Boolean(state.settings?.keys?.online));
+}
+function syncEngineSelect() {
+  for (const option of [...(engineSelect.options || [])]) {
+    const ready = engineReady(option.value);
+    option.disabled = !ready;
+    option.textContent = ready ? ENGINE_LABELS[option.value] : `${ENGINE_LABELS[option.value]} (set up in Settings)`;
+  }
+  engineSelect.value = settingValue('ai_engine') ?? state.status?.ai_engine ?? 'mac';  // the saved engine is the one the server runs
+}
+engineSelect.addEventListener('change', async () => {
+  const engine = engineSelect.value;
+  try {
+    fillSettings(await post('/api/settings', { ai_engine: engine }), ['ai_engine']);
+    announce(`AI engine is now ${ENGINE_LABELS[engine]}.`);
+  } catch (error) {
+    syncEngineSelect();  // snaps back to the engine still in use
+    announce(error.message);
+  }
+  await load().catch(error => announce(error.message));
+});
+const selectSettingsSection = wireTablist('#settings-sections', 'lumen-settings-section');
+selectSettingsSection.restore();
+request('/api/settings').then(body => { fillSettings(body); if (state.status) syncRoleModels(state.status); }).catch(() => {});  // the rail's engine switch; Settings itself reports a failure when opened
+// ---- end Settings ------------------------------------------------------------------------------------------------
+
 const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   collapsePanel(false);  // choosing a tab always shows its panel
   const main = document.querySelector('#main-content');
@@ -3490,6 +3834,7 @@ const selectTab = wireTablist('.tab-row', 'lumen-tab', tab => {
   if (tab.id === 'assist-tab') loadVocabulary();
   if (tab.id === 'clear-tab') loadCleared();
   if (tab.id === 'map-tab') loadMap().finally(() => main.scrollTo({ top: 0, behavior: 'auto' }));
+  if (tab.id === 'settings-tab') loadSettings();
 }, () => togglePanel());  // clicking the open tab again folds the panel away, and back
 
 function collapsePanel(collapsed) {

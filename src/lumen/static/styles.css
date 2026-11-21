@@ -525,3 +525,39 @@ label[for="keyword-input"] { display: block; margin-bottom: .35rem; font-weight:
 .reject-row { display: grid; grid-template-columns: 96px 1fr auto; align-items: center; gap: .75rem; padding: .5rem; border: 1px solid var(--line); border-radius: 4px; }
 .reject-row img { width: 96px; height: 64px; object-fit: cover; background: var(--black); }
 .reject-row p { margin: 0; }
+
+/* Settings: the gear tab sits apart at the right of the tab row; sections run down the side, one shown at a time. */
+#settings-tab { margin-left: auto; }
+.settings-layout { display: grid; grid-template-columns: 12rem minmax(0, 1fr); gap: 1.5rem; margin-top: 1rem; align-items: start; }
+.settings-sections { position: sticky; top: calc(var(--main-top, 0px) + 1rem); flex-direction: column; gap: 0; padding: 0; border-bottom: 0; border-right: 1px solid var(--line); }  /* stays in view down a long section */
+.settings-sections button { text-align: left; border-bottom: 0; border-left: 3px solid transparent; }
+.settings-sections [aria-selected="true"] { border-left-color: var(--amber); }
+.settings-sections [data-unsaved]::after { content: " •" / ""; color: var(--amber); }  /* the words "(unsaved)" ride along for screen readers */
+.settings-section { padding: 0; max-width: 52rem; }
+.setting-row { display: grid; gap: .25rem; margin: 0 0 1.25rem; }
+.setting-row > label, .setting-row legend { font-weight: 700; }
+.setting-row input:not([type="checkbox"]):not([type="radio"]), .setting-row select { width: 100%; max-width: 36rem; padding: 0 .75rem; color: var(--paper); background: var(--graphite); color-scheme: dark; }
+.setting-row input[readonly]:not([type="checkbox"]):not([type="radio"]) { color: var(--muted); }
+.setting-row input:disabled { opacity: .6; cursor: not-allowed; }
+.setting-row .toggle { margin-left: 0; }
+.setting-row fieldset { margin: 0; }
+.setting-row .scope-options { margin: .25rem 0; }
+.workflow .setting-row p, .workflow .engine-key p { margin: 0; }
+.setting-row .applies { color: var(--cyan); font-size: .85rem; }
+.setting-error, .settings-error { color: var(--danger); }
+.settings-error:empty, .test-result:empty { display: none; }
+.engine-group { margin: 1.25rem 0; padding-top: 1rem; border-top: 1px solid var(--line); }
+.workflow .engine-group h3 { margin-bottom: .75rem; }
+.engine-key { margin: 0 0 1.25rem; }
+.engine-key .button-row { margin: .35rem 0; }
+.engine-key .input-row { max-width: 36rem; margin: .35rem 0; }
+.test-result { color: var(--cyan); }
+.settings-note { padding-top: 1rem; border-top: 1px solid var(--line); font-weight: 700; }
+.settings-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .4rem 1rem; margin: 0; }
+.settings-facts dt { color: var(--muted); }
+.settings-facts dd { margin: 0; overflow-wrap: anywhere; }
+.settings-facts ul { margin: 0; padding-left: 1.1rem; }
+@media (max-width: 680px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-sections { position: static; border-right: 0; border-bottom: 1px solid var(--line); }
+}
