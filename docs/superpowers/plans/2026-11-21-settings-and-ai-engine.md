@@ -28,7 +28,7 @@
 Conditions the spec implies that a person will hit. Each has a test in the task named.
 
 1. The saved engine is Online but its key was removed in Keychain Access: advice is refused with "Online has no key: add one in Settings", not a 401 dump (Task 5).
-2. The URL is typed with a trailing `/` or `/v1` (`http://pc.local:11434/v1/`): it is normalised, so requests do not go to `/v1/v1/...` (Task 4).
+2. The address is typed the way each service documents it, which differs: a bare host (`http://pc.local:11434`), a host with `/v1/`, or a longer base path (`https://api.example.com/v1beta/compat/`). All three must reach `<base>/chat/completions`, never `/v1/v1/...` and never a stripped path (Task 4).
 3. The remote answers an error (`401` with `{"error": {"message": "…"}}`, or an HTML page): the refusal names the engine and carries the service's reason clipped to 200 characters, never the whole body (Task 4).
 4. A saved value is unreadable (hand-edited row, older version) or the catalog does not exist yet: that setting falls back to its default and the server and CLI still start (Task 1).
 5. Base is asleep when the photographer switches to it, or when a server with Base saved starts: the switch is refused and the engine stays as it was; a started server shows "AI: Base · not reachable" and refuses advice readably without hanging the status poll (Tasks 5 and 7).
@@ -186,25 +186,29 @@ If `security -i` does not accept the quoted form, stop and report; do not fall b
 
 **Interfaces:**
 - Produces, in `omlx`:
-  - `normalise_engine_url(engine: str, url: str) -> str`: strips whitespace, a trailing `/`, then a trailing `/v1`. `mac`: loopback host only, message unchanged ("oMLX endpoint must be a loopback http(s) URL"). `base`: scheme `http` or `https` and a host, else `ValueError("Base needs an http or https address")`. `online`: `https` and a host, else `ValueError("Online needs an https address")`. URLs carrying a username, password, query or fragment are refused for every engine.
+  - `normalise_engine_url(engine: str, url: str) -> str`: strips whitespace and trailing `/`. For `base`/`online` the result is the service's **API base**, path included: a URL with no path gets `/v1` appended, a URL with a path is kept as typed. For `mac` a trailing `/v1` is stripped (today's form). `api_base(engine, url) -> str` returns `url + "/v1"` on `mac` and `url` otherwise; every request is `api_base + "/chat/completions"` or `api_base + "/models"`. `mac`: loopback host only, message unchanged ("oMLX endpoint must be a loopback http(s) URL"). `base`: scheme `http` or `https` and a host, else `ValueError("Base needs an http or https address")`. `online`: `https` and a host, else `ValueError("Online needs an https address")`. URLs carrying a username, password, query or fragment are refused for every engine.
   - `OmlxTagger(base_url, model, api_key=None, *, role="review", engine="mac")`: URL through `normalise_engine_url`; `self.engine`; the key falls back to `_local_api_key()` on `mac` only.
   - `_image_content` becomes an instance method. On `mac` unchanged. On `base`/`online`: `long_edge=0` is treated as `MODEL_IMAGE_LONG_EDGE`, and the image is always decoded and re-saved as JPEG (quality 90, `convert("RGB")`, no `exif=` argument), whatever its size or format.
-  - `_complete`: `chat_template_kwargs` in the payload on `mac` only. Error text prefix from `{"mac": "Local oMLX", "base": "Base", "online": "Online"}`. On an `HTTPError`, read at most 2000 bytes of the body; if it is JSON with `error.message` (or `error` as a string) append that reason clipped to 200 characters, otherwise append nothing beyond the status line. After a successful reply call `record_usage(self.engine, result.get("usage"))`.
+  - `_complete` stays the only function that knows the wire format (the seam for a second format later; see the spec's "Room for other kinds of engine"). `chat_template_kwargs` in the payload on `mac` only. `temperature: 0` on `mac` and `base` only: at least one large online service answers 400 to any temperature below 1, so `online` omits the field. Error text prefix from `{"mac": "Local oMLX", "base": "Base", "online": "Online"}`. On an `HTTPError`, read at most 2000 bytes of the body; if it is JSON with `error.message` (or `error` as a string) append that reason clipped to 200 characters, otherwise append nothing beyond the status line. After a successful reply call `record_usage(self.engine, result.get("usage"))`.
   - `record_usage(engine: str, usage) -> None` and `usage_snapshot() -> dict`: a module-level, lock-guarded tally `{engine: {"prompt_tokens": int, "completion_tokens": int, "calls": int, "unreported": int}}` for engines that have made a call. A reply whose `usage` is not a dict with two non-negative ints counts in `unreported`, not as zero tokens. `reset_usage()` for tests.
-  - `list_models(engine: str, url: str, api_key: str | None, timeout: float = 10) -> list[str]`: `GET <url>/v1/models`, no redirects, returns `data[].id` strings sorted; failures raise `OmlxError` with the engine's label, same reason rule as `_complete`.
+  - `list_models(engine: str, url: str, api_key: str | None, timeout: float = 10) -> list[str]`: `GET <url>/v1/models`, no redirects, returns `data[].id` strings sorted, or `[]` when the service answers 404 (it is reachable but offers no listing); other failures raise `OmlxError` with the engine's label, same reason rule as `_complete`.
 - `preferences.validate` for `base_url` / `online_url`: `""` is allowed (clears it); otherwise `omlx.normalise_engine_url(<engine>, value)` and store the normalised form.
 
 - [ ] **Step 1: Write the failing tests** (follow how `tests/test_omlx.py` already fakes the opener):
 
 ```python
 def test_url_rules_per_engine(self):
-    self.assertEqual(normalise_engine_url("base", " http://pc.local:11434/v1/ "), "http://pc.local:11434")   # Review Focus 2
-    self.assertEqual(normalise_engine_url("online", "https://api.example.com/v1"), "https://api.example.com")
+    self.assertEqual(normalise_engine_url("base", " http://pc.local:11434/v1/ "), "http://pc.local:11434/v1")   # Review Focus 2
+    self.assertEqual(normalise_engine_url("base", "http://pc.local:11434"), "http://pc.local:11434/v1")
+    self.assertEqual(normalise_engine_url("online", "https://api.example.com/v1beta/compat/"), "https://api.example.com/v1beta/compat")
+    self.assertEqual(normalise_engine_url("mac", "http://127.0.0.1:8000/v1"), "http://127.0.0.1:8000")
     for engine, url in (("online", "http://api.example.com"), ("base", "ftp://pc"), ("mac", "http://192.168.1.5:8000"),
                         ("base", "http://user:pw@pc.local"), ("online", "https://api.example.com/v1?key=1")):
         with self.assertRaises(ValueError): normalise_engine_url(engine, url)
 
 def test_remote_request_omits_template_kwargs_and_mac_keeps_them(self): ...
+def test_online_omits_temperature_and_base_and_mac_send_zero(self): ...
+def test_requests_go_to_the_api_base(self): ...   # online base "https://api.example.com/v1beta/compat" -> POST .../v1beta/compat/chat/completions; mac -> .../v1/chat/completions
 def test_remote_never_reads_the_local_omlx_key(self): ...   # patch _local_api_key to return "local"; engine="base", api_key=None -> no Authorization header
 
 def test_remote_image_is_always_reencoded_without_metadata(self):
@@ -252,12 +256,12 @@ def test_list_models_reads_ids_and_refuses_redirects(self): ...   # {"data": [{"
   2. `online` with `keychain.get_key("online")` `None`: `"Online has no key: add one in Settings"`
   3. `held_models` is `None`: call `refresh_models`; an `OmlxError` becomes `"<L> did not answer: <reason>"`
   4. `m == ""`: `"choose a <role> model for <L> in Settings"`
-  5. `m` not in the held list: `"<role> model <m> is not offered by <L>"`
+  5. the held list is not empty and `m` is not in it: `"<role> model <m> is not offered by <L>"` (an empty list means the service has no listing; the typed name is used as it is)
   then `OmlxTagger(url, m, api_key=keychain.get_key(engine), role=role, engine=engine)`. On `mac` nothing changes. `library.py` calls `keychain.get_key` so tests patch `lumen.library.keychain`.
 - `diagnostics.doctor_report` adds `"ai_engine"`, `"ai_engine_host"` (hostname and port of the engine's URL, `None` on `mac`), `"ai_engine_reachable"` (`None` on `mac`; else `held_models(engine) is not None`), `"ai_usage": usage_snapshot()`; `omlx_roles` on a remote engine is `{role: {"model": model_for(role), "loaded": model in (held_models(engine) or [])}}`. The report never calls Base or Online.
 - `web.py`:
   - `/api/status` `review_models`: on `mac` the two configured names as today; on a remote engine `held_models(engine) or []`.
-  - `POST /api/role-model`: on `mac` unchanged (session only). On a remote engine the model must be in the held list, and it is saved as `<engine>_<role>_model` through `preferences.save`, then overlaid.
+  - `POST /api/role-model`: on `mac` unchanged (session only). On a remote engine the model must be in the held list when that list is not empty, and it is saved as `<engine>_<role>_model` through `preferences.save`, then overlaid.
   - `POST /api/settings/test` body exactly `{"engine"}` (`base` or `online`): uses the saved URL and Keychain key, calls `refresh_models`, answers `{"ok": true, "models": [...]}` or `{"ok": false, "error": "<reason>"}` with status 200 either way.
   - `POST /api/settings` when the result changes `ai_engine`, or changes the URL of the current engine: for a remote target run checks 1 and 2 above, then `refresh_models`; any failure is a 400 and nothing is saved (the engine stays as it was). Clearing the URL of the current engine is refused: `"<L> is in use: switch engine first"`.
   - `make_server`, after `preferences.load`: when the loaded engine is remote, one `refresh_models` attempt in a daemon thread, failures swallowed (they show as not reachable).
@@ -289,6 +293,7 @@ def test_status_never_calls_the_remote_engine(self):
 def test_started_server_with_unreachable_base_reports_it(self): ...   # Review Focus 5: ai_engine_reachable is False, status answers
 def test_test_route_lists_models_or_reports_the_reason(self): ...
 def test_role_model_on_a_remote_engine_is_saved(self): ...             # survives a new server on the same library
+def test_a_service_without_a_model_listing_still_works(self): ...       # list_models -> []: switch succeeds, a typed model name builds a tagger
 def test_status_and_settings_never_contain_the_key(self): ...          # key "sk-abc12345" in the fake keychain; not in either body
 
 # tests/test_cli.py
@@ -346,7 +351,7 @@ def test_cli_batch_on_remote_engine_needs_yes(self): ...                    # re
   - **Sections:** inside `#settings-panel`, a second tablist `id="settings-sections"` with `aria-orientation="vertical"` and tabs `settings-ai-tab`, `settings-library-tab`, `settings-places-tab`, `settings-server-tab` (labels `AI engine`, `Library`, `Places and map`, `Server`), remembered under `lumen-settings-section`. Extend `wireTablist` so a tablist with `aria-orientation="vertical"` also maps `ArrowDown`/`ArrowUp` to next/previous.
   - **Row shape:** each setting is a `<div class="setting-row">` holding a `<label>`, the native control, `<p class="quiet">` help, and `<p class="applies">` reading one of `Applies now`, `Applies at the next regroup or import`. A shell-fixed setting's control is `disabled` and its help reads `Set by your shell (<VAR>)`.
   - **Save/Discard per section**, both disabled until a field differs from the loaded value; an unsaved section's tab gets `data-unsaved` and the text `(unsaved)` for screen readers. Save posts only the changed keys; success and refusal go through `announce()`, and a refusal's text is put beside the field named by its key when the message starts with one, else under the buttons.
-  - **AI engine section:** radios `This Mac` / `Base` / `Online`; per remote engine a URL field, key status text (`saved` / `not set`), buttons `Add key` or `Replace` (reveals a `type="password"` field with `autocomplete="off"`; its value is posted to `/api/settings/key` and the field cleared at once, never stored in `state` or `localStorage`), `Remove`, and `Test` (shows `<n> models found` or the reason). The fixed sentence `Previews and prompts leave this Mac on Base and Online. Originals never do.` Then `Tokens this session:` per engine that has calls, as `<prompt + completion> tokens`, with `(<n> calls not reported)` when `unreported > 0`.
+  - **AI engine section:** radios `This Mac` / `Base` / `Online`; per remote engine a URL field, key status text (`saved` / `not set`), buttons `Add key` or `Replace` (reveals a `type="password"` field with `autocomplete="off"`; its value is posted to `/api/settings/key` and the field cleared at once, never stored in `state` or `localStorage`), `Remove`, and `Test` (shows `<n> models found`, `Connected; this service does not list its models, type their names`, or the reason). Under each URL field the help reads `The API address from your service's documentation, for example https://api.example.com/v1`. Per remote engine two text fields, `Fast model` and `Review model`, each with a native `<datalist>` filled from the last Test, so a name can be picked or typed. The fixed sentence `Previews and prompts leave this Mac on Base and Online. Originals never do.` Then `Tokens this session:` per engine that has calls, as `<prompt + completion> tokens`, with `(<n> calls not reported)` when `unreported > 0`.
   - **Library section:** library folder (text, read-only); burst gap (number, saved through `POST /api/burst-gap`, `Applies now: regroups every burst`); near-duplicate distance (number 0 to 64, `Applies at the next regroup or import`).
   - **Places and map section:** checkbox `Look up missing place names online` with help `Sends the frame's coordinates to the lookup service when the local index has no close place.`; GeoNames folder and map folder read-only.
   - **Server section:** address (`location.host`), version, and the `stale` reasons as a list, or `Up to date`. No buttons.

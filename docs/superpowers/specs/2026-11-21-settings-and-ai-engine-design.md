@@ -14,7 +14,7 @@ A signed, double-click installer is the third project in this round and gets its
 ## Goals
 
 - Every option that is a shell variable today can be seen on one page, and those that are safe to change can be changed there and survive a restart.
-- One switch sends all advice to This Mac, Base or Online. Any server that speaks the standard chat completions API (`POST /v1/chat/completions`, `GET /v1/models`) works with a URL, an optional key and a model name.
+- One switch sends all advice to This Mac, Base or Online. Any server that speaks the standard chat completions API (`POST <base>/chat/completions`, optionally `GET <base>/models`) works with its API address, an optional key and a model name. That covers the local model servers people run at home and the chat-compatible endpoints the large online services publish (checked against three services' documentation on 2026-11-21: all accept a bearer key and base64 image parts, and their base paths differ).
 - When advice leaves this Mac the page says so at all times, and a batch asks before it starts.
 - Token use reported by the engine is counted and shown.
 
@@ -124,8 +124,10 @@ Settings is a full view in the main area, not a dialog, so it has room for more 
 | Engine | URL rule | Key | Model list | Model "ready" means |
 |---|---|---|---|---|
 | This Mac | loopback only, as today (`LUMEN_OMLX_URL`) | oMLX key, as today | oMLX `/api/status` `loaded_models` | loaded, as today |
-| Base | any `http` or `https` URL | optional | `GET /v1/models` | listed |
-| Online | `https` only | required | `GET /v1/models` | listed |
+| Base | any `http` or `https` URL | optional | `GET <base>/models` | listed, or typed when the server has no listing |
+| Online | `https` only | required | `GET <base>/models` | listed, or typed when the service has no listing |
+
+The saved address is the service's API base as its documentation gives it, path included (services differ: `/v1`, `/v1beta/compat`, `/compatible-mode/v1`). A bare host gets `/v1`. Lumen appends `/chat/completions` and `/models` and never rewrites the path.
 
 Plain `http` is allowed for Base because home model servers serve it; it is refused for Online because the key and the photos would cross the internet in the clear. Redirects stay refused for every engine.
 
@@ -149,9 +151,10 @@ The page shows "saved" or "not set" and a Replace button. Tests inject the `secu
 One client keeps doing the work (`OmlxTagger._complete`); the engine decides the URL, key and two details:
 
 - `chat_template_kwargs` is sent to This Mac only; a strict service may refuse an unknown field.
+- `temperature: 0` is sent to This Mac and Base only. One large online service's documentation says any temperature below 1 is a 400 on its current models, so Online omits it and takes the service's default.
 - Burst critique sends full-size frames today (`long_edge=0`). On Base and Online it is capped at `MODEL_IMAGE_LONG_EDGE`.
 
-Known risk: some services refuse `temperature: 0` or want a differently named token-limit field on some models. The build is tested against fakes of the documented API only; the builder sends nothing to a real Base or Online service. A refusal must reach the photographer as a readable message naming the engine and carrying the service's own reason. The photographer makes the first real calls with their own server and key, and any request adaptation is a follow-up once a real refusal has been seen.
+Known risk: some services want a differently named token-limit field on some models, and one service describes its chat-compatible endpoint as meant for testing and comparison, with its native API the supported path. The build is tested against fakes of the documented API only; the builder sends nothing to a real Base or Online service. A refusal must reach the photographer as a readable message naming the engine and carrying the service's own reason. The photographer makes the first real calls with their own server and key, and any request adaptation is a follow-up once a real refusal has been seen.
 
 Error text names the engine in use ("Base request failed: …") in place of "Local oMLX".
 
@@ -184,6 +187,14 @@ Single-frame advice (a caption, a develop suggestion, a crop review) runs withou
 ### Diagnostics
 
 `lumen doctor` and `/api/status` report `ai_engine`, the engine's URL host (not the key), and the per-role model state for the current engine in the existing `omlx_roles` shape.
+
+## Room for other kinds of engine
+
+Not built this round; written down so the build does not close the door.
+
+- **A service's native API.** `OmlxTagger._complete` is the only function that knows the wire format: it takes content parts, a system prompt and a token limit, and returns text. A second format (different path, key header, image-part shape and usage field names) is a second branch there, chosen by a new saved setting per engine. Nothing above `_complete` changes. Trigger: a service whose chat-compatible endpoint proves unreliable or is withdrawn.
+- **Judgment classifiers.** A newer kind of model answers typed questions (yes/no with a probability, one of a set, a score) about supplied state and images, and writes no prose. That fits the fast role's work, which is classification already (reject problems from a fixed list, sky-frame triage classes, vocabulary tags), and does not fit the review role (captions, rationales, digest). It would be a second tagger class with the same method names as `OmlxTagger` for the fast-role methods, returned by `Library.tagger_for("fast")`. It needs the engine-per-role non-goal built first, since review would stay on a chat model. The one such API read on 2026-11-21 takes images only behind an explicit opt-in header and reports usage as `input_tokens`/`output_tokens`.
+- **What the build must keep true for this:** all advice goes through `Library.tagger_for(role)`; callers use only the tagger's task methods and never its URL or payload; `record_usage` takes token counts, not a reply in one service's shape.
 
 ## Left to the builder
 
