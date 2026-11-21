@@ -3669,7 +3669,7 @@ function fillSettingsStatus(status) {
   const stale = Array.isArray(status.stale) && status.stale.length ? status.stale : ['Up to date'];
   document.querySelector('#settings-server-stale').replaceChildren(...stale.map(reason => Object.assign(document.createElement('li'), { textContent: reason })));
   const usage = Object.entries(status.ai_usage || {}).filter(([, item]) => item?.calls > 0).map(([engine, item]) => {
-    return `${ENGINE_LABELS[engine] ?? engine} ${tokenTotal(item)} tokens${item.unreported > 0 ? ` (${plural(item.unreported, 'call')} not reported)` : ''}`;
+    return `${ENGINE_LABELS[engine] ?? engine} ${tokenTotal(item)} tokens (${item.prompt_tokens.toLocaleString()} in, ${item.completion_tokens.toLocaleString()} out, ${plural(item.calls, 'call')})${item.unreported > 0 ? ` (${plural(item.unreported, 'call')} not reported)` : ''}`;
   });
   const line = document.querySelector('#settings-usage');
   line.hidden = !usage.length;
