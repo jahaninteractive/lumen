@@ -4,7 +4,7 @@ Website: [lumen.contact](https://lumen.contact), with a [step-by-step walk
 through one real trip](https://lumen.contact/guide.html).
 
 Everything a photographer does after install, in the order a shoot goes:
-ingest, cull, frame view, places, map, local AI, export, refine, stack. Install and
+ingest, cull, frame view, places, map, local AI, settings, export, refine, stack. Install and
 first run are in the [README](../README.md).
 
 ## What is working
@@ -523,7 +523,9 @@ over nothing. Natural Earth data is public domain.
 
 ![The Assist tab: Review model and Fast model selects, then Pick and develop every burst, Tag, scan and caption keepers, Tag keepers, Learned keywords and Write today's digest.](images/assist.jpg)
 
-Everything below runs through your local oMLX server and is advisory: the
+Everything below runs through your local oMLX server, unless Settings has
+switched the AI engine (see [Settings and the AI engine](#settings-and-the-ai-engine)),
+and is advisory: the
 models tag, suggest, draft, and explain, but never pick, reject, crop, export,
 or delete. Two model roles are used:
 
@@ -665,6 +667,78 @@ with no animal. Treat species as a suggestion to confirm, not a fact.
 See [MODELS.md](MODELS.md) for what was validated on this Mac and the measured
 timings behind the tables above, and `model-speed/HANDOFF.md` for the raw
 results and the ideas not yet tried.
+
+## Settings and the AI engine
+
+**Settings** is the gear button at the far right of the tab row. It opens in
+place of the workflow panel, with four sections down its left side: AI engine,
+Library, Places and map, and Server. Each section has its own **Save** and
+**Discard**; nothing changes until you save, and each row says when a change
+applies. A setting fixed by a shell variable (`LUMEN_NEAR_DUP_DISTANCE`,
+`LUMEN_GEOCODE_ONLINE`) is shown read-only with the variable's name. Saved
+settings are kept in the catalog and apply to the command line too. The Server
+section shows the address, the version, and whether the running server is out
+of date; it changes nothing.
+
+### Where the advice runs
+
+The AI engine section, and the **AI engine** select at the top of the left
+rail, choose one of three engines for all advice:
+
+- **This Mac** (the default): oMLX on this Mac, as described in
+  [Local AI](#local-ai). No advice request leaves the Mac.
+- **Base**: your own model server elsewhere on your network, at an `http` or
+  `https` address, with an optional key.
+- **Online**: an online service you hold a key for, at an `https` address.
+
+Any server that speaks the standard chat completions API works. Type the
+service's API address as its documentation gives it, path included; a bare
+host gets `/v1`. Keys are kept in the macOS Keychain (service `Lumen`), never
+shown again, and never sent to the page. **Test** saves the address and asks
+the engine for its models; the Fast model and Review model fields offer what
+it found, or take a typed name when the service lists none. Switching to an
+engine that does not answer is refused and nothing is saved. While Base or
+Online is in use, the header status line begins "AI: Base" or "AI: Online".
+
+The Online form's **Service** select fills in a documented address; **Other**
+leaves it for typing, and the address stays an ordinary field. The Base hint
+gives the usual addresses of two home model servers.
+
+| Engine | Service or program | Address |
+|--------|--------------------|---------|
+| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one) |
+| Online | Google | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| Online | OpenAI | `https://api.openai.com/v1` |
+| Online | Qwen (Alibaba Cloud) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| Base | Ollama | `http://<your PC>:11434/v1` |
+| Base | LM Studio | `http://<your PC>:1234/v1` |
+
+### What leaves the Mac
+
+On Base and Online, and only there, each request sends:
+
+- the preview the advice needs, resized to at most 1024 px on the long edge and
+  re-encoded with no metadata (no EXIF, GPS position or serial number);
+- the prompt, which can carry the frame's place name, your keyword
+  vocabulary, develop settings and a summary of the histogram, the day
+  digest's facts including the top frames' file names, and the words you type
+  as feedback on a develop suggestion.
+
+Never sent: camera originals, source paths, fingerprints, GPS coordinates, and
+oMLX's own key. The Base and Online keys go only to their own engine.
+(Looking up missing place names online, in Places and map, is a separate
+setting that sends a frame's coordinates to the place lookup service.)
+
+Online services charge for tokens. Lumen counts the tokens each engine
+reports for the running server, shown as "Tokens this session" in the AI
+engine section; a reply that reports none is counted as "not reported", and
+the count starts again when the server restarts.
+
+Batches ask first. On Base or Online, tagging, Tag, scan and caption, Pick and
+develop every burst, the problem scan and sky triage say "This sends N frames
+to Online. Continue?" before they start; the command-line `tag`, `assist`,
+`review-rejects` and `triage` print the count and need `--yes`. Advice on one
+frame or one burst runs without asking; the status line is the notice.
 
 ## Finish and clear a shoot
 
