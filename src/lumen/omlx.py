@@ -525,13 +525,13 @@ class OmlxTagger:
             {"type": "text", "text": prompt},
             self._image_content(preview),
         ], timeout, system=system)
-        return parse_tag_response(content)
+        return self._parse(parse_tag_response, content)
 
     def expand_query(self, query: str, vocabulary: dict[str, list[str]], timeout: float = 60) -> list[str]:
         """Text only: which vocabulary keywords fit a free-text search."""
         prompt = f'Which of these keywords describe photos matching "{query}"? Answer {{"terms": [...]}} using only listed keywords.'
         raw = self._complete([{"type": "text", "text": prompt}], timeout, max_tokens=200, system=_vocabulary_system(vocabulary))
-        return parse_expand_response(raw, vocabulary)
+        return self._parse(parse_expand_response, raw, vocabulary)
 
     def review_composition(
         self,
@@ -567,28 +567,28 @@ class OmlxTagger:
                 self._image_content(path),
             ))
         response = self._complete(content, timeout)
-        return parse_composition_response(response, set(ids))
+        return self._parse(parse_composition_response, response, set(ids))
 
     def review_rejects(self, preview: Path, timeout: float = 240) -> RejectReview:
         prompt = ("Look for technical failures only: " + ", ".join(PROBLEMS) + ". Return one JSON object only, shaped "
                   '{"problems": [{"kind": "...", "confidence": 0.0}], "suggest_reject": false, "confidence": 0.0}; '
                   "problems may be an empty array. Do not identify a person.")
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=300)
-        return parse_reject_response(content)
+        return self._parse(parse_reject_response, content)
 
     def triage_astro(self, preview: Path, timeout: float = 240) -> AstroTriage:
         prompt = ("Classify the sky in this long exposure as one of: " + ", ".join(SKY_CLASSES) + ". List any issues "
                   "from: " + ", ".join(SKY_ISSUES) + ". Return JSON only with sky, confidence (0 to 1), issues "
                   "(array, may be empty). Do not identify a person.")
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=200)
-        return parse_astro_response(content)
+        return self._parse(parse_astro_response, content)
 
     def caption(self, preview: Path, timeout: float = 240, *, place: str | None = None) -> Caption:
         prompt = ("Write caption (under 200 characters, no hashtags, no emoji) and alt_text (under 125 characters, a "
                   "literal description of what is visible for a screen reader). Return JSON only. Do not identify a person."
                   + _place_sentence(place))
         content = self._complete([{"type": "text", "text": prompt}, self._image_content(preview)], timeout, max_tokens=400)
-        return parse_caption_response(content)
+        return self._parse(parse_caption_response, content)
 
     def suggest_develop(self, preview: Path, *, settings: dict, histogram_note: str = "",
                         feedback: str | None = None, timeout: float = 240) -> DevelopAdvice:
@@ -616,7 +616,7 @@ class OmlxTagger:
         if feedback:
             prompt += f" The photographer says of your previous attempt: {feedback}"
         content = [{"type": "text", "text": prompt}, self._image_content(preview)]
-        return parse_develop_response(self._complete(content, timeout, max_tokens=600))
+        return self._parse(parse_develop_response, self._complete(content, timeout, max_tokens=600))
 
     def review_stack(self, preview: Path, debrief_text: str, timeout: float = 240) -> StackReview:
         """Advisory notes on a stacked night-sky preview: only what eyes catch, never numbers or settings."""
@@ -629,7 +629,7 @@ class OmlxTagger:
             "visible; an empty array when there is nothing to add. Do not identify a person.\n\n" + debrief_text
         )
         content = [{"type": "text", "text": prompt}, self._image_content(preview)]
-        return parse_stack_review(self._complete(content, timeout, max_tokens=400))
+        return self._parse(parse_stack_review, self._complete(content, timeout, max_tokens=400))
 
     def write_digest(self, facts_markdown: str, timeout: float = 240) -> DigestNarrative:
         """Text only: the facts table goes to the model, never an image."""
@@ -637,7 +637,7 @@ class OmlxTagger:
                   "facts only. Do not invent species, places, or counts. Return JSON only with narrative.")
         content = [{"type": "text", "text": prompt}, {"type": "text", "text": facts_markdown}]
         raw = self._complete(content, timeout, max_tokens=600)
-        return DigestNarrative(parse_digest_response(raw), raw)
+        return DigestNarrative(self._parse(parse_digest_response, raw), raw)
 
     def critique_burst(self, frames: list[tuple[str, Path]], timeout: float = 240) -> BurstCritique:
         ids = [frame_id for frame_id, _ in frames]
@@ -651,7 +651,17 @@ class OmlxTagger:
             "(at most 300 characters), confidence (0 to 1). Do not identify a person.")}]
         for frame_id, path in frames:
             content.extend(({"type": "text", "text": f"Frame {frame_id}"}, self._image_content(path, long_edge=0)))  # sharpness is compared per pixel
-        return parse_burst_response(self._complete(content, timeout, max_tokens=400), set(ids))
+        return self._parse(parse_burst_response, self._complete(content, timeout, max_tokens=400), set(ids))
+
+    def _parse(self, parse, raw: str, *args):
+        """parse(raw, *args); on Base or Online a parse error names that engine where the parsers say oMLX."""
+        try:
+            return parse(raw, *args)
+        except OmlxError as error:
+            message = str(error)
+            if self.engine == "mac" or not message.startswith("oMLX "):
+                raise
+            raise type(error)(ERROR_PREFIX[self.engine] + message[4:], getattr(error, "raw_response", None)) from error
 
     def _image_content(self, path: Path, *, long_edge: int = MODEL_IMAGE_LONG_EDGE) -> dict:
         if not isinstance(path, Path) or not path.is_file():

@@ -671,6 +671,15 @@ class EngineTests(unittest.TestCase):
             tagger._complete([{"type": "text", "text": "hi"}], 5)
         return opener.requests
 
+    def test_a_remote_parse_error_names_the_engine_not_omlx(self):
+        for engine, start in (("base", "Base "), ("online", "Online "), ("mac", "oMLX ")):
+            opener = _Opener(_chat("not json"))
+            with self.subTest(engine=engine), patch("lumen.omlx.urllib.request.build_opener", return_value=opener), \
+                    self.assertRaises(TagResponseError) as caught:
+                self.taggers()[engine].tag(self.preview)
+            self.assertTrue(str(caught.exception).startswith(start + "did not return valid JSON"), str(caught.exception))
+            self.assertEqual("not json", caught.exception.raw_response)
+
     def test_url_rules_per_engine(self):
         self.assertEqual(normalise_engine_url("base", " http://pc.local:11434/v1/ "), "http://pc.local:11434/v1")
         self.assertEqual(normalise_engine_url("base", "http://pc.local:11434"), "http://pc.local:11434/v1")

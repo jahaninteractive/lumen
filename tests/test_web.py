@@ -2165,7 +2165,7 @@ console.log(JSON.stringify([panel.hidden, store]));
             self.assertEqual((200, {"ok": True, "models": ["a", "b"]}), self.post_json("/api/settings/test", {"engine": "base"}))
         models.assert_called_once_with("base", "http://pc.local:11434/v1", None, 10)
         with patch("lumen.omlx.list_models", side_effect=OmlxError("Base model list request failed: refused")):
-            self.assertEqual((200, {"ok": False, "error": "Base did not answer: Base model list request failed: refused"}),
+            self.assertEqual((200, {"ok": False, "error": "Base did not answer: refused"}),
                              self.post_json("/api/settings/test", {"engine": "base"}))
         self.assertEqual("mac", self.status()[1]["ai_engine"])  # a test never switches
         with patch("lumen.omlx.list_models", side_effect=AssertionError("refused before any call")):

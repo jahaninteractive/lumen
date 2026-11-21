@@ -3434,6 +3434,10 @@ class LibraryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "^Base did not answer: Base request failed: timed out$"):
             self.remote_tagger(listing=OmlxError("Base request failed: timed out"))
 
+    def test_tagger_for_a_refused_listing_gives_the_reason_once(self):
+        with self.assertRaisesRegex(RuntimeError, "^Base did not answer: <urlopen error refused>$"):
+            self.remote_tagger(listing=OmlxError("Base model list request failed: <urlopen error refused>"))
+
     def test_tagger_for_names_a_missing_or_unoffered_model(self):
         with self.assertRaisesRegex(RuntimeError, "^choose a fast model for Base in Settings$"):
             self.remote_tagger(base_fast_model="")
