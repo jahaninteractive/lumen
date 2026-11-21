@@ -14,6 +14,7 @@ UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 - On Base and Online, previews go out resized and re-encoded with no metadata, and prompts go with them; originals, source paths, fingerprints and coordinates never do. The status line says "AI: Base" or "AI: Online" while one is in use, tokens reported by the engine are counted for the session, and batches name how many frames they would send and start only once confirmed (`--yes` on the command line).
 - The About dialog no longer says nothing is ever sent: it says nothing is sent unless the AI engine is switched in Settings.
 - Base and Online answers get 4000 extra tokens of room, because a model that reasons before it answers otherwise spends the whole limit reasoning; an empty answer after reasoning now says so instead of "did not return valid JSON". Base is also asked not to reason first, as This Mac already is.
+- A service whose model list this client cannot read (it answers 400, 404 or 405) no longer fails Test or the switch: the model names are typed instead.
 
 ## 0.5.1 (2026-11-13)
 

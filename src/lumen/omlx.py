@@ -775,7 +775,7 @@ def get_server_status(base_url: str, api_key: str | None = None, timeout: float 
 
 
 def list_models(engine: str, url: str, api_key: str | None, timeout: float = 10) -> list[str]:
-    """The model ids a service offers, sorted; [] when it is reachable but has no listing (404)."""
+    """The model ids a service offers, sorted; [] when it is reachable but has no listing this client can read (400, 404, 405)."""
     url = normalise_engine_url(engine, url)
     key = api_key or (OmlxTagger._local_api_key() if engine == "mac" else None)
     headers = {"Authorization": f"Bearer {key}"} if key else {}
@@ -786,7 +786,8 @@ def list_models(engine: str, url: str, api_key: str | None, timeout: float = 10)
         with opener.open(request, timeout=timeout) as response:
             data = json.load(response)["data"]
     except urllib.error.HTTPError as error:
-        if error.code == 404:
+        # ponytail: a 400 also hides a bad key on a service that answers 400 for one; the first chat call then says so.
+        if error.code in (400, 404, 405):  # seen: a service's listing answered 400 wanting its own version header, while its chat endpoint takes the standard request
             error.close()
             return []
         reason = "" if engine == "mac" else _http_reason(error)

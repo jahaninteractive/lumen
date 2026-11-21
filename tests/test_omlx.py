@@ -938,6 +938,9 @@ class EngineTests(unittest.TestCase):
     def test_list_models_without_a_listing_is_empty_and_other_failures_raise(self):
         with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(404, b"not here"))):
             self.assertEqual([], list_models("base", "http://pc.local:11434", None))
+        for code in (400, 405):  # a service whose listing wants its own headers, or has none: the typed model name stands
+            with self.subTest(code=code), patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(code, b'{"error": {"message": "a header is required"}}'))):
+                self.assertEqual([], list_models("online", "https://api.example.com/v1", "sk-test-key"))
         body = json.dumps({"error": {"message": "bad key"}}).encode()
         with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(401, body))):
             with self.assertRaisesRegex(OmlxError, "^Base .*bad key$"):

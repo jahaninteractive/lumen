@@ -710,7 +710,7 @@ gives the usual addresses of two home model servers.
 
 | Engine | Service or program | Address |
 |--------|--------------------|---------|
-| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one) |
+| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one). Its model list is not readable through this address, so type the Fast model and Review model names from the service's documentation |
 | Online | Google | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | Online | OpenAI | `https://api.openai.com/v1` |
 | Online | Qwen (Alibaba Cloud) | no preset: choose **Other** and paste your workspace's address, `https://<WorkspaceId>.<region>.maas.aliyuncs.com/compatible-mode/v1`, from the service's console |
