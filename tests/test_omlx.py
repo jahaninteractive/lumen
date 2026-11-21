@@ -23,6 +23,7 @@ from lumen.omlx import (
     DevelopAdviceError,
     NoRedirectHandler,
     OmlxError,
+    REMOTE_REASONING_TOKENS,
     OmlxTagger,
     PROBLEMS,
     RejectResponseError,
@@ -705,6 +706,18 @@ class EngineTests(unittest.TestCase):
         self.assertEqual({"enable_thinking": False}, payloads["mac"]["chat_template_kwargs"])
         self.assertNotIn("chat_template_kwargs", payloads["base"])
         self.assertNotIn("chat_template_kwargs", payloads["online"])
+
+    def test_remote_engines_get_room_to_reason_before_the_answer(self):
+        payloads = {engine: json.loads(self.send(tagger)[0].data) for engine, tagger in self.taggers().items()}
+        self.assertEqual(payloads["mac"]["max_tokens"] + REMOTE_REASONING_TOKENS, payloads["base"]["max_tokens"])
+        self.assertEqual(payloads["base"]["max_tokens"], payloads["online"]["max_tokens"])
+
+    def test_an_empty_answer_after_reasoning_says_so(self):
+        reply = json.dumps({"choices": [{"finish_reason": "length", "message": {"content": "", "reasoning_content": "Let me examine each frame"}}]}).encode()
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(reply)), \
+                self.assertRaisesRegex(OmlxError, "^Base model spent its token budget on reasoning") as caught:
+            self.taggers()["base"].tag(self.preview)
+        self.assertNotIn("Let me examine", str(caught.exception))
 
     def test_online_omits_temperature_and_base_and_mac_send_zero(self):
         payloads = {engine: json.loads(self.send(tagger)[0].data) for engine, tagger in self.taggers().items()}

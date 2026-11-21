@@ -27,6 +27,7 @@ SKY_ISSUES = ("haze", "light_pollution", "trailing", "cloud_band")
 CAPTION_MAX = 200
 ALT_TEXT_MAX = 125
 NARRATIVE_MAX = 1500
+REMOTE_REASONING_TOKENS = 4000  # added to every Base and Online answer limit: a model that reasons first spends its limit there (seen: 400 of 400 on reasoning, empty answer)
 MODEL_IMAGE_LONG_EDGE = 1024  # measured: the 27B tags as well at 1024 as at 1616 in two-thirds of the time; 768 starts inventing species
 STACK_NOTES_MAX = 5
 STACK_NOTE_CHARS = 200
@@ -698,7 +699,7 @@ class OmlxTagger:
         payload = {"model": self.model, "messages": messages}
         if self.engine != "online":  # at least one large online service answers 400 to any temperature below 1
             payload["temperature"] = 0
-        payload["max_tokens"] = max_tokens
+        payload["max_tokens"] = max_tokens + (REMOTE_REASONING_TOKENS if self.engine != "mac" else 0)
         if self.engine == "mac":
             payload["chat_template_kwargs"] = {"enable_thinking": False}  # Qwen-style thinking otherwise eats the budget and returns no content.
         headers = {"Content-Type": "application/json"}
@@ -723,9 +724,9 @@ class OmlxTagger:
         except (*NETWORK_ERRORS, KeyError, IndexError, TypeError, AttributeError) as error:
             raise OmlxError(_masked(f"{prefix} request failed: {error}", self.api_key)) from error
         record_usage(self.engine, result.get("usage"))
-        if not isinstance(content, str):
+        if not isinstance(content, str) or not content.strip():
             if isinstance(message, dict) and message.get("reasoning_content"):
-                raise OmlxError(f"{prefix} model spent its token budget on reasoning and returned no answer; use a model that answers directly")
+                raise OmlxError(f"{prefix} model spent its token budget on reasoning and returned no answer; turn its thinking off on the server or use a model that answers directly")
             raise OmlxError(f"{prefix} response did not contain text")
         return content
 
