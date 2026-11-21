@@ -3387,6 +3387,66 @@ class LibraryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "fast model .* is not loaded in oMLX; oMLX is offline"):
                     library.tagger_for("fast")
 
+    def remote_tagger(self, role="fast", *, key=None, listing=("small", "big"), **fields):
+        """tagger_for on a remote engine with a fake Keychain, a fake listing and a fake tagger class."""
+        from lumen import omlx
+        omlx.reset_models()
+        self.addCleanup(omlx.reset_models)
+        fields = {"ai_engine": "base", "base_url": "http://pc.local:11434", "base_fast_model": "small"} | fields
+        listing = {"side_effect": listing} if isinstance(listing, Exception) else {"return_value": list(listing)}
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.library.keychain") as keychain, \
+                patch("lumen.omlx.list_models", **listing) as models, patch("lumen.library.OmlxTagger") as tagger, \
+                patch("lumen.library.get_server_status", side_effect=AssertionError("oMLX is not asked on a remote engine")):
+            keychain.get_key.return_value = key
+            with Library(Settings(library_dir=Path(directory), **fields)) as library:
+                library.tagger_for(role)
+        return tagger, models
+
+    def test_tagger_for_base_builds_a_base_tagger(self):
+        tagger, models = self.remote_tagger()
+        tagger.assert_called_once_with("http://pc.local:11434", "small", api_key=None, role="fast", engine="base")
+        models.assert_called_once()
+        tagger, _ = self.remote_tagger("review", key="sk-abc12345", ai_engine="online", online_url="https://api.example.com/v1",
+                                       online_review_model="big")
+        tagger.assert_called_once_with("https://api.example.com/v1", "big", api_key="sk-abc12345", role="review", engine="online")
+
+    def test_tagger_for_a_held_listing_does_not_ask_again(self):
+        from lumen import omlx
+        with patch("lumen.omlx.list_models", return_value=["small"]):
+            omlx.refresh_models("base", "http://pc.local:11434", None)
+        self.addCleanup(omlx.reset_models)
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.library.keychain") as keychain, \
+                patch("lumen.omlx.list_models", side_effect=AssertionError("already held")), patch("lumen.library.OmlxTagger"):
+            keychain.get_key.return_value = None
+            settings = Settings(library_dir=Path(directory), ai_engine="base", base_url="http://pc.local:11434", base_fast_model="small")
+            with Library(settings) as library:
+                library.tagger_for("fast")
+
+    def test_tagger_for_without_an_address_says_so(self):
+        with self.assertRaisesRegex(RuntimeError, "^Base has no address: add one in Settings$"):
+            self.remote_tagger(base_url="")
+
+    def test_tagger_for_online_without_a_key_says_so(self):
+        with self.assertRaisesRegex(RuntimeError, "^Online has no key: add one in Settings$"):
+            self.remote_tagger("review", ai_engine="online", online_url="https://api.example.com/v1", online_review_model="big")
+
+    def test_tagger_for_unreachable_base_says_it_did_not_answer(self):
+        with self.assertRaisesRegex(RuntimeError, "^Base did not answer: Base request failed: timed out$"):
+            self.remote_tagger(listing=OmlxError("Base request failed: timed out"))
+
+    def test_tagger_for_names_a_missing_or_unoffered_model(self):
+        with self.assertRaisesRegex(RuntimeError, "^choose a fast model for Base in Settings$"):
+            self.remote_tagger(base_fast_model="")
+        with self.assertRaisesRegex(RuntimeError, "^fast model gone is not offered by Base$"):
+            self.remote_tagger(base_fast_model="gone")
+        tagger, _ = self.remote_tagger(base_fast_model="typed", listing=())  # no listing: the typed name is used as it is
+        self.assertEqual("typed", tagger.call_args.args[1])
+
+    def test_tagger_for_never_puts_the_key_in_a_refusal(self):
+        with self.assertRaises(RuntimeError) as refusal:
+            self.remote_tagger(key="sk-abc12345", listing=OmlxError("Base model list request failed: HTTP Error 401: bad key sk-abc12345"))
+        self.assertNotIn("sk-abc12345", str(refusal.exception))
+
     def test_tag_job_keepers_scope_applies_vocabulary_and_high_confidence_species_only(self):
         class FakeTagger:
             model, role = "fast-model", "fast"

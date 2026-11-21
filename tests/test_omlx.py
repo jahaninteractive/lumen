@@ -35,8 +35,11 @@ from lumen.omlx import (
     parse_expand_response,
     parse_reject_response,
     parse_tag_response,
+    held_models,
     list_models,
     normalise_engine_url,
+    refresh_models,
+    reset_models,
     reset_usage,
     usage_snapshot,
 )
@@ -646,6 +649,7 @@ class EngineTests(unittest.TestCase):
 
     def setUp(self):
         reset_usage()
+        reset_models()
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.preview = self.root / "p.jpg"
@@ -654,6 +658,7 @@ class EngineTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
         reset_usage()
+        reset_models()
 
     def taggers(self):
         return {"mac": OmlxTagger("http://127.0.0.1:8000", "m", api_key="k"),
@@ -671,6 +676,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(normalise_engine_url("base", "http://pc.local:11434"), "http://pc.local:11434/v1")
         self.assertEqual(normalise_engine_url("online", "https://api.example.com/v1beta/compat/"), "https://api.example.com/v1beta/compat")
         self.assertEqual(normalise_engine_url("mac", "http://127.0.0.1:8000/v1"), "http://127.0.0.1:8000")
+        self.assertEqual(normalise_engine_url("online", "https://api.example.com/v1/chat/completions"), "https://api.example.com/v1")
         for engine, url in (("online", "http://api.example.com"), ("base", "ftp://pc"), ("mac", "http://192.168.1.5:8000"),
                             ("base", "http://user:pw@pc.local"), ("online", "https://api.example.com/v1?key=1"),
                             ("online", "https://api.example.com/v1#x"), ("mac", "http://user@127.0.0.1:8000"),
@@ -824,6 +830,23 @@ class EngineTests(unittest.TestCase):
         with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(redirect)):
             with self.assertRaisesRegex(OmlxError, "^Online "):
                 list_models("online", "https://api.example.com", "secret")
+
+    def test_refresh_models_holds_the_last_listing_and_a_failure_clears_it(self):
+        self.assertIsNone(held_models("base"))
+        with patch("lumen.omlx.list_models", return_value=["a", "b"]) as listing:
+            self.assertEqual(["a", "b"], refresh_models("base", "http://pc.local:11434", "k"))
+        listing.assert_called_once_with("base", "http://pc.local:11434", "k", 10)
+        self.assertEqual(["a", "b"], held_models("base"))
+        self.assertIsNone(held_models("online"))  # held per engine
+        with patch("lumen.omlx.list_models", side_effect=OmlxError("Base model list request failed: timed out")):
+            with self.assertRaisesRegex(OmlxError, "timed out"):
+                refresh_models("base", "http://pc.local:11434", "k")
+        self.assertIsNone(held_models("base"))
+        with patch("lumen.omlx.list_models", return_value=[]):
+            refresh_models("base", "http://pc.local:11434", None)
+        self.assertEqual([], held_models("base"))  # reachable, no listing: not the same as never listed
+        reset_models()
+        self.assertIsNone(held_models("base"))
 
     def test_list_models_without_a_listing_is_empty_and_other_failures_raise(self):
         with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(_http_error(404, b"not here"))):

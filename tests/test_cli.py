@@ -18,7 +18,7 @@ from lumen.cli import main
 from lumen.config import Settings
 from lumen.diagnostics import doctor_report
 from lumen.library import Library
-from lumen.omlx import AstroTriage, BurstCritique, Caption
+from lumen.omlx import AstroTriage, BurstCritique, Caption, OmlxError
 from lumen.pipelines import DarktablePipeline, PipelineResult
 from lumen.previews import fingerprint_file
 from lumen.tools import ToolStatus
@@ -482,6 +482,40 @@ class CliTests(unittest.TestCase):
         with patch("lumen.omlx.get_server_status") as status:  # an explicit LUMEN_OMLX_REVIEW_MODEL is never second-guessed
             self.assertEqual("picked", serve_settings(chosen).review_model)
             status.assert_not_called()
+
+    def test_serve_settings_leaves_a_remote_engine_alone(self):
+        from lumen.cli import serve_settings
+        remote = Settings(library_dir=Path("/tmp/unused"), ai_engine="base", base_url="http://pc.local:11434/v1")
+        with patch("lumen.omlx.get_server_status") as status:
+            self.assertIs(remote, serve_settings(remote))
+        status.assert_not_called()
+
+    def test_doctor_names_the_engine(self):
+        from lumen import omlx
+        omlx.reset_usage()
+        self.addCleanup(omlx.reset_usage)
+        missing = ToolStatus(name="tool", available=False, path=None, version=None)
+        with tempfile.TemporaryDirectory() as directory, patch("lumen.diagnostics._find_model", return_value=None), \
+                patch("lumen.diagnostics.tool_status", return_value=missing), \
+                patch("lumen.diagnostics.get_server_status", side_effect=OmlxError("offline")), \
+                patch("lumen.omlx.list_models", side_effect=AssertionError("doctor never calls Base")), \
+                patch.dict(os.environ, {"LUMEN_GEONAMES_DIR": str(Path(directory) / "none"), "LUMEN_MAP_DIR": str(Path(directory) / "none")}):
+            library_dir = Path(directory) / "library"
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--library", str(library_dir), "doctor"])
+            self.assertIn("AI engine: This Mac\n", output.getvalue())
+            with Catalog(library_dir / "catalog.sqlite3") as catalog:
+                catalog.set_preference("setting.ai_engine", '"base"')
+                catalog.set_preference("setting.base_url", '"http://pc.local:11434/v1"')
+            output = io.StringIO()
+            with redirect_stdout(output):
+                main(["--library", str(library_dir), "doctor"])
+            self.assertIn("AI engine: Base (pc.local:11434)\n", output.getvalue())
+            report = doctor_report(Settings(library_dir=library_dir, ai_engine="base", base_url="http://pc.local:11434/v1"))
+        self.assertEqual(("base", "pc.local:11434", False, {}), (report["ai_engine"], report["ai_engine_host"],
+                                                             report["ai_engine_reachable"], report["ai_usage"]))
+        self.assertEqual({"model": "", "loaded": False}, report["omlx_roles"]["fast"])
 
     def test_tag_keepers_runs_job_and_doctor_reports_both_roles(self):
         from lumen.omlx import TagResult

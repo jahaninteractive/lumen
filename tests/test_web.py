@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 from PIL import Image, ImageCms
 
-from lumen import preferences
+from lumen import omlx, preferences
 from lumen.config import Settings
 from lumen.domain import DEVELOP_FLAGS, DEVELOP_RANGES, DevelopSettings
 from lumen.library import Library
@@ -83,6 +83,13 @@ class WebTests(unittest.TestCase):
         self.keychain = keys.start()
         self.addCleanup(keys.stop)
         self.keychain.get_key.return_value = None
+        library_keys = patch("lumen.library.keychain", self.keychain)  # the same fake behind Library.tagger_for
+        library_keys.start()
+        self.addCleanup(library_keys.stop)
+        omlx.reset_models()
+        self.addCleanup(omlx.reset_models)
+        omlx.reset_usage()
+        self.addCleanup(omlx.reset_usage)
         settings = Settings(library_dir=self.root / "library", map_dir=self.root / "map")
         source = self.root / "photo.jpg"
         Image.new("RGB", (120, 90), (80, 100, 120)).save(source)
@@ -1932,6 +1939,144 @@ console.log(JSON.stringify([panel.hidden, store]));
         self.assertEqual(403, self.delete_json("/api/settings/key/online", headers=hostile)[0])
         self.keychain.set_key.assert_not_called()
         self.keychain.delete_key.assert_not_called()
+
+    OFFLINE = {"side_effect": OmlxError("Local oMLX status request failed: offline")}
+
+    def status(self):
+        with patch("lumen.diagnostics.get_server_status", **self.OFFLINE):
+            return self.get_json("/api/status")
+
+    def restart(self, **listing):
+        """A fresh server on the same library; `listing` patches the startup model refresh, which is joined."""
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        with patch("lumen.omlx.list_models", **(listing or {"side_effect": AssertionError("no refresh expected")})) as models:
+            self.server = make_server(Settings(library_dir=self.root / "library", map_dir=self.root / "map"), port=0)
+            if self.server.models_refresh is not None:
+                self.server.models_refresh.join(timeout=5)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        return models
+
+    def use_base(self, models=("small", "big")):
+        self.assertEqual(200, self.post_json("/api/settings", {"base_url": "http://pc.local:11434"})[0])
+        with patch("lumen.omlx.list_models", return_value=list(models)):
+            status, body = self.post_json("/api/settings", {"ai_engine": "base"})
+        self.assertEqual(200, status, body)
+
+    def test_mac_status_names_this_mac_and_makes_no_listing(self):
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("mac never lists")):
+            body = self.status()[1]
+        self.assertEqual(("mac", None, None), (body["ai_engine"], body["ai_engine_host"], body["ai_engine_reachable"]))
+        self.assertEqual({}, body["ai_usage"])
+        self.assertIsNone(self.server.models_refresh)  # no startup thread on this Mac
+
+    def test_switching_to_an_unreachable_base_is_refused_and_keeps_the_engine(self):
+        self.post_json("/api/settings", {"base_url": "http://pc.local:11434"})
+        with patch("lumen.omlx.list_models", side_effect=OmlxError("Base request failed: timed out")):
+            status, body = self.post_json("/api/settings", {"ai_engine": "base"})
+        self.assertEqual((400, {"error": "Base did not answer: Base request failed: timed out"}), (status, body))
+        self.assertEqual("mac", self.status()[1]["ai_engine"])
+        rows = {row["key"]: row for row in self.get_json("/api/settings")[1]["settings"]}
+        self.assertEqual(("mac", "default"), (rows["ai_engine"]["value"], rows["ai_engine"]["source"]))
+
+    def test_switching_to_online_needs_a_url_and_a_key(self):
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("refused before any call")):
+            self.assertEqual((400, {"error": "Online has no address: add one in Settings"}),
+                             self.post_json("/api/settings", {"ai_engine": "online"}))
+            self.assertEqual(200, self.post_json("/api/settings", {"online_url": "https://api.example.com/v1"})[0])
+            self.assertEqual((400, {"error": "Online has no key: add one in Settings"}),
+                             self.post_json("/api/settings", {"ai_engine": "online"}))
+        self.assertEqual("mac", self.status()[1]["ai_engine"])
+        self.keychain.get_key.side_effect = lambda engine: "sk-abc12345" if engine == "online" else None
+        with patch("lumen.omlx.list_models", return_value=["big"]) as models:
+            self.assertEqual(200, self.post_json("/api/settings", {"ai_engine": "online"})[0])
+        models.assert_called_once_with("online", "https://api.example.com/v1", "sk-abc12345", 10)
+        body = self.status()[1]
+        self.assertEqual(("online", "api.example.com", True), (body["ai_engine"], body["ai_engine_host"], body["ai_engine_reachable"]))
+
+    def test_changing_the_current_engine_address_is_checked_and_clearing_it_is_refused(self):
+        self.use_base()
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("no call for a change that leaves the engine alone")):
+            self.assertEqual(200, self.post_json("/api/settings", {"near_duplicate_distance": 4, "base_fast_model": "big"})[0])
+            self.assertEqual((400, {"error": "Base is in use: switch engine first"}), self.post_json("/api/settings", {"base_url": ""}))
+        with patch("lumen.omlx.list_models", side_effect=OmlxError("Base model list request failed: refused")):
+            self.assertEqual(400, self.post_json("/api/settings", {"base_url": "http://other.local:11434"})[0])
+        self.assertEqual("pc.local:11434", self.status()[1]["ai_engine_host"])  # the refused address was not saved
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("switching to this Mac lists nothing")):
+            self.assertEqual(200, self.post_json("/api/settings", {"ai_engine": "mac", "base_url": ""})[0])
+        self.assertEqual("mac", self.status()[1]["ai_engine"])
+
+    def test_status_never_calls_the_remote_engine(self):
+        self.use_base()
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("status must not call Base")):
+            status, body = self.status()
+        self.assertEqual(200, status)
+        self.assertEqual((body["ai_engine"], body["ai_engine_host"]), ("base", "pc.local:11434"))
+        self.assertTrue(body["ai_engine_reachable"])
+        self.assertEqual(["small", "big"], body["review_models"])  # the held listing as the service gave it
+        self.assertEqual({"model": "", "loaded": False}, body["omlx_roles"]["fast"])
+
+    def test_started_server_with_unreachable_base_reports_it(self):
+        self.use_base()
+        models = self.restart(side_effect=OmlxError("Base model list request failed: timed out"))
+        models.assert_called_once()
+        status, body = self.status()
+        self.assertEqual(200, status)
+        self.assertEqual(("base", False), (body["ai_engine"], body["ai_engine_reachable"]))
+        self.assertEqual([], body["review_models"])
+        models = self.restart(return_value=["small"])  # a reachable Base is listed at startup
+        self.assertTrue(self.status()[1]["ai_engine_reachable"])
+
+    def test_test_route_lists_models_or_reports_the_reason(self):
+        self.assertEqual((200, {"ok": False, "error": "Base has no address: add one in Settings"}),
+                         self.post_json("/api/settings/test", {"engine": "base"}))
+        self.post_json("/api/settings", {"base_url": "http://pc.local:11434"})
+        with patch("lumen.omlx.list_models", return_value=["a", "b"]) as models:
+            self.assertEqual((200, {"ok": True, "models": ["a", "b"]}), self.post_json("/api/settings/test", {"engine": "base"}))
+        models.assert_called_once_with("base", "http://pc.local:11434/v1", None, 10)
+        with patch("lumen.omlx.list_models", side_effect=OmlxError("Base model list request failed: refused")):
+            self.assertEqual((200, {"ok": False, "error": "Base did not answer: Base model list request failed: refused"}),
+                             self.post_json("/api/settings/test", {"engine": "base"}))
+        self.assertEqual("mac", self.status()[1]["ai_engine"])  # a test never switches
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("refused before any call")):
+            for payload in ({}, {"engine": "mac"}, {"engine": "base", "extra": 1}, {"engine": 1}, {"engine": ["base"]}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, self.post_json("/api/settings/test", payload)[0])
+            self.assertEqual(403, self.post_json("/api/settings/test", {"engine": "base"}, headers={"Origin": "https://attacker.example"})[0])
+
+    def test_role_model_on_a_remote_engine_is_saved(self):
+        self.use_base()
+        self.assertEqual((200, {"role": "fast", "model": "small"}), self.post_json("/api/role-model", {"role": "fast", "model": "small"}))
+        self.assertEqual((200, {"role": "review", "model": "big"}), self.post_json("/api/role-model", {"role": "review", "model": "big"}))
+        self.assertEqual((400, {"error": "review model gone is not offered by Base"}),
+                         self.post_json("/api/role-model", {"role": "review", "model": "gone"}))
+        self.assertEqual(400, self.post_json("/api/role-model", {"role": "review", "model": 1})[0])
+        self.restart(return_value=["small", "big"])
+        roles = self.status()[1]["omlx_roles"]
+        self.assertEqual(({"model": "small", "loaded": True}, {"model": "big", "loaded": True}), (roles["fast"], roles["review"]))
+        rows = {row["key"]: row for row in self.get_json("/api/settings")[1]["settings"]}
+        self.assertEqual(("big", "saved"), (rows["base_review_model"]["value"], rows["base_review_model"]["source"]))
+
+    def test_a_service_without_a_model_listing_still_works(self):
+        self.use_base(models=())
+        self.assertEqual(200, self.post_json("/api/role-model", {"role": "review", "model": "typed"})[0])
+        with patch("lumen.omlx.list_models", side_effect=AssertionError("the empty listing is held")), \
+                patch("lumen.library.Library.caption_photo", lambda self, photo_id, tagger: {"model": tagger.model, "engine": tagger.engine}):
+            self.assertEqual((200, {"model": "typed", "engine": "base"}), self.post_json("/api/photos/1/caption", {}))
+
+    def test_status_and_settings_never_contain_the_key(self):
+        self.keychain.get_key.side_effect = lambda engine: "sk-abc12345"
+        self.use_base()
+        with patch("lumen.omlx.list_models", return_value=["small"]):
+            self.post_json("/api/settings/test", {"engine": "base"})
+        for body in (self.status()[1], self.get_json("/api/settings")[1]):
+            self.assertNotIn("sk-abc12345", json.dumps(body))
+        with patch("lumen.omlx.list_models", side_effect=OmlxError("Base model list request failed: bad key sk-abc12345")):
+            for path, payload in (("/api/settings/test", {"engine": "base"}), ("/api/settings", {"base_url": "http://x.local"})):
+                self.assertNotIn("sk-abc12345", json.dumps(self.post_json(path, payload)[1]))
 
     def test_saved_settings_are_loaded_when_the_server_starts(self):
         self.assertEqual(200, self.post_json("/api/settings", {"geocode_online": True})[0])

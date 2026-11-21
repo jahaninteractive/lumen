@@ -4,11 +4,12 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from . import __version__
 from .config import Settings
 from .geonames import PlaceIndex
-from .omlx import ROLES, OmlxError, get_server_status
+from .omlx import ROLES, OmlxError, get_server_status, held_models, usage_snapshot
 from .astro import probe_siril
 from .tools import tool_status
 
@@ -115,6 +116,13 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         }
     roles = {role: {"model": (model := getattr(settings, attribute)), "loaded": model in live_report["loaded_models"]}
              for role, attribute in ROLES.items()}
+    engine = settings.ai_engine
+    engine_host = engine_reachable = None
+    if engine != "mac":  # read from the held listing only: a report never calls Base or Online
+        held = held_models(engine)
+        engine_host = urlparse(getattr(settings, f"{engine}_url")).netloc or None
+        engine_reachable = held is not None
+        roles = {role: {"model": (model := settings.model_for(role)), "loaded": model in (held or [])} for role in ROLES}
     geonames_dir = settings.geonames_dir
     geonames = {"dir": str(geonames_dir) if geonames_dir else None, "files": 0, "places": 0,
                 "online": settings.geocode_online}
@@ -148,6 +156,10 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         },
         "omlx_live": live_report,
         "omlx_roles": roles,
+        "ai_engine": engine,
+        "ai_engine_host": engine_host,
+        "ai_engine_reachable": engine_reachable,
+        "ai_usage": usage_snapshot(),
         "geonames": geonames,
         "map": {"dir": str(map_dir) if map_dir else None,
                 "layers": len(list(map_dir.glob("*.geojson"))) if map_dir and map_dir.is_dir() else 0},

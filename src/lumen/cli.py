@@ -205,7 +205,7 @@ def serve_settings(settings: Settings) -> Settings:
     """Review starts on the full model when oMLX has it loaded, else on the fast one; the web page can switch it."""
     from . import omlx
 
-    if settings.omlx_review_model:  # an explicit LUMEN_OMLX_REVIEW_MODEL wins
+    if settings.ai_engine != "mac" or settings.omlx_review_model:  # Base and Online name their own models; an explicit LUMEN_OMLX_REVIEW_MODEL wins
         return settings
     try:
         loaded = omlx.get_server_status(settings.omlx_url)["loaded_models"]
@@ -236,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.json:
             for role, item in report["omlx_roles"].items():
                 print(f"{role}: {item['model']} ({'loaded' if item['loaded'] else 'not loaded'})")
+            host = f" ({report['ai_engine_host']})" if report["ai_engine_host"] else ""
+            print(f"AI engine: {preferences.ENGINE_LABELS[report['ai_engine']]}{host}")
         return 0 if report["tools"]["exiftool"]["available"] and report["omlx_model"]["complete"] else 2
 
     if args.command == "ingest":

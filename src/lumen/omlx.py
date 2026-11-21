@@ -108,6 +108,8 @@ def normalise_engine_url(engine: str, url: str) -> str:
     path included, with /v1 added only when no path was typed.
     """
     url = url.strip().rstrip("/")
+    if engine in {"base", "online"}:
+        url = url.removesuffix("/chat/completions")  # people paste the full endpoint
     parsed = urlparse(url)
     if engine == "mac":
         valid = parsed.scheme in {"http", "https"} and parsed.hostname in _LOOPBACK
@@ -773,3 +775,30 @@ def list_models(engine: str, url: str, api_key: str | None, timeout: float = 10)
     if not isinstance(data, list):
         raise OmlxError(f"{prefix} model list was not a list")
     return sorted(item["id"] for item in data if isinstance(item, dict) and isinstance(item.get("id"), str))
+
+
+_models_lock = threading.Lock()
+_models: dict[str, list[str]] = {}  # engine -> its last successful listing; absent when never listed or the last try failed
+
+
+def held_models(engine: str) -> list[str] | None:
+    with _models_lock:
+        models = _models.get(engine)
+        return None if models is None else list(models)
+
+
+def refresh_models(engine: str, url: str, api_key: str | None, timeout: float = 10) -> list[str]:
+    try:
+        models = list_models(engine, url, api_key, timeout)
+    except OmlxError:
+        with _models_lock:
+            _models.pop(engine, None)
+        raise
+    with _models_lock:
+        _models[engine] = list(models)
+    return models
+
+
+def reset_models() -> None:
+    with _models_lock:
+        _models.clear()

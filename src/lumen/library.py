@@ -31,7 +31,7 @@ from .digest import day_facts, render_facts_table
 from .domain import (MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, DevelopSettings, Job,
                      Photo, PhotoEdit)
 from .geonames import Place, PlaceIndex, distance_km, online_lookup, parse_position
-from . import ingest
+from . import ingest, keychain, omlx
 from .mapdata import MapIndex, parse_geojson, parse_gpx, position_at
 from .astro import execute_job, load_manifest, prepare_siril_job, probe_siril
 from .astrodebrief import debrief, output_stem, parse_siril_log, rename_outputs
@@ -111,6 +111,28 @@ def _select(ranking: list[RankedPhoto]) -> RankedPhoto:
     """Manual unrejected pick, else best unrejected frame, else best frame (keeper filtering drops it)."""
     kept = [item for item in ranking if item.photo.decision != "reject"]
     return next((item for item in kept if item.photo.manual_pick), kept[0] if kept else ranking[0])
+
+
+def remote_engine_models(settings: Settings, engine: str, get_key, *, refresh: bool) -> tuple[list[str], str | None]:
+    """Base's or Online's model list (the held one unless `refresh`) and its key, or RuntimeError with a sentence for the page.
+
+    `get_key` is the caller's Keychain reader, asked only once there is an address. The key never appears in a refusal.
+    """
+    label = omlx.ERROR_PREFIX[engine]
+    url = getattr(settings, f"{engine}_url")
+    if not url:
+        raise RuntimeError(f"{label} has no address: add one in Settings")
+    key = get_key(engine)
+    if engine == "online" and key is None:
+        raise RuntimeError("Online has no key: add one in Settings")
+    models = None if refresh else omlx.held_models(engine)
+    if models is None:
+        try:
+            models = omlx.refresh_models(engine, url, key)
+        except OmlxError as error:
+            reason = str(error).replace(key, "<key>") if key else str(error)
+            raise RuntimeError(f"{label} did not answer: {reason}") from None
+    return models, key
 
 
 def public_message(text: str | None) -> str | None:
@@ -669,6 +691,8 @@ class Library:
         """A tagger for a model role, only when oMLX reports that role's model loaded right now."""
         if role not in ROLES:
             raise ValueError(f"unknown model role: {role}")
+        if self.settings.ai_engine != "mac":
+            return self._remote_tagger(role)
         model = getattr(self.settings, ROLES[role])
         try:
             loaded = get_server_status(self.settings.omlx_url)["loaded_models"]
@@ -677,6 +701,18 @@ class Library:
         if model not in loaded:
             raise RuntimeError(f"{role} model {model} is not loaded in oMLX")
         return OmlxTagger(self.settings.omlx_url, model, role=role)
+
+    def _remote_tagger(self, role: str) -> OmlxTagger:
+        """A tagger on Base or Online; refuses with the first thing the photographer must fix in Settings."""
+        engine = self.settings.ai_engine
+        label = omlx.ERROR_PREFIX[engine]
+        models, key = remote_engine_models(self.settings, engine, keychain.get_key, refresh=False)
+        model = self.settings.model_for(role)
+        if not model:
+            raise RuntimeError(f"choose a {role} model for {label} in Settings")
+        if models and model not in models:  # an empty list: the service has no listing, so the typed name stands
+            raise RuntimeError(f"{role} model {model} is not offered by {label}")
+        return OmlxTagger(getattr(self.settings, f"{engine}_url"), model, api_key=key, role=role, engine=engine)
 
     def start_tag_job(self, tagger, *, scope: str | list[int] = "keepers", retag: bool = False) -> Job:
         if type(retag) is not bool:

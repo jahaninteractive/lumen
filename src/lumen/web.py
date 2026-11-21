@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlsplit
 
-from . import keychain, preferences
+from . import keychain, omlx, preferences
 from .astro import RECIPES
 from .catalog import GroupFilters
 from .cli import _cleanup_error_payload, _json_default, _serializable_groups, preview_version
@@ -24,7 +24,7 @@ from .digest import parse_day
 from .domain import MANUAL_CROP_ID, DevelopSettings
 from .jobs import LocalJobRunner
 from .astrodebrief import PLACES
-from .library import CleanupError, ExportRequest, Library, public_message
+from .library import CleanupError, ExportRequest, Library, public_message, remote_engine_models
 from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS, validate_watermark
 from .previews import PreviewError, full_size_for, read_exif_summary, thumbnail_for
@@ -212,8 +212,32 @@ def reveal_astro_job(settings: Settings, job_id: int) -> str:
     return reveal_outputs(settings, job_dir, select)
 
 
+def _refresh_models_quietly(settings: Settings) -> None:
+    """One listing of the remote engine at startup; a failure only shows as not reachable."""
+    engine = settings.ai_engine
+    try:
+        omlx.refresh_models(engine, getattr(settings, f"{engine}_url"), keychain.get_key(engine))
+    except (OmlxError, ValueError):
+        pass
+
+
+def _check_engine_change(before: Settings, after: Settings) -> None:
+    """Refuses a switch to, or a new address for, a remote engine that cannot answer; nothing is called otherwise."""
+    engine = after.ai_engine
+    if engine == "mac":
+        return
+    url = getattr(after, f"{engine}_url")
+    if engine == before.ai_engine and url == getattr(before, f"{engine}_url"):
+        return
+    if engine == before.ai_engine and not url:
+        raise ValueError(f"{omlx.ERROR_PREFIX[engine]} is in use: switch engine first")
+    remote_engine_models(after, engine, keychain.get_key, refresh=True)
+
+
 class LumenServer(ThreadingHTTPServer):
     """Loopback server that owns the single heavy-job runner shared by every per-request Library."""
+
+    models_refresh: threading.Thread | None = None  # the startup listing of a remote engine; tests join it
 
     def __init__(self, address, handler, settings: Settings):
         self.settings = settings
@@ -299,7 +323,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 return
             if path == "/api/status":
                 self._send_json(doctor_report(settings) | {
-                    "review_models": role_models,
+                    "review_models": role_models if settings.ai_engine == "mac" else omlx.held_models(settings.ai_engine) or [],
                     "stale": stale_sources(settings),
                     "jpeg_output_dir": str(settings.jpeg_output_dir.resolve()),
                     "astro_output_dir": str((settings.output_dir / "astro").resolve()),
@@ -688,6 +712,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if path == "/api/role-model":
                     if payload.keys() != {"role", "model"} or payload["role"] not in role_fields:
                         raise ValueError("role must be fast or review, with a model")
+                    if settings.ai_engine != "mac":  # a remote engine's role models are saved settings, not a session switch
+                        engine, role, model = settings.ai_engine, payload["role"], payload["model"]
+                        held = omlx.held_models(engine) or []
+                        if held and model not in held:
+                            raise ValueError(f"{role} model {model} is not offered by {omlx.ERROR_PREFIX[engine]}")
+                        with Library(settings) as library:
+                            preferences.save(library.catalog, {f"{engine}_{role}_model": model})
+                            settings = preferences.overlay(settings, library.catalog)
+                        self._send_json({"role": role, "model": model})
+                        return
                     if payload["model"] not in role_models:
                         raise ValueError(f"model must be one of {', '.join(role_models)}")
                     settings = replace(settings, **{role_fields[payload["role"]]: payload["model"]})
@@ -696,10 +730,23 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if path == "/api/settings":
                     if not payload:
                         raise ValueError("settings needs at least one setting")
+                    # Checked on what the settings would become, before anything is saved.
+                    _check_engine_change(settings, replace(settings, **{key: preferences.validate(key, value)
+                                                                      for key, value in payload.items()}))
                     with Library(settings) as library:
                         preferences.save(library.catalog, payload)
                         settings = preferences.overlay(settings, library.catalog)  # keeps a session role-model switch
                         self._send_json(settings_body(library))
+                    return
+                if path == "/api/settings/test":
+                    if payload.keys() != {"engine"} or payload["engine"] not in ("base", "online"):  # a tuple: a list value is refused, not a TypeError
+                        raise ValueError("a test needs an engine, Base or Online, and nothing else")
+                    try:
+                        models, _ = remote_engine_models(settings, payload["engine"], keychain.get_key, refresh=True)
+                    except RuntimeError as error:  # an answer, not a fault: the page shows why
+                        self._send_json({"ok": False, "error": str(error)})
+                        return
+                    self._send_json({"ok": True, "models": models})
                     return
                 if path == "/api/settings/key":
                     if payload.keys() != {"engine", "key"} or payload["engine"] not in {"base", "online"} or not isinstance(payload["key"], str):
@@ -1280,5 +1327,9 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
         def log_message(self, format: str, *args: object) -> None:
             return
 
-    return LumenServer((host, port), Handler, settings)
+    server = LumenServer((host, port), Handler, settings)
+    if settings.ai_engine != "mac":  # off the startup path: a slow Base must not hold up the page
+        server.models_refresh = threading.Thread(target=_refresh_models_quietly, args=(settings,), daemon=True)
+        server.models_refresh.start()
+    return server
 
