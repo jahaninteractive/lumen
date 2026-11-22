@@ -328,7 +328,8 @@ else
         skipped+=("GeoNames $code: download failed; re-run with LUMEN_GEONAMES_COUNTRIES=$code")
       fi
     done
-    [[ -z "${countries// /}" ]] && skipped+=("GeoNames country files: none chosen; re-run with LUMEN_GEONAMES_COUNTRIES=\"ZA AQ\" for full place detail")
+    # Terminal advice only: the app's window has its own field for the codes.
+    (( ! downloads_only )) && [[ -z "${countries// /}" ]] && skipped+=("GeoNames country files: none chosen; re-run with LUMEN_GEONAMES_COUNTRIES=\"ZA AQ\" for full place detail")
   fi
 
   # 5b. Natural Earth base map

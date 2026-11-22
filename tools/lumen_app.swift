@@ -293,7 +293,7 @@ final class Shell: NSObject, NSApplicationDelegate {
 
 /// One tick box per line of `bootstrap.sh --list`; Install runs the script with the ticked keys.
 /// The only key known here is `places`, whose row carries the country codes field.
-final class Setup: NSObject, NSWindowDelegate {
+final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
     let onClose: () -> Void
     let rows = NSStackView()
@@ -317,6 +317,7 @@ final class Setup: NSObject, NSWindowDelegate {
         super.init()
         let width: CGFloat = 440  // inside the margins
         countries.setAccessibilityTitleUIElement(countriesLabel)
+        countries.delegate = self
         countries.widthAnchor.constraint(equalToConstant: 200).isActive = true
         logView.isEditable = false
         logView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -419,9 +420,22 @@ final class Setup: NSObject, NSWindowDelegate {
 
     @objc func changed() {
         for (key, box) in boxes { ticked[key] = box.state == .on }
-        install.isEnabled = script == nil && boxes.contains { $0.box.state == .on }
+        install.isEnabled = script == nil && !tickedKeys.isEmpty
         countries.isEnabled = script == nil && places?.state == .on
     }
+
+    /// The ticked missing keys, plus `places` when it is installed and country codes were typed:
+    /// the script skips the files already there and fetches the country files.
+    var tickedKeys: [String] {
+        var keys = boxes.filter { $0.box.state == .on }.map(\.key)
+        let codes = !countries.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
+        if places != nil && !boxes.contains(where: { $0.key == "places" }) && codes {
+            keys.append("places")
+        }
+        return keys
+    }
+
+    func controlTextDidChange(_ notification: Notification) { changed() }
 
     func show(_ text: String) {
         message.stringValue = text
@@ -429,7 +443,7 @@ final class Setup: NSObject, NSWindowDelegate {
     }
 
     @objc func installTicked() {
-        let keys = boxes.filter { $0.box.state == .on }.map(\.key)
+        let keys = tickedKeys
         guard script == nil, !keys.isEmpty else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")

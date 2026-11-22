@@ -83,6 +83,18 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual("ready", rows["places"])
             self.assertEqual("missing", rows["map"])
 
+    def test_downloads_only_places_with_no_country_codes_is_not_skipped(self):
+        with tempfile.TemporaryDirectory() as dest:
+            geonames = Path(dest) / "data" / "geonames"
+            geonames.mkdir(parents=True)
+            for name in ("countryInfo.txt", "readme.txt", "cities500.zip", "cities500.txt"):
+                (geonames / name).write_text("")
+            env = {**os.environ, "LUMEN_GEONAMES_COUNTRIES": ""}
+            result = self._bootstrap("--downloads-only", "--dest", dest, "--only", "places", env=env)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("GeoNames cities500: ready", result.stdout)
+            self.assertFalse([l for l in result.stdout.splitlines() if l.startswith("Skipped:")], result.stdout)
+
     def test_only_refuses_an_unknown_or_empty_key(self):
         for keys in ("bogus", "", "map,bogus"):
             result = self._bootstrap("--downloads-only", "--only", keys, "--dest", "/nonexistent")
