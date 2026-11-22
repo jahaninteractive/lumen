@@ -86,7 +86,9 @@ rm -rf "$stdlib"/{test,idlelib,tkinter,ensurepip,turtledemo} "$stdlib"/lib-dynlo
   "$resources/python"/lib/{tcl*,tk*,itcl*,thread*,libtcl*} \
   "$resources/python"/{include,share,BUILD} \
   "$resources/python"/bin/{idle*,pip*,pydoc*,python3-config,python3.13-config}
-uv pip install --python "$python" --target "$stdlib/site-packages" --link-mode copy "$project_root"
+# Pillow at the version uv.lock pins, the one the test suite runs against.
+uv pip install --python "$python" --target "$stdlib/site-packages" --link-mode copy \
+  --constraints =(uv export --project "$project_root" --frozen --no-dev --no-emit-project --no-header --no-hashes) "$project_root"
 rm -rf "$stdlib/site-packages/bin"  # the lumen entry script: absolute #!, and the shell runs python -m lumen
 "$python" -I -m compileall -q "$resources/python/lib"
 

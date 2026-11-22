@@ -71,6 +71,8 @@ The Homebrew tap planned here on 2026-10-26 was dropped for `Lumen.app` (design 
 - **Local AI in the app's setup.** Not offered (photographer, 2026-11-22): oMLX must be opened once before it has a model folder, its server is started by hand, and the models are 6 to 22 GB. The shell route still installs them. Trigger: oMLX can be installed and started without a person, or a smaller vision model is good enough.
 - **Uninstall's Keychain removal runs on the main thread.** Two `security` calls with a 15 s timeout each; the window can stall in the worst case. Trigger: a stall is seen.
 - **Quit and closing the setup window can block for up to 10 s** while the server or the setup script stops, with the menu bar frozen. Trigger: it is noticed in use.
+- **A server too busy to answer `/api/jobs` within a second counts as having no jobs.** Quit and Uninstall then stop it without asking about a running job. Trigger: a job is lost that way, or the server is seen to stall that long.
+- **A slow Lumen on port 8765 is read as absent.** The launch probe waits a second; a Lumen that answers later is not seen, so the app tries 8765 itself, fails to bind and says "Lumen could not start." Trigger: it is reported, or the probe moves to a connect check.
 - **exiftool.org serves only the current version.** The tarball comes from the SourceForge link exiftool.org gives and is checked against exiftool.org/checksums.txt; a version bump means a new URL and hash in `scripts/build_app.sh` (SourceForge keeps the old tarballs). Trigger: the next exiftool bump.
 
 ## Keep the export 16-bit through crop and resize

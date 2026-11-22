@@ -29,8 +29,8 @@ so for now a built app opens only on the Mac that built it.
 6. For AI advice, connect Base or Online in [Settings](#settings-and-the-ai-engine).
    The app does not install AI on this Mac; for that, see [Local AI](#local-ai).
 
-**Uninstall Lumen…** moves the downloaded pieces, saved service keys and the
-app to the Trash. The library stays unless you tick one or both of its boxes:
+**Uninstall Lumen…** moves the downloaded pieces and the app to the Trash and
+removes saved service keys from the Keychain, which cannot be undone. The library stays unless you tick one or both of its boxes:
 Lumen's working data (ratings, picks, tags, crops, develop settings, previews)
 and your exported files. Camera originals are never touched; oMLX and its
 models are left alone.

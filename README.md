@@ -155,13 +155,14 @@ only on the Mac that built it.
    set up AI on this Mac; to run it here, follow
    [Local AI](docs/GUIDE.md#local-ai) after installing from the project folder.
 
-**Uninstall Lumen…** always moves the downloaded pieces, any saved service
-keys and the app itself to the Trash. Your library (`~/Pictures/Lumen
+**Uninstall Lumen…** always moves the downloaded pieces and the app itself to
+the Trash, and removes any saved service keys from your Keychain; those cannot
+be recovered, so keep a copy of a key you will need again. Your library (`~/Pictures/Lumen
 Library`) is kept unless you tick its boxes: one for Lumen's working data
 (ratings, picks, tags, crops, develop settings and previews), one for your
 exported files. Your camera originals are never touched, and oMLX and its
-models are left alone. Everything goes to the Trash, so a mistake can be put
-back.
+models are left alone. Everything else goes to the Trash, so a mistake can be
+put back.
 
 If a Lumen is already running from the project folder on the usual address,
 the app says so and opens that one instead of starting a second.

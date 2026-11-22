@@ -109,6 +109,14 @@ class ScriptTests(unittest.TestCase):
         script = Path("scripts/bootstrap.sh").read_text()
         self.assertRegex(script, r"\ntrap 'exit 143' TERM INT")
 
+    def test_a_sha256_mismatch_removes_the_bad_download(self):
+        # fetch skips a file that exists, so a bad one left behind would fail every re-run the same way.
+        live = "\n".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())
+        branch = re.search(r'verify_sha256\(\) \{.*?if \[\[ "\$got" != "\$2" \]\]; then(.*?)\n    exit 1', live, re.S)
+        self.assertIsNotNone(branch)
+        self.assertRegex(branch.group(1), r'\n\s*rm -f "\$1"')
+        self.assertIn("Removed it; run again to download it afresh.", branch.group(1))
+
     def test_a_rerun_still_fetches_a_missing_geonames_file(self):
         live = "\n".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())
         self.assertNotIn("if ! component_ready places", live)

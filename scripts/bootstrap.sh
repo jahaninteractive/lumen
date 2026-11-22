@@ -174,7 +174,9 @@ verify_sha256() {
     echo "${1:t}: sha256 mismatch" >&2
     echo "  expected $2" >&2
     echo "  got      $got" >&2
-    echo "Delete $1 and re-run, or check the release page for a changed file." >&2
+    # fetch skips a file that exists, so a bad one left here would fail every re-run the same way.
+    rm -f "$1"
+    echo "Removed it; run again to download it afresh. If it fails again the published file has changed." >&2
     exit 1
   fi
 }
