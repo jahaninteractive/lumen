@@ -1,10 +1,13 @@
 // Lumen.app's shell: runs `python -m lumen serve` from inside the bundle, opens the
 // workbench in the default browser, reopens it from the Dock and stops the server on Quit.
-// It also offers the optional downloads (the bundled bootstrap.sh) and a move to Applications.
+// It also offers the optional downloads (the bundled bootstrap.sh), a move to Applications
+// and an uninstall that moves Lumen's own folders and the app to the Trash.
 // The component list, URLs and sizes live in bootstrap.sh, never here.
 //
 // LUMEN_APP_HEADLESS=1 (the smoke script only): no browser, no window, no alert; the
 // server's "Lumen is running at" line is printed on stdout and failures go to stderr.
+// With LUMEN_APP_UNINSTALL=keep|data|exports|all as well, it runs the uninstall's trash steps
+// (no Keychain, no server, the bundle kept) and exits; it needs LUMEN_VENDOR and LUMEN_LIBRARY set.
 import AppKit
 
 let headless = ProcessInfo.processInfo.environment["LUMEN_APP_HEADLESS"] == "1"
@@ -24,6 +27,10 @@ let childEnvironment: [String: String] = {
     environment["PYTHONDONTWRITEBYTECODE"] = "1"  // the bundle is signed; nothing may write into it
     return environment
 }()
+
+let vendorURL = URL(fileURLWithPath: childEnvironment["LUMEN_VENDOR"]!)
+let libraryURL = URL(fileURLWithPath: NSString(
+    string: ProcessInfo.processInfo.environment["LUMEN_LIBRARY"] ?? "~/Pictures/Lumen Library").expandingTildeInPath)
 
 /// A GET that waits at most a second, so a launch or Quit never hangs on a wedged port.
 func get(_ url: URL) -> Data? {
@@ -88,6 +95,7 @@ final class Shell: NSObject, NSApplicationDelegate {
     var quitting = false
     var setup: Setup?
     var holdBrowser = false  // the first-run setup window is open; the browser waits for it
+    var uninstaller: Uninstall?
 
     // MARK: Launch
 
@@ -257,6 +265,7 @@ final class Shell: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu(title: "Lumen")
         appMenu.addItem(withTitle: "Open Lumen", action: #selector(openLumen), keyEquivalent: "o").target = self
         appMenu.addItem(withTitle: "Set Up Lumen…", action: #selector(showSetup), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Uninstall Lumen…", action: #selector(showUninstall), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Lumen", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let appItem = NSMenuItem()
@@ -278,15 +287,139 @@ final class Shell: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Cancel")
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
         }
+        stopServer()
+        return .terminateNow
+    }
+
+    func stopServer() {
         quitting = true
         setup?.stop()
-        guard let server, server.isRunning else { return .terminateNow }
+        guard let server, server.isRunning else { return }
         server.interrupt()
         let deadline = Date().addingTimeInterval(10)
         while server.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
         if server.isRunning { server.terminate() }
-        return .terminateNow
     }
+
+    // MARK: Uninstall
+
+    @objc func showUninstall() {
+        if uninstaller == nil {
+            uninstaller = Uninstall(onUninstall: { [unowned self] in uninstall(data: $0, exports: $1) },
+                                    onClose: { [unowned self] in uninstaller = nil })
+        }
+        uninstaller?.window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The window's Uninstall: keys, server, then the trash steps and the bundle; quits either way.
+    func uninstall(data: Bool, exports: Bool) {
+        var notes: [String] = []
+        if !removeKeys() {
+            notes.append("A saved service key could not be removed from the Keychain; remove it in Keychain Access under the name Lumen.")
+        }
+        stopServer()
+        uninstaller?.window.orderOut(nil)
+        var title = "Lumen was uninstalled."
+        do {
+            try trashLumen(data: data, exports: exports)
+            try FileManager.default.trashItem(at: Bundle.main.bundleURL, resultingItemURL: nil)
+        } catch {
+            title = "Lumen could not finish uninstalling."
+            notes.insert(error.localizedDescription, at: 0)
+            notes.append("Lumen will quit now. Open it again to try again.")
+        }
+        if !notes.isEmpty {
+            let alert = NSAlert()
+            alert.alertStyle = title == "Lumen was uninstalled." ? .informational : .critical
+            alert.messageText = title
+            alert.informativeText = notes.joined(separator: "\n\n")
+            alert.runModal()
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// Removes the Base and Online keys through the package's own keychain module; false when
+    /// either could not be confirmed gone. A key that was never saved is not a failure.
+    func removeKeys() -> Bool {
+        let process = Process()
+        process.executableURL = resources.appendingPathComponent("python/bin/python3")
+        process.arguments = ["-c", """
+            from lumen import keychain
+            failed = False
+            for engine in keychain.KEY_ENGINES:
+                try:
+                    keychain.delete_key(engine)
+                except RuntimeError:
+                    failed = True
+            raise SystemExit(failed)
+            """]
+        process.environment = childEnvironment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+}
+
+/// The trash steps shared by the window and the headless hook; throws at the first failure, so
+/// nothing after it runs. Everything goes to the Trash: nothing here deletes a file.
+func trashLumen(data: Bool, exports: Bool) throws {
+    let files = FileManager.default
+    if files.fileExists(atPath: vendorURL.path) { try files.trashItem(at: vendorURL, resultingItemURL: nil) }
+    let outputs = libraryURL.appendingPathComponent("outputs")
+    if data && exports {
+        if files.fileExists(atPath: libraryURL.path) { try files.trashItem(at: libraryURL, resultingItemURL: nil) }
+    } else if data && files.fileExists(atPath: libraryURL.path) {
+        for item in try files.contentsOfDirectory(at: libraryURL, includingPropertiesForKeys: nil)
+        where item.lastPathComponent != "outputs" {
+            try files.trashItem(at: item, resultingItemURL: nil)
+        }
+    } else if exports && files.fileExists(atPath: outputs.path) {
+        try files.trashItem(at: outputs, resultingItemURL: nil)
+    }
+    UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier ?? "au.com.jahan-interactive.lumen")
+}
+
+/// Shows "nothing to remove" now, or "calculating…" now and the `du` size later on the main
+/// thread, so a large library never holds up the window. True when any of `urls` exists.
+@discardableResult
+func measure(_ urls: [URL], _ show: @escaping (String) -> Void) -> Bool {
+    let present = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+    guard !present.isEmpty else {
+        show("nothing to remove")
+        return false
+    }
+    show("calculating…")
+    DispatchQueue.global().async {
+        let du = Process()
+        du.executableURL = URL(fileURLWithPath: "/usr/bin/du")
+        du.arguments = ["-shc"] + present.map(\.path)
+        let output = Pipe()
+        du.standardOutput = output
+        du.standardError = FileHandle.nullDevice
+        var size = "size unknown"
+        if (try? du.run()) != nil {
+            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            du.waitUntilExit()
+            if let total = text.split(separator: "\n").last?.split(separator: "\t").first {
+                size = total.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        DispatchQueue.main.async { show(size) }
+    }
+    return true
+}
+
+func indented(_ views: [NSView]) -> NSStackView {
+    let stack = NSStackView(views: views)
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.spacing = 4
+    stack.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 6, right: 0)
+    return stack
 }
 
 // MARK: Setup window
@@ -358,15 +491,6 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         window.delegate = self
         reload()
         window.center()
-    }
-
-    func indented(_ views: [NSView]) -> NSStackView {
-        let stack = NSStackView(views: views)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 6, right: 0)
-        return stack
     }
 
     /// Rebuilds the tick boxes from `--list`, which only reads.
@@ -512,8 +636,90 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     }
 }
 
+// MARK: Uninstall window
+
+/// The window is the confirmation: what always goes, two library boxes that start off, and
+/// Uninstall, which is not the default button. Cancel takes Escape.
+final class Uninstall: NSObject, NSWindowDelegate {
+    let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    let onUninstall: (Bool, Bool) -> Void
+    let onClose: () -> Void
+    let data = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    let exports = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+
+    init(onUninstall: @escaping (Bool, Bool) -> Void, onClose: @escaping () -> Void) {
+        self.onUninstall = onUninstall
+        self.onClose = onClose
+        super.init()
+        let width: CGFloat = 560  // inside the margins
+        func label(_ text: String) -> NSTextField {
+            let field = NSTextField(wrappingLabelWithString: text)
+            field.widthAnchor.constraint(equalToConstant: width).isActive = true
+            return field
+        }
+        let vendor = label("")
+        measure([vendorURL]) { vendor.stringValue = "Downloaded tools and data (\($0)) will be removed." }
+        let keys = label("Saved service keys will be removed from your Keychain.")
+        let library = label("Your library: \(libraryURL.path)")
+        let outputs = libraryURL.appendingPathComponent("outputs")
+        let working = ((try? FileManager.default.contentsOfDirectory(at: libraryURL, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent != "outputs" }
+        data.isEnabled = measure(working) { [data] in
+            data.title = "Also remove Lumen's working data: ratings, picks, tags, crops and develop settings (\($0))"
+        }
+        exports.isEnabled = measure([outputs]) { [exports] in
+            exports.title = "Also remove my exported files: JPEGs, crops and astro results (\($0))"
+        }
+        let originals = NSTextField(labelWithString: "Your camera originals are never touched.")
+        originals.textColor = .secondaryLabelColor
+        let models = label("oMLX and any AI models are left alone.")
+        let go = NSButton(title: "Uninstall", target: self, action: #selector(uninstall))
+        let cancel = NSButton(title: "Cancel", target: window, action: #selector(NSWindow.performClose(_:)))
+        cancel.keyEquivalent = "\u{1b}"
+        let buttons = NSStackView()
+        buttons.setViews([cancel, go], in: .trailing)
+        buttons.widthAnchor.constraint(equalToConstant: width).isActive = true
+        let content = NSStackView(views: [vendor, keys, library, indented([data, exports, originals]), models, buttons])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 14
+        content.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        content.widthAnchor.constraint(equalToConstant: width + 40).isActive = true
+        window.title = "Uninstall Lumen"
+        window.contentView = content
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.initialFirstResponder = cancel
+        window.center()
+    }
+
+    @objc func uninstall() {
+        onUninstall(data.state == .on, exports.state == .on)
+    }
+
+    func windowWillClose(_ notification: Notification) { onClose() }
+}
+
 let shell = Shell()
-if headless {
+if headless, let choice = ProcessInfo.processInfo.environment["LUMEN_APP_UNINSTALL"] {
+    let environment = ProcessInfo.processInfo.environment
+    let choices = ["keep": (false, false), "data": (true, false), "exports": (false, true), "all": (true, true)]
+    func refuse(_ reason: String) -> Never {
+        FileHandle.standardError.write(Data("LUMEN_APP_UNINSTALL: \(reason)\n".utf8))
+        exit(2)
+    }
+    guard environment["LUMEN_VENDOR"] != nil, environment["LUMEN_LIBRARY"] != nil else {
+        refuse("refused: set both LUMEN_VENDOR and LUMEN_LIBRARY, so it can never reach the real folders")
+    }
+    guard let (data, exports) = choices[choice] else { refuse("expected keep, data, exports or all") }
+    do {
+        try trashLumen(data: data, exports: exports)
+    } catch {
+        FileHandle.standardError.write(Data("Lumen could not finish uninstalling.\n\(error.localizedDescription)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+} else if headless {
     // No NSApplication: nothing here may need the window server.
     shell.startServer()
     dispatchMain()

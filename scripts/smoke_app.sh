@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Smoke test for a built Lumen.app: the shell starts the bundled server, /api/status
 # finds exiftool and both helpers, a killed shell takes the server with it, and
-# nothing was written into the bundle. Uses a throwaway library and vendor folder.
+# nothing was written into the bundle, and the uninstall hook trashes what each choice says.
+# Uses throwaway libraries and vendor folders; the uninstall cases put them in the Trash.
 #
 #   zsh scripts/smoke_app.sh dist/Lumen.app
 set -eu
@@ -52,5 +53,30 @@ done
 (( gone )) || fail "the server still answers 10 s after the app was killed"
 
 [[ -z "$(find "$app" -newer "$app/Contents/Info.plist" -name '*.pyc')" ]] || fail "bytecode was written inside the bundle"
+
+# Uninstall's trash steps, headless: each case on its own scratch vendor and library, named so
+# that what lands in the Trash is recognisable. The hook refuses without both variables.
+(
+  unset LUMEN_LIBRARY
+  mkdir -p "$work/refused/lumen-smoke-vendor"
+  LUMEN_VENDOR="$work/refused/lumen-smoke-vendor" LUMEN_APP_UNINSTALL=keep "$app/Contents/MacOS/Lumen" 2>/dev/null \
+    && fail "uninstall ran without LUMEN_LIBRARY"
+  [[ -d "$work/refused/lumen-smoke-vendor" ]] || fail "a refused uninstall moved the vendor folder"
+)
+typeset -A remains=(keep "./catalog.sqlite3 ./outputs/jpeg/a.jpg" data "./outputs/jpeg/a.jpg" exports "./catalog.sqlite3" all "")
+for choice in keep data exports all; do
+  vendor="$work/$choice/lumen-smoke-vendor" library="$work/$choice/lumen-smoke-library"
+  mkdir -p "$vendor" "$library/outputs/jpeg"
+  touch "$vendor/tool" "$library/catalog.sqlite3" "$library/outputs/jpeg/a.jpg"
+  LUMEN_VENDOR="$vendor" LUMEN_LIBRARY="$library" LUMEN_APP_UNINSTALL=$choice "$app/Contents/MacOS/Lumen" \
+    || fail "uninstall $choice exited $?"
+  [[ ! -e "$vendor" ]] || fail "uninstall $choice left the vendor folder"
+  if [[ $choice == all ]]; then
+    [[ ! -e "$library" ]] || fail "uninstall all left the library folder"
+  else
+    left="$(cd "$library" && find . -type f | sort | tr '\n' ' ')"
+    [[ "${left% }" == "${remains[$choice]}" ]] || fail "uninstall $choice left: $left"
+  fi
+done
 
 echo "Lumen app smoke test passed."
