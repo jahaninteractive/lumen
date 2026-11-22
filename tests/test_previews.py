@@ -453,11 +453,30 @@ class EmbeddedPreviewTests(unittest.TestCase):
 
     def test_arw_preview_never_renders(self):
         self.tags = {"PreviewImage": (1616, 1080), "JpgFromRaw": (7008, 10)}
-        self.assertEqual((2048, 3), self.preview("DSC00001.ARW", self.helper))
+        self.assertEqual((1616, 1080), self.preview("DSC00001.ARW", self.helper))
         self.assertEqual([], self.renders)
         self.image_size = "7008 4672"
         full_size_for(self.raw("DSC00001.ARW"), self.root / "full", "abc", self.helper)
         self.assertEqual([], self.renders, "nor does its full-size view")
+
+    def extractions(self) -> list[str]:
+        return [command[2][1:] for command in self.commands if command[1] == "-b"]
+
+    def test_arw_preview_uses_the_preview_image_in_one_call(self):
+        self.tags = {"PreviewImage": (1616, 1080), "JpgFromRaw": (7008, 10)}
+        self.assertEqual((1616, 1080), self.preview("DSC00001.ARW", self.helper))
+        self.assertEqual(1, len(self.commands), "one exiftool run per Sony frame, as before")
+
+    def test_preview_skips_a_thumbnail_sized_preview_image(self):
+        self.tags = {"PreviewImage": (640, 427), "OtherImage": (1620, 1080), "JpgFromRaw": (4000, 100)}
+        self.assertEqual((1620, 1080), self.preview("DSC_0001.NEF", self.helper))
+        self.assertNotIn("JpgFromRaw", self.extractions())
+
+    def test_full_size_reads_the_full_size_jpeg_in_one_call(self):
+        self.tags, self.image_size = {"JpgFromRaw": (7008, 4672), "PreviewImage": (1616, 1080)}, "7040 4688"
+        self.assertEqual((7008, 4672), self.full_size("DSC00001.ARW", self.helper))
+        self.assertEqual(["JpgFromRaw"], self.extractions())
+        self.assertEqual([], self.renders)
 
     def full_size(self, name: str, raw_developer) -> tuple[int, int]:
         target = full_size_for(self.raw(name), self.root / "full", name, raw_developer)

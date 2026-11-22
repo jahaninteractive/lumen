@@ -69,11 +69,12 @@ def _long_edge(data: bytes) -> int:
         return max(image.size)
 
 
-def _largest_embedded(source: Path) -> bytes | None:
-    """The embedded JPEG with the longest edge: Sony's JpgFromRaw, Nikon's larger tag, Leica's PreviewImage or nothing."""
+def _embedded(source: Path, tags: tuple[str, ...]) -> bytes | None:
+    """The first of `tags` whose embedded JPEG reaches MIN_EMBEDDED_PREVIEW, so a Sony frame costs one exiftool run;
+    failing that, the largest one found, or None."""
     exiftool = shutil.which("exiftool")
     best, best_edge = None, 0
-    for tag in ("JpgFromRaw", "OtherImage", "PreviewImage") if exiftool else ():
+    for tag in tags if exiftool else ():
         try:
             result = subprocess.run([exiftool, "-b", f"-{tag}", str(source)], capture_output=True, timeout=60, check=False)
         except subprocess.SubprocessError:
@@ -84,6 +85,8 @@ def _largest_embedded(source: Path) -> bytes | None:
             edge = _long_edge(result.stdout)
         except OSError:
             continue
+        if edge >= MIN_EMBEDDED_PREVIEW:
+            return result.stdout
         if edge > best_edge:
             best, best_edge = result.stdout, edge
     return best
@@ -115,7 +118,7 @@ class ExifToolPreviewProvider:
             except OSError:
                 pass
 
-        embedded = _largest_embedded(source)
+        embedded = _embedded(source, ("PreviewImage", "OtherImage", "JpgFromRaw", "ThumbnailImage"))
         if embedded and _long_edge(embedded) >= MIN_EMBEDDED_PREVIEW:
             return self._normalize_bytes(embedded, destination)
         if is_raw(source) and self.raw_developer is not None and Path(self.raw_developer).is_file():
@@ -334,7 +337,7 @@ def full_size_for(source: Path, cache_dir: Path, fingerprint: str, raw_developer
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return None
-    embedded = _largest_embedded(source)
+    embedded = _embedded(source, ("JpgFromRaw", "OtherImage", "PreviewImage"))
     if (is_raw(source) and raw_developer is not None and Path(raw_developer).is_file()
             and (embedded is None or 2 * _long_edge(embedded) < _raw_long_edge(exiftool, source))):
         cache_dir.mkdir(parents=True, exist_ok=True)
