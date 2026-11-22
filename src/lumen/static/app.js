@@ -1774,7 +1774,7 @@ for (const select of roleSelects) {
 function renderSystemStatus(status) {
   const systemStatus = document.querySelector('#system-status');
   const remoteEngine = status.ai_engine === 'base' || status.ai_engine === 'online';  // off this Mac, oMLX's health is beside the point
-  const missing = Object.entries(status.tools || {}).filter(([name, tool]) => tool?.available === false && !(remoteEngine && name === 'omlx')).map(([name]) => `${name} missing`);
+  const missing = Object.entries(status.tools || {}).filter(([name, tool]) => tool?.available === false && tool?.needed !== false && !(remoteEngine && name === 'omlx')).map(([name]) => `${name} missing`);
   const health = [...(remoteEngine ? [] : [status.omlx_live?.online ? 'Local AI online' : 'Local AI offline']), ...missing].join(' · ');
   const tools = status.omlx_roles
     ? health

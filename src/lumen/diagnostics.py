@@ -65,6 +65,11 @@ def doctor_report(settings: Settings) -> dict[str, Any]:
         "swiftc": ("--version",),
     }
     tools = {}
+    if settings.helper_dir:
+        # Prebuilt helpers (the app): never run /usr/bin/swiftc, a shim that pops the
+        # developer-tools installer on a Mac without them. `needed` keeps it out of the status line.
+        del tool_specs["swiftc"]
+        tools["swiftc"] = {"available": False, "path": None, "version": None, "required": False, "needed": False}
     for name, arguments in tool_specs.items():
         status = tool_status(name, arguments)
         tools[name] = {

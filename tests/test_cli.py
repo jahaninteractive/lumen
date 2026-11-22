@@ -325,6 +325,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual({"dir": None, "files": 0, "places": 0, "online": False}, report["geonames"])
         self.assertEqual({"dir": None, "layers": 0}, report["map"])
 
+    def test_doctor_never_runs_swiftc_when_the_helpers_are_prebuilt(self):
+        # /usr/bin/swiftc is a shim that pops the developer-tools installer on a Mac without them.
+        found = ToolStatus(name="tool", available=True, path="/usr/bin/tool", version="1")
+        for helper_dir, probed in ((Path("/nonexistent/helpers"), False), (None, True)):
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch("lumen.diagnostics._find_model", return_value=None), \
+                    patch("lumen.diagnostics.get_server_status", side_effect=OmlxError("offline")), \
+                    patch("lumen.diagnostics.probe_siril", side_effect=RuntimeError), \
+                    patch("lumen.diagnostics.tool_status", return_value=found) as status:
+                report = doctor_report(Settings(library_dir=Path(directory), helper_dir=helper_dir))
+            self.assertEqual(probed, "swiftc" in [call.args[0] for call in status.call_args_list], helper_dir)
+            swiftc = report["tools"]["swiftc"]
+            self.assertEqual({"available", "path", "version", "required"}, set(swiftc) - {"needed"})
+            if not probed:
+                self.assertEqual({"available": False, "path": None, "version": None, "required": False, "needed": False}, swiftc)
+
     def test_doctor_distinguishes_loaded_model_from_lumen_target(self):
         missing = ToolStatus(name="tool", available=False, path=None, version=None)
         live = {
