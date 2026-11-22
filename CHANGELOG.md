@@ -5,8 +5,9 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
-## Unreleased
+## 0.7.0 (2026-11-22)
 
+- Leica `.DNG` and Nikon `.NEF` raws import, cull, develop and export as Sony `.ARW` does. Measured on one file each from the Leica M9, M (Typ 240), M11, M11 Monochrom and Q3 and the Nikon D800, Z 8 and Z 9 (see the guide's "Cameras measured"). A raw with no embedded JPEG of 1000 px or more gets its preview and full-size view rendered from the raw; a Leica serial is read, a 0°N 0°E position is treated as none, a high-efficiency Nikon raw says darktable cannot decode it, and Develop greys out the controls a file's decoder does not offer (all four numeric ones on the M11 Monochrom). Needs `zsh scripts/bootstrap.sh --no-download` to rebuild the raw developer.
 - A burst whose every frame is rejected no longer shows a broken-image mark in the batch list.
 - Advice wording no longer says "local" where the AI engine may be Base or Online: "AI suggests frame 3", "Asking the AI…", "AI assist". The header's "Local AI online/offline" is unchanged, since it only shows on This Mac.
 - `SECURITY.md`, the README, the guide and the architecture notes say what the AI engine sends when it is switched, and that one laptop works in the field, at home on Base, and on Online.

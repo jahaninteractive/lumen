@@ -1578,7 +1578,7 @@ function firstRunCard() {
   title.textContent = 'Lumen';
   const promise = document.createElement('p');
   promise.className = 'quiet';
-  promise.textContent = 'Reads your Sony raws where they are. Originals are never moved, renamed, or changed.';
+  promise.textContent = 'Reads your Sony, Leica and Nikon raws where they are. Originals are never moved, renamed, or changed.';
   intro.append(title, promise);
   const choices = document.createElement('div');
   choices.className = 'first-run-choices';

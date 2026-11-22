@@ -35,7 +35,8 @@ Other differences from Sony files:
   records none; the EXIF tab and the astro stem show what the file says.
 - A 60 MP M11 render takes 4.8 s warm (10 s cold) against about 1 s for the Z 9 and 0.4 s for the Sony. The
   Develop tab will feel slow on M11 files; the build measures it and the guide says so. Speeding it up is not
-  in this round.
+  in this round. (The build's real run, 2026-11-22, measured 0.8 s warm at the tab's window size and 1.4 s
+  at full size; the guide gives those.)
 - The Q3 records a true aperture, a time zone and a serial, and its lens correction works (measured: turning
   it off changes the render). The sample was re-saved by Lightroom, so its embedded JPEGs are Lightroom's, not
   the camera's: what a Q3 embeds straight from the card is unmeasured, and the preview rule covers either case.
@@ -73,12 +74,13 @@ postage-stamp preview, or a pin at 0°N 0°E.
 - **One list.** `pipelines.RAW_EXTENSIONS = {".arw", ".dng", ".nef"}`. `domain.SUPPORTED_EXTENSIONS` and
   `astro.ASTRO_SUFFIXES` are built from it. `library.py`'s copy-to-burst check and the Develop tab stop comparing
   the format to `ARW`: `GET /api/photos/<id>` carries `is_raw`.
-- **Previews.** `ExifToolPreviewProvider` reads the embedded JPEGs in the order `JpgFromRaw`, `OtherImage`,
-  `PreviewImage` and takes the first whose long edge is at least `MIN_EMBEDDED_PREVIEW` (1000). With none, a raw
-  is rendered by `raw_developer` at the preview size; the existing `sips` and darktable fallbacks stay behind
-  that. `full_size_for` renders at `long_edge: 0` when the largest embedded JPEG is clearly smaller than the raw's
-  own `ImageSize` (the M11's is a fifth of it) or absent. The provider needs the helper's path, passed
-  where it is constructed.
+- **Previews.** As built (a review ruling changed the order to keep a Sony import at one exiftool run):
+  `ExifToolPreviewProvider` takes the first embedded JPEG at least `MIN_EMBEDDED_PREVIEW` (1000) long in the order
+  `PreviewImage`, `OtherImage`, `JpgFromRaw`, `ThumbnailImage`, so a Nikon preview comes from its 1620 px
+  `OtherImage`; with none, a raw is rendered by `raw_developer` at the preview size, with `sips`, darktable and the
+  largest thumbnail behind it. `full_size_for` reads `JpgFromRaw`, `OtherImage`, `PreviewImage` and renders at
+  `long_edge: 0` when the largest embedded JPEG is under half the raw's own `ImageSize` (the M11's is a fifth of
+  it) or absent. The provider takes the helper's path where it is constructed.
 - **Metadata.** Serial is `SerialNumber`, else `CameraSerialNumber`; a value with no letter or digit is
   `unknown`. A fix of exactly 0, 0 is no fix.
 - **Unsupported controls.** The helper reports `supported`, the decoder's own answer per control for that file

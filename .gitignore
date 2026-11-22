@@ -9,3 +9,8 @@ __pycache__/
 
 test-image/
 vendor/
+
+Examples/*.dng
+Examples/*.DNG
+Examples/*.nef
+Examples/*.NEF

@@ -2,6 +2,13 @@
 
 Deferred items with a known reason. Each entry says what, why it was deferred, and the trigger for picking it up. Keep `docs/HANDOFF.md` as the status ledger; this file only holds work nobody is doing yet.
 
+## From the 2026-11-22 Leica and Nikon raws
+
+- **Bodies and files not yet measured.** A Leica Q file straight from the camera (the Q3 sample had been re-saved by Lightroom, so its embedded JPEGs are Lightroom's), an SL file with a built-in lens correction, and a lossless-compressed Nikon Z file. Each should work through the same paths; import one, check the preview size, the Develop tab's disabled controls and a full export, then add a row to the guide's "Cameras measured". Trigger: the photographer has such a file.
+- **An astro stack from Leica or Nikon lights.** DNG and NEF lights are accepted, but no two lights from one body were to hand, so Siril has never stacked either. Trigger: a night of Leica or Nikon frames.
+- **Leica M develop speed if it bites.** A 60 MP M11 render measured 0.8 s at the window size and 1.4 s at full size; fine today. Trigger: the photographer finds dragging sliders on M11 files slow.
+- **Rendered previews are labelled `embedded`.** A Leica M9 or M (Typ 240) preview rendered by `raw_developer` at import still has `preview_kind` `embedded`, as the `sips` and darktable fallbacks always did. Harmless so far; revisit if anything starts branching on that label to mean "came from the camera".
+
 ## From the 2026-11-21 settings and AI engine design
 
 - **Try Online against OpenAI and Google.** Only one service has been run for real (the guide's "Online services tried"). For each: press Test, tag one frame, pick one burst, then add a row to that table. Known before starting: the OpenAI address in `preferences.SERVICE_PRESETS` was written from memory and its exact base string was not seen in the documentation; that service documents `max_tokens` as deprecated in favour of `max_completion_tokens` and refused by its reasoning models, so the first call to one may be a 400 and `OmlxTagger._complete` would need to send the other field on Online; either service's model list may be unreadable (now an empty list, names typed) or may answer 400 for a bad key, which Test would then pass. Trigger: the photographer has a key for either.

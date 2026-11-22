@@ -11,8 +11,10 @@ first run are in the [README](../README.md).
 
 ![Lumen open on a day's load: the batch rail lists 234 frames and 105 keepers, and the contact sheet shows three flagged frames of an expedition guide in a yellow hood in falling snow, the third marked Best as the model's pick.](images/hero.jpg)
 
-- Recursive `.ARW`, JPEG, PNG, TIFF, and HEIC import (Canon, Nikon and Leica
-  raw support is coming soon). A JPEG straight from
+- Recursive import of Sony `.ARW`, Leica `.DNG` and Nikon `.NEF` raws, and of
+  JPEG, PNG, TIFF, and HEIC (the bodies measured are listed under
+  [Cameras measured](#cameras-measured); Canon and Fujifilm raws are not
+  supported yet). A JPEG straight from
   the camera is a first-class source: shoot JPEG in the body for its own
   rendering (Creative Look, lens corrections, noise handling) and cull, crop,
   tag, and export it as usual; only the Develop tab, which drives the raw
@@ -23,8 +25,10 @@ first run are in the [README](../README.md).
   Display P3 profile and exports through darktable, which converts it to sRGB.
   A JPEG exported from Photos carries the same Display P3 colour but can lack
   the profile, and Lumen then refuses it as "not sRGB" rather than guess.
-- Embedded Sony RAW preview extraction through ExifTool, with `sips` and
-  darktable fallbacks.
+- Previews from the raw's own embedded JPEG through ExifTool, taking the first
+  one at least 1000 px long; a raw without one (older Leica M bodies) is
+  rendered from the raw by the macOS raw decoder instead, with `sips` and
+  darktable behind it.
 - Deterministic burst grouping by camera and capture time, 2 s apart by
   default, with a saved slider from 0.5 to 30 s that regroups the catalog.
 - Regrouping from the keyboard: `G` / `Shift`+`G` mark bursts for merge, and
@@ -83,6 +87,56 @@ first run are in the [README](../README.md).
   for next time) and an auto-stretched preview of the stack.
 - Recoverable batch removal and workspace clearing that retain completed exports.
 - Keyboard-friendly local contact-sheet UI and JSON-capable CLI.
+
+### Cameras measured
+
+Leica and Nikon raws go through the same import, cull, develop and export as
+Sony ones. These bodies were imported, developed and exported for real from
+one sample file each (2026-11-22):
+
+| Body | File | Preview | Develop controls |
+|---|---|---|---|
+| Sony A7C II | `.ARW` | camera's 1616 px JPEG | all |
+| Leica M9 | `.DNG` | rendered from the raw | all; no lens profile |
+| Leica M (Typ 240) | `.DNG` | rendered from the raw | all; no lens profile |
+| Leica M11 | `.DNG` | camera's 2112 px JPEG | all; no lens profile |
+| Leica M11 Monochrom | `.DNG` | camera's 2112 px JPEG | no contrast, sharpness or noise reduction |
+| Leica Q3 | `.DNG` | 1620 px embedded JPEG | all, lens correction on by default |
+| Nikon D800 (uncompressed) | `.NEF` | camera's 1632 px JPEG | all; no lens profile |
+| Nikon Z 8 (high-efficiency) | `.NEF` | camera's 1620 px JPEG | all, with lens correction |
+| Nikon Z 9 (high-efficiency) | `.NEF` | camera's 1620 px JPEG | all, with lens correction |
+
+Every one exported a full-size JPEG carrying the camera's make, MakerNote and
+IPTC caption and keywords. Things to know:
+
+- **Develop controls a decoder lacks are greyed out.** The macOS raw decoder
+  says per file which controls it offers. On the M11 Monochrom it offers no
+  contrast, sharpness or noise reduction, so those sliders are disabled with
+  "This file's decoder has no … control"; exposure, white balance, clarity and
+  the tone curve still work (tint tones a monochrome frame). Lens Correction is
+  disabled on any file with no lens profile.
+- **Leica M bodies cannot read the lens's aperture.** The M11 and M11
+  Monochrom record f/1 behind an f/2 lens; the M9 and M (Typ 240) record no
+  aperture at all. The EXIF tab and the astro file name show what the file
+  says. The M9's serial is masked in the file, so its frames group as one
+  "unknown" body.
+- **Leica M positions.** The M (Typ 240) and M11 write a position of 0°N 0°E
+  when no phone is paired; Lumen treats that as no position, so those frames
+  take a typed one like any other without GPS.
+- **High-efficiency Nikon raws** (the Z 8 and Z 9 default) cannot be decoded
+  by darktable, so **Refine previews** and exports with a darktable XMP profile
+  are unavailable for them, and the frame view says so. Culling, Develop and
+  JPEG export are unaffected, because they use the macOS decoder.
+- **Develop speed** (warm, on a 48 GB M4 Max, the window-sized render the tab asks
+  for, about 1400 px): a 60 MP M11 frame took 0.8 s, a Z 9 frame 0.36 s and a
+  33 MP Sony frame 0.31 s. **Full size** renders the whole raw: 1.4 s, 0.77 s
+  and 0.49 s.
+
+Not yet tried: a Leica Q file straight from the camera (the Q3 sample had been
+re-saved by Lightroom, so its embedded JPEGs are Lightroom's), an SL file, a
+lossless-compressed Nikon Z file, and an astro stack from either maker. Any of
+them may behave differently; DNGs from phones or converters will import but
+were not measured.
 
 
 ## Ingest or import?
@@ -301,7 +355,8 @@ stops), White Balance (temperature and tint), Contrast, Sharpness (sharpness
 and clarity, a wide unsharp mask for mid-tone structure), Lens Correction (one
 box, disabled when the file carries no profile), and Noise Reduction, which
 offers **Auto** (the decoder's own judgement), **Off**, and **Manual** with
-luminance and colour amounts. Every slider has a number box and
+luminance and colour amounts. A control the file's decoder does not offer is
+disabled with the reason (see [Cameras measured](#cameras-measured)). Every slider has a number box and
 its own Reset; **Reset all** and **Reset the curve** undo more at once. A box
 that reads "not set" means Lumen is leaving that setting to the camera's own
 look, which is different from setting it to its middle value. Your changes
