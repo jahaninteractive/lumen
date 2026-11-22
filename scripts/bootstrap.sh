@@ -297,14 +297,13 @@ else
   # 5. GeoNames
   geonames_dir="$vendor_root/data/geonames"
   if wanted places; then
-    if ! component_ready places; then
-      mkdir -p "$geonames_dir"
-      for name in countryInfo.txt readme.txt cities500.zip; do
-        fetch "$geonames_url$name" "$geonames_dir/$name" || skipped+=("GeoNames $name: download failed; re-run scripts/bootstrap.sh")
-      done
-      if [[ -f "$geonames_dir/cities500.zip" ]]; then
-        unzip_member "$geonames_dir/cities500.zip" cities500.txt "$geonames_dir"
-      fi
+    # Always through fetch, which skips a file already there, so a re-run repairs a file an earlier run missed.
+    mkdir -p "$geonames_dir"
+    for name in countryInfo.txt readme.txt cities500.zip; do
+      fetch "$geonames_url$name" "$geonames_dir/$name" || skipped+=("GeoNames $name: download failed; re-run scripts/bootstrap.sh")
+    done
+    if [[ -f "$geonames_dir/cities500.zip" ]]; then
+      unzip_member "$geonames_dir/cities500.zip" cities500.txt "$geonames_dir"
     fi
     if component_ready places; then
       echo "GeoNames cities500: ready"

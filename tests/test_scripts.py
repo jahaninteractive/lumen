@@ -97,6 +97,10 @@ class ScriptTests(unittest.TestCase):
         script = Path("scripts/bootstrap.sh").read_text()
         self.assertRegex(script, r"\ntrap 'exit 143' TERM INT")
 
+    def test_a_rerun_still_fetches_a_missing_geonames_file(self):
+        live = "\n".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())
+        self.assertNotIn("if ! component_ready places", live)
+
     def test_web_ui_reports_live_omlx_health(self):
         script = Path("src/lumen/static/app.js").read_text()
         self.assertIn("status.omlx_live?.online", script)
