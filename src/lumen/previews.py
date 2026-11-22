@@ -165,6 +165,10 @@ class ExifToolPreviewProvider:
         return destination
 
 
+NIKON_HE_WARNING = ("Nikon high-efficiency raw; darktable cannot decode it. darktable's refine pass and XMP-profile exports "
+                    "are unavailable and culling uses the embedded preview. JPEG export is unaffected.")
+
+
 def read_metadata(path: Path) -> dict[str, str | float | None]:
     unknown = {"captured_at": None, "camera_id": "unknown", "exposure_seconds": None, "raw_warning": None,
                "latitude": None, "longitude": None, "altitude": None}
@@ -173,8 +177,9 @@ def read_metadata(path: Path) -> dict[str, str | float | None]:
         return unknown
     try:
         result = subprocess.run(
-            [exiftool, "-json", "-n", "-DateTimeOriginal", "-CreateDate", "-Model", "-SerialNumber", "-ExposureTime",
-             "-SubIFD:PhotometricInterpretation", "-GPSLatitude", "-GPSLongitude", "-GPSAltitude", str(path)],
+            [exiftool, "-json", "-n", "-DateTimeOriginal", "-CreateDate", "-Model", "-SerialNumber", "-CameraSerialNumber",
+             "-ExposureTime", "-SubIFD:PhotometricInterpretation", "-NEFCompression", "-GPSLatitude", "-GPSLongitude",
+             "-GPSAltitude", str(path)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -190,16 +195,20 @@ def read_metadata(path: Path) -> dict[str, str | float | None]:
         return unknown
     captured = item.get("DateTimeOriginal") or item.get("CreateDate")
     model = item.get("Model") or "unknown"
-    serial = item.get("SerialNumber") or "unknown"
+    # Leica keeps the serial in CameraSerialNumber, and some bodies mask it as "*******".
+    serials = (str(item.get(key) or "") for key in ("SerialNumber", "CameraSerialNumber"))
+    serial = next((value for value in serials if any(c.isalnum() for c in value)), "unknown")
     exposure = item.get("ExposureTime")  # -n gives seconds as a number
     exposure = float(exposure) if isinstance(exposure, (int, float)) and not isinstance(exposure, bool) and exposure > 0 else None
     # Sony's reduced-size (M/S) lossless ARW stores the raw as YCbCr lossless JPEG (photometric 6); rawspeed refuses it.
     unsupported = path.suffix.lower() == ".arw" and item.get("PhotometricInterpretation") == 6
     warning = ("Sony reduced-size lossless raw; darktable cannot decode it. darktable's refine pass is unavailable and "
                "culling uses the embedded preview. JPEG export is unaffected.") if unsupported else None
+    if path.suffix.lower() == ".nef" and item.get("NEFCompression") in (13, 14):  # high-efficiency: rawspeed refuses it
+        warning = NIKON_HE_WARNING
     number = lambda key: value if isinstance(value := item.get(key), (int, float)) and not isinstance(value, bool) else None
     latitude, longitude, altitude = number("GPSLatitude"), number("GPSLongitude"), number("GPSAltitude")  # -n: signed decimals
-    if latitude is None or longitude is None:  # half a fix is no fix
+    if latitude is None or longitude is None or latitude == longitude == 0:  # half a fix, or 0,0, is no fix
         latitude = longitude = altitude = None
     return {"captured_at": _normalize_exif_date(captured), "camera_id": f"{model}:{serial}", "exposure_seconds": exposure,
             "raw_warning": warning, "latitude": latitude, "longitude": longitude, "altitude": altitude}

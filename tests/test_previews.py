@@ -11,7 +11,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
-from lumen.previews import (ExifToolPreviewProvider, PreviewError, fingerprint_file, full_size_for, prune_thumbnails, read_exif_summary,
+from lumen.previews import (NIKON_HE_WARNING, ExifToolPreviewProvider, PreviewError, fingerprint_file, full_size_for, prune_thumbnails, read_exif_summary,
                             read_image_dimensions, read_metadata, thumbnail_for)
 
 
@@ -140,6 +140,44 @@ class PreviewTests(unittest.TestCase):
                 "lumen.previews.subprocess.run", return_value=response
             ):
                 self.assertIsNone(read_metadata(Path(directory) / "photo.jpg")["raw_warning"], "only raw files are flagged")
+
+    def _metadata(self, name: str, item: dict) -> dict:
+        response = subprocess.CompletedProcess(["exiftool"], 0, json.dumps([item]), "")
+        with patch("lumen.previews.shutil.which", return_value="/usr/bin/exiftool"), patch(
+            "lumen.previews.subprocess.run", return_value=response
+        ) as run:
+            metadata = read_metadata(Path("/nonexistent") / name)
+        metadata["args"] = run.call_args.args[0]
+        return metadata
+
+    def test_serial_falls_back_to_camera_serial_number(self):
+        metadata = self._metadata("L1000001.DNG", {"Model": "LEICA M (Typ 240)", "CameraSerialNumber": 4851623})
+        self.assertEqual("LEICA M (Typ 240):4851623", metadata["camera_id"])
+        self.assertIn("-CameraSerialNumber", metadata["args"])
+
+    def test_a_masked_serial_is_unknown(self):
+        metadata = self._metadata("L1000001.DNG", {"Model": "M9 Digital Camera", "SerialNumber": "*******"})
+        self.assertEqual("M9 Digital Camera:unknown", metadata["camera_id"])
+        metadata = self._metadata("L1000001.DNG", {"Model": "M9 Digital Camera", "SerialNumber": "*******",
+                                                   "CameraSerialNumber": "*******"})
+        self.assertEqual("M9 Digital Camera:unknown", metadata["camera_id"])
+
+    def test_a_zero_zero_fix_is_no_fix(self):
+        metadata = self._metadata("DSC_0001.NEF", {"Model": "NIKON Z 8", "GPSLatitude": 0, "GPSLongitude": 0, "GPSAltitude": 0})
+        self.assertEqual((None, None, None), (metadata["latitude"], metadata["longitude"], metadata["altitude"]))
+
+    def test_an_equator_fix_is_kept(self):
+        metadata = self._metadata("DSC_0001.NEF", {"Model": "NIKON Z 8", "GPSLatitude": 0, "GPSLongitude": 36.8, "GPSAltitude": 1795})
+        self.assertEqual((0, 36.8, 1795), (metadata["latitude"], metadata["longitude"], metadata["altitude"]))
+
+    def test_high_efficiency_nef_warns(self):
+        for compression in (14, 13):
+            metadata = self._metadata("DSC_0001.NEF", {"Model": "NIKON Z 8", "NEFCompression": compression})
+            self.assertEqual(NIKON_HE_WARNING, metadata["raw_warning"])
+        self.assertIn("-NEFCompression", metadata["args"])
+        self.assertIsNone(self._metadata("DSC_0001.NEF", {"Model": "NIKON Z 8", "NEFCompression": 1})["raw_warning"])
+        sony = self._metadata("DSC00712.ARW", {"Model": "ILCE-7CM2", "PhotometricInterpretation": 6})["raw_warning"]
+        self.assertTrue(sony.startswith("Sony reduced-size lossless raw"))
 
     def test_unknown_source_dimensions_fail_clearly(self):
         with tempfile.TemporaryDirectory() as directory:
