@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
@@ -183,6 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve = commands.add_parser("serve", help="start the local contact-sheet UI")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--open", action="store_true", dest="open_browser")
+    serve.add_argument("--exit-with-parent", action="store_true",
+                       help="stop when stdin reaches end of file (the launching app holds the pipe)")
     return parser
 
 
@@ -497,7 +500,9 @@ def main(argv: list[str] | None = None) -> int:
 
         server = make_server(serve_settings(settings), port=args.port)
         url = f"http://127.0.0.1:{server.server_port}"
-        print(f"Lumen is running at {url}")
+        print(f"Lumen is running at {url}", flush=True)
+        if args.exit_with_parent:  # the pipe closes however the parent ends, crash included
+            threading.Thread(target=lambda: (sys.stdin.buffer.read(), server.shutdown()), daemon=True).start()
         if args.open_browser:  # Never wait on the browser: Python's webbrowser blocks in waitpid on a wedged osascript.
             subprocess.Popen(["/usr/bin/open", url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:

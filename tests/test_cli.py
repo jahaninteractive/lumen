@@ -508,6 +508,24 @@ class CliTests(unittest.TestCase):
             self.assertEqual("picked", serve_settings(chosen).review_model)
             status.assert_not_called()
 
+    def test_serve_exits_when_its_parent_closes_stdin(self):
+        # No shell LUMEN_* reaches the child; oMLX points at a closed loopback port, so the startup probe goes nowhere.
+        env = {key: value for key, value in os.environ.items() if not key.startswith("LUMEN_")}
+        env.update(PYTHONPATH="src", LUMEN_OMLX_URL="http://127.0.0.1:9/v1")
+        with tempfile.TemporaryDirectory() as library:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "lumen", "--library", library, "serve", "--port", "0", "--exit-with-parent"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+            try:
+                self.assertRegex(process.stdout.readline(), r"^Lumen is running at http://127\.0\.0\.1:\d+$")
+                process.stdin.close()
+                self.assertEqual(0, process.wait(timeout=15))
+            finally:
+                process.kill()
+                process.wait()
+                process.stdin.close()
+                process.stdout.close()
+
     def test_serve_settings_leaves_a_remote_engine_alone(self):
         from lumen.cli import serve_settings
         remote = Settings(library_dir=Path("/tmp/unused"), ai_engine="base", base_url="http://pc.local:11434/v1")
