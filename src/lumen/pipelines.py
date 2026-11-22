@@ -14,9 +14,9 @@ from xml.etree import ElementTree
 
 from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps, JpegImagePlugin
 
-# Apple's Core Image raw pipeline (the native raw developer) decodes every raw this library holds, including the
-# Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
-from .domain import RAW_EXTENSIONS
+# Re-exported: Apple's Core Image raw pipeline (the native raw developer) decodes every raw in this list, including
+# the Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
+from .domain import RAW_EXTENSIONS  # noqa: F401
 from .previews import fingerprint_file
 from .rawdevelop import render_raw
 from .sidecars import SidecarWriter
