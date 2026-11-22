@@ -90,7 +90,15 @@ rm -rf "$stdlib"/{test,idlelib,tkinter,ensurepip,turtledemo} "$stdlib"/lib-dynlo
 uv pip install --python "$python" --target "$stdlib/site-packages" --link-mode copy \
   --constraints =(uv export --project "$project_root" --frozen --no-dev --no-emit-project --no-header --no-hashes) "$project_root"
 rm -rf "$stdlib/site-packages/bin"  # the lumen entry script: absolute #!, and the shell runs python -m lumen
-"$python" -I -m compileall -q "$resources/python/lib"
+# A public download must not carry the build Mac's folders: the package's file:// origin, uv's
+# install prefix in the build variables, libpython's install name and every .pyc's source name.
+# Python finds its prefix from the executable, so none of these is read to run.
+neutral="/Lumen.app/Contents/Resources/python"
+rm -f "$stdlib"/site-packages/*.dist-info/direct_url.json
+sed -i '' "s|$python_home|$neutral|g" "$stdlib"/_sysconfigdata_*.py
+install_name_tool -id @rpath/libpython3.13.dylib "$resources/python/lib/libpython3.13.dylib"
+codesign --force --sign - "$resources/python/lib/libpython3.13.dylib"  # the edit voids it; --sign re-signs below
+"$python" -I -m compileall -q -f -s "$resources/python" -p "$neutral" "$resources/python/lib"
 
 # 4. exiftool: a Perl script that finds its lib/ beside itself; macOS ships /usr/bin/perl.
 tarball="$project_root/vendor/downloads/Image-ExifTool-$exiftool_version.tar.gz"
@@ -154,7 +162,7 @@ if [[ -n "$identity" ]]; then
   codesign --verify --deep --strict "$app"
 else
   # Unsigned build: on Apple Silicon each Mach-O still needs the ad-hoc signature it came with.
-  "$python" -I -B -c 'import lumen, PIL._imaging' || { echo "The bundled Python does not run." >&2; exit 1; }
+  "$python" -I -B -c 'import lumen, PIL._imaging, sysconfig, ssl, sqlite3' || { echo "The bundled Python does not run." >&2; exit 1; }
 fi
 
 rm -rf "$project_root/dist/Lumen.app"

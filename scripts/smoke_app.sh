@@ -15,6 +15,11 @@ fail() {
   exit 1
 }
 
+# A public download names no folder of the Mac that built it.
+if carriers="$(LC_ALL=C grep -rlaF -- "$HOME" "$app")"; then
+  fail "these files carry the builder's home folder: ${carriers//$app\//}"
+fi
+
 work="$(mktemp -d -t lumen-smoke)"
 shell_pid=""
 cleanup() {
