@@ -12,6 +12,8 @@ from typing import Iterable
 
 from PIL import Image, ImageOps
 
+from .domain import is_raw
+from .rawdevelop import DevelopError, render_raw
 from .tools import find_tool
 
 
@@ -59,9 +61,47 @@ def fingerprint_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+MIN_EMBEDDED_PREVIEW = 1000  # long edge below which an embedded JPEG is a thumbnail, not a preview
+
+
+def _long_edge(data: bytes) -> int:
+    with Image.open(io.BytesIO(data)) as image:
+        return max(image.size)
+
+
+def _largest_embedded(source: Path) -> bytes | None:
+    """The embedded JPEG with the longest edge: Sony's JpgFromRaw, Nikon's larger tag, Leica's PreviewImage or nothing."""
+    exiftool = shutil.which("exiftool")
+    best, best_edge = None, 0
+    for tag in ("JpgFromRaw", "OtherImage", "PreviewImage") if exiftool else ():
+        try:
+            result = subprocess.run([exiftool, "-b", f"-{tag}", str(source)], capture_output=True, timeout=60, check=False)
+        except subprocess.SubprocessError:
+            continue
+        if result.returncode != 0 or not result.stdout.startswith(b"\xff\xd8"):
+            continue
+        try:
+            edge = _long_edge(result.stdout)
+        except OSError:
+            continue
+        if edge > best_edge:
+            best, best_edge = result.stdout, edge
+    return best
+
+
+def _raw_long_edge(exiftool: str, source: Path) -> int:
+    """The raw's own long edge from exiftool's ImageSize ("W H" under -n); 0 when it cannot be read."""
+    try:
+        result = subprocess.run([exiftool, "-s3", "-n", "-ImageSize", str(source)], capture_output=True, timeout=30, check=False)
+        return max(int(value) for value in result.stdout.split()) if result.returncode == 0 else 0
+    except (subprocess.SubprocessError, ValueError):
+        return 0
+
+
 class ExifToolPreviewProvider:
-    def __init__(self, max_size: int = 2048):
+    def __init__(self, max_size: int = 2048, raw_developer: Path | None = None):
         self.max_size = max_size
+        self.raw_developer = raw_developer
 
     def create_preview(self, source: Path, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -75,20 +115,17 @@ class ExifToolPreviewProvider:
             except OSError:
                 pass
 
-        exiftool = shutil.which("exiftool")
-        if exiftool:
-            for tag in ("PreviewImage", "JpgFromRaw", "ThumbnailImage"):
+        embedded = _largest_embedded(source)
+        if embedded and _long_edge(embedded) >= MIN_EMBEDDED_PREVIEW:
+            return self._normalize_bytes(embedded, destination)
+        if is_raw(source) and self.raw_developer is not None and Path(self.raw_developer).is_file():
+            with tempfile.TemporaryDirectory(prefix=".render-", dir=destination.parent) as directory:
+                candidate = Path(directory) / "render.jpg"
                 try:
-                    result = subprocess.run(
-                        [exiftool, "-b", f"-{tag}", str(source)],
-                        capture_output=True,
-                        timeout=60,
-                        check=False,
-                    )
-                except subprocess.SubprocessError:
-                    continue
-                if result.returncode == 0 and result.stdout.startswith(b"\xff\xd8"):
-                    return self._normalize_bytes(result.stdout, destination)
+                    render_raw(source, candidate, self.raw_developer, long_edge=self.max_size, image_format="jpeg")
+                    return self.normalize(candidate, destination)
+                except DevelopError:
+                    pass
 
         sips = shutil.which("sips")
         if sips:
@@ -121,6 +158,8 @@ class ExifToolPreviewProvider:
                     result = None
                 if result and result.returncode == 0 and candidate.exists():
                     return self.normalize(candidate, destination)
+        if embedded:  # a thumbnail beats no preview at all
+            return self._normalize_bytes(embedded, destination)
         raise PreviewError(f"No local preview provider could decode {source.name}")
 
     def create_refined_preview(self, source: Path, destination: Path, *, darktable: str, runner=subprocess.run) -> Path:
@@ -279,35 +318,39 @@ def thumbnail_for(preview: Path, cache_dir: Path, crop: tuple[float, float, floa
     return target
 
 
-def full_size_for(source: Path, cache_dir: Path, fingerprint: str) -> Path | None:
-    """The largest JPEG the camera embedded in the original, cached by fingerprint; None without one or without exiftool."""
+def full_size_for(source: Path, cache_dir: Path, fingerprint: str, raw_developer: Path | None = None) -> Path | None:
+    """The largest JPEG the camera embedded in the original, or a native-size render of a raw whose embedded JPEG is
+    under half its size (when the helper is present), cached by fingerprint; None without either or without exiftool."""
     target = cache_dir / f"{fingerprint}.jpg"
     if target.is_file():  # served even when the original's volume is unplugged
         return target
     source.stat()  # an unreadable original with no cached copy raises OSError for the caller
     if source.suffix.lower() in {".jpg", ".jpeg"}:  # a camera JPEG is its own full-size image
         cache_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
-            shutil.copyfileobj(source.open("rb"), temporary)
+        with source.open("rb") as original, tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
+            shutil.copyfileobj(original, temporary)
         Path(temporary.name).replace(target)
         return target
     exiftool = shutil.which("exiftool")
     if not exiftool:
         return None
-    for tag in ("JpgFromRaw", "PreviewImage"):
-        try:
-            result = subprocess.run([exiftool, "-b", f"-{tag}", str(source)], capture_output=True, timeout=60, check=False)
-        except subprocess.SubprocessError:
-            continue
-        if result.returncode == 0 and result.stdout.startswith(b"\xff\xd8"):
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            with Image.open(io.BytesIO(result.stdout)) as opened:
-                image = ImageOps.exif_transpose(opened).convert("RGB")
-            with tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
-                image.save(temporary, "JPEG", quality=92)
-            Path(temporary.name).replace(target)
-            return target
-    return None
+    embedded = _largest_embedded(source)
+    if (is_raw(source) and raw_developer is not None and Path(raw_developer).is_file()
+            and (embedded is None or 2 * _long_edge(embedded) < _raw_long_edge(exiftool, source))):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".full-", dir=cache_dir) as directory:
+            rendered = Path(directory) / "full.jpg"
+            render_raw(source, rendered, raw_developer, long_edge=0, image_format="jpeg")
+            embedded = rendered.read_bytes()
+    if embedded is None:
+        return None
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with Image.open(io.BytesIO(embedded)) as opened:
+        image = ImageOps.exif_transpose(opened).convert("RGB")
+    with tempfile.NamedTemporaryFile(suffix=".jpg", dir=cache_dir, delete=False) as temporary:
+        image.save(temporary, "JPEG", quality=92)
+    Path(temporary.name).replace(target)
+    return target
 
 
 def prune_cache(cache_dir: Path, live: set[str]) -> int:

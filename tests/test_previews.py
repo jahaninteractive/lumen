@@ -309,7 +309,7 @@ class PreviewTests(unittest.TestCase):
                 self.assertEqual((320, 480), image.size)
             self.assertEqual(0, prune_thumbnails(cache, [preview]))
 
-    def test_full_size_for_extracts_jpg_from_raw_first_and_caches_by_fingerprint(self):
+    def test_full_size_for_extracts_the_largest_embedded_jpeg_and_caches_by_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "DSC00001.ARW"
@@ -327,16 +327,16 @@ class PreviewTests(unittest.TestCase):
                     patch("lumen.previews.subprocess.run", side_effect=run):
                 target = full_size_for(source, cache, "abc")
                 self.assertEqual(cache / "abc.jpg", target)
-                self.assertEqual(["-JpgFromRaw"], calls)
+                self.assertEqual(["-JpgFromRaw", "-OtherImage", "-PreviewImage"], calls)
                 with Image.open(target) as saved:
                     self.assertEqual((640, 427), saved.size)
                 self.assertEqual(target, full_size_for(source, cache, "abc"))
-                self.assertEqual(["-JpgFromRaw"], calls, "a cached full-size image never runs exiftool again")
+                self.assertEqual(3, len(calls), "a cached full-size image never runs exiftool again")
 
                 calls.clear()
                 buffer = io.BytesIO()  # no embedded JPEG under either tag
                 self.assertIsNone(full_size_for(source, cache, "def"))
-                self.assertEqual(["-JpgFromRaw", "-PreviewImage"], calls)
+                self.assertEqual(["-JpgFromRaw", "-OtherImage", "-PreviewImage"], calls)
                 with self.assertRaises(OSError):
                     full_size_for(root / "missing.ARW", cache, "ghi")
                 self.assertEqual(target, full_size_for(root / "missing.ARW", cache, "abc"), "a cached copy outlives an unplugged volume")
@@ -370,6 +370,116 @@ class PreviewTests(unittest.TestCase):
                 (full / "gone.jpg").write_bytes(b"stale")
                 library._prune_thumbnails()
             self.assertEqual([full / f"{fingerprint}.jpg"], list(full.iterdir()))
+
+
+def jpeg(size: tuple[int, int]) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, "blue").save(buffer, "JPEG")
+    return buffer.getvalue()
+
+
+class EmbeddedPreviewTests(unittest.TestCase):
+    """exiftool answers per tag from `tags` ({tag: (width, height)}); render_raw writes a 3000x2000 JPEG and records its long edge."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.helper = self.root / "raw_developer"
+        self.helper.write_bytes(b"")
+        self.renders, self.commands = [], []
+        self.tags, self.image_size, self.tools = {}, "", {"exiftool"}
+        patchers = [patch("lumen.previews.render_raw", side_effect=self.render),
+                    patch("lumen.previews.subprocess.run", side_effect=self.exiftool),
+                    patch("lumen.previews.shutil.which", side_effect=lambda name: f"/usr/bin/{name}" if name in self.tools else None),
+                    patch("lumen.previews.find_tool", return_value=None)]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def render(self, source, destination, executable, *, long_edge=0, image_format="tiff16", **kwargs):
+        self.renders.append(long_edge)
+        Image.new("RGB", (3000, 2000), "red").save(destination, "JPEG")
+
+    def exiftool(self, command, **kwargs):
+        self.commands.append(command)
+        if command[0].endswith("sips"):
+            Image.new("RGB", (300, 200), "green").save(command[-1], "JPEG")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        if "-ImageSize" in command:
+            return subprocess.CompletedProcess(command, 0, self.image_size.encode(), b"")
+        size = self.tags.get(command[2][1:])
+        return subprocess.CompletedProcess(command, 0, jpeg(size) if size else b"", b"")
+
+    def raw(self, name: str) -> Path:
+        source = self.root / name
+        source.write_bytes(b"raw")
+        return source
+
+    def preview(self, name: str, raw_developer=None) -> tuple[int, int]:
+        destination = self.root / "previews" / "p.jpg"
+        destination.unlink(missing_ok=True)
+        ExifToolPreviewProvider(raw_developer=raw_developer).create_preview(self.raw(name), destination)
+        with Image.open(destination) as image:
+            return image.size
+
+    def test_preview_takes_the_largest_embedded_jpeg(self):
+        self.tags = {"PreviewImage": (640, 427), "JpgFromRaw": (4000, 100)}
+        self.assertEqual((2048, 51), self.preview("L1000001.DNG", self.helper))
+        self.assertEqual([], self.renders)
+
+    def test_preview_renders_a_raw_whose_embedded_jpeg_is_a_thumbnail(self):
+        self.tags = {"PreviewImage": (160, 120)}
+        self.assertEqual((2048, 1365), self.preview("L1000001.DNG", self.helper))
+        self.assertEqual([2048], self.renders)
+
+    def test_preview_renders_a_raw_with_no_embedded_jpeg(self):
+        self.assertEqual((2048, 1365), self.preview("L1000001.DNG", self.helper))
+        self.assertEqual([2048], self.renders)
+
+    def test_preview_without_the_helper_falls_back_as_before(self):
+        self.tools.add("sips")
+        self.tags = {"PreviewImage": (160, 120)}
+        self.assertEqual((300, 200), self.preview("L1000001.DNG"))
+        self.assertEqual([], self.renders)
+        self.assertTrue(any(command[0].endswith("sips") for command in self.commands))
+        self.assertEqual((300, 200), self.preview("L1000002.DNG", self.root / "never-bootstrapped"),
+                         "a helper path with no file behind it is no helper")
+        self.assertEqual([], self.renders)
+
+    def test_preview_accepts_a_small_embedded_jpeg_as_the_last_resort(self):
+        self.tags = {"PreviewImage": (160, 120)}
+        self.assertEqual((160, 120), self.preview("L1000001.DNG"))
+
+    def test_arw_preview_never_renders(self):
+        self.tags = {"PreviewImage": (1616, 1080), "JpgFromRaw": (7008, 10)}
+        self.assertEqual((2048, 3), self.preview("DSC00001.ARW", self.helper))
+        self.assertEqual([], self.renders)
+        self.image_size = "7008 4672"
+        full_size_for(self.raw("DSC00001.ARW"), self.root / "full", "abc", self.helper)
+        self.assertEqual([], self.renders, "nor does its full-size view")
+
+    def full_size(self, name: str, raw_developer) -> tuple[int, int]:
+        target = full_size_for(self.raw(name), self.root / "full", name, raw_developer)
+        with Image.open(target) as image:
+            return image.size
+
+    def test_full_size_renders_when_the_embedded_jpeg_is_far_smaller_than_the_raw(self):
+        self.tags, self.image_size = {"JpgFromRaw": (2112, 1404)}, "9536 6336"
+        self.assertEqual((3000, 2000), self.full_size("L1000001.DNG", self.helper))
+        self.assertEqual([0], self.renders)
+        self.assertEqual([self.root / "full" / "L1000001.DNG.jpg"], list((self.root / "full").iterdir()),
+                         "no temporary render remains")
+
+    def test_full_size_keeps_a_near_full_embedded_jpeg(self):
+        self.tags, self.image_size = {"JpgFromRaw": (3504, 2336)}, "3584 2560"
+        self.assertEqual((3504, 2336), self.full_size("DSC00001.ARW", self.helper))
+        self.assertEqual([], self.renders)
+
+    def test_full_size_without_the_helper_keeps_the_embedded_jpeg(self):
+        self.tags, self.image_size = {"JpgFromRaw": (2112, 1404)}, "9536 6336"
+        self.assertEqual((2112, 1404), self.full_size("L1000001.DNG", None))
+        self.assertEqual([], self.renders)
 
 
 if __name__ == "__main__":

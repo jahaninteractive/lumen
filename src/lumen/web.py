@@ -570,7 +570,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     if develop and not develop.is_empty:
                         full = developed_full_size(settings, Path(photo.path), full_dir, photo.fingerprint, develop)
                     else:
-                        full = full_size_for(Path(photo.path), full_dir, photo.fingerprint) if photo else None
+                        full = full_size_for(Path(photo.path), full_dir, photo.fingerprint, settings.raw_developer_path) if photo else None
                     if full:
                         full.resolve().relative_to(full_dir)
                 except OSError:  # the original's volume is unplugged and nothing is cached

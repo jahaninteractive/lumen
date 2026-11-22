@@ -7538,3 +7538,11 @@ class DevelopWebTests(unittest.TestCase):
         self.post_json("/api/photos/1/develop", {"settings": {"contrast": 0.6}})
         self.request("GET", "/full/1")
         self.assertEqual(2, len(list(full_dir.glob(f"{self.photo.fingerprint}-*.jpg"))))
+
+    def test_full_size_and_previews_are_given_the_raw_developer(self):
+        """A raw whose embedded JPEG is a thumbnail is rendered, so both callers must hand over the helper's path."""
+        with patch("lumen.web.full_size_for", return_value=None) as full:
+            self.assertEqual(404, self.request("GET", "/full/1")[0])
+        self.assertEqual(self.settings.raw_developer_path, full.call_args.args[3])
+        with Library(self.settings) as library:
+            self.assertEqual(self.settings.raw_developer_path, library.previews.raw_developer)

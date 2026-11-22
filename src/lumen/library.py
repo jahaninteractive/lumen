@@ -254,7 +254,7 @@ class Library:
         self.settings = settings
         settings.ensure_directories()
         self.catalog = Catalog(settings.database_path)
-        self.previews = ExifToolPreviewProvider()
+        self.previews = ExifToolPreviewProvider(raw_developer=settings.raw_developer_path)
         self.sidecars = SidecarWriter(settings.sidecar_dir)
         # An injected runner outlives this Library (the web server shares one across requests).
         self._runner: LocalJobRunner | None = job_runner
