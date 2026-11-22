@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, supported: {}, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null },
   mergeSelection: new Set(), mergeAnchor: null, clearedFrames: 0,
   aiTasks: new Map(),  // per-panel local AI status by key, e.g. critique:<groupId>; it outlives the panel that asked
   ingest: { card: null, primary: null, mirror: null },
@@ -4616,6 +4616,11 @@ function developPark(control) {
   return Number.isFinite(decoded) ? developClamp(decoded, control.min, control.max) : control.park;
 }
 
+// What this file's decoder offers, from the last render; unknown until then, so offered.
+function developOffered(key) {
+  return state.develop.supported?.[key] !== false;
+}
+
 function syncDevelopControls() {
   const { fields, ready } = state.develop;
   const touched = Object.keys(fields).length > 0;
@@ -4630,15 +4635,23 @@ function syncDevelopControls() {
     range.setAttribute('aria-valuetext', set ? `${value.toFixed(control.decimals)}${control.unit}` : 'not set');
     if (set) range.removeAttribute('data-unset');
     else range.setAttribute('data-unset', '');
-    range.disabled = field.disabled = !ready;
-    developNode(`develop-${control.key}-reset`).disabled = !ready || !set;
+    // Disabled rather than hidden, like the lens box below: a one-channel sensor's decoder
+    // has no contrast, sharpness or noise controls at all.
+    const offered = developOffered(control.key);
+    range.disabled = field.disabled = !ready || !offered;
+    developNode(`develop-${control.key}-reset`).disabled = !ready || !set || !offered;
+    const note = developNode(`develop-${control.key}-note`);
+    if (note) {
+      note.textContent = offered ? '' : `This file's decoder has no ${control.label.toLowerCase()} control.`;
+      note.hidden = offered;
+    }
   });
   CURVE_IDENTITY.forEach((_point, index) => developNode(`develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
   const lens = developNode('develop-lens_correction');
   lens.checked = fields.lens_correction === true;
   // A frame whose file carries no profile gets the box disabled rather than hidden, so the
   // panel's shape does not change from frame to frame.
-  const supported = state.develop.lensCorrection !== false;
+  const supported = developOffered('lens_correction');
   lens.disabled = !ready || !supported;
   developNode('develop-lens-note').textContent = ready && !supported
     ? 'This file carries no lens profile Core Image can correct against.'
@@ -4660,7 +4673,7 @@ function fillDevelop(photo) {
   develop.controller?.abort();
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
-    neutral: null, defaults: {}, lensCorrection: true, zoomShown: false, histogram: {}, drag: null, controller: null,
+    neutral: null, defaults: {}, supported: {}, zoomShown: false, histogram: {}, drag: null, controller: null,
     beforeAdvice: null, advice: state.details?.advice || null,
   });
   aiTaskLine(`develop:${photo.id}`, developNode('develop-task'));
@@ -4711,7 +4724,7 @@ async function renderDevelopPreview() {
   if (controller.signal.aborted || develop.photoId !== photo.id) return;
   develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
   develop.defaults = result.defaults && typeof result.defaults === 'object' ? result.defaults : {};
-  develop.lensCorrection = result.lens_correction !== false;
+  develop.supported = result.supported && typeof result.supported === 'object' ? result.supported : {};
   develop.histogram = result.histogram && !Array.isArray(result.histogram) ? result.histogram : {};
   drawDevelopWidget();
   syncDevelopControls();
@@ -4781,10 +4794,14 @@ function developNoiseMode() {
 
 function syncNoiseMode() {
   const mode = developNoiseMode();
+  const offered = NR_KEYS.some(developOffered);  // the mode drives both amounts
   document.querySelectorAll('input[name="develop-nr-mode"]').forEach(radio => {
     radio.checked = radio.value === mode;
-    radio.disabled = !state.develop.ready;
+    radio.disabled = !state.develop.ready || !offered;
   });
+  const note = developNode('develop-nr-mode-note');
+  note.textContent = offered ? '' : "This file's decoder has no noise reduction control.";
+  note.hidden = offered;
   developNode('develop-nr-manual').hidden = mode !== 'manual';
 }
 

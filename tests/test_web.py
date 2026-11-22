@@ -1283,7 +1283,7 @@ class WebTests(unittest.TestCase):
         def render(source, destination, executable, *, settings=None, long_edge=0,
                    image_format="tiff16", histogram=False, runner=None):
             Image.effect_noise((2048, 1536), 64).convert("RGB").save(destination, format="JPEG", quality=95)
-            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram={}, defaults={}, lens_correction_supported=False,
+            return DevelopRender(path=Path(destination), width=2048, height=1536, histogram={}, defaults={}, supported={"lens_correction": False},
                                  neutral_temperature=5500.0, neutral_tint=0.0)
 
         seen = []
@@ -1507,7 +1507,7 @@ class WebTests(unittest.TestCase):
         render = lambda source, destination, executable, **kwargs: (
             Image.new("RGB", (64, 48), (90, 90, 90)).save(destination, format="JPEG"),
             DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={},
-                          lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0))[1]
+                          supported={"lens_correction": False}, neutral_temperature=5500.0, neutral_tint=0.0))[1]
         with patch("lumen.library.render_raw", side_effect=render), patch(
                 "lumen.library.OmlxTagger", return_value=tagger), patch(
                 "lumen.library.get_server_status", return_value=REVIEW_LOADED):
@@ -1539,7 +1539,7 @@ class WebTests(unittest.TestCase):
         render = lambda source, destination, executable, **kwargs: (
             Image.new("RGB", (64, 48), (90, 90, 90)).save(destination, format="JPEG"),
             DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={},
-                          lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0))[1]
+                          supported={"lens_correction": False}, neutral_temperature=5500.0, neutral_tint=0.0))[1]
         self.assertIsNone(self.get_json("/api/photos/1")[1]["advice"])
         with patch("lumen.library.render_raw", side_effect=render), patch(
                 "lumen.library.OmlxTagger", return_value=Tagger()), patch(
@@ -1559,7 +1559,7 @@ class WebTests(unittest.TestCase):
         render = lambda source, destination, executable, **kwargs: (
             Image.new("RGB", (64, 48), (90, 90, 90)).save(destination, format="JPEG"),
             DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={},
-                          lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0))[1]
+                          supported={"lens_correction": False}, neutral_temperature=5500.0, neutral_tint=0.0))[1]
         with patch("lumen.library.render_raw", side_effect=render), patch(
                 "lumen.library.OmlxTagger", return_value=BrokenTagger()), patch(
                 "lumen.library.get_server_status", return_value=REVIEW_LOADED):
@@ -1831,7 +1831,7 @@ console.log(JSON.stringify([panel.hidden, store]));
 
         def render(source, destination, executable, *, settings=None, long_edge=0, image_format="tiff16", histogram=False, runner=None):
             Image.new("RGB", (64, 48)).save(destination, format="JPEG")
-            return DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={}, lens_correction_supported=False,
+            return DevelopRender(path=Path(destination), width=64, height=48, histogram={}, defaults={}, supported={"lens_correction": False},
                                  neutral_temperature=5500.0, neutral_tint=0.0)
 
         both = {"version": None, "default_model": None, "loaded_models": ["Qwen3-VL-8B-Instruct-4bit", "Qwen3.8-27B-4bit"]}
@@ -7370,7 +7370,7 @@ class DevelopWebTests(unittest.TestCase):
         Image.new("RGB", (64, 48), (200, 100, 50)).save(destination, format="JPEG")
         return DevelopRender(path=Path(destination), width=64, height=48, histogram={"y": (0.1, 0.2), "r": (0.3, 0.4), "g": (0.5, 0.6), "b": (0.7, 0.8)},
                               defaults={"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.004, "color_nr": 0.5},
-                              lens_correction_supported=True,
+                              supported={"contrast": True, "sharpness": False, "luminance_nr": True, "color_nr": True, "lens_correction": True},
                              neutral_temperature=5500.0, neutral_tint=3.0)
 
     post_json = WebTests.post_json
@@ -7425,6 +7425,13 @@ class DevelopWebTests(unittest.TestCase):
         self.assertTrue(self.calls[0]["histogram"])
         with Library(self.settings) as library:
             self.assertIsNone(library.develop_for(1), "the preview route never persists")
+
+    def test_develop_preview_returns_supported_controls(self):
+        """The panel disables what this file's decoder does not offer, so it needs every flag."""
+        body = self.preview()[1]
+        self.assertEqual({"contrast": True, "sharpness": False, "luminance_nr": True, "color_nr": True,
+                          "lens_correction": True}, body["supported"])
+        self.assertNotIn("lens_correction", body)
 
     def test_develop_preview_clamps_an_oversized_long_edge(self):
         self.assertEqual(200, self.preview(long_edge=10**9)[0])

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,9 +30,10 @@ class DevelopRender:
     # What the decoder itself applies when nothing is asked of it, keyed by DEVELOP_AMOUNTS.
     # The panel parks each unset handle here; empty when the helper reported none.
     defaults: dict[str, float]
-    # Whether this file carries a profile Core Image can correct against; the panel only
-    # offers the checkbox when it does, because not every body and lens pair has one.
-    lens_correction_supported: bool
+    # Which of the decoder's controls this file offers, keyed by DEVELOP_AMOUNTS and
+    # "lens_correction". A one-channel sensor has no contrast, sharpness or noise controls, and
+    # not every body and lens pair carries a profile; the panel disables what is not offered.
+    supported: Mapping[str, bool]
     neutral_temperature: float
     neutral_tint: float
 
@@ -53,6 +55,16 @@ def _histogram(reported: object) -> dict[str, tuple[float, ...]]:
             return {}
         channels[channel] = tuple(float(bucket) for bucket in buckets)
     return channels
+
+
+def _supported(payload: dict) -> dict[str, bool]:
+    """Every control the helper did not deny is offered, except lens correction, which needs a
+    profile. A helper built before this map reported only the old lens flag, read here until rebuilt."""
+    reported = payload.get("supported")
+    reported = reported if isinstance(reported, dict) else {}
+    supported = {amount: reported.get(amount) is not False for amount in DEVELOP_AMOUNTS}
+    supported["lens_correction"] = reported.get("lens_correction", payload.get("lens_correction_supported")) is True
+    return supported
 
 
 def _defaults(reported: object) -> dict[str, float]:
@@ -189,7 +201,7 @@ def render_raw(
             height=int(payload["height"]),
             histogram=_histogram(payload.get("histogram")),
             defaults=_defaults(payload.get("defaults")),
-            lens_correction_supported=payload.get("lens_correction_supported") is True,
+            supported=_supported(payload),
             neutral_temperature=float(payload["neutral_temperature"]),
             neutral_tint=float(payload["neutral_tint"]),
         )

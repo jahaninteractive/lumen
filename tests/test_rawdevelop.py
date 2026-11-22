@@ -13,7 +13,7 @@ RESPONSE = {
     "height": 733,
     "histogram": {"y": [0.5522, 0.0256], "r": [0.4, 0.1], "g": [0.5, 0.2], "b": [0.6, 0.3]},
     "defaults": {"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.0041, "color_nr": 0.5},
-    "lens_correction_supported": True,
+    "supported": {"contrast": True, "sharpness": True, "luminance_nr": True, "color_nr": True, "lens_correction": True},
     "neutral_temperature": 3490.1663,
     "neutral_tint": -9.4,
 }
@@ -83,6 +83,21 @@ class RenderRawTests(unittest.TestCase):
 
         self.assertEqual({"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.0041, "color_nr": 0.5},
                          render.defaults)
+
+    def test_render_reports_supported_controls(self):
+        """A one-channel sensor's decoder has no contrast, sharpness or noise controls at all."""
+        unsupported = dict.fromkeys(("contrast", "sharpness", "luminance_nr", "color_nr", "lens_correction"), False)
+        render = render_raw(self.source, self.destination, self._responder({**RESPONSE, "supported": unsupported}))
+        self.assertIs(False, render.supported["sharpness"])
+
+        older = {key: value for key, value in RESPONSE.items() if key != "supported"}
+        render = render_raw(self.source, self.destination, self._responder(older))
+        self.assertIs(True, render.supported["sharpness"], "a helper built before this reports nothing: assume it")
+        self.assertIs(False, render.supported["lens_correction"], "lens correction needs a profile, as before")
+
+        render = render_raw(self.source, self.destination,
+                            self._responder({**older, "lens_correction_supported": True}))
+        self.assertIs(True, render.supported["lens_correction"], "an unrebuilt helper's lens box keeps working")
 
     def test_render_raw_ignores_defaults_it_cannot_read(self):
         for shape in ([0.5], {"sharpness": "lots"}, "nonsense", {}):

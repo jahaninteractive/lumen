@@ -1520,10 +1520,9 @@ class Library:
                         "model": model, "role": role, "error": str(error),
                         "raw_response": getattr(error, "raw_response", None)})
                 raise
-        if not render.lens_correction_supported and "lens_correction" in advice.settings:
-            # The helper refuses lens correction on a file with no profile, and the panel disables that box.
-            advice = replace(advice, settings={key: value for key, value in advice.settings.items()
-                                               if key != "lens_correction"})
+        # The helper refuses a control this file's decoder lacks, and the panel disables it.
+        advice = replace(advice, settings={key: value for key, value in advice.settings.items()
+                                           if render.supported.get(key, True)})
         with self._mutation():
             self.catalog.append_event(photo_id, "develop_advised", {
                 "model": model, "role": role, "settings": advice.settings, "rationale": advice.rationale,

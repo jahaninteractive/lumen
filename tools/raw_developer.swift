@@ -198,9 +198,22 @@ let decodedDefaults: [String: Double] = [
     "luminance_nr": Double(rawFilter.luminanceNoiseReductionAmount),
     "color_nr": Double(rawFilter.colorNoiseReductionAmount),
 ]
-// Whether this particular file carries a profile Core Image can correct against. Not every
-// body and lens pair does, and a checkbox that silently does nothing is worse than none.
-let lensCorrectionSupported = rawFilter.isLensCorrectionSupported
+// Which controls this particular file's decoder offers. A one-channel sensor has no contrast,
+// sharpness or noise controls, and not every body and lens pair carries a lens profile; a
+// control that silently does nothing is worse than none.
+let supported: [String: Bool] = [
+    "contrast": rawFilter.isContrastSupported,
+    "sharpness": rawFilter.isSharpnessSupported,
+    "luminance_nr": rawFilter.isLuminanceNoiseReductionSupported,
+    "color_nr": rawFilter.isColorNoiseReductionSupported,
+    "lens_correction": rawFilter.isLensCorrectionSupported,
+]
+// Asking for one the file lacks is the request's mistake, not a silent no-op: the panel
+// disables it whenever the render says it is not offered.
+for name in ["contrast", "sharpness", "luminance_nr", "color_nr"]
+    where settings[name] != nil && supported[name] != true {
+    fail("this file's decoder has no \(name) control", invalidRequest)
+}
 
 // Decode at native scale and resample afterwards, rather than asking the raw filter for a
 // small image. Core Image skips raw sharpening entirely at scaleFactor <= 0.5 and applies
@@ -222,7 +235,7 @@ if let value = optionalNumber(settings, "color_nr") { rawFilter.colorNoiseReduct
 if let wanted = optionalFlag(settings, "lens_correction") {
     // Asking for it on a file that does not support it is the request's mistake, not a
     // silent no-op: the panel only offers the box when the render says it is supported.
-    guard !wanted || lensCorrectionSupported else {
+    guard !wanted || supported["lens_correction"] == true else {
         fail("this file has no lens correction profile", invalidRequest)
     }
     rawFilter.isLensCorrectionEnabled = wanted
@@ -322,7 +335,7 @@ var response: [String: Any] = [
     "neutral_temperature": Double(neutralTemperature),
     "neutral_tint": Double(neutralTint),
     "defaults": decodedDefaults,
-    "lens_correction_supported": lensCorrectionSupported,
+    "supported": supported,
 ]
 if wantsHistogram {
     response["histogram"] = channelHistograms(image, context, colorSpace)

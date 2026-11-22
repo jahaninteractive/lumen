@@ -2444,7 +2444,7 @@ class LibraryTests(unittest.TestCase):
                      else Image.new("RGB", (2048, 1536), (118, 118, 118)))
             image.save(destination, format="JPEG", quality=95)
             return DevelopRender(path=Path(destination), width=image.width, height=image.height,
-                                 histogram={}, defaults={}, lens_correction_supported=False, neutral_temperature=5500.0, neutral_tint=0.0)
+                                 histogram={}, defaults={}, supported={"lens_correction": False}, neutral_temperature=5500.0, neutral_tint=0.0)
         return render
 
     def test_save_develop_refuses_empty_settings(self):
@@ -2593,6 +2593,33 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual((before.preview_kind, before.preview_path), (after.preview_kind, after.preview_path))
         self.assertEqual(1, status["result"]["failed"])
         self.assertTrue(status["log_tail"][0].startswith("DSC0002.jpg: "))
+
+    def test_copy_to_burst_reports_a_frame_whose_decoder_refuses_a_setting(self):
+        """A monochrome mate's decoder has no sharpness control: that one fails by name, the rest are copied."""
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"sharpness": 0.6}))
+            render = self.develop_render([])
+
+            def refuse_one(source, *args, **kwargs):
+                if Path(source).name == "DSC0003.jpg":
+                    raise library_module.DevelopError(
+                        "The raw developer could not develop DSC0003.jpg: this file's decoder has no sharpness control.")
+                return render(source, *args, **kwargs)
+
+            with patch("lumen.library.render_raw", side_effect=refuse_one):
+                job = library.start_develop_group_job(ids[0])
+                self.assertTrue(library.wait_for_job(job.id, 10))
+            status = library.job_status(job.id)
+            copied = {photo_id: library.develop_for(photo_id) for photo_id in ids[1:]}
+            refused = library.catalog.photo_by_path(str((self.source_dir / "DSC0003.jpg").resolve())).id
+
+        self.assertEqual((2, 1), (status["result"]["applied"], status["result"]["failed"]))
+        self.assertEqual(["DSC0003.jpg: The raw developer could not develop DSC0003.jpg: "
+                          "this file's decoder has no sharpness control."], status["log_tail"])
+        self.assertIsNone(copied.pop(refused))
+        self.assertEqual([{"sharpness": 0.6}] * 2, [stored.to_dict() for stored in copied.values()])
 
     def test_apply_to_group_records_one_develop_applied_to_group_event(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
@@ -4221,6 +4248,26 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual({"exposure_ev": 0.3}, stored, "the browser never parks a box it must disable")
         self.assertTrue(developed)
         self.assertEqual({"exposure_ev": 0.3}, saved.to_dict())
+
+    def test_advice_drops_controls_the_decoder_lacks(self):
+        class SharpTagger:
+            model, role = "review-model", "review"
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None):
+                return DevelopAdvice({"sharpness": 0.6, "exposure_ev": 0.3}, "Crisp it.", "{}")
+
+        render = self.develop_render([])
+
+        def monochrome(*args, **kwargs):
+            return replace(render(*args, **kwargs), supported={"sharpness": False, "lens_correction": False})
+
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=monochrome):
+                advice = library.suggest_develop(photo_id, SharpTagger(), settings=DevelopSettings())
+            stored = library.latest_develop_advice(photo_id)["settings"]
+        self.assertEqual({"exposure_ev": 0.3}, advice.settings)
+        self.assertEqual({"exposure_ev": 0.3}, stored)
 
     def test_suggest_develop_records_a_failure_and_refuses_an_offline_original(self):
         class FailingTagger:

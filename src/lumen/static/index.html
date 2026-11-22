@@ -887,19 +887,21 @@
             <summary>Contrast</summary>
             <div class="develop-row">
               <label for="develop-contrast">Contrast</label>
-              <input type="range" id="develop-contrast" min="0" max="1" step="0.01" value="0.5">
+              <input type="range" id="develop-contrast" aria-describedby="develop-contrast-note" min="0" max="1" step="0.01" value="0.5">
               <input type="number" id="develop-contrast-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Contrast">
               <button type="button" class="secondary" id="develop-contrast-reset">Reset</button>
             </div>
+            <p id="develop-contrast-note" class="quiet" hidden></p>
           </details>
           <details>
             <summary>Sharpness</summary>
             <div class="develop-row">
               <label for="develop-sharpness">Sharpness</label>
-              <input type="range" id="develop-sharpness" min="0" max="1" step="0.01" value="0.5">
+              <input type="range" id="develop-sharpness" aria-describedby="develop-sharpness-note" min="0" max="1" step="0.01" value="0.5">
               <input type="number" id="develop-sharpness-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Sharpness">
               <button type="button" class="secondary" id="develop-sharpness-reset">Reset</button>
             </div>
+            <p id="develop-sharpness-note" class="quiet" hidden></p>
             <div class="develop-row">
               <label for="develop-clarity">Clarity</label>
               <input type="range" id="develop-clarity" min="0" max="1" step="0.01" value="0">
@@ -914,7 +916,7 @@
           </details>
           <details>
             <summary>Noise Reduction</summary>
-            <fieldset id="develop-nr-mode">
+            <fieldset id="develop-nr-mode" aria-describedby="develop-nr-mode-note">
               <legend class="sr-only">Noise reduction mode</legend>
               <div class="scope-options">
                 <label><input type="radio" name="develop-nr-mode" value="auto" checked> Auto &mdash; the decoder's own judgement</label>
@@ -922,19 +924,22 @@
                 <label><input type="radio" name="develop-nr-mode" value="manual"> Manual</label>
               </div>
             </fieldset>
+            <p id="develop-nr-mode-note" class="quiet" hidden></p>
             <div id="develop-nr-manual">
             <div class="develop-row">
               <label for="develop-luminance_nr">Luminance</label>
-              <input type="range" id="develop-luminance_nr" min="0" max="1" step="0.01" value="0.5">
+              <input type="range" id="develop-luminance_nr" aria-describedby="develop-luminance_nr-note" min="0" max="1" step="0.01" value="0.5">
               <input type="number" id="develop-luminance_nr-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Luminance noise reduction">
               <button type="button" class="secondary" id="develop-luminance_nr-reset">Reset</button>
             </div>
+            <p id="develop-luminance_nr-note" class="quiet" hidden></p>
             <div class="develop-row">
               <label for="develop-color_nr">Colour</label>
-              <input type="range" id="develop-color_nr" min="0" max="1" step="0.01" value="0.5">
+              <input type="range" id="develop-color_nr" aria-describedby="develop-color_nr-note" min="0" max="1" step="0.01" value="0.5">
               <input type="number" id="develop-color_nr-value" min="0" max="1" step="0.01" placeholder="not set" aria-label="Colour noise reduction">
               <button type="button" class="secondary" id="develop-color_nr-reset">Reset</button>
             </div>
+            <p id="develop-color_nr-note" class="quiet" hidden></p>
             </div>
           </details>
           <details class="how"><summary>How this works</summary>
