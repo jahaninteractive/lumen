@@ -6,7 +6,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-VENDOR_APPS = Path(__file__).resolve().parents[2] / "vendor" / "apps"
+from .config import vendor_root
+
+VENDOR_APPS = vendor_root() / "apps"
+SYSTEM_APPS = Path("/Applications")
 _BUNDLES = {"darktable-cli": "darktable.app", "siril-cli": "Siril.app"}
 
 
@@ -19,15 +22,16 @@ class ToolStatus:
 
 
 def find_tool(name: str) -> str | None:
-    """PATH first, then the project-local app bundle; never a path that resolves outside it."""
+    """PATH first, then the vendor app bundle, then /Applications; never a path that resolves outside its bundle."""
     if path := shutil.which(name):
         return path
     if name not in _BUNDLES:
         return None
-    bundle = VENDOR_APPS.resolve() / _BUNDLES[name]
-    executable = (bundle / "Contents" / "MacOS" / name).resolve()
-    if executable.is_relative_to(bundle) and executable.is_file() and os.access(executable, os.X_OK):
-        return str(executable)
+    for apps in (VENDOR_APPS, SYSTEM_APPS):
+        bundle = apps.resolve() / _BUNDLES[name]
+        executable = (bundle / "Contents" / "MacOS" / name).resolve()
+        if executable.is_relative_to(bundle) and executable.is_file() and os.access(executable, os.X_OK):
+            return str(executable)
     return None
 
 

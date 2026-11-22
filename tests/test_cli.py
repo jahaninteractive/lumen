@@ -2,6 +2,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 import unittest.mock
@@ -244,6 +245,30 @@ class CliTests(unittest.TestCase):
         self.assertIn("vision_analyzer", payload)
         self.assertEqual(__version__, payload["version"])
         self.assertTrue(payload["raw_developer"]["path"].endswith("cache/bin/raw_developer"))
+
+    def test_doctor_reports_a_missing_helper_in_helper_dir(self):
+        missing = ToolStatus(name="tool", available=False, path=None, version=None)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("raw_developer", "vision_analyzer"):  # present in the library, absent from the helper dir
+                make = root / "library" / "cache" / "bin" / name
+                make.parent.mkdir(parents=True, exist_ok=True)
+                make.write_text("#!/bin/sh\n")
+            (root / "helpers").mkdir()
+            output = io.StringIO()
+            with patch("lumen.diagnostics.get_server_status", side_effect=OmlxError("offline")), \
+                    patch("lumen.diagnostics.tool_status", return_value=missing), \
+                    patch("lumen.diagnostics._find_model", return_value=None), \
+                    patch.dict(os.environ, {"LUMEN_HELPER_DIR": str(root / "helpers")}), redirect_stdout(output):
+                main(["--library", str(root / "library"), "doctor", "--json"])
+        report = json.loads(output.getvalue())
+        self.assertFalse(report["raw_developer"]["available"])
+        self.assertFalse(report["vision_analyzer"]["available"])
+        self.assertEqual(str(root / "helpers" / "raw_developer"), report["raw_developer"]["path"])
+
+    def test_python_dash_m_lumen_prints_the_version(self):
+        result = subprocess.run([sys.executable, "-m", "lumen", "--version"], capture_output=True, text=True, timeout=30)
+        self.assertIn(__version__, result.stdout)
 
     def test_package_version_matches_pyproject(self):
         pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()

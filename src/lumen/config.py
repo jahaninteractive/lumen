@@ -4,8 +4,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_GEONAMES_DIR = Path(__file__).resolve().parents[2] / "vendor" / "data" / "geonames"
-DEFAULT_MAP_DIR = Path(__file__).resolve().parents[2] / "vendor" / "data" / "map"
+
+def vendor_root() -> Path:
+    """Where optional tools and data live: `LUMEN_VENDOR`, else the checkout's `vendor/`."""
+    return Path(os.environ.get("LUMEN_VENDOR") or Path(__file__).resolve().parents[2] / "vendor").expanduser()
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +29,7 @@ class Settings:
     online_url: str = ""
     online_fast_model: str = ""
     online_review_model: str = ""
+    helper_dir: Path | None = None  # LUMEN_HELPER_DIR; None means <library>/cache/bin
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -45,8 +48,9 @@ class Settings:
             omlx_fast_model=os.environ.get("LUMEN_OMLX_FAST_MODEL", "Qwen3-VL-8B-Instruct-4bit"),
             omlx_review_model=os.environ.get("LUMEN_OMLX_REVIEW_MODEL") or None,
             near_duplicate_distance=distance,
-            geonames_dir=Path(os.environ.get("LUMEN_GEONAMES_DIR", str(DEFAULT_GEONAMES_DIR))).expanduser(),
-            map_dir=Path(os.environ.get("LUMEN_MAP_DIR", str(DEFAULT_MAP_DIR))).expanduser(),
+            geonames_dir=Path(os.environ.get("LUMEN_GEONAMES_DIR", str(vendor_root() / "data" / "geonames"))).expanduser(),
+            map_dir=Path(os.environ.get("LUMEN_MAP_DIR", str(vendor_root() / "data" / "map"))).expanduser(),
+            helper_dir=Path(os.environ["LUMEN_HELPER_DIR"]).expanduser() if os.environ.get("LUMEN_HELPER_DIR") else None,
             geocode_online=os.environ.get("LUMEN_GEOCODE_ONLINE", "").strip().lower() in {"1", "true", "yes"},
         )
 
@@ -120,11 +124,11 @@ class Settings:
 
     @property
     def vision_analyzer_path(self) -> Path:
-        return self.cache_dir / "bin" / "vision_analyzer"
+        return (self.helper_dir or self.cache_dir / "bin") / "vision_analyzer"
 
     @property
     def raw_developer_path(self) -> Path:
-        return self.cache_dir / "bin" / "raw_developer"
+        return (self.helper_dir or self.cache_dir / "bin") / "raw_developer"
 
     def ensure_directories(self) -> None:
         for path in (self.library_dir, self.preview_dir, self.sidecar_dir, self.output_dir, self.cache_dir, self.trash_dir,

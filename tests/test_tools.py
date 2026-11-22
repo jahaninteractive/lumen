@@ -22,9 +22,12 @@ class FindToolTests(unittest.TestCase):
         self.root = Path(directory.name).resolve()
         self.vendor = self.root / "vendor" / "apps"
         self.vendor.mkdir(parents=True)
-        patcher = patch("lumen.tools.VENDOR_APPS", self.vendor)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.system = self.root / "Applications"
+        self.system.mkdir()
+        for name, value in (("VENDOR_APPS", self.vendor), ("SYSTEM_APPS", self.system)):
+            patcher = patch(f"lumen.tools.{name}", value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def bundled(self, app: str, name: str) -> Path:
         return make_executable(self.vendor / app / "Contents" / "MacOS" / name)
@@ -77,6 +80,25 @@ class FindToolTests(unittest.TestCase):
         (self.vendor / "darktable.app" / "Contents" / "MacOS" / "darktable-cli").mkdir(parents=True)
         with patch("lumen.tools.shutil.which", return_value=None):
             self.assertIsNone(find_tool("siril-cli"))
+            self.assertIsNone(find_tool("darktable-cli"))
+
+    def test_falls_back_to_applications_after_vendor(self):
+        executable = make_executable(self.system / "darktable.app" / "Contents" / "MacOS" / "darktable-cli")
+        with patch("lumen.tools.shutil.which", return_value=None):
+            self.assertEqual(str(executable.resolve()), find_tool("darktable-cli"))
+
+    def test_vendor_bundle_wins_over_applications(self):
+        vendored = self.bundled("darktable.app", "darktable-cli")
+        make_executable(self.system / "darktable.app" / "Contents" / "MacOS" / "darktable-cli")
+        with patch("lumen.tools.shutil.which", return_value=None):
+            self.assertEqual(str(vendored), find_tool("darktable-cli"))
+
+    def test_applications_bundle_resolving_outside_itself_is_refused(self):
+        outside = make_executable(self.root / "outside" / "darktable-cli")
+        link = self.system / "darktable.app" / "Contents" / "MacOS" / "darktable-cli"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(outside)
+        with patch("lumen.tools.shutil.which", return_value=None):
             self.assertIsNone(find_tool("darktable-cli"))
 
     def test_doctor_and_pipeline_registry_use_the_fallback(self):
