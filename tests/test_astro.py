@@ -90,6 +90,11 @@ class AstroPreparationTests(unittest.TestCase):
         options = {"output_root": self.outputs, "job_id": 7, "lights": self.lights, "siril": SIRIL}
         return prepare_siril_job(**(options | overrides))
 
+    def test_dng_and_nef_lights_are_accepted(self):
+        lights = [self.frame(self.night / "L1000001.dng", "leica"), self.frame(self.night / "DSC_0001.NEF", "nikon")]
+        manifest = self.prepare(lights=lights)
+        self.assertTrue(manifest.job_dir)
+
     def test_job_is_self_contained_under_managed_astro_directory(self):
         before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in self.lights]
         manifest = self.prepare()

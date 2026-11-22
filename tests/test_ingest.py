@@ -104,6 +104,17 @@ class IngestTests(unittest.TestCase):
         scan = scan_card(self.card)
         self.assertEqual((("._DSC00001.JPG",), ()), (scan.hidden, scan.unreadable))
 
+    def test_dng_and_nef_are_scanned(self):
+        """Every file is planned, but only photos have their capture date read; a Leica or Nikon raw is one."""
+        card = self.root / "RAWCARD"
+        card.mkdir()
+        for name in ("a.DNG", "b.nef", "c.arw", "d.txt"):
+            (card / name).write_bytes(b"x")
+        read = []
+        with patch("lumen.ingest.read_metadata", side_effect=lambda path: read.append(path.name) or {}):
+            plan_ingest(card, (self.primary, self.mirror), library_dir=self.library, today=date(2026, 10, 22))
+        self.assertEqual(["a.DNG", "b.nef", "c.arw"], sorted(read))
+
     def test_copy_verified_writes_partial_fsyncs_and_renames_into_place(self):
         source = next((self.card / "DCIM" / "100MSDCF").iterdir())
         destination = self.primary / "2026-10-20" / "DCIM" / source.name

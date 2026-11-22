@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import math
 import re
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -13,9 +14,15 @@ DECISIONS = frozenset({"none", "flag", "reject"})
 # "refined" means rendered from the raw rather than from the embedded JPEG; "developed" adds the
 # photographer's own develop settings on top.
 PREVIEW_KINDS = frozenset({"embedded", "refined", "developed"})
-SUPPORTED_EXTENSIONS = frozenset({".arw", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic"})
+# Sony ARW, Leica DNG and Nikon NEF: every check for "is this a raw" reads this one list.
+RAW_EXTENSIONS = frozenset({".arw", ".dng", ".nef"})
+SUPPORTED_EXTENSIONS = RAW_EXTENSIONS | {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic"}
 JOB_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled", "interrupted"})
 MAX_JOB_ERROR_LENGTH = 1000
+
+
+def is_raw(path: str | Path) -> bool:
+    return Path(path).suffix.lower() in RAW_EXTENSIONS
 
 
 @dataclass(frozen=True, slots=True)

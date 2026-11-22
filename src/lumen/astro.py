@@ -16,6 +16,7 @@ from typing import Any, Callable, Collection, Mapping, Sequence
 from PIL import Image
 
 from .astrodebrief import remove_process, write_frames_json
+from .domain import RAW_EXTENSIONS
 from .pipelines import SirilPipeline
 from .previews import fingerprint_file
 from .tools import find_tool
@@ -23,7 +24,7 @@ from .tools import find_tool
 MANIFEST_SCHEMA = 1
 # Script syntax below was validated against Siril 1.4.4; `requires` refuses other series too.
 SUPPORTED_SIRIL = ((1, 4, 0), (1, 5, 0))
-ASTRO_SUFFIXES = {".arw", ".fit", ".fits", ".fts", ".tif", ".tiff"}
+ASTRO_SUFFIXES = RAW_EXTENSIONS | {".fit", ".fits", ".fts", ".tif", ".tiff"}
 CALIBRATION_KINDS = ("dark", "flat", "bias")
 MISSING_WARNINGS = {
     "dark": "No dark frames: thermal noise and hot pixels will not be subtracted.",

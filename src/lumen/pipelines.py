@@ -14,6 +14,9 @@ from xml.etree import ElementTree
 
 from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps, JpegImagePlugin
 
+# Apple's Core Image raw pipeline (the native raw developer) decodes every raw this library holds, including the
+# Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
+from .domain import RAW_EXTENSIONS
 from .previews import fingerprint_file
 from .rawdevelop import render_raw
 from .sidecars import SidecarWriter
@@ -103,9 +106,6 @@ class JpegExportResult(PipelineResult):
     output_fingerprint: str
 
 
-# Apple's Core Image raw pipeline (the native raw developer) decodes every raw this library holds, including the
-# Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
-RAW_EXTENSIONS = frozenset({".arw"})
 # A camera JPEG is already finished by the body: it is published as-is (one re-encode at the preset's quality for
 # the crop, resize, metadata and provenance every export carries) without any renderer in between.
 CAMERA_JPEG_EXTENSIONS = frozenset({".jpg", ".jpeg"})

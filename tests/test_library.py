@@ -2551,6 +2551,19 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual((1, 2), (summary["skipped_non_raw"], summary["applied"]))
         self.assertIsNone(stored)
 
+    def test_develop_copy_reaches_a_nef_burst_mate(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5}))
+            library.catalog.connection.execute("UPDATE photos SET format = 'NEF' WHERE id = ?", (ids[1],))
+            library.catalog.connection.commit()
+            summary = self.run_group_job(library, ids[0])["result"]
+            stored = library.develop_for(ids[1])
+
+        self.assertEqual((0, 3), (summary["skipped_non_raw"], summary["applied"]))
+        self.assertEqual({"exposure_ev": 0.5}, stored.to_dict())
+
     def test_apply_to_group_skips_and_counts_frames_whose_original_is_missing(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
             ids = self.burst(library)

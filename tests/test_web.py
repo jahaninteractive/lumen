@@ -2885,7 +2885,7 @@ async function fetch(url, options = {}) {
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
     develop: scenario === 'develop' && url.endsWith('/1') ? { exposure_ev: 0.5 } : null,
     advice: scenario === 'advice-status' && url.endsWith('/1') ? { settings: { exposure_ev: 0.5 }, rationale: 'lift' } : null,
-    photo: Object.assign({ format: 'ARW', offline: scenario === 'develop-offline' },
+    photo: Object.assign({ format: 'ARW', is_raw: true, offline: scenario === 'develop-offline' },
       (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null }),
     tags: scenario === 'caption' && url.endsWith('/1') ? { model: 'review-model', data: { description: 'Penguins on ice', caption: 'Porpoising.', alt_text: 'Penguins leaping.' } }
@@ -7405,6 +7405,15 @@ class DevelopWebTests(unittest.TestCase):
         payload = self.get_json("/api/photos/1")[1]
         self.assertTrue(payload["photo"]["offline"], "an unreachable original is reported, so no control offers a render")
         self.assertNotIn(str(self.root), json.dumps(payload))
+
+    def test_photo_detail_says_whether_the_frame_is_raw(self):
+        from lumen.domain import Photo
+        with Library(self.settings) as library:
+            raw_id = library.catalog.upsert_photo(Photo(path=str(self.root / "L1000001.dng"), fingerprint="cd" * 32,
+                                                        captured_at=None, camera_id="A", format="DNG"))
+            library.catalog.save_metrics(raw_id, library.catalog.get_metrics(1))
+        self.assertTrue(self.get_json(f"/api/photos/{raw_id}")[1]["photo"]["is_raw"])
+        self.assertFalse(self.get_json("/api/photos/1")[1]["photo"]["is_raw"])
 
     def test_develop_preview_returns_an_image_and_a_histogram(self):
         code, body = self.preview()

@@ -2182,7 +2182,7 @@ class Library:
                                 worker._log_job(job, f"{name or f'photo {other_id}'}: "
                                                      + ("removed since the job started" if other is None
                                                         else "the source frame's settings were cleared"))
-                            elif other.format.upper() != "ARW":
+                            elif f".{other.format.lower()}" not in RAW_EXTENSIONS:
                                 counts["skipped_non_raw"] += 1
                             elif not Path(other.path).is_file():  # The volume is routinely unplugged.
                                 counts["skipped_offline"] += 1

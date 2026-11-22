@@ -4668,7 +4668,7 @@ function fillDevelop(photo) {
   developNode('develop-feedback').value = '';
   develop.saved = JSON.stringify(develop.fields);
   const offline = detail.offline === true;
-  const raw = String(detail.format || '').toUpperCase() === 'ARW';
+  const raw = detail.is_raw === true;
   develop.ready = !offline && raw;
   const reason = offline ? 'The original is offline. Plug its drive back in and reopen this frame: every develop render reads the raw.'
     : raw ? '' : 'Develop reads raw files; this frame is not one.';

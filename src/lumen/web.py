@@ -21,7 +21,7 @@ from .cli import _cleanup_error_payload, _json_default, _serializable_groups, pr
 from .config import Settings
 from .diagnostics import doctor_report, stale_sources
 from .digest import parse_day
-from .domain import MANUAL_CROP_ID, DevelopSettings
+from .domain import MANUAL_CROP_ID, DevelopSettings, is_raw
 from .jobs import LocalJobRunner
 from .astrodebrief import PLACES
 from .library import CleanupError, ExportRequest, Library, public_message, remote_engine_models
@@ -548,6 +548,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 photo = asdict(item["photo"])
                 # The Develop tab needs both before it offers a control: every render reads the original.
                 photo["offline"] = not Path(photo["path"]).is_file()
+                photo["is_raw"] = is_raw(photo["path"])
                 for key in ("path", "fingerprint", "preview_path", "mirror_path"):
                     photo.pop(key, None)
                 photo["preview_url"] = preview_url
