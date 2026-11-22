@@ -1362,7 +1362,8 @@ class Library:
             # An old helper given several paths fails; given one it succeeds without a print. Either way, rebuild it.
             # A print missing for some paths only is an unreadable preview: that frame is skipped.
             if not computed:
-                raise ValueError("Belongs with needs the Vision helper's feature prints; run scripts/bootstrap.sh")
+                raise ValueError("Belongs with got no feature prints from the Vision helper; "
+                                 "reinstall Lumen.app, or in a checkout run scripts/bootstrap.sh")
             with self._mutation():
                 for path, data in computed.items():
                     self.catalog.save_feature_print(missing[path], data)

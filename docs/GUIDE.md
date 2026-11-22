@@ -4,8 +4,36 @@ Website: [lumen.contact](https://lumen.contact), with a [step-by-step walk
 through one real trip](https://lumen.contact/guide.html).
 
 Everything a photographer does after install, in the order a shoot goes:
-ingest, cull, frame view, places, map, local AI, settings, export, refine, stack. Install and
-first run are in the [README](../README.md).
+ingest, cull, frame view, places, map, local AI, settings, export, refine, stack. Installing
+the app is just below; installing from the project folder and the first run
+from the command line are in the [README](../README.md#install).
+
+## Install the app
+
+`Lumen.app` needs nothing else installed. Its disk image is built with
+`zsh scripts/build_app.sh`; a signed release that opens on any Mac is pending,
+so for now a built app opens only on the Mac that built it.
+
+1. Open `Lumen-<version>.dmg`.
+2. Drag Lumen onto the Applications folder beside it, or double-click Lumen
+   and choose **Move** when it offers to move itself to Applications.
+3. On the first launch, **Set Up Lumen** lists Places, Map, darktable and
+   Siril with their sizes. Tick what you want (for Places, type the country
+   codes you photograph in, such as `ZA AQ`) and press **Install**, or **Not
+   Now**. Anything that did not finish is listed; press Install again for it.
+4. Lumen then opens in your browser. Click Lumen in the Dock to open it again
+   after closing the tab; quitting Lumen stops it, and asks first if a job is
+   still running.
+5. The Lumen menu holds **Set Up Lumen…** (add a piece later) and
+   **Uninstall Lumen…**.
+6. For AI advice, connect Base or Online in [Settings](#settings-and-the-ai-engine).
+   The app does not install AI on this Mac; for that, see [Local AI](#local-ai).
+
+**Uninstall Lumen…** moves the downloaded pieces, saved service keys and the
+app to the Trash. The library stays unless you tick one or both of its boxes:
+Lumen's working data (ratings, picks, tags, crops, develop settings, previews)
+and your exported files. Camera originals are never touched; oMLX and its
+models are left alone.
 
 ## What is working
 
@@ -296,9 +324,10 @@ is not something a picture's pixels decide. A moved frame stays in its new
 burst through regrouping and re-import, and the burst it left stays together
 even if that frame was bridging a time gap.
 
-After updating Lumen, run `zsh scripts/bootstrap.sh` once (add `--no-download`
-to fetch nothing) so the Vision helper is rebuilt; until then the panel says so
-instead of suggesting.
+After updating Lumen from the project folder, run `zsh scripts/bootstrap.sh`
+once (add `--no-download` to fetch nothing) so the Vision helper is rebuilt;
+until then the panel says so instead of suggesting. The app carries its own
+helper, so a new app needs nothing more.
 
 Culling keeps working while an import or ingest runs. It pauses while tagging,
 preview refinement, or a stack runs.
@@ -971,9 +1000,10 @@ uv run lumen export --keepers --preset web --watermark "© Your Name" --json
 ```
 
 Raw frames are rendered by a small native helper that `scripts/bootstrap.sh`
-builds; if it is missing, exporting a raw without a darktable profile is refused
+builds (the app carries its own); if it is missing, exporting a raw without a darktable profile is refused
 with a message telling you to run the script again. If `darktable-cli` is
-unavailable, the Export panel explains why and disables export. Install
+unavailable, the Export panel explains why and disables export. In the app,
+tick darktable in Lumen > Set Up Lumen… and reload the page. Otherwise install
 darktable as described in the README, add its executable directory to `PATH` if needed, restart Lumen, and reload the page. Check with
 `uv run lumen doctor --json`. Import and review remain usable.
 

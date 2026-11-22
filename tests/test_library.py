@@ -1842,7 +1842,8 @@ class LibraryTests(unittest.TestCase):
     def test_belongs_with_refuses_when_the_helper_returns_no_print(self):
         library, photos, _ = self.belongs_fixture({"focus": "12:05:00", "a": "12:00:00"})
         with library, patch("lumen.library.feature_prints", return_value={}):
-            with self.assertRaisesRegex(ValueError, "scripts/bootstrap.sh"):
+            # Can happen in the app too, where the helper is never missing, so it names both routes.
+            with self.assertRaisesRegex(ValueError, "reinstall Lumen.app, or in a checkout run scripts/bootstrap.sh"):
                 library.belongs_with(photos["focus"])
 
     def test_belongs_with_skips_a_frame_the_helper_could_not_read(self):

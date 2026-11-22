@@ -116,12 +116,60 @@ reporting anything sensitive. Versions are listed in [CHANGELOG.md](CHANGELOG.md
 ## Install
 
 Prerequisites: macOS 13.5 or newer on an Apple Silicon Mac with at least 16 GB
-of memory (the AI features need macOS 15). Lumen was built and measured on a
+of memory (AI advice on this Mac needs macOS 15). Lumen was built and measured on a
 48 GB M4; a 16 GB machine has not been tested, but the fast model needs about
-6 GB and nothing else in Lumen is memory-hungry. Homebrew is needed only if
-`uv` or ExifTool is missing.
+6 GB and nothing else in Lumen is memory-hungry.
 
-From this project folder:
+There are two ways in: the app, for photographers who would rather not use a
+terminal, and the project folder, for those who would.
+
+### The app
+
+`Lumen.app` carries everything Lumen needs to import, cull, develop and export;
+nothing else has to be installed first. There is no download link yet: the disk
+image is built with `zsh scripts/build_app.sh` (it lands in `dist/`), and a
+signed release that opens on any Mac is pending. Until then a built app opens
+only on the Mac that built it.
+
+1. Open `Lumen-<version>.dmg`. It shows Lumen beside an Applications folder.
+2. Drag Lumen onto Applications, or double-click it in the disk image and
+   choose **Move** when it asks "Move Lumen to your Applications folder?". It
+   copies itself there and opens the copy.
+3. The first time it opens, the **Set Up Lumen** window lists the optional
+   pieces with their sizes: Places (town names, about 50 MB; type the
+   two-letter codes of the countries you photograph in, such as ZA AQ, to add
+   their parks, reserves and bays), Map (about 100 MB),
+   darktable (310 MB, for PNG, TIFF and HEIC export) and Siril (230 MB, for
+   night-sky stacking). Tick what you want and press **Install**, or **Not
+   Now**; nothing is required. Anything that did not finish is listed, and
+   pressing Install again picks it up.
+4. When the window closes, Lumen opens in your web browser. Closing the
+   browser tab does not stop it: click Lumen in the Dock to open it again, and
+   quit Lumen from the Dock or its menu to stop it.
+5. **Set Up Lumen…** and **Uninstall Lumen…** are in the Lumen menu, so you can
+   add a piece later or remove Lumen.
+6. For AI advice, open **Settings** (the gear at the far right of the tabs) and
+   connect a service under AI engine: Base (your own computer at home) or
+   Online (a service you hold a key for); see
+   [Settings and the AI engine](#settings-and-the-ai-engine). The app does not
+   set up AI on this Mac; to run it here, follow
+   [Local AI](docs/GUIDE.md#local-ai) after installing from the project folder.
+
+**Uninstall Lumen…** always moves the downloaded pieces, any saved service
+keys and the app itself to the Trash. Your library (`~/Pictures/Lumen
+Library`) is kept unless you tick its boxes: one for Lumen's working data
+(ratings, picks, tags, crops, develop settings and previews), one for your
+exported files. Your camera originals are never touched, and oMLX and its
+models are left alone. Everything goes to the Trash, so a mistake can be put
+back.
+
+If a Lumen is already running from the project folder on the usual address,
+the app says so and opens that one instead of starting a second.
+
+### From the project folder
+
+Homebrew is needed only if `uv` or ExifTool is missing. From this project
+folder:
 
 ```sh
 zsh scripts/bootstrap.sh
@@ -196,6 +244,10 @@ The bootstrap fills these. To do it by hand (`--no-download`):
   `.geojson` files directly in `vendor/data/map/`. See [Map](docs/GUIDE.md#map).
 
 ## First run
+
+In the app, Lumen opens in the browser by itself, and the **Add photos** tab takes a
+card or folder.
+The commands below are for the project folder.
 
 Check the machine:
 

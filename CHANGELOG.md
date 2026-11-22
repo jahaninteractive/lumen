@@ -5,6 +5,13 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.9.0 (2026-11-23)
+
+- `Lumen.app` and its disk image, built by `scripts/build_app.sh`: a double-clickable app carrying its own Python, exiftool and both native helpers. It starts the server, opens the workbench in the browser, reopens it from the Dock and stops the server on Quit (or when the app crashes). The first launch shows **Set Up Lumen**, tick boxes for Places, Map, darktable and Siril that run the same pinned downloads as `scripts/bootstrap.sh`; the app offers to move itself to Applications when opened from the disk image; **Uninstall Lumen…** moves the downloads, the saved service keys and the app to the Trash and keeps the library unless asked. Not yet signed or notarized, so a built app runs only on the Mac that built it.
+- `scripts/bootstrap.sh` takes `--dest`, `--downloads-only`, `--only` and `--list`, so the app runs it; a re-run fetches a GeoNames file an earlier run missed.
+- `lumen serve --exit-with-parent`; `python -m lumen`; `LUMEN_VENDOR` moves `vendor/`, `LUMEN_HELPER_DIR` moves the helpers, and darktable and Siril are also found in `/Applications`.
+- Belongs with's refusal when the Vision helper gives no feature prints names both routes: reinstall the app, or run `scripts/bootstrap.sh` in a checkout.
+
 ## 0.8.0 (2026-11-22)
 
 - Canon `.CR2` and `.CR3` raws import, cull, develop and export as the other raws do. Measured on five files: an EOS 5D Mark III at full size, mRAW and sRAW, and an EOS R5 at full size and as a compact raw in the 1.6x crop (see the guide's "Cameras measured"). Both decoders read all five, so none carries a warning; Develop greys out contrast, sharpness and noise reduction on mRAW and sRAW files, whose decoder offers none.

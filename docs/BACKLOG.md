@@ -61,31 +61,17 @@ Deferred items with a known reason. Each entry says what, why it was deferred, a
 - The 8 MP crop error passes through the route by string match on the message; a typed error would be sturdier.
 - Reopening the same frame keeps the previous crop outline until its crops arrive.
 
-## Distribution: Homebrew tap + GitHub Release (planned 2026-10-26)
+## From the 2026-11-23 Lumen.app and its disk image
 
-Goal: a `brew install jahaninteractive/lumen/lumen` that pulls Lumen and its tools without an Apple Developer account. A signed DMG is the later step and needs a Developer ID (99 USD/yr) plus notarization; do this first.
+The Homebrew tap planned here on 2026-10-26 was dropped for `Lumen.app` (design `docs/superpowers/specs/2026-11-22-app-dmg-design.md`), which needs no Homebrew, uv or Xcode tools on the photographer's Mac.
 
-What ships today and how it would move:
-
-| Piece | Today | Plan |
-|---|---|---|
-| Lumen package | `uv sync` from source | GitHub Release tarball, formula runs `uv tool install` on it |
-| `vision_analyzer` | built on the user's Mac with `swiftc` (needs Xcode CLT) | prebuilt in CI on a `macos-14` runner, attached to the release, installed by the formula |
-| exiftool | expected on PATH | `depends_on "exiftool"` |
-| darktable, Siril | `vendor/apps/`, gitignored, 535 MB | `depends_on cask: "darktable"`, `depends_on cask: "siril"`; extend `find_tool` fallback to `/Applications/*.app` |
-| GeoNames | `vendor/data/geonames/`, gitignored, 70 MB | new `lumen setup`: downloads the dump into `<library>/cache/` on first run, SHA-256 pinned in the repo |
-| oMLX | separate server | unchanged; `lumen doctor` already reports it |
-
-Steps:
-
-1. Tag `v0.1.0`; GitHub Actions workflow on tag push builds `vision_analyzer`, attaches it and the sdist to the release.
-2. Add `lumen setup` (explicit, user-triggered download with checksum check). Note the one-off outbound fetch in `AGENTS.md`, since the contract currently says no network.
-3. Create `homebrew-lumen` repo with `Formula/lumen.rb`: `uv tool install` the tarball, install the prebuilt analyzer, declare the dependencies above. Caveat text points at `lumen setup` and `lumen doctor`.
-4. Verify on a clean account: `brew install`, `lumen setup`, `lumen doctor --json` all green.
-
-The photographer has a Developer ID and chose the signed DMG as the next project (2026-11-21); it needs its own design first.
-
-Trigger: when someone other than the author wants to run Lumen. Pick up the DMG (PyInstaller bundle, `codesign --options runtime`, `notarytool`, `stapler`, DMG via `hdiutil`) when non-terminal users appear and a Developer ID exists.
+- **Automatic updates.** A new version is a new disk image dragged over the old app. Trigger: photographers ask for it, or releases come often enough that old copies linger.
+- **A checkout server on another port goes undetected.** The app only probes `127.0.0.1:8765`; a `lumen serve --port <other>` on the same library is not seen, so the app starts a second server on it. Trigger: someone runs both and hits it.
+- **A release build in CI.** The build runs on the photographer's Mac, where the signing certificate lives. Trigger: more than one person cuts releases, or the certificate can live in CI secrets.
+- **Local AI in the app's setup.** Not offered (photographer, 2026-11-22): oMLX must be opened once before it has a model folder, its server is started by hand, and the models are 6 to 22 GB. The shell route still installs them. Trigger: oMLX can be installed and started without a person, or a smaller vision model is good enough.
+- **Uninstall's Keychain removal runs on the main thread.** Two `security` calls with a 15 s timeout each; the window can stall in the worst case. Trigger: a stall is seen.
+- **Quit and closing the setup window can block for up to 10 s** while the server or the setup script stops, with the menu bar frozen. Trigger: it is noticed in use.
+- **exiftool.org serves only the current version.** The tarball comes from the SourceForge link exiftool.org gives and is checked against exiftool.org/checksums.txt; a version bump means a new URL and hash in `scripts/build_app.sh` (SourceForge keeps the old tarballs). Trigger: the next exiftool bump.
 
 ## Keep the export 16-bit through crop and resize
 
