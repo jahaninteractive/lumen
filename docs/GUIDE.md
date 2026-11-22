@@ -123,14 +123,15 @@ IPTC caption and keywords. Things to know:
 - **Leica M positions.** The M (Typ 240) and M11 write a position of 0°N 0°E
   when no phone is paired; Lumen treats that as no position, so those frames
   take a typed one like any other without GPS.
-- **High-efficiency Nikon raws** (the Z 8 and Z 9 default) cannot be decoded
+- **High-efficiency Nikon raws** (both Z samples) cannot be decoded
   by darktable, so **Refine previews** and exports with a darktable XMP profile
   are unavailable for them, and the frame view says so. Culling, Develop and
   JPEG export are unaffected, because they use the macOS decoder.
 - **Develop speed** (warm, on a 48 GB M4 Max, the window-sized render the tab asks
   for, about 1400 px): a 60 MP M11 frame took 0.8 s, a Z 9 frame 0.36 s and a
   33 MP Sony frame 0.31 s. **Full size** renders the whole raw: 1.4 s, 0.77 s
-  and 0.49 s.
+  and 0.49 s. The first render of a 60 MP frame after a pause is slower: 5 to 10 s
+  was seen on the M11.
 
 Not yet tried: a Leica Q file straight from the camera (the Q3 sample had been
 re-saved by Lightroom, so its embedded JPEGs are Lightroom's), an SL file, a
