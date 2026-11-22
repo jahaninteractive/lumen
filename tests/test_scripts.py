@@ -1,5 +1,7 @@
+import os
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -55,6 +57,45 @@ class ScriptTests(unittest.TestCase):
             self.assertRegex(live, rf"{layer}\.geojson\S*\s+[0-9a-f]{{64}}")
         self.assertIn('vendor/data/map', live)
         self.assertIn("about 100 MB", live)
+
+    def _bootstrap(self, *args, env=None):
+        return subprocess.run(["zsh", "scripts/bootstrap.sh", *args], capture_output=True, text=True, timeout=30, check=False, env=env)
+
+    def test_list_prints_every_component_without_touching_anything(self):
+        with tempfile.TemporaryDirectory() as dest:
+            result = self._bootstrap("--list", "--dest", dest)
+            self.assertEqual(0, result.returncode, result.stderr)
+            rows = [line.split("\t") for line in result.stdout.splitlines()]
+            self.assertEqual(["places", "map", "darktable", "siril", "omlx", "fast-model", "review-model"], [r[0] for r in rows])
+            self.assertTrue(all(len(r) == 6 and r[4] in ("ready", "missing") and r[5] in ("on", "off") for r in rows))
+            self.assertEqual([], os.listdir(dest))
+
+    def test_downloads_only_list_leaves_local_ai_out(self):
+        result = self._bootstrap("--downloads-only", "--list", "--dest", "/nonexistent")
+        self.assertEqual(["places", "map", "darktable", "siril"], [l.split("\t")[0] for l in result.stdout.splitlines()])
+
+    def test_list_sees_places_in_a_dest_with_a_space(self):
+        with tempfile.TemporaryDirectory() as root:
+            dest = Path(root) / "Application Support" / "Lumen"
+            (dest / "data" / "geonames").mkdir(parents=True)
+            (dest / "data" / "geonames" / "cities500.txt").write_text("")
+            rows = dict((l.split("\t")[0], l.split("\t")[4]) for l in self._bootstrap("--list", "--dest", str(dest)).stdout.splitlines())
+            self.assertEqual("ready", rows["places"])
+            self.assertEqual("missing", rows["map"])
+
+    def test_only_refuses_an_unknown_or_empty_key(self):
+        for keys in ("bogus", "", "map,bogus"):
+            result = self._bootstrap("--downloads-only", "--only", keys, "--dest", "/nonexistent")
+            self.assertEqual(2, result.returncode, keys)
+            self.assertIn("usage:", result.stderr)
+
+    def test_no_path_under_the_checkout_vendor_is_spelled_out(self):
+        live = "\n".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())
+        self.assertEqual(1, live.count("$project_root/vendor"))   # only the default of vendor_root
+
+    def test_a_terminated_run_still_detaches_its_disk_image(self):
+        script = Path("scripts/bootstrap.sh").read_text()
+        self.assertRegex(script, r"\ntrap 'exit 143' TERM INT")
 
     def test_web_ui_reports_live_omlx_health(self):
         script = Path("src/lumen/static/app.js").read_text()

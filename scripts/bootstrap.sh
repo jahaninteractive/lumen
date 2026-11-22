@@ -10,6 +10,12 @@
 #   zsh scripts/bootstrap.sh --yes           accept every default (also when stdin is not a terminal)
 #   zsh scripts/bootstrap.sh --no-download   check, sync and compile only; fetch nothing
 #   zsh scripts/bootstrap.sh --check         report uv, exiftool and swiftc, change nothing
+#
+# For another front end (the app) these combine with the above:
+#   --dest <dir>       put downloads, apps and data in <dir> instead of the checkout's vendor/
+#   --downloads-only   only the downloads below that need no uv, Homebrew, Xcode tools or python3
+#   --only <keys>      only these components, comma separated (implies --yes); see --list for keys
+#   --list             print key, label, size, purpose, ready|missing, on|off per component, tab separated; change nothing
 set -eu
 
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,14 +37,29 @@ if [[ "${1:-}" == "--check" ]]; then
   exit "$missing"
 fi
 
+usage() {
+  echo "usage: zsh scripts/bootstrap.sh [--yes] [--no-download] [--downloads-only] [--only <keys>] [--dest <dir>] [--list] | --check" >&2
+  exit 2
+}
+
 no_download=0
 assume_yes=0
-for arg in "$@"; do
-  case "$arg" in
+downloads_only=0
+list=0
+only_given=0
+only_keys=()
+vendor_root="$project_root/vendor"
+while (( $# )); do
+  case "$1" in
     --no-download) no_download=1 ;;
     --yes) assume_yes=1 ;;
-    *) echo "usage: zsh scripts/bootstrap.sh [--yes] [--no-download] | --check" >&2; exit 2 ;;
+    --downloads-only) downloads_only=1 ;;
+    --list) list=1 ;;
+    --dest) (( $# > 1 )) || usage; vendor_root="$2"; shift ;;
+    --only) (( $# > 1 )) || usage; only_given=1; assume_yes=1; only_keys=(${(s:,:)2}); shift ;;
+    *) usage ;;
   esac
+  shift
 done
 [[ -t 0 ]] || assume_yes=1
 
@@ -68,7 +89,65 @@ natural_earth_layers=(
 fast_model="mlx-community/Qwen3-VL-8B-Instruct-4bit"
 review_model="mlx-community/Qwen3.8-27B-4bit"
 
+# What --list shows and --only names: key, label, size, purpose, default.
+components=(
+  places "Places" "about 50 MB" "Names the town or park a photo was taken in" on
+  map "Map" "about 100 MB" "The base map for the Map tab" on
+  darktable "darktable" "310 MB" "PNG, TIFF and HEIC export, darktable profiles" off
+  siril "Siril" "230 MB" "Stacking night-sky frames" off
+  omlx "oMLX" "850 MB" "Runs AI advice on this Mac" on
+  fast-model "Fast model" "6 GB" "Needed for every AI feature on this Mac" on
+  review-model "Review model" "16 GB" "Better critique; wants 32 GB of memory" off
+)
+local_ai=(omlx fast-model review-model)
+
+# Refuse an unknown or empty --only before anything else happens.
+if (( only_given )); then
+  (( ${#only_keys} )) || usage
+  all_keys=()
+  for key label size purpose default in "${components[@]}"; do all_keys+=("$key"); done
+  for key in "${only_keys[@]}"; do
+    (( ${all_keys[(Ie)$key]} )) || usage
+  done
+fi
+
 skipped=()
+
+# wanted key: true unless --only was given without this key.
+wanted() {
+  (( ! only_given || ${only_keys[(Ie)$1]} ))
+}
+
+# omlx_model_dir: oMLX's configured model folder, empty when it has no settings yet.
+omlx_model_dir() {
+  [[ -f "$HOME/.omlx/settings.json" ]] || return 0
+  python3 -c 'import json, os, sys
+m = json.load(open(sys.argv[1])).get("model", {})
+print(os.path.expanduser(m.get("model_dir") or (m.get("model_dirs") or [""])[0]))' "$HOME/.omlx/settings.json" 2>/dev/null || true
+}
+
+model_ready() {
+  local weights=("$1"/*.safetensors(N))
+  [[ -f "$1/config.json" && ${#weights} -gt 0 ]]
+}
+
+# component_ready key: the one test of "already installed", shared by --list and the steps below.
+# The two models read $model_dir, which the caller sets.
+component_ready() {
+  local name sha
+  case "$1" in
+    places) [[ -f "$vendor_root/data/geonames/cities500.txt" ]] ;;
+    map)
+      for name sha in "${natural_earth_layers[@]}"; do
+        [[ -f "$vendor_root/data/map/$name" ]] || return 1
+      done ;;
+    darktable) [[ -x "$vendor_root/apps/darktable.app/Contents/MacOS/darktable-cli" || -x /Applications/darktable.app/Contents/MacOS/darktable-cli ]] ;;
+    siril) [[ -x "$vendor_root/apps/Siril.app/Contents/MacOS/siril-cli" || -x /Applications/Siril.app/Contents/MacOS/siril-cli ]] ;;
+    omlx) command -v omlx >/dev/null 2>&1 || [[ -d /Applications/oMLX.app ]] ;;
+    fast-model) model_ready "$model_dir/$fast_model" ;;
+    review-model) model_ready "$model_dir/$review_model" ;;
+  esac
+}
 
 # ask "question" Y|N: succeeds for yes; Enter, --yes and a non-terminal stdin take the default.
 ask() {
@@ -109,10 +188,11 @@ detach_dmg() {
   fi
 }
 trap detach_dmg EXIT
+trap 'exit 143' TERM INT
 
 # install_app name url sha256 bundle dest_dir: download, verify, mount, copy, unmount.
 install_app() {
-  local dmg="$project_root/vendor/downloads/${2:t}"
+  local dmg="$vendor_root/downloads/${2:t}"
   mkdir -p "${dmg:h}" "$5"
   if ! fetch "$2" "$dmg"; then
     echo "$1: download failed" >&2
@@ -135,6 +215,21 @@ unzip_member() {
   unzip -p "$1" "$2" > "$3/$2.part" && mv "$3/$2.part" "$3/$2"
 }
 
+# Before the platform check, so a front end can show the list anywhere; it reads, never writes.
+if (( list )); then
+  if (( ! downloads_only )); then
+    model_dir="$(omlx_model_dir)"
+    model_dir="${model_dir:-$HOME/Models}"
+  fi
+  for key label size purpose default in "${components[@]}"; do
+    (( downloads_only && ${local_ai[(Ie)$key]} )) && continue
+    state=missing
+    component_ready "$key" && state=ready
+    print -r -- "$key"$'\t'"$label"$'\t'"$size"$'\t'"$purpose"$'\t'"$state"$'\t'"$default"
+  done
+  exit 0
+fi
+
 # 1. Platform
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "Lumen's supported target is Apple Silicon macOS." >&2
@@ -148,89 +243,102 @@ if ! is-at-least 13.5 "$macos_version"; then
 fi
 macos_major="${macos_version%%.*}"
 
-# 2. Homebrew tools
-if (( ! no_download )); then
-  brew_missing=()
-  for tool in uv exiftool; do
-    command -v "$tool" >/dev/null 2>&1 || brew_missing+=("$tool")
-  done
-  if (( ${#brew_missing} )); then
-    # ponytail: Homebrew is only demanded when uv or exiftool is missing; a Mac with both needs no brew.
-    if ! command -v brew >/dev/null 2>&1; then
-      echo "Homebrew is needed to install ${brew_missing[*]}. Install it with:" >&2
-      echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
-      echo "then re-run zsh scripts/bootstrap.sh." >&2
-      exit 1
+# 2-4 need uv, Homebrew and the Xcode tools; the app brings its own Python and helpers.
+if (( ! downloads_only )); then
+  # 2. Homebrew tools
+  if (( ! no_download )); then
+    brew_missing=()
+    for tool in uv exiftool; do
+      command -v "$tool" >/dev/null 2>&1 || brew_missing+=("$tool")
+    done
+    if (( ${#brew_missing} )); then
+      # ponytail: Homebrew is only demanded when uv or exiftool is missing; a Mac with both needs no brew.
+      if ! command -v brew >/dev/null 2>&1; then
+        echo "Homebrew is needed to install ${brew_missing[*]}. Install it with:" >&2
+        echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
+        echo "then re-run zsh scripts/bootstrap.sh." >&2
+        exit 1
+      fi
+      brew install "${brew_missing[@]}"
     fi
-    brew install "${brew_missing[@]}"
   fi
+  check_command uv
+  check_command exiftool
+
+  # 3. Xcode command-line tools. /usr/bin/swiftc is a shim that exists on every Mac
+  # and pops the installer dialog when run, so the tools are detected by their path instead.
+  if ! xcode-select -p >/dev/null 2>&1 && (( ! no_download )); then
+    xcode-select --install || true
+    echo "Installing the Apple command-line developer tools. Re-run zsh scripts/bootstrap.sh when that dialog finishes." >&2
+    exit 1
+  fi
+  check_command swiftc
+
+  # 4. Python environment and native helpers
+  uv sync --project "$project_root"
+
+  library_root="${LUMEN_LIBRARY:-$HOME/Pictures/Lumen Library}"
+  native_bin="$library_root/cache/bin"
+  module_cache="$library_root/cache/swift-module-cache"
+  mkdir -p "$native_bin" "$module_cache"
+  CLANG_MODULE_CACHE_PATH="$module_cache" swiftc \
+    "$project_root/tools/vision_analyzer.swift" \
+    -o "$native_bin/vision_analyzer"
+  # -O here but not above: the developer renders while the photographer waits on a slider,
+  # so its speed is on the interactive path; face analysis runs in the background.
+  CLANG_MODULE_CACHE_PATH="$module_cache" swiftc -O \
+    "$project_root/tools/raw_developer.swift" \
+    -o "$native_bin/raw_developer"
 fi
-check_command uv
-check_command exiftool
-
-# 3. Xcode command-line tools. /usr/bin/swiftc is a shim that exists on every Mac
-# and pops the installer dialog when run, so the tools are detected by their path instead.
-if ! xcode-select -p >/dev/null 2>&1 && (( ! no_download )); then
-  xcode-select --install || true
-  echo "Installing the Apple command-line developer tools. Re-run zsh scripts/bootstrap.sh when that dialog finishes." >&2
-  exit 1
-fi
-check_command swiftc
-
-# 4. Python environment and native helpers
-uv sync --project "$project_root"
-
-library_root="${LUMEN_LIBRARY:-$HOME/Pictures/Lumen Library}"
-native_bin="$library_root/cache/bin"
-module_cache="$library_root/cache/swift-module-cache"
-mkdir -p "$native_bin" "$module_cache"
-CLANG_MODULE_CACHE_PATH="$module_cache" swiftc \
-  "$project_root/tools/vision_analyzer.swift" \
-  -o "$native_bin/vision_analyzer"
-# -O here but not above: the developer renders while the photographer waits on a slider,
-# so its speed is on the interactive path; face analysis runs in the background.
-CLANG_MODULE_CACHE_PATH="$module_cache" swiftc -O \
-  "$project_root/tools/raw_developer.swift" \
-  -o "$native_bin/raw_developer"
 
 if (( no_download )); then
   skipped+=("Downloads (--no-download): GeoNames, Natural Earth map, darktable, Siril, oMLX and models; run zsh scripts/bootstrap.sh without it to fetch them")
 else
   # 5. GeoNames
-  geonames_dir="$project_root/vendor/data/geonames"
-  mkdir -p "$geonames_dir"
-  for name in countryInfo.txt readme.txt cities500.zip; do
-    fetch "$geonames_url$name" "$geonames_dir/$name" || skipped+=("GeoNames $name: download failed; re-run scripts/bootstrap.sh")
-  done
-  if [[ -f "$geonames_dir/cities500.zip" ]]; then
-    unzip_member "$geonames_dir/cities500.zip" cities500.txt "$geonames_dir"
-    echo "GeoNames cities500: ready"
-  fi
-  if [[ -n "${LUMEN_GEONAMES_COUNTRIES+set}" ]]; then
-    countries="$LUMEN_GEONAMES_COUNTRIES"
-  elif (( assume_yes )); then
-    countries=""
-  else
-    read -r "countries?Country codes you shoot in, space separated (e.g. ZA AQ), blank to skip: " || countries=""
-  fi
-  for code in ${=countries}; do
-    code="${(U)code}"
-    if [[ "$code" != [A-Z][A-Z] ]]; then
-      echo "GeoNames: skipping '$code', not a two-letter country code" >&2
-      continue
+  geonames_dir="$vendor_root/data/geonames"
+  if wanted places; then
+    if ! component_ready places; then
+      mkdir -p "$geonames_dir"
+      for name in countryInfo.txt readme.txt cities500.zip; do
+        fetch "$geonames_url$name" "$geonames_dir/$name" || skipped+=("GeoNames $name: download failed; re-run scripts/bootstrap.sh")
+      done
+      if [[ -f "$geonames_dir/cities500.zip" ]]; then
+        unzip_member "$geonames_dir/cities500.zip" cities500.txt "$geonames_dir"
+      fi
     fi
-    if fetch "$geonames_url$code.zip" "$geonames_dir/$code.zip"; then
-      unzip_member "$geonames_dir/$code.zip" "$code.txt" "$geonames_dir"
-      echo "GeoNames $code: ready"
+    if component_ready places; then
+      echo "GeoNames cities500: ready"
+    fi
+    if [[ -n "${LUMEN_GEONAMES_COUNTRIES+set}" ]]; then
+      countries="$LUMEN_GEONAMES_COUNTRIES"
+    elif (( assume_yes )); then
+      countries=""
     else
-      skipped+=("GeoNames $code: download failed; re-run with LUMEN_GEONAMES_COUNTRIES=$code")
+      read -r "countries?Country codes you shoot in, space separated (e.g. ZA AQ), blank to skip: " || countries=""
     fi
-  done
-  [[ -z "${countries// /}" ]] && skipped+=("GeoNames country files: none chosen; re-run with LUMEN_GEONAMES_COUNTRIES=\"ZA AQ\" for full place detail")
+    for code in ${=countries}; do
+      code="${(U)code}"
+      if [[ "$code" != [A-Z][A-Z] ]]; then
+        echo "GeoNames: skipping '$code', not a two-letter country code" >&2
+        continue
+      fi
+      if fetch "$geonames_url$code.zip" "$geonames_dir/$code.zip"; then
+        unzip_member "$geonames_dir/$code.zip" "$code.txt" "$geonames_dir"
+        echo "GeoNames $code: ready"
+      else
+        skipped+=("GeoNames $code: download failed; re-run with LUMEN_GEONAMES_COUNTRIES=$code")
+      fi
+    done
+    [[ -z "${countries// /}" ]] && skipped+=("GeoNames country files: none chosen; re-run with LUMEN_GEONAMES_COUNTRIES=\"ZA AQ\" for full place detail")
+  fi
 
   # 5b. Natural Earth base map
-  map_dir="$project_root/vendor/data/map"
-  if ask "Download the Natural Earth base map for the Map tab (about 100 MB) into vendor/data/map? [Y/n]" Y; then
+  map_dir="$vendor_root/data/map"
+  if ! wanted map; then
+    :
+  elif component_ready map; then
+    echo "Map: ready"
+  elif ask "Download the Natural Earth base map for the Map tab (about 100 MB) into vendor/data/map? [Y/n]" Y; then
     mkdir -p "$map_dir"
     for name sha in "${natural_earth_layers[@]}"; do
       if fetch "$natural_earth_url$name" "$map_dir/$name"; then
@@ -244,25 +352,33 @@ else
   fi
 
   # 6. darktable
-  apps="$project_root/vendor/apps"
-  if [[ -x "$apps/darktable.app/Contents/MacOS/darktable-cli" ]]; then
+  apps="$vendor_root/apps"
+  if ! wanted darktable; then
+    :
+  elif component_ready darktable; then
     echo "darktable: ready"
   else
     install_app darktable "$darktable_url" "$darktable_sha256" darktable.app "$apps"
   fi
 
   # 7. Siril
-  if [[ -x "$apps/Siril.app/Contents/MacOS/siril-cli" ]]; then
+  if ! wanted siril; then
+    :
+  elif component_ready siril; then
     echo "Siril: ready"
   else
     install_app Siril "$siril_url" "$siril_sha256" Siril.app "$apps"
   fi
 
   # 8. oMLX
-  if (( macos_major < 15 )); then
+  if (( downloads_only )) || ! { wanted omlx || wanted fast-model || wanted review-model; }; then
+    :
+  elif (( macos_major < 15 )); then
     skipped+=("oMLX and models: the AI features need macOS 15 or newer; this Mac runs $macos_version")
   else
-    if command -v omlx >/dev/null 2>&1 || [[ -d /Applications/oMLX.app ]]; then
+    if ! wanted omlx; then
+      :
+    elif component_ready omlx; then
       echo "oMLX: ready"
     elif ask "Install oMLX.app into /Applications? [Y/n]" Y; then
       if (( macos_major >= 26 )); then
@@ -276,49 +392,47 @@ else
     fi
 
     # 9. Models
-    memory_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
-    model_dir=""
-    if [[ -f "$HOME/.omlx/settings.json" ]]; then
-      model_dir="$(python3 -c 'import json, os, sys
-m = json.load(open(sys.argv[1])).get("model", {})
-print(os.path.expanduser(m.get("model_dir") or (m.get("model_dirs") or [""])[0]))' "$HOME/.omlx/settings.json" 2>/dev/null || true)"
-    fi
-    if [[ -n "$model_dir" ]]; then
-      echo "Model directory: $model_dir (from ~/.omlx/settings.json)"
-    else
-      model_dir="$HOME/Models"
-      echo "Model directory: $model_dir (oMLX has no settings yet; point oMLX at this folder)"
-    fi
-    (( memory_gb < 16 )) && echo "This Mac reports $memory_gb GB; Lumen's AI features are untested under 16 GB." >&2
-
-    model_ready() {
-      local weights=("$1"/*.safetensors(N))
-      [[ -f "$1/config.json" && ${#weights} -gt 0 ]]
-    }
-    # get_model repo question default
-    get_model() {
-      local dest="$model_dir/$1"
-      if model_ready "$dest"; then
-        echo "${1:t}: ready in $dest"
-      elif ask "$2" "$3"; then
-        uvx --from huggingface_hub hf download "$1" --local-dir "$dest" \
-          || skipped+=("${1:t}: download failed; re-run scripts/bootstrap.sh, it resumes")
+    if wanted fast-model || wanted review-model; then
+      memory_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+      model_dir="$(omlx_model_dir)"
+      if [[ -n "$model_dir" ]]; then
+        echo "Model directory: $model_dir (from ~/.omlx/settings.json)"
       else
-        skipped+=("${1:t}: not downloaded; re-run scripts/bootstrap.sh and answer yes")
+        model_dir="$HOME/Models"
+        echo "Model directory: $model_dir (oMLX has no settings yet; point oMLX at this folder)"
       fi
-    }
-    get_model "$fast_model" "This Mac reports $memory_gb GB. Download the fast model (6 GB, needed for every AI feature)? [Y/n]" Y
-    if (( memory_gb >= 32 )); then
-      get_model "$review_model" "Also download the review model (16 GB; worth it with 32 GB or more)? [Y/n]" Y
-    else
-      get_model "$review_model" "Also download the review model (16 GB; worth it with 32 GB or more)? [y/N]" N
+      (( memory_gb < 16 )) && echo "This Mac reports $memory_gb GB; Lumen's AI features are untested under 16 GB." >&2
+
+      # get_model key repo question default
+      get_model() {
+        local dest="$model_dir/$2"
+        if ! wanted "$1"; then
+          :
+        elif component_ready "$1"; then
+          echo "${2:t}: ready in $dest"
+        elif ask "$3" "$4"; then
+          uvx --from huggingface_hub hf download "$2" --local-dir "$dest" \
+            || skipped+=("${2:t}: download failed; re-run scripts/bootstrap.sh, it resumes")
+        else
+          skipped+=("${2:t}: not downloaded; re-run scripts/bootstrap.sh and answer yes")
+        fi
+      }
+      get_model fast-model "$fast_model" "This Mac reports $memory_gb GB. Download the fast model (6 GB, needed for every AI feature)? [Y/n]" Y
+      # Naming it in --only is the yes a small Mac's default would otherwise withhold.
+      if (( memory_gb >= 32 || only_given )); then
+        get_model review-model "$review_model" "Also download the review model (16 GB; worth it with 32 GB or more)? [Y/n]" Y
+      else
+        get_model review-model "$review_model" "Also download the review model (16 GB; worth it with 32 GB or more)? [y/N]" N
+      fi
     fi
   fi
 fi
 
 echo "Lumen is installed."
-echo "Native face/eye analyzer: $native_bin/vision_analyzer"
-echo "Native raw developer: $native_bin/raw_developer"
+if (( ! downloads_only )); then
+  echo "Native face/eye analyzer: $native_bin/vision_analyzer"
+  echo "Native raw developer: $native_bin/raw_developer"
+fi
 for line in "${skipped[@]}"; do
   echo "Skipped: $line"
 done
