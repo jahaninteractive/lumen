@@ -101,6 +101,22 @@ class ScriptTests(unittest.TestCase):
         live = "\n".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())
         self.assertNotIn("if ! component_ready places", live)
 
+    def test_build_app_parses_and_signs_for_distribution(self):
+        self.assertEqual(0, subprocess.run(["zsh", "-n", "scripts/build_app.sh"], capture_output=True, timeout=30).returncode)
+        script = Path("scripts/build_app.sh").read_text()
+        for needle in ("au.com.jahan-interactive.lumen", "--options runtime", "--timestamp", "notarytool submit",
+                       "stapler staple", "arm64-apple-macos13.5", "LSMinimumSystemVersion", "compileall"):
+            self.assertIn(needle, script)
+        for source in ("vision_analyzer", "raw_developer", "lumen_app"):
+            self.assertIn(f"tools/{source}.swift", script)
+
+    def test_build_app_pins_exiftool(self):
+        script = Path("scripts/build_app.sh").read_text()
+        self.assertRegex(script, r'\nexiftool_sha256="[0-9a-f]{64}"')
+
+    def test_smoke_app_parses(self):
+        self.assertEqual(0, subprocess.run(["zsh", "-n", "scripts/smoke_app.sh"], capture_output=True, timeout=30).returncode)
+
     def test_web_ui_reports_live_omlx_health(self):
         script = Path("src/lumen/static/app.js").read_text()
         self.assertIn("status.omlx_live?.online", script)
