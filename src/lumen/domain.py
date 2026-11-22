@@ -14,8 +14,8 @@ DECISIONS = frozenset({"none", "flag", "reject"})
 # "refined" means rendered from the raw rather than from the embedded JPEG; "developed" adds the
 # photographer's own develop settings on top.
 PREVIEW_KINDS = frozenset({"embedded", "refined", "developed"})
-# Sony ARW, Leica DNG and Nikon NEF: every check for "is this a raw" reads this one list.
-RAW_EXTENSIONS = frozenset({".arw", ".dng", ".nef"})
+# Sony ARW, Leica DNG, Nikon NEF and Canon CR2/CR3: every check for "is this a raw" reads this one list.
+RAW_EXTENSIONS = frozenset({".arw", ".dng", ".nef", ".cr2", ".cr3"})
 SUPPORTED_EXTENSIONS = RAW_EXTENSIONS | {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".heic"}
 JOB_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled", "interrupted"})
 MAX_JOB_ERROR_LENGTH = 1000

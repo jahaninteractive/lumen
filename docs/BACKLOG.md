@@ -2,6 +2,10 @@
 
 Deferred items with a known reason. Each entry says what, why it was deferred, and the trigger for picking it up. Keep `docs/HANDOFF.md` as the status ledger; this file only holds work nobody is doing yet.
 
+## From the 2026-11-22 Canon raws
+
+- **Canon files not yet measured.** An RF lens with built-in corrections (does the helper offer lens correction?), a Dual Pixel raw, an HDR PQ raw, a body older than the 5D Mark III, and a Siril stack of CR2 or CR3 lights. Trigger: one of those files to hand; import it, check the preview, the Develop tab's disabled controls and a full export, then add a row to the guide's "Cameras measured".
+
 ## From the 2026-11-22 Leica and Nikon raws
 
 - **Bodies and files not yet measured.** A Leica Q file straight from the camera (the Q3 sample had been re-saved by Lightroom, so its embedded JPEGs are Lightroom's), an SL file with a built-in lens correction, and a lossless-compressed Nikon Z file. Each should work through the same paths; import one, check the preview size, the Develop tab's disabled controls and a full export, then add a row to the guide's "Cameras measured". Trigger: the photographer has such a file.

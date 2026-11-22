@@ -91,7 +91,8 @@ class AstroPreparationTests(unittest.TestCase):
         return prepare_siril_job(**(options | overrides))
 
     def test_dng_and_nef_lights_are_accepted(self):
-        lights = [self.frame(self.night / "L1000001.dng", "leica"), self.frame(self.night / "DSC_0001.NEF", "nikon")]
+        lights = [self.frame(self.night / "L1000001.dng", "leica"), self.frame(self.night / "DSC_0001.NEF", "nikon"),
+                  self.frame(self.night / "IMG_0001.CR2", "canon"), self.frame(self.night / "IMG_0002.cr3", "canon r")]
         manifest = self.prepare(lights=lights)
         self.assertTrue(manifest.job_dir)
 

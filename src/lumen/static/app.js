@@ -1578,7 +1578,7 @@ function firstRunCard() {
   title.textContent = 'Lumen';
   const promise = document.createElement('p');
   promise.className = 'quiet';
-  promise.textContent = 'Reads your Sony, Leica and Nikon raws where they are. Originals are never moved, renamed, or changed.';
+  promise.textContent = 'Reads your Sony, Leica, Nikon and Canon raws where they are. Originals are never moved, renamed, or changed.';
   intro.append(title, promise);
   const choices = document.createElement('div');
   choices.className = 'first-run-choices';
@@ -4168,7 +4168,11 @@ function showPreview(viewport, photo, src = photo.preview_url, loaded = () => {}
   image.alt = photo.name;
   image.draggable = false;  // a pointer drag draws a crop, never drags the file out
   if (fit) image.className = 'fit';
+  // A fitted image sets the viewport's height; hold the old height until the new one loads so the panel does not jump.
+  viewport.style.minHeight = fit ? `${viewport.offsetHeight || 0}px` : '';
+  image.addEventListener('error', () => { viewport.style.minHeight = ''; });
   image.addEventListener('load', () => {
+    viewport.style.minHeight = '';
     if (!fit) Object.assign(image, { width: image.naturalWidth, height: image.naturalHeight });
     loaded(image);
   });

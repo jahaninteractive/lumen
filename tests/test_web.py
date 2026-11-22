@@ -1634,6 +1634,16 @@ class WebTests(unittest.TestCase):
         finally:
             Image.new("RGB", (120, 90), (80, 100, 120)).save(source)
 
+    def test_frame_viewport_hugs_a_fitted_image(self):
+        static = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static"
+        styles, javascript = (static / "styles.css").read_text(), (static / "app.js").read_text()
+        # No dark band under a landscape frame: the viewport is only as tall as the fitted image, up to its cap.
+        self.assertRegex(styles, r"#loupe \.loupe-viewport:has\(> img\.fit\)\s*\{[^}]*height:\s*auto[^}]*max-height:\s*var\(--loupe-h\)")
+        self.assertRegex(styles, r"#loupe-viewport img\.fit\s*\{[^}]*max-height:\s*calc\(var\(--loupe-h\) - 2px\)")
+        self.assertRegex(styles, r"@media \(max-width: 980px\) \{[^@]*#loupe \{ --loupe-h: 60vh; \}")
+        # The box keeps its height while the next frame loads, so stepping does not make the panel jump.
+        self.assertIn("viewport.style.minHeight", javascript)
+
     def test_compose_panel_has_native_controls_fallback_and_crop_treatment(self):
         html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
         parser = LandmarkParser()
@@ -6125,7 +6135,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_frame_view_crop_draw(self):
         css = (Path(__file__).parent.parent / "src/lumen/static/styles.css").read_text()
-        self.assertIn("#loupe-viewport img.fit { max-width: 100%; max-height: 100%; }", css, "the frame view shows its preview whole")
+        self.assertIn("#loupe-viewport img.fit { max-width: 100%; max-height: calc(var(--loupe-h) - 2px); }", css, "the frame view shows its preview whole")
         self.run_javascript_cleanup_regression("crop-draw")
 
     def test_javascript_frame_view_crop_manual_card(self):

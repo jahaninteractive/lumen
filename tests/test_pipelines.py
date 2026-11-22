@@ -52,7 +52,7 @@ class PipelineTests(unittest.TestCase):
     def test_dng_and_nef_export_through_the_raw_developer(self):
         from lumen import domain, pipelines
         self.assertIs(domain.RAW_EXTENSIONS, pipelines.RAW_EXTENSIONS)
-        for name in ("x.dng", "x.NEF"):
+        for name in ("x.dng", "x.NEF", "x.CR2", "x.cr3"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 source = root / name

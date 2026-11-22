@@ -24,7 +24,7 @@ for. One select switches between them; see
 The Python package is `lumen-raw` and the command is `lumen`.
 
 Lumen is a local, non-destructive RAW photography workbench for Apple
-Silicon Macs. It catalogs Sony `.ARW`, Leica `.DNG` and Nikon `.NEF` raws (and a Sony body's own JPEGs) without moving or changing them,
+Silicon Macs. It catalogs Sony `.ARW`, Leica `.DNG`, Nikon `.NEF` and Canon `.CR2`/`.CR3` raws (and a Sony body's own JPEGs) without moving or changing them,
 extracts previews, groups bursts, explains a best-shot choice, optionally tags
 previews through oMLX, writes portable sidecars, shows where the frames were
 taken on an offline map, checks astrophotography frames, and hands exports to
@@ -215,7 +215,7 @@ No card to hand? `Examples/` holds two Sony `.ARW` frames to try it on:
 uv run lumen import Examples
 ```
 
-Sony `.ARW`, Leica `.DNG` and Nikon `.NEF` raws, and a Sony body's own JPEGs,
+Sony `.ARW`, Leica `.DNG`, Nikon `.NEF` and Canon `.CR2`/`.CR3` raws, and a Sony body's own JPEGs,
 are the sources Lumen is built for; the guide lists [the bodies measured so
 far](docs/GUIDE.md#cameras-measured). Phone
 photos should be imported as HEIC, not as JPEGs exported from Photos; see
@@ -436,6 +436,6 @@ own licences.
 
 The photographs in [`Examples/`](Examples/), `docs/images/` and `docs/media/`
 are © Nasir David and are not covered by the MIT License; see
-[`Examples/README.md`](Examples/README.md). Sony, Leica, Nikon, Apple, Mac and the other
+[`Examples/README.md`](Examples/README.md). Sony, Leica, Nikon, Canon, Apple, Mac and the other
 product names mentioned are trademarks of their owners; Lumen is not
 affiliated with or endorsed by any of them.

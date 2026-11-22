@@ -350,10 +350,13 @@ button.version:hover { color: var(--cyan); text-decoration: underline; }
 .compare-pane select { padding: .5rem; color: var(--paper); background: var(--graphite); }
 /* Scale 1: the img keeps its stored preview size, so both panes zoom alike. No smooth scrolling: it would fight synced panning. */
 .loupe-viewport { height: min(55vh, 720px); overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #08090a; }
-#loupe .loupe-viewport { height: calc(96vh - 9rem); }
+#loupe { --loupe-h: calc(96vh - 9rem); }
+#loupe .loupe-viewport { height: var(--loupe-h); }
+/* A fitted frame sets the box's height, so a landscape image has no dark band under it; Full size keeps the fixed box to pan in. */
+#loupe .loupe-viewport:has(> img.fit) { height: auto; max-height: var(--loupe-h); }
 .loupe-viewport img { display: block; max-width: none; }
 #loupe-viewport { position: relative; }
-#loupe-viewport img.fit { max-width: 100%; max-height: 100%; }  /* the whole frame shows while cropping; Full size stays 1:1 */
+#loupe-viewport img.fit { max-width: 100%; max-height: calc(var(--loupe-h) - 2px); }  /* the whole frame shows while cropping; Full size stays 1:1 */
 #loupe-viewport img { user-select: none; -webkit-user-select: none; cursor: crosshair; }
 #crop-overlay { position: absolute; left: 0; top: 0; overflow: hidden; pointer-events: none; }
 #crop-outline { position: absolute; box-sizing: border-box; border: 2px solid var(--amber); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55); pointer-events: auto; cursor: move; }  /* the shadow takes no clicks; the box moves the crop */
@@ -463,7 +466,7 @@ kbd { display: inline-block; min-width: 1.6rem; padding: 0 .35rem; border: 1px s
 @media (max-width: 980px) {
   .workspace { grid-template-columns: 180px minmax(0, 1fr); }
   #loupe[open] { display: block; height: auto; overflow-y: auto; }
-  #loupe .loupe-viewport { height: 60vh; }
+  #loupe { --loupe-h: 60vh; }
 }
 
 @media (max-width: 680px) {

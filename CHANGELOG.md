@@ -5,6 +5,14 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.8.0 (2026-11-22)
+
+- Canon `.CR2` and `.CR3` raws import, cull, develop and export as the other raws do. Measured on five files: an EOS 5D Mark III at full size, mRAW and sRAW, and an EOS R5 at full size and as a compact raw in the 1.6x crop (see the guide's "Cameras measured"). Both decoders read all five, so none carries a warning; Develop greys out contrast, sharpness and noise reduction on mRAW and sRAW files, whose decoder offers none.
+
+## 0.7.1 (2026-11-22)
+
+- The frame view's image box is only as tall as the fitted image, so a landscape frame no longer has a dark band under it; Full size keeps the fixed box to pan in.
+
 ## 0.7.0 (2026-11-22)
 
 - Leica `.DNG` and Nikon `.NEF` raws import, cull, develop and export as Sony `.ARW` does. Measured on one file each from the Leica M9, M (Typ 240), M11, M11 Monochrom and Q3 and the Nikon D800, Z 8 and Z 9 (see the guide's "Cameras measured"). A raw with no embedded JPEG of 1000 px or more gets its preview and full-size view rendered from the raw; a Leica serial is read, a 0°N 0°E position is treated as none, a high-efficiency Nikon raw says darktable cannot decode it, and Develop greys out the controls a file's decoder does not offer (all four numeric ones on the M11 Monochrom). Needs `zsh scripts/bootstrap.sh --no-download` to rebuild the raw developer.

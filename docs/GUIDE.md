@@ -11,9 +11,9 @@ first run are in the [README](../README.md).
 
 ![Lumen open on a day's load: the batch rail lists 234 frames and 105 keepers, and the contact sheet shows three flagged frames of an expedition guide in a yellow hood in falling snow, the third marked Best as the model's pick.](images/hero.jpg)
 
-- Recursive import of Sony `.ARW`, Leica `.DNG` and Nikon `.NEF` raws, and of
+- Recursive import of Sony `.ARW`, Leica `.DNG`, Nikon `.NEF` and Canon `.CR2`/`.CR3` raws, and of
   JPEG, PNG, TIFF, and HEIC (the bodies measured are listed under
-  [Cameras measured](#cameras-measured); Canon and Fujifilm raws are not
+  [Cameras measured](#cameras-measured); Fujifilm raws are not
   supported yet). A JPEG straight from
   the camera is a first-class source: shoot JPEG in the body for its own
   rendering (Creative Look, lens corrections, noise handling) and cull, crop,
@@ -90,7 +90,7 @@ first run are in the [README](../README.md).
 
 ### Cameras measured
 
-Leica and Nikon raws go through the same import, cull, develop and export as
+Leica, Nikon and Canon raws go through the same import, cull, develop and export as
 Sony ones. These bodies were imported, developed and exported for real from
 one sample file each (2026-11-22):
 
@@ -105,6 +105,10 @@ one sample file each (2026-11-22):
 | Nikon D800 (uncompressed) | `.NEF` | camera's 1632 px JPEG | all; no lens profile |
 | Nikon Z 8 (high-efficiency) | `.NEF` | camera's 1620 px JPEG | all, with lens correction |
 | Nikon Z 9 (high-efficiency) | `.NEF` | camera's 1620 px JPEG | all, with lens correction |
+| Canon EOS 5D Mark III | `.CR2` | camera's 5760 px JPEG | all; no lens profile |
+| Canon EOS 5D Mark III (mRAW, sRAW) | `.CR2` | camera's 5760 px JPEG | no contrast, sharpness or noise reduction |
+| Canon EOS R5 | `.CR3` | camera's 1620 px JPEG | all; no lens profile |
+| Canon EOS R5 (compact raw, 1.6x crop) | `.CR3` | camera's 1620 px JPEG | all; no lens profile |
 
 Every one exported a full-size JPEG carrying the camera's make, MakerNote and
 IPTC caption and keywords. Things to know:
@@ -127,15 +131,24 @@ IPTC caption and keywords. Things to know:
   by darktable, so **Refine previews** and exports with a darktable XMP profile
   are unavailable for them, and the frame view says so. Culling, Develop and
   JPEG export are unaffected, because they use the macOS decoder.
+- **Canon reduced-size raws.** An mRAW or sRAW `.CR2` is decoded without
+  contrast, sharpness or noise reduction, so those sliders are disabled as on
+  the M11 Monochrom. The camera still embeds a JPEG at the sensor's full 5760 px,
+  so the frame view's Full size is larger than the raw; Develop's Full size and
+  the export are the raw's own 3960 or 2880 px. darktable decodes every Canon
+  sample, the compact `.CR3` included, so none carries a warning. Both bodies
+  were shot with lenses that carry no profile, so Lens Correction was
+  never on offer.
 - **Develop speed** (warm, on a 48 GB M4 Max, the window-sized render the tab asks
   for, about 1400 px): a 60 MP M11 frame took 0.8 s, a Z 9 frame 0.36 s and a
   33 MP Sony frame 0.31 s. **Full size** renders the whole raw: 1.4 s, 0.77 s
-  and 0.49 s. The first render of a 60 MP frame after a pause is slower: 5 to 10 s
+  and 0.49 s. A 45 MP EOS R5 frame took 0.53 s and 0.83 s. The first render of a 60 MP frame after a pause is slower: 5 to 10 s
   was seen on the M11.
 
 Not yet tried: a Leica Q file straight from the camera (the Q3 sample had been
 re-saved by Lightroom, so its embedded JPEGs are Lightroom's), an SL file, a
-lossless-compressed Nikon Z file, and an astro stack from either maker. Any of
+lossless-compressed Nikon Z file, a Canon RF lens with built-in corrections,
+a Dual Pixel or HDR PQ Canon raw, and an astro stack from any of the three makers. Any of
 them may behave differently; DNGs from phones or converters will import but
 were not measured.
 
