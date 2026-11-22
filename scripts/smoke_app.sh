@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Smoke test for a built Lumen.app: the shell starts the bundled server, /api/status
 # finds exiftool and both helpers, a killed shell takes the server with it, and
-# nothing was written into the bundle, and the uninstall hook trashes what each choice says.
+# nothing was written into the bundle, a lumen package on PYTHONPATH is ignored, and the uninstall
+# hook trashes what each choice says and refuses folders it must never touch.
 # Uses throwaway libraries and vendor folders; the uninstall cases put them in the Trash.
 #
 #   zsh scripts/smoke_app.sh dist/Lumen.app
@@ -23,7 +24,10 @@ cleanup() {
 trap cleanup EXIT
 
 export LUMEN_APP_HEADLESS=1 LUMEN_LIBRARY="$work/library" LUMEN_VENDOR="$work/vendor"
-"$app/Contents/MacOS/Lumen" > "$work/out" 2> "$work/err" &
+# A lumen package on PYTHONPATH that cannot import: the bundled Python must ignore it (-I).
+mkdir -p "$work/shadow/lumen"
+echo 'raise RuntimeError("the shadowing lumen package was imported")' > "$work/shadow/lumen/__init__.py"
+PYTHONPATH="$work/shadow" "$app/Contents/MacOS/Lumen" > "$work/out" 2> "$work/err" &
 shell_pid=$!
 
 url=""
@@ -63,6 +67,17 @@ done
     && fail "uninstall ran without LUMEN_LIBRARY"
   [[ -d "$work/refused/lumen-smoke-vendor" ]] || fail "a refused uninstall moved the vendor folder"
 )
+# Folders the guard refuses: an empty vendor (read as unset), a relative one, and a library holding the vendor.
+mkdir -p "$work/guard/lumen-smoke-vendor" "$work/guard/lumen-smoke-library/lumen-smoke-vendor"
+for vendor library in \
+    "" "$work/guard/lumen-smoke-library" \
+    lumen-smoke-vendor "$work/guard/lumen-smoke-library" \
+    "$work/guard/lumen-smoke-library/lumen-smoke-vendor" "$work/guard/lumen-smoke-library"; do
+  (cd "$work/guard" && LUMEN_VENDOR="$vendor" LUMEN_LIBRARY="$library" LUMEN_APP_UNINSTALL=all \
+    "$app/Contents/MacOS/Lumen" 2>/dev/null) && fail "uninstall ran with LUMEN_VENDOR='$vendor' LUMEN_LIBRARY='$library'"
+  [[ -d "$work/guard/lumen-smoke-vendor" && -d "$work/guard/lumen-smoke-library/lumen-smoke-vendor" ]] \
+    || fail "a refused uninstall moved a folder (LUMEN_VENDOR='$vendor')"
+done
 typeset -A remains=(keep "./catalog.sqlite3 ./outputs/jpeg/a.jpg" data "./outputs/jpeg/a.jpg" exports "./catalog.sqlite3" all "")
 for choice in keep data exports all; do
   vendor="$work/$choice/lumen-smoke-vendor" library="$work/$choice/lumen-smoke-library"

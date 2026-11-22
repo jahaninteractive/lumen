@@ -8,9 +8,16 @@
 // server's "Lumen is running at" line is printed on stdout and failures go to stderr.
 // With LUMEN_APP_UNINSTALL=keep|data|exports|all as well, it runs the uninstall's trash steps
 // (no Keychain, no server, the bundle kept) and exits; it needs LUMEN_VENDOR and LUMEN_LIBRARY set.
+// An inherited LUMEN_VENDOR is honoured only headless: a normal launch always uses Application Support.
 import AppKit
 
-let headless = ProcessInfo.processInfo.environment["LUMEN_APP_HEADLESS"] == "1"
+/// An environment value, with an empty one read as unset, as the Python package reads it.
+func setting(_ name: String) -> String? {
+    let value = ProcessInfo.processInfo.environment[name] ?? ""
+    return value.isEmpty ? nil : value
+}
+
+let headless = setting("LUMEN_APP_HEADLESS") == "1"
 let defaultPort = 8765
 let urlLine = try! Regex(#"Lumen is running at (http://\S+)"#)
 let resources = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources")
@@ -19,18 +26,18 @@ let resources = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources
 let childEnvironment: [String: String] = {
     var environment = ProcessInfo.processInfo.environment
     environment["PATH"] = "\(resources.path)/bin:\(resources.path)/python/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    if environment["LUMEN_VENDOR"] == nil {  // an inherited one wins, for the smoke script
-        environment["LUMEN_VENDOR"] = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Lumen").path
-    }
+    // Forced here, so the server and bootstrap.sh agree with the shell; inherited only for the smoke script.
+    environment["LUMEN_VENDOR"] = (headless ? setting("LUMEN_VENDOR") : nil) ?? FileManager.default
+        .homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Lumen").path
     environment["LUMEN_HELPER_DIR"] = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers").path
     environment["PYTHONDONTWRITEBYTECODE"] = "1"  // the bundle is signed; nothing may write into it
     return environment
 }()
 
-let vendorURL = URL(fileURLWithPath: childEnvironment["LUMEN_VENDOR"]!)
-let libraryURL = URL(fileURLWithPath: NSString(
-    string: ProcessInfo.processInfo.environment["LUMEN_LIBRARY"] ?? "~/Pictures/Lumen Library").expandingTildeInPath)
+let vendorPath = childEnvironment["LUMEN_VENDOR"]!
+let libraryPath = NSString(string: setting("LUMEN_LIBRARY") ?? "~/Pictures/Lumen Library").expandingTildeInPath
+let vendorURL = URL(fileURLWithPath: vendorPath)
+let libraryURL = URL(fileURLWithPath: libraryPath)
 
 /// A GET that waits at most a second, so a launch or Quit never hangs on a wedged port.
 func get(_ url: URL) -> Data? {
@@ -125,7 +132,7 @@ final class Shell: NSObject, NSApplicationDelegate {
 
         let process = Process()
         process.executableURL = resources.appendingPathComponent("python/bin/python3")
-        process.arguments = ["-m", "lumen", "serve", "--port", String(port), "--exit-with-parent"]
+        process.arguments = ["-I", "-B", "-m", "lumen", "serve", "--port", String(port), "--exit-with-parent"]
         process.environment = childEnvironment
         process.standardInput = serverInput
         do {
@@ -222,6 +229,12 @@ final class Shell: NSObject, NSApplicationDelegate {
                 try FileManager.default.trashItem(at: target, resultingItemURL: nil)
             }
             try FileManager.default.copyItem(at: here, to: target)
+            // copyItem keeps the quarantine, and a quarantined copy runs translocated: it would offer the move forever.
+            let unquarantine = Process()
+            unquarantine.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            unquarantine.arguments = ["-dr", "com.apple.quarantine", target.path]
+            unquarantine.standardError = FileHandle.nullDevice
+            if (try? unquarantine.run()) != nil { unquarantine.waitUntilExit() }  // a failure: there was none to remove
         } catch {
             let failed = NSAlert()
             failed.alertStyle = .warning
@@ -273,10 +286,20 @@ final class Shell: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Uninstall Lumen…", action: #selector(showUninstall), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Lumen", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        let appItem = NSMenuItem()
-        appItem.submenu = appMenu
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        // No target: the first responder handles these, so the country codes field can be edited.
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         let menu = NSMenu()
-        menu.addItem(appItem)
+        for submenu in [appMenu, fileMenu, editMenu] {
+            let item = NSMenuItem()
+            item.submenu = submenu
+            menu.addItem(item)
+        }
         return menu
     }
 
@@ -363,7 +386,7 @@ final class Shell: NSObject, NSApplicationDelegate {
     func removeKeys() -> Bool {
         let process = Process()
         process.executableURL = resources.appendingPathComponent("python/bin/python3")
-        process.arguments = ["-c", """
+        process.arguments = ["-I", "-B", "-c", """
             from lumen import keychain
             failed = False
             for engine in keychain.KEY_ENGINES:
@@ -383,9 +406,32 @@ final class Shell: NSObject, NSApplicationDelegate {
     }
 }
 
+struct Refusal: LocalizedError {
+    let errorDescription: String?
+}
+
+/// Throws unless both folders are absolute, neither is the home folder or one of its ancestors
+/// (which covers /), and neither equals or holds the other.
+func checkUninstallFolders() throws {
+    func resolved(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path }
+    func holds(_ outer: String, _ inner: String) -> Bool { outer == inner || inner.hasPrefix(outer.hasSuffix("/") ? outer : outer + "/") }
+    let home = resolved(FileManager.default.homeDirectoryForCurrentUser.path)
+    let folders = [("Downloaded tools", vendorPath), ("Library", libraryPath)]
+    for (name, path) in folders {
+        if !path.hasPrefix("/") { throw Refusal(errorDescription: "Uninstall refused the \(name) folder \"\(path)\": it is not an absolute path.") }
+        if holds(resolved(path), home) {
+            throw Refusal(errorDescription: "Uninstall refused the \(name) folder \(path): it is your home folder or holds it.")
+        }
+    }
+    if holds(resolved(vendorPath), resolved(libraryPath)) || holds(resolved(libraryPath), resolved(vendorPath)) {
+        throw Refusal(errorDescription: "Uninstall refused the folders \(vendorPath) and \(libraryPath): one holds the other.")
+    }
+}
+
 /// The trash steps shared by the window and the headless hook; throws at the first failure, so
 /// nothing after it runs. Everything goes to the Trash: nothing here deletes a file.
 func trashLumen(data: Bool, exports: Bool) throws {
+    try checkUninstallFolders()
     let files = FileManager.default
     if files.fileExists(atPath: vendorURL.path) { try files.trashItem(at: vendorURL, resultingItemURL: nil) }
     let outputs = libraryURL.appendingPathComponent("outputs")
@@ -593,7 +639,9 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         process.arguments = [resources.appendingPathComponent("bootstrap.sh").path, "--downloads-only",
                              "--dest", childEnvironment["LUMEN_VENDOR"]!, "--only", keys.joined(separator: ",")]
         var environment = childEnvironment
-        environment["LUMEN_GEONAMES_COUNTRIES"] = countries.stringValue.trimmingCharacters(in: .whitespaces)
+        // The script splits on spaces only, so "ZA, AQ" would skip both.
+        environment["LUMEN_GEONAMES_COUNTRIES"] = countries.stringValue.replacingOccurrences(of: ",", with: " ")
+            .trimmingCharacters(in: .whitespaces)
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         skipped = []
@@ -720,14 +768,13 @@ final class Uninstall: NSObject, NSWindowDelegate {
 }
 
 let shell = Shell()
-if headless, let choice = ProcessInfo.processInfo.environment["LUMEN_APP_UNINSTALL"] {
-    let environment = ProcessInfo.processInfo.environment
+if headless, let choice = setting("LUMEN_APP_UNINSTALL") {
     let choices = ["keep": (false, false), "data": (true, false), "exports": (false, true), "all": (true, true)]
     func refuse(_ reason: String) -> Never {
         FileHandle.standardError.write(Data("LUMEN_APP_UNINSTALL: \(reason)\n".utf8))
         exit(2)
     }
-    guard environment["LUMEN_VENDOR"] != nil, environment["LUMEN_LIBRARY"] != nil else {
+    guard setting("LUMEN_VENDOR") != nil, setting("LUMEN_LIBRARY") != nil else {
         refuse("refused: set both LUMEN_VENDOR and LUMEN_LIBRARY, so it can never reach the real folders")
     }
     guard let (data, exports) = choices[choice] else { refuse("expected keep, data, exports or all") }
