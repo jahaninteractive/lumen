@@ -115,9 +115,8 @@ final class Shell: NSObject, NSApplicationDelegate {
         var port = defaultPort
         if headless {
             port = 0
-        } else if let answer = get(URL(string: "http://127.0.0.1:\(defaultPort)/api/status")!) {
-            let status = (try? JSONSerialization.jsonObject(with: answer)) as? [String: Any]
-            if status?["version"] != nil {
+        } else if let lumen = lumenOnDefaultPort() {
+            if lumen {
                 alreadyRunning()
                 return
             }
@@ -135,6 +134,12 @@ final class Shell: NSObject, NSApplicationDelegate {
             fail("Lumen could not start.", detail: error.localizedDescription)
         }
         server = process
+    }
+
+    /// What answers on the default port: nil for nothing, true when it is a Lumen server.
+    func lumenOnDefaultPort() -> Bool? {
+        guard let answer = get(URL(string: "http://127.0.0.1:\(defaultPort)/api/status")!) else { return nil }
+        return ((try? JSONSerialization.jsonObject(with: answer)) as? [String: Any])?["version"] != nil
     }
 
     func serverLine(_ line: String) {
@@ -278,19 +283,25 @@ final class Shell: NSObject, NSApplicationDelegate {
     // MARK: Quit
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if let server, server.isRunning, let url = serverURL, let answer = get(url.appendingPathComponent("api/jobs")),
-           let jobs = ((try? JSONSerialization.jsonObject(with: answer)) as? [String: Any])?["jobs"] as? [[String: Any]],
-           jobs.contains(where: { ["queued", "running"].contains($0["status"] as? String ?? "") }) {
-            let alert = NSAlert()
-            alert.messageText = "A job is still running. Quit anyway?"
-            alert.addButton(withTitle: "Quit")
-            alert.addButton(withTitle: "Cancel")
-            if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
-        }
+        guard mayStopJobs("Quit") else { return .terminateCancel }
         stopServer()
         return .terminateNow
     }
 
+    /// False when our server has a queued or running job and the photographer cancels.
+    /// Asks nothing once the server is stopped, so Uninstall's own terminate does not ask twice.
+    func mayStopJobs(_ action: String) -> Bool {
+        guard let server, server.isRunning, let url = serverURL, let answer = get(url.appendingPathComponent("api/jobs")),
+              let jobs = ((try? JSONSerialization.jsonObject(with: answer)) as? [String: Any])?["jobs"] as? [[String: Any]],
+              jobs.contains(where: { ["queued", "running"].contains($0["status"] as? String ?? "") }) else { return true }
+        let alert = NSAlert()
+        alert.messageText = "A job is still running. \(action) anyway?"
+        alert.addButton(withTitle: action)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Sets `quitting` first, so the server's exit is not reported as a crash by `serverEnded`.
     func stopServer() {
         quitting = true
         setup?.stop()
@@ -314,6 +325,14 @@ final class Shell: NSObject, NSApplicationDelegate {
 
     /// The window's Uninstall: keys, server, then the trash steps and the bundle; quits either way.
     func uninstall(data: Bool, exports: Bool) {
+        if server?.isRunning != true && lumenOnDefaultPort() == true {
+            let alert = NSAlert()
+            alert.messageText = "Another Lumen is still running."
+            alert.informativeText = "Quit it first, then choose Uninstall Lumen… again."
+            alert.runModal()
+            return
+        }
+        guard mayStopJobs("Uninstall") else { return }
         var notes: [String] = []
         if !removeKeys() {
             notes.append("A saved service key could not be removed from the Keychain; remove it in Keychain Access under the name Lumen.")
