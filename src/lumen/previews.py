@@ -323,7 +323,8 @@ def thumbnail_for(preview: Path, cache_dir: Path, crop: tuple[float, float, floa
 
 def full_size_for(source: Path, cache_dir: Path, fingerprint: str, raw_developer: Path | None = None) -> Path | None:
     """The largest JPEG the camera embedded in the original, or a native-size render of a raw whose embedded JPEG is
-    under half its size (when the helper is present), cached by fingerprint; None without either or without exiftool."""
+    under half its size (when the helper is present), cached by fingerprint; None without either or without exiftool.
+    When that render is needed but the helper is missing or fails, the embedded JPEG is returned as `<fingerprint>-embedded.jpg`."""
     target = cache_dir / f"{fingerprint}.jpg"
     if target.is_file():  # served even when the original's volume is unplugged
         return target
@@ -338,13 +339,19 @@ def full_size_for(source: Path, cache_dir: Path, fingerprint: str, raw_developer
     if not exiftool:
         return None
     embedded = _embedded(source, ("JpgFromRaw", "OtherImage", "PreviewImage"))
-    if (is_raw(source) and raw_developer is not None and Path(raw_developer).is_file()
-            and (embedded is None or 2 * _long_edge(embedded) < _raw_long_edge(exiftool, source))):
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=".full-", dir=cache_dir) as directory:
-            rendered = Path(directory) / "full.jpg"
-            render_raw(source, rendered, raw_developer, long_edge=0, image_format="jpeg")
-            embedded = rendered.read_bytes()
+    if is_raw(source) and (embedded is None or 2 * _long_edge(embedded) < _raw_long_edge(exiftool, source)):
+        if raw_developer is not None and Path(raw_developer).is_file():
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                with tempfile.TemporaryDirectory(prefix=".full-", dir=cache_dir) as directory:
+                    rendered = Path(directory) / "full.jpg"
+                    render_raw(source, rendered, raw_developer, long_edge=0, image_format="jpeg")
+                    rendered.replace(target)
+                return target
+            except DevelopError:
+                if embedded is None:
+                    raise
+        target = cache_dir / f"{fingerprint}-embedded.jpg"  # a stand-in, so the next call tries the render again
     if embedded is None:
         return None
     cache_dir.mkdir(parents=True, exist_ok=True)

@@ -11,6 +11,7 @@ from PIL import Image
 
 from lumen.config import Settings
 from lumen.library import Library
+from lumen.rawdevelop import DevelopError
 from lumen.previews import (NIKON_HE_WARNING, ExifToolPreviewProvider, PreviewError, fingerprint_file, full_size_for, prune_thumbnails, read_exif_summary,
                             read_image_dimensions, read_metadata, thumbnail_for)
 
@@ -320,7 +321,8 @@ class PreviewTests(unittest.TestCase):
             calls = []
 
             def run(command, **kwargs):
-                calls.append(command[2])
+                if command[1] == "-b":  # extractions only; the ImageSize read is not one
+                    calls.append(command[2])
                 return subprocess.CompletedProcess(command, 0, buffer.getvalue() if "-JpgFromRaw" in command else b"", b"")
 
             with patch("lumen.previews.shutil.which", return_value="exiftool"), \
@@ -423,7 +425,7 @@ class EmbeddedPreviewTests(unittest.TestCase):
         with Image.open(destination) as image:
             return image.size
 
-    def test_preview_takes_the_largest_embedded_jpeg(self):
+    def test_preview_skips_a_small_preview_image_for_a_larger_tag(self):
         self.tags = {"PreviewImage": (640, 427), "JpgFromRaw": (4000, 100)}
         self.assertEqual((2048, 51), self.preview("L1000001.DNG", self.helper))
         self.assertEqual([], self.renders)
@@ -497,8 +499,27 @@ class EmbeddedPreviewTests(unittest.TestCase):
 
     def test_full_size_without_the_helper_keeps_the_embedded_jpeg(self):
         self.tags, self.image_size = {"JpgFromRaw": (2112, 1404)}, "9536 6336"
+        full = self.root / "full"
+        self.assertEqual(full / "L1000001.DNG-embedded.jpg", full_size_for(self.raw("L1000001.DNG"), full, "L1000001.DNG", None))
         self.assertEqual((2112, 1404), self.full_size("L1000001.DNG", None))
         self.assertEqual([], self.renders)
+        self.assertFalse((full / "L1000001.DNG.jpg").exists(), "a stand-in is never cached as the full-size image")
+        self.assertEqual((3000, 2000), self.full_size("L1000001.DNG", self.helper), "building the helper later renders")
+        self.assertTrue((full / "L1000001.DNG.jpg").is_file())
+
+    def test_full_size_falls_back_to_the_embedded_jpeg_when_the_render_fails(self):
+        self.tags, self.image_size = {"JpgFromRaw": (2112, 1404)}, "9536 6336"
+        full = self.root / "full"
+        with patch("lumen.previews.render_raw", side_effect=DevelopError("broke")):
+            self.assertEqual(full / "L1000001.DNG-embedded.jpg", full_size_for(self.raw("L1000001.DNG"), full, "L1000001.DNG", self.helper))
+        self.assertFalse((full / "L1000001.DNG.jpg").exists())
+
+    def test_full_size_render_failure_with_nothing_embedded_raises(self):
+        self.image_size = "9536 6336"
+        full = self.root / "full"
+        with patch("lumen.previews.render_raw", side_effect=DevelopError("broke")), self.assertRaises(DevelopError):
+            full_size_for(self.raw("L1000001.DNG"), full, "L1000001.DNG", self.helper)
+        self.assertEqual([], list(full.glob("*.jpg")))
 
 
 if __name__ == "__main__":

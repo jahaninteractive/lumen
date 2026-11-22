@@ -4794,7 +4794,7 @@ function developNoiseMode() {
 
 function syncNoiseMode() {
   const mode = developNoiseMode();
-  const offered = NR_KEYS.some(developOffered);  // the mode drives both amounts
+  const offered = NR_KEYS.every(developOffered);  // the mode drives both amounts
   document.querySelectorAll('input[name="develop-nr-mode"]').forEach(radio => {
     radio.checked = radio.value === mode;
     radio.disabled = !state.develop.ready || !offered;
