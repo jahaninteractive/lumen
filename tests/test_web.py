@@ -4685,6 +4685,12 @@ const regression = `
     await element('#refine-previews').listeners.click();
     assert.equal(element('#refine-status').textContent, 'Refine previews could not start: darktable-cli is unavailable.');
     assert.equal(element('#announcer').textContent, element('#refine-status').textContent);
+    await load();  // still no darktable: export goes on without it, only a profile needs it
+    assert.equal(element('#export-availability').textContent, 'darktable is not installed. Raws and camera JPEGs export without it; a darktable profile needs it.');
+    assert.equal(element('#browse-xmp').disabled, true, 'a profile needs darktable');
+    await inspect(state.groups[0].photos[0]);
+    assert.equal(element('#loupe-export').disabled, false);
+    assert.equal(element('#export-jpegs').disabled, false, 'the current frame exports');
     return;
   }
   if (scenario === 'all-rejected') {

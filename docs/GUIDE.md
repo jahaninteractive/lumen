@@ -1002,8 +1002,10 @@ uv run lumen export --keepers --preset web --watermark "© Your Name" --json
 Raw frames are rendered by a small native helper that `scripts/bootstrap.sh`
 builds (the app carries its own); if it is missing, exporting a raw without a darktable profile is refused
 with a message telling you to run the script again. If `darktable-cli` is
-unavailable, the Export panel explains why and disables export. In the app,
-tick darktable in Lumen > Set Up Lumen… and reload the page. Otherwise install
+unavailable, raws and camera JPEGs still export; an export that uses a
+darktable profile, or starts from a PNG, TIFF or HEIC, is refused with a
+message saying how to add darktable, and the profile chooser is disabled. In
+the app, tick darktable in Lumen > Set Up Lumen… and reload the page. Otherwise install
 darktable as described in the README, add its executable directory to `PATH` if needed, restart Lumen, and reload the page. Check with
 `uv run lumen doctor --json`. Import and review remain usable.
 

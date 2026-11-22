@@ -110,6 +110,8 @@ class JpegExportResult(PipelineResult):
 # the crop, resize, metadata and provenance every export carries) without any renderer in between.
 CAMERA_JPEG_EXTENSIONS = frozenset({".jpg", ".jpeg"})
 DECODERS = frozenset({"darktable", "coreimage", "camera"})
+DARKTABLE_MISSING = ("this export needs darktable, which is not installed: add it from Set Up Lumen… in the Lumen menu, "
+                     "or run scripts/bootstrap.sh in a checkout")
 # A full-size export render keeps the budget the macOS decoder had; the interactive preview keeps the shorter
 # default in `rawdevelop`, so a slow export never makes the Develop tab feel hung.
 EXPORT_RENDER_TIMEOUT_SECONDS = 600
@@ -134,7 +136,7 @@ def _disk_full(directory: Path) -> list[str]:
 
 
 class DarktablePipeline:
-    def __init__(self, executable: str, output_root: Path, raw_developer: Path | None = None):
+    def __init__(self, executable: str | None, output_root: Path, raw_developer: Path | None = None):
         self.executable = executable
         self.output_root = output_root.resolve()
         self.raw_developer = raw_developer
@@ -185,6 +187,8 @@ class DarktablePipeline:
         published: Path | None = None
         work: Path | None = None
         try:
+            if decoder == "darktable" and not self.executable:
+                raise RuntimeError(DARKTABLE_MISSING)
             if profile is not None and not profile.is_file():
                 raise ValueError(f"profile does not exist: {profile}")
             if crop is not None:
@@ -458,9 +462,10 @@ class PipelineRegistry:
             ),
         }
 
-    def darktable(self, output_root: Path, raw_developer: Path | None = None) -> DarktablePipeline:
+    def darktable(self, output_root: Path, raw_developer: Path | None = None, *, required: bool = True) -> DarktablePipeline:
+        """`required=False` is the JPEG export route: only a profile or a non-raw non-JPEG source needs darktable."""
         executable = find_tool("darktable-cli")
-        if not executable:
+        if not executable and required:
             raise RuntimeError("darktable-cli is not installed")
         return DarktablePipeline(executable, output_root, raw_developer)
 

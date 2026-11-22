@@ -1422,6 +1422,50 @@ class LibraryTests(unittest.TestCase):
                     self.assertIn("scripts/bootstrap.sh", str(refusal.exception))
             self.assertFalse(library.settings.jpeg_output_dir.exists())
 
+    @staticmethod
+    def no_darktable(name):
+        """`find_tool` on a Mac without darktable; exiftool's runs are faked by the runner."""
+        return None if name == "darktable-cli" else f"/opt/fake/{name}"
+
+    def test_export_without_darktable_renders_a_raw_and_a_camera_jpeg(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            raw_id = self.raw_export_frame(library)
+            jpeg_path = self.source_dir / "DSC0002.jpg"
+            Image.new("RGB", (30, 20), "blue").save(jpeg_path)
+            library.import_path(jpeg_path)
+            camera_id = next(photo.id for photo in library.catalog.list_photos() if photo.id != raw_id)
+            self.install_raw_developer(library)
+            with patch("lumen.pipelines.find_tool", side_effect=self.no_darktable), \
+                    patch("lumen.pipelines.render_raw", side_effect=render_raw_stub([])), \
+                    patch("lumen.pipelines.subprocess.run", side_effect=self.os_version_runner):
+                results = library.export_jpegs(library_module.ExportRequest((raw_id, camera_id), None))
+            self.assertTrue(all(result.success for result in results), [result.message for result in results])
+            self.assertEqual(["coreimage", "camera"], [result.artifact.settings["decoder"] for result in results])
+
+    def test_export_with_a_profile_and_no_darktable_says_how_to_add_it(self):
+        profile = self.root / "look.xmp"
+        profile.write_text("<x:xmpmeta/>")
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.raw_export_frame(library)
+            with patch("lumen.pipelines.find_tool", side_effect=self.no_darktable), \
+                    patch("lumen.pipelines.subprocess.run", side_effect=AssertionError("nothing may run")):
+                result = library.export_jpegs(library_module.ExportRequest((photo_id,), profile))[0]
+            self.assertFalse(result.success)
+            self.assertEqual("this export needs darktable, which is not installed: add it from Set Up Lumen… in the "
+                             "Lumen menu, or run scripts/bootstrap.sh in a checkout", result.message)
+            self.assertEqual([], library.catalog.list_artifacts())
+
+    def test_keepers_export_job_without_darktable_exports_a_camera_jpeg(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            library.set_rating(library.catalog.list_photos()[0].id, 4)
+            with patch("lumen.pipelines.find_tool", side_effect=self.no_darktable), \
+                    patch("lumen.pipelines.subprocess.run", side_effect=self.os_version_runner):
+                job = library.start_export_job(library_module.ExportRequest(tuple(library.keeper_ids()), None))
+                self.assertTrue(library.wait_for_job(job.id, 10))
+            status = library.job_status(job.id)
+            self.assertEqual(("succeeded", {"exported": 1, "failed": 0, "skipped": 0}), (status["status"], status["result"]))
+
     def test_export_records_artifact_and_sidecar_provenance(self):
         self.assertTrue(hasattr(library_module, "ExportRequest"), "ExportRequest is missing")
         before = (self.image_path.read_bytes(), self.image_path.stat().st_mtime_ns)

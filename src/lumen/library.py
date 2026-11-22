@@ -2111,7 +2111,7 @@ class Library:
         if (request.profile is None and not self.settings.raw_developer_path.is_file()
                 and any(Path(photo.path).suffix.lower() in RAW_EXTENSIONS for photo in photos)):
             raise ValueError("the raw developer is missing; run scripts/bootstrap.sh to build it")
-        return photos, PipelineRegistry().darktable(self.settings.output_dir, self.settings.raw_developer_path)
+        return photos, PipelineRegistry().darktable(self.settings.output_dir, self.settings.raw_developer_path, required=False)
 
     @_coordinated
     def export_jpegs(self, request: ExportRequest) -> list[ExportResult]:
@@ -2129,7 +2129,7 @@ class Library:
 
         def work(context) -> None:
             with Library(self.settings, job_runner=runner) as worker:
-                pipeline = PipelineRegistry().darktable(worker.settings.output_dir, worker.settings.raw_developer_path)
+                pipeline = PipelineRegistry().darktable(worker.settings.output_dir, worker.settings.raw_developer_path, required=False)
                 counts = {"exported": 0, "failed": 0, "skipped": 0}
                 for index, photo_id in enumerate(request.photo_ids, 1):
                     if context.cancelled:

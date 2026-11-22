@@ -36,7 +36,7 @@ class LibraryCoordinationTests(unittest.TestCase):
         Image.new("RGB", (40, 30), "red").save(command[-8], format="TIFF", icc_profile=ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    def pipeline(self, output_root, raw_developer=None):
+    def pipeline(self, output_root, raw_developer=None, *, required=True):
         return DarktablePipeline("darktable-cli", output_root, raw_developer)
 
     def export(self, library):

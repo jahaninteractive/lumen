@@ -2563,10 +2563,10 @@ function updateWorkflow() {
   document.querySelector('#group-cleanup-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.frame_count)}` : 'No batch selected · 0 frames';
   document.querySelector('#workspace-cleanup-count').textContent = `${state.groups.length} batch${state.groups.length === 1 ? '' : 'es'} · ${frameCount(state.photoCount)}`;
   document.querySelector('#clear-help').textContent = `Use the exact uppercase word CLEAR. This removes all ${frameCount(state.photoCount)} from Lumen, including photos outside visible batches.`;
-  document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
+  document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable is not installed. Raws and camera JPEGs export without it; a darktable profile needs it.';
   const scope = document.querySelector('input[name="export-scope"]:checked').value;
-  document.querySelector('#export-jpegs').disabled = state.busy || !available || (scope === 'current' ? !photo : scope === 'keepers' ? !keepers : !filtered);
-  document.querySelector('#loupe-export').disabled = state.busy || !available || !photo;
+  document.querySelector('#export-jpegs').disabled = state.busy || (scope === 'current' ? !photo : scope === 'keepers' ? !keepers : !filtered);
+  document.querySelector('#loupe-export').disabled = state.busy || !photo;
   document.querySelector('#refine-availability').textContent = available ? '' : 'darktable-cli is unavailable. Install darktable or add it to PATH, restart Lumen, then reload this page.';
   document.querySelector('#refine-previews').disabled = state.busy || !available || (document.querySelector('#refine-scope').value === 'group' && !group);
   document.querySelector('#remove-group').disabled = state.busy || !group;
@@ -2584,7 +2584,7 @@ function updateWorkflow() {
     section.children[0].children[2].textContent = selected ? 'Selected' : '';
   });
   document.querySelector('#clear-workspace').disabled = state.busy || !state.photoCount || document.querySelector('#clear-confirmation').value !== 'CLEAR';
-  document.querySelector('#browse-xmp').disabled = state.busy;
+  document.querySelector('#browse-xmp').disabled = state.busy || !available;
   document.querySelector('#reset-xmp').disabled = state.busy || !state.profile;
   document.querySelector('#import-form button[type="submit"]').disabled = state.busy;
   document.querySelector('#browse-path').disabled = state.busy;

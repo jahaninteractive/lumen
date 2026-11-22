@@ -139,7 +139,9 @@ only on the Mac that built it.
    pieces with their sizes: Places (town names, about 50 MB; type the
    two-letter codes of the countries you photograph in, such as ZA AQ, to add
    their parks, reserves and bays), Map (about 100 MB),
-   darktable (310 MB, for PNG, TIFF and HEIC export) and Siril (230 MB, for
+   darktable (310 MB, for refined previews and exports that use a darktable
+   profile or start from a PNG, TIFF or HEIC; raws and camera JPEGs export
+   without it) and Siril (230 MB, for
    night-sky stacking). Tick what you want and press **Install**, or **Not
    Now**; nothing is required. Anything that did not finish is listed, and
    pressing Install again picks it up.
@@ -214,7 +216,7 @@ that Lumen looks for locally:
 
 | Path | What goes there | Used by |
 |------|-----------------|---------|
-| `vendor/apps/darktable.app` | the darktable application bundle; Lumen runs `Contents/MacOS/darktable-cli` | JPEG export, refined previews, RAW preview fallback |
+| `vendor/apps/darktable.app` | the darktable application bundle; Lumen runs `Contents/MacOS/darktable-cli` | refined previews, exports that use a darktable profile or start from a PNG, TIFF or HEIC, RAW preview fallback |
 | `vendor/apps/Siril.app` | the Siril application bundle; Lumen runs `Contents/MacOS/siril-cli` | Astro stacking |
 | `vendor/data/geonames/` | GeoNames `<CC>.txt`, `cities500.txt`, `countryInfo.txt` | Places (see below) |
 | `vendor/data/map/` | eleven Natural Earth 1:10m GeoJSON layers (`LUMEN_MAP_DIR`) | Map tab base map |
