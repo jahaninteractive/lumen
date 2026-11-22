@@ -348,6 +348,15 @@ final class Shell: NSObject, NSApplicationDelegate {
 
     /// The window's Uninstall: keys, server, then the trash steps and the bundle; quits either way.
     func uninstall(data: Bool, exports: Bool) {
+        do {  // before the keys go and the server stops, so a refusal changes nothing
+            try checkUninstallFolders()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Lumen cannot uninstall these folders."
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+            return
+        }
         if server?.isRunning != true && lumenOnDefaultPort() == true {
             let alert = NSAlert()
             alert.messageText = "Another Lumen is still running."
