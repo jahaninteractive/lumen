@@ -93,7 +93,7 @@ review_model="mlx-community/Qwen3.8-27B-4bit"
 components=(
   places "Places" "about 50 MB" "Names the town or park a photo was taken in" on
   map "Map" "about 100 MB" "The base map for the Map tab" on
-  darktable "darktable" "310 MB" "Refined previews and exports that use a darktable profile" off
+  darktable "darktable" "310 MB" "Refined previews, darktable profiles, and exporting HEIC, PNG or TIFF photos" off
   siril "Siril" "230 MB" "Stacking night-sky frames" off
   omlx "oMLX" "850 MB" "Runs AI advice on this Mac" on
   fast-model "Fast model" "6 GB" "Needed for every AI feature on this Mac" on

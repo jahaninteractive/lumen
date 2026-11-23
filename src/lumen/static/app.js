@@ -2563,7 +2563,7 @@ function updateWorkflow() {
   document.querySelector('#group-cleanup-count').textContent = group ? `Burst ${groupIndex + 1} · ${frameCount(group.frame_count)}` : 'No batch selected · 0 frames';
   document.querySelector('#workspace-cleanup-count').textContent = `${state.groups.length} batch${state.groups.length === 1 ? '' : 'es'} · ${frameCount(state.photoCount)}`;
   document.querySelector('#clear-help').textContent = `Use the exact uppercase word CLEAR. This removes all ${frameCount(state.photoCount)} from Lumen, including photos outside visible batches.`;
-  document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable is not installed. Raws and camera JPEGs export without it; a darktable profile needs it.';
+  document.querySelector('#export-availability').textContent = available ? 'darktable is ready. Existing JPEGs are kept; each export gets a unique name.' : 'darktable is not installed. Raws and camera JPEGs export without it; a darktable profile, or a HEIC, PNG or TIFF photo, needs it.';
   const scope = document.querySelector('input[name="export-scope"]:checked').value;
   document.querySelector('#export-jpegs').disabled = state.busy || (scope === 'current' ? !photo : scope === 'keepers' ? !keepers : !filtered);
   document.querySelector('#loupe-export').disabled = state.busy || !photo;
