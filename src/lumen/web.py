@@ -27,7 +27,7 @@ from .astrodebrief import PLACES
 from .library import CleanupError, ExportRequest, Library, public_message, remote_engine_models
 from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS, validate_watermark
-from .previews import PreviewError, full_size_for, read_exif_summary, thumbnail_for
+from .previews import PreviewError, full_size_for, read_exif_summary, read_image_dimensions, thumbnail_for
 from .rawdevelop import DevelopError, render_raw
 
 
@@ -1101,9 +1101,16 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         rendered = render_raw(Path(photo.path), Path(directory) / "preview.jpg", settings.raw_developer_path,
                                               settings=develop.to_dict(), long_edge=edge, image_format="jpeg", histogram=True)
                         image = base64.b64encode(rendered.path.read_bytes()).decode()
-                    self._send_json({"image": "data:image/jpeg;base64," + image, "histogram": {channel: list(buckets) for channel, buckets in rendered.histogram.items()},
-                                     "defaults": dict(rendered.defaults), "supported": dict(rendered.supported),
-                                     "neutral_temperature": rendered.neutral_temperature, "neutral_tint": rendered.neutral_tint})
+                    reply = {"image": "data:image/jpeg;base64," + image, "histogram": {channel: list(buckets) for channel, buckets in rendered.histogram.items()},
+                             "defaults": dict(rendered.defaults), "supported": dict(rendered.supported),
+                             "neutral_temperature": rendered.neutral_temperature, "neutral_tint": rendered.neutral_tint}
+                    # The render is preview-sized and already turned, so the Straighten group's megapixel count
+                    # needs the source's own size, the same one the crop choices count against.
+                    try:
+                        reply["native_width"], reply["native_height"] = read_image_dimensions(Path(photo.path))
+                    except ValueError:
+                        pass  # the count is left blank; the render itself is fine
+                    self._send_json(reply)
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/composition-review", path)
                 if match:

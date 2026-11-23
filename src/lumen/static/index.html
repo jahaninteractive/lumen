@@ -951,6 +951,17 @@
             <p id="develop-color_nr-note" class="quiet" hidden></p>
             </div>
           </details>
+          <details>
+            <summary>Straighten</summary>
+            <div class="develop-row">
+              <label for="develop-straighten_deg">Angle (degrees)</label>
+              <input type="range" id="develop-straighten_deg" aria-describedby="develop-straighten_deg-megapixels develop-straighten_deg-note" min="-15" max="15" step="0.1" value="0">
+              <input type="number" id="develop-straighten_deg-value" min="-15" max="15" step="0.1" placeholder="not set" aria-label="Straighten in degrees">
+              <button type="button" class="secondary" id="develop-straighten_deg-reset">Reset</button>
+            </div>
+            <p id="develop-straighten_deg-megapixels" class="quiet"></p>
+            <p id="develop-straighten_deg-note" class="quiet" hidden></p>
+          </details>
           <details class="how"><summary>How this works</summary>
             <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping.</p>
             <p class="quiet">The review model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>

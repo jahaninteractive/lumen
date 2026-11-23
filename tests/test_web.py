@@ -2695,7 +2695,8 @@ const suggestPosts = [];
 let suggestCount = 0;
 let developPolls = 0;
 let developSaveError = null;
-const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.2, 0.4, 0.1], r: [0.1, 0.2, 0.2, 0.1], g: [0.1, 0.1, 0.2, 0.1], b: [0.8, 0.05, 0.1, 0.05] }, defaults: { contrast: 0, sharpness: 1, luminance_nr: 0.004, color_nr: 0.5 }, neutral_temperature: 5600, neutral_tint: 7 });
+let developPreviewExtra = {};  // a scenario's own render fields, laid over the shared ones
+const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.2, 0.4, 0.1], r: [0.1, 0.2, 0.2, 0.1], g: [0.1, 0.1, 0.2, 0.1], b: [0.8, 0.05, 0.1, 0.05] }, defaults: { contrast: 0, sharpness: 1, luminance_nr: 0.004, color_nr: 0.5 }, neutral_temperature: 5600, neutral_tint: 7, ...developPreviewExtra });
 const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
 const refinePosts = [];
 let refinePolls = 0;
@@ -2927,7 +2928,7 @@ async function fetch(url, options = {}) {
       : developJob('succeeded', 1, { processed: 2, total: 2, result: { applied: 2, skipped_non_raw: 0, skipped_offline: 1, failed: 0 } });
   }
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
-    develop: scenario === 'develop' && url.endsWith('/1') ? { exposure_ev: 0.5 } : null,
+    develop: scenario === 'develop' && url.endsWith('/1') ? { exposure_ev: 0.5 } : scenario === 'develop-straighten' && url.endsWith('/1') ? { exposure_ev: 0.5, straighten_deg: 2 } : null,
     advice: scenario === 'advice-status' && url.endsWith('/1') ? { settings: { exposure_ev: 0.5 }, rationale: 'lift' } : null,
     photo: Object.assign({ format: 'ARW', is_raw: true, offline: scenario === 'develop-offline' },
       (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
@@ -4166,6 +4167,118 @@ const regression = `
     assert.equal(element('#develop-status').textContent || '', showing, "a failed save never writes on another frame's panel");
     const spoken = element('#announcer').textContent;
     assert.ok(spoken.includes('photo-1.jpg') && spoken.includes('could not be saved'), 'the failure names the frame it belongs to: ' + spoken);
+    return;
+  }
+  if (scenario === 'develop-straighten') {
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    activeCrop = { candidate_id: cropId, photo_id: 1 };  // frame 1 is cropped, frame 2 is not
+    const supported = { contrast: true, sharpness: true, luminance_nr: true, color_nr: true, lens_correction: true, straighten: true };
+    developPreviewExtra = { supported, native_width: 6000, native_height: 4000 };
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
+    Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    Object.assign(element('#loupe-viewport'), { tagName: 'DIV', clientWidth: 800, clientHeight: 600 });
+    const settled = () => new Promise(setImmediate);
+    const flush = async () => { for (let i = 0; i < 6; i++) await settled(); };
+    const field = name => element('#develop-' + name + '-value');
+    const range = element('#develop-straighten_deg');
+    const megapixels = () => element('#develop-straighten_deg-megapixels').textContent;
+    const saved = id => developPosts.filter(post => post.url === '/api/photos/' + id + '/develop').at(-1)?.body.settings;
+    const cropNote = 'Straighten changed; check the crop';
+    assert.deepEqual(straightenedSize(6000, 4000, 2), [5704, 3803], 'the same whole pixels as composition.straightened_size');
+    assert.deepEqual(straightenedSize(6000, 4000, -2), [5704, 3803], 'either direction costs the same');
+
+    await key('Home', card(1), element('#contact-sheet'));
+    await key('Enter', card(1), element('#contact-sheet'));
+    await flush();
+    element('#develop-tab').listeners.click();
+    await flush();
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5, straighten_deg: 2 }, 'the stored angle renders');
+    assert.equal(field('straighten_deg').value, '2.0');
+    assert.equal(range.getAttribute('aria-valuetext'), '2.0 degrees');
+    assert.equal(megapixels(), '21.7 MP remaining', '5704 by 3803 of the native 6000 by 4000');
+    assert.equal([range.disabled, field('straighten_deg').disabled, element('#develop-straighten_deg-reset').disabled].join(), 'false,false,false');
+    assert.equal(element('#develop-straighten_deg-note').hidden, true);
+    const renders = developPosts.length;
+    range.value = '0';
+    range.listeners.input({ target: range });
+    assert.equal(megapixels(), '24.0 MP remaining', 'the count follows the handle as it moves');
+    assert.equal(developPosts.length, renders, 'moving the handle renders nothing until it is let go');
+    range.value = '2';
+    range.listeners.input({ target: range });
+
+    // Another slider leaves the angle alone.
+    element('#develop-contrast').value = '0.3';
+    element('#develop-contrast').listeners.change();
+    await flush();
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5, straighten_deg: 2, contrast: 0.3 });
+
+    // A parked suggestion keeps the photographer's angle, and Discard puts a changed one back.
+    const held = { ...state.develop.fields };
+    await element('#develop-ask').listeners.click();
+    await flush();
+    assert.deepEqual(state.develop.fields, { exposure_ev: 0.8, clarity: 0.2, straighten_deg: 2 }, 'the advice does not level frames, so the angle stays');
+    range.value = '4';
+    range.listeners.change();
+    await flush();
+    assert.equal(state.develop.fields.straighten_deg, 4);
+    await element('#develop-discard-advice').listeners.click();
+    await flush();
+    assert.deepEqual(state.develop.fields, held, 'Discard restores the angle with every other field');
+    assert.equal(field('straighten_deg').value, '2.0');
+
+    // Reset clears the key, and the handle parks level: the helper reports no default for it.
+    await element('#develop-straighten_deg-reset').listeners.click();
+    await flush();
+    assert.ok(!('straighten_deg' in developPosts.at(-1).body.settings), 'a reset angle is never sent');
+    assert.equal(field('straighten_deg').value, '');
+    assert.equal(range.value, '0');
+    assert.equal(range.getAttribute('aria-valuetext'), 'not set');
+    assert.equal(megapixels(), '24.0 MP remaining');
+    let heard = announcements.length;
+    await key(']', element('#loupe-viewport'), element('#loupe'));
+    await flush();
+    assert.equal(state.develop.photoId, 2);
+    assert.deepEqual(saved(1), { exposure_ev: 0.5, contrast: 0.3 }, 'the reset angle is cleared from the frame');
+    assert.ok(announcements.slice(heard).includes('Develop settings saved. ' + cropNote), announcements.slice(heard).join(' | '));
+
+    // Frame 2 has no crop: the angle saves without the crop warning.
+    field('straighten_deg').value = '-3';
+    field('straighten_deg').listeners.change();
+    await flush();
+    assert.equal(element('#announcer').textContent, 'Straighten -3.0 degrees');
+    heard = announcements.length;
+    await key('[', element('#loupe-viewport'), element('#loupe'));
+    await flush();
+    assert.deepEqual(saved(2), { straighten_deg: -3 }, 'the angle is sent on save');
+    assert.ok(announcements.slice(heard).includes('Develop settings saved.'), announcements.slice(heard).join(' | '));
+    assert.ok(!announcements.slice(heard).some(text => text.includes(cropNote)), 'no crop, nothing to check');
+
+    // A changed angle on the cropped frame warns again; saving it unchanged would not.
+    assert.equal(state.develop.photoId, 1);
+    element('#develop-tab').listeners.click();
+    await flush();
+    range.value = '5';
+    range.listeners.change();
+    await flush();
+    heard = announcements.length;
+    element('#close-loupe').listeners.click();
+    await flush();
+    assert.deepEqual(saved(1), { exposure_ev: 0.5, straighten_deg: 5 });
+    assert.ok(announcements.slice(heard).includes('Develop settings saved. ' + cropNote), announcements.slice(heard).join(' | '));
+
+    // A helper built before straightening: the group is disabled and says why.
+    supported.straighten = false;
+    await key('Enter', card(1), element('#contact-sheet'));
+    await flush();
+    element('#develop-tab').listeners.click();
+    await flush();
+    assert.equal([range.disabled, field('straighten_deg').disabled, element('#develop-straighten_deg-reset').disabled].join(), 'true,true,true');
+    assert.equal(element('#develop-straighten_deg-note').hidden, false);
+    assert.equal(element('#develop-straighten_deg-note').textContent, "This Lumen's raw developer is older than straightening; run scripts/bootstrap.sh to rebuild it.");
+    assert.equal(element('#develop-contrast').disabled, false, 'the other controls are unaffected');
     return;
   }
   if (scenario === 'frame-view-full') {
@@ -6143,8 +6256,6 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
         panel = by_id["develop-panel"]
         for key, (low, high) in DEVELOP_RANGES.items():
-            if key == "straighten_deg":  # the Straighten group lands in a later change
-                continue
             for node in (by_id[f"develop-{key}"], by_id[f"develop-{key}-value"]):
                 self.assertIn(panel, node["parents"], f"{key} lives in the Develop panel")
                 self.assertEqual((float(low), float(high)), (float(node["attrs"]["min"]), float(node["attrs"]["max"])), key)
@@ -6162,7 +6273,7 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         # The suggestion panel is not a develop control, so it sits above them all rather than in
         # their order: it is where a photographer who cannot read the histogram yet starts.
         self.assertEqual(["Where to start", "Brightness", "White Balance", "Contrast", "Sharpness",
-                          "Lens Correction", "Noise Reduction", "How this works"], summaries, "IEDT's order, after the suggestion")
+                          "Lens Correction", "Noise Reduction", "Straighten", "How this works"], summaries, "IEDT's order, after the suggestion")
         # Every flag in DEVELOP_FLAGS needs a control, or the server accepts a setting the
         # panel cannot reach.
         for flag in DEVELOP_FLAGS:
@@ -6182,6 +6293,9 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_develop_tab_sends_only_touched_fields(self):
         self.run_javascript_cleanup_regression("develop")
+
+    def test_javascript_develop_straighten_group(self):
+        self.run_javascript_cleanup_regression("develop-straighten")
 
     def test_javascript_develop_tab_is_disabled_when_the_original_is_offline(self):
         self.run_javascript_cleanup_regression("develop-offline")
@@ -7504,6 +7618,11 @@ class DevelopWebTests(unittest.TestCase):
         self.assertEqual({"contrast": True, "sharpness": False, "luminance_nr": True, "color_nr": True,
                           "lens_correction": True}, body["supported"])
         self.assertNotIn("lens_correction", body)
+
+    def test_develop_preview_reports_the_native_size(self):
+        """The Straighten group counts the megapixels an angle leaves, which the preview-sized render cannot say."""
+        body = self.preview(settings={"straighten_deg": 2.0})[1]
+        self.assertEqual((120, 90), (body["native_width"], body["native_height"]), "the source, unturned and unscaled")
 
     def test_develop_preview_clamps_an_oversized_long_edge(self):
         self.assertEqual(200, self.preview(long_edge=10**9)[0])

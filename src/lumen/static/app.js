@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, supported: {}, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null },
   mergeSelection: new Set(), mergeAnchor: null, clearedFrames: 0,
   aiTasks: new Map(),  // per-panel local AI status by key, e.g. critique:<groupId>; it outlives the panel that asked
   ingest: { card: null, primary: null, mirror: null },
@@ -4574,7 +4574,25 @@ const DEVELOP_CONTROLS = [
   { key: 'luminance_nr', label: 'Luminance noise reduction', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
   { key: 'color_nr', label: 'Colour noise reduction', unit: '', min: 0, max: 1, park: 0.5, decimals: 2 },
   { key: 'clarity', label: 'Clarity', unit: '', min: 0, max: 1, park: 0, decimals: 2 },
+  // The helper reports this one as "straighten"; one built before it renders the frame unturned.
+  { key: 'straighten_deg', label: 'Straighten', unit: ' degrees', min: -15, max: 15, park: 0, decimals: 1, offer: 'straighten',
+    missing: "This Lumen's raw developer is older than straightening; run scripts/bootstrap.sh to rebuild it." },
 ];
+
+// composition.straightened_size: the largest same-aspect frame inside one turned by degrees, floored to whole pixels.
+function straightenedSize(width, height, degrees) {
+  const turn = Math.abs(degrees) * Math.PI / 180;
+  const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
+  const scale = Math.min(width / (width * cos + height * sin), height / (width * sin + height * cos));
+  return [Math.max(1, Math.min(width, Math.floor(scale * width))), Math.max(1, Math.min(height, Math.floor(scale * height)))];
+}
+
+// Counted against the source's own size, which the last render reported; blank until then.
+function showStraightenMegapixels(degrees) {
+  const native = state.develop.native;
+  const [width, height] = native ? straightenedSize(native.width, native.height, degrees) : [0, 0];
+  developNode('develop-straighten_deg-megapixels').textContent = native ? `${(width * height / 1_000_000).toFixed(1)} MP remaining` : '';
+}
 const CURVE_IDENTITY = [[0, 0], [0.25, 0.25], [0.5, 0.5], [0.75, 0.75], [1, 1]];
 const CURVE_GAP = 0.01;  // the server rejects equal x values, so a dragged point stops short of its neighbour
 const [CURVE_W, CURVE_H] = [100, 60];  // the viewBox in index.html
@@ -4690,15 +4708,16 @@ function syncDevelopControls() {
     else range.setAttribute('data-unset', '');
     // Disabled rather than hidden, like the lens box below: a one-channel sensor's decoder
     // has no contrast, sharpness or noise controls at all.
-    const offered = developOffered(control.key);
+    const offered = developOffered(control.offer ?? control.key);
     range.disabled = field.disabled = !ready || !offered;
     developNode(`develop-${control.key}-reset`).disabled = !ready || !set || !offered;
     const note = developNode(`develop-${control.key}-note`);
     if (note) {
-      note.textContent = offered ? '' : `This file's decoder has no ${control.label.toLowerCase()} control.`;
+      note.textContent = offered ? '' : control.missing ?? `This file's decoder has no ${control.label.toLowerCase()} control.`;
       note.hidden = offered;
     }
   });
+  showStraightenMegapixels(fields.straighten_deg ?? 0);
   CURVE_IDENTITY.forEach((_point, index) => developNode(`develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
   const lens = developNode('develop-lens_correction');
   lens.checked = fields.lens_correction === true;
@@ -4726,7 +4745,7 @@ function fillDevelop(photo) {
   develop.controller?.abort();
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
-    neutral: null, defaults: {}, supported: {}, zoomShown: false, histogram: {}, drag: null, controller: null,
+    neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, drag: null, controller: null,
     beforeAdvice: null, advice: state.details?.advice || null,
   });
   aiTaskLine(`develop:${photo.id}`, developNode('develop-task'));
@@ -4778,6 +4797,8 @@ async function renderDevelopPreview() {
   develop.neutral = { temperature: result.neutral_temperature, tint: result.neutral_tint };
   develop.defaults = result.defaults && typeof result.defaults === 'object' ? result.defaults : {};
   develop.supported = result.supported && typeof result.supported === 'object' ? result.supported : {};
+  develop.native = Number.isInteger(result.native_width) && Number.isInteger(result.native_height)
+    ? { width: result.native_width, height: result.native_height } : null;
   develop.histogram = result.histogram && !Array.isArray(result.histogram) ? result.histogram : {};
   drawDevelopWidget();
   syncDevelopControls();
@@ -4806,6 +4827,9 @@ async function saveDevelop() {
   const photoId = develop.photoId;
   const body = JSON.stringify(develop.fields);
   if (!develop.ready || photoId === null || body === develop.saved) return;
+  // A crop was drawn on the frame before it turned, so a new angle asks for a second look.
+  const turned = state.composition?.photo_id === photoId && Boolean(state.composition.active_crop)
+    && JSON.parse(develop.saved ?? '{}').straighten_deg !== JSON.parse(body).straighten_deg;
   develop.saved = body;  // one save per change, even if the panel closes twice
   try {
     const result = await post(`/api/photos/${photoId}/develop`, { settings: JSON.parse(body) });
@@ -4816,7 +4840,7 @@ async function saveDevelop() {
       refreshFrame(photoId);
       if (state.composition?.photo_id === photoId) state.composition.preview_url = result.preview_url;
     }
-    announce(result.develop ? 'Develop settings saved.' : 'Develop settings cleared.');
+    announce((result.develop ? 'Develop settings saved.' : 'Develop settings cleared.') + (turned ? ' Straighten changed; check the crop' : ''));
   } catch (error) {
     develop.saved = null;  // unknown server state: every later body differs, so the next close tries again
     const message = `${photoById(photoId)?.name || 'This frame'}: develop settings could not be saved: ${error.message}`;
@@ -4896,6 +4920,8 @@ DEVELOP_CONTROLS.forEach(control => {
   });
   developNode(`develop-${control.key}-reset`).addEventListener('click', () => setDevelopField(control, null));
 });
+// The count follows the handle as it moves; the render still waits for the release.
+developNode('develop-straighten_deg').addEventListener('input', event => showStraightenMegapixels(Number(event.target.value)));
 
 // Dragging a point keeps the x values strictly ascending, which is what the server validates.
 function moveCurvePoint(index, x, y) {
@@ -4979,6 +5005,13 @@ developNode('develop-reset-all').addEventListener('click', async () => {
   await saveDevelop();  // the clear also re-renders the contact-sheet preview
   renderDevelopPreview();
 });
+// The advice does not level frames, so a parked suggestion carries the photographer's angle, or none.
+function withPanelAngle(settings) {
+  const { straighten_deg: _ignored, ...rest } = settings;
+  const angle = state.develop.fields.straighten_deg;
+  return angle === undefined ? rest : { ...rest, straighten_deg: angle };
+}
+
 // Advisory, like every other local AI control: the sliders move so the change is visible in the
 // preview, but nothing is stored until the photographer leaves the tab, and Discard undoes the lot.
 async function askDevelopAdvice() {
@@ -4995,7 +5028,7 @@ async function askDevelopAdvice() {
     if (develop.photoId !== photoId) return;  // the server stored it; reopening the frame offers it again
     if (develop.beforeAdvice === null) develop.beforeAdvice = before;  // the first attempt is what Discard goes back to
     develop.advice = advice;
-    develop.fields = advice.settings;
+    develop.fields = withPanelAngle(advice.settings);
     developNode('develop-advice').textContent = advice.rationale;
     developNode('develop-feedback').value = '';
     developNode('develop-status').textContent = 'The handles are where the model would start. Nothing is saved yet.';
@@ -5016,7 +5049,7 @@ function useStoredDevelopAdvice() {
   const develop = state.develop;
   if (!develop.ready || !develop.advice) return;
   if (develop.beforeAdvice === null) develop.beforeAdvice = JSON.stringify(develop.fields);
-  develop.fields = JSON.parse(JSON.stringify(develop.advice.settings));
+  develop.fields = withPanelAngle(JSON.parse(JSON.stringify(develop.advice.settings)));
   developNode('develop-advice').textContent = develop.advice.rationale ?? '';
   developNode('develop-status').textContent = 'The handles are where the model would start. Nothing is saved yet.';
   syncDevelopControls();
