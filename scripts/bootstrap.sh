@@ -91,10 +91,10 @@ review_model="mlx-community/Qwen3.8-27B-4bit"
 
 # What --list shows and --only names: key, label, size, purpose, default.
 components=(
-  places "Places" "about 50 MB" "Names the town or park a photo was taken in" on
-  map "Map" "about 100 MB" "The base map for the Map tab" on
-  darktable "darktable" "310 MB" "Refined previews, darktable profiles, and exporting HEIC, PNG or TIFF photos" off
-  siril "Siril" "230 MB" "Stacking night-sky frames" off
+  places "Places" "about 50 MB" "Turns each photo's GPS position into a place name (town, park or bay), on this Mac with nothing sent anywhere. Most people want this." on
+  map "Map" "about 100 MB" "The world map behind the Map tab, so you can see where your photos were taken without an internet connection. Most people want this." on
+  darktable "darktable" "310 MB" "A free raw editor. Lumen uses it for refined previews, your darktable looks, and exporting HEIC, PNG or TIFF photos. Raws and camera JPEGs export without it." off
+  siril "Siril" "230 MB" "A free astronomy program. Lumen uses it to stack many night-sky frames into one cleaner picture. Only needed for astrophotography." off
   omlx "oMLX" "850 MB" "Runs AI advice on this Mac" on
   fast-model "Fast model" "6 GB" "Needed for every AI feature on this Mac" on
   review-model "Review model" "16 GB" "Better critique; wants 32 GB of memory" off

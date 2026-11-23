@@ -60,6 +60,7 @@ cat > "$contents/Info.plist" <<EOF
   <key>CFBundleIconFile</key><string>Lumen</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
+  <key>NSHumanReadableCopyright</key><string>Made by Nasir David. © 2026 Jahan Interactive Pty Ltd, released under the MIT License.</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.5</string>
   <key>NSHighResolutionCapable</key><true/>
