@@ -2,6 +2,10 @@
 
 Deferred items with a known reason. Each entry says what, why it was deferred, and the trigger for picking it up. Keep `docs/HANDOFF.md` as the status ledger; this file only holds work nobody is doing yet.
 
+## From the 2026-11-23 clean-Mac test of Lumen.app
+
+- **oMLX on a 16 GB Mac needs written help (website and guide).** On an M4 Mac mini with 16 GB, oMLX refused the fast model: "Model … (5.63GB) does not fit under the dynamic memory ceiling (5.16GB). Close other apps to free RAM (… 13.00GB static cap …), raise memory_guard_tier (safe → balanced → aggressive), or use a smaller model." The photographer got it loading by turning oMLX's memory limit off. The help should say: on 16 GB take only the fast model, close other apps before loading, and where oMLX's memory guard setting is and which tier to pick; whether `balanced` is enough was not tried. It belongs beside the Settings hint that names which model to download. Trigger: the website's install page is written, or the Settings hint is built.
+
 ## From the 2026-11-22 Canon raws
 
 - **Canon files not yet measured.** An RF lens with built-in corrections (does the helper offer lens correction?), a Dual Pixel raw, an HDR PQ raw, a body older than the 5D Mark III, and a Siril stack of CR2 or CR3 lights. Trigger: one of those files to hand; import it, check the preview, the Develop tab's disabled controls and a full export, then add a row to the guide's "Cameras measured".

@@ -90,7 +90,8 @@ class PreferencesTests(unittest.TestCase):
 
     def test_service_presets_are_pinned(self):
         self.assertEqual(preferences.SERVICE_PRESETS, (
-            {"name": "Anthropic", "url": "https://api.anthropic.com/v1"},
+            {"name": "Anthropic", "url": "https://api.anthropic.com/v1",
+             "listing_headers": {"anthropic-version": "2023-06-01"}, "listing_key_header": "x-api-key"},
             {"name": "Google", "url": "https://generativelanguage.googleapis.com/v1beta/openai"},
             {"name": "OpenAI", "url": "https://api.openai.com/v1"},
         ))

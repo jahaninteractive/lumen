@@ -1918,7 +1918,13 @@ console.log(JSON.stringify([panel.hidden, store]));
         row = next(r for r in body["settings"] if r["key"] == "geocode_online")
         self.assertEqual((True, "saved"), (row["value"], row["source"]))
         self.assertEqual({"base": False, "online": False}, body["keys"])
-        self.assertEqual(list(preferences.SERVICE_PRESETS), body["presets"])
+        self.assertEqual([{"name": p["name"], "url": p["url"]} for p in preferences.SERVICE_PRESETS], body["presets"])
+        self.assertEqual({"fast": "Qwen3-VL-8B-Instruct-4bit", "review": "Qwen3.8-27B-4bit"}, body["mac_models"])
+        markup = (Path(__file__).parent.parent / "src/lumen/static/index.html").read_text()
+        self.assertIn('<p class="quiet" id="mac-models-hint" hidden></p>', markup)
+        javascript = (Path(__file__).parent.parent / "src/lumen/static/app.js").read_text()
+        self.assertIn("This Mac runs advice through oMLX. In oMLX, download ${fast} (needed for every AI feature).", javascript)
+        self.assertIn(" With 32 GB of memory or more, also ${review} for better critique; with 16 GB, take only the first.", javascript)
         self.assertEqual((200, body), self.get_json("/api/settings"))
         self.assertTrue(self.get_json("/api/status")[1]["geonames"]["online"])  # the live server now uses it
 

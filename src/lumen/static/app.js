@@ -3650,6 +3650,11 @@ function fillSettings(body, saved = []) {
   }
   const service = document.querySelector('#online-service');
   if (service.options?.length === 1) service.append(...(body.presets || []).map(preset => new Option(preset.name, preset.url)));
+  const { fast, review } = body.mac_models || {};
+  const macHint = document.querySelector('#mac-models-hint');
+  macHint.hidden = !fast;
+  macHint.textContent = fast ? `This Mac runs advice through oMLX. In oMLX, download ${fast} (needed for every AI feature).`
+    + (review && review !== fast ? ` With 32 GB of memory or more, also ${review} for better critique; with 16 GB, take only the first.` : '') : '';
   syncOnlineService();
   markSettings();
   syncEngineSelect();

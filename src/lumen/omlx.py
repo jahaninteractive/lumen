@@ -779,6 +779,14 @@ def list_models(engine: str, url: str, api_key: str | None, timeout: float = 10)
     url = normalise_engine_url(engine, url)
     key = api_key or (OmlxTagger._local_api_key() if engine == "mac" else None)
     headers = {"Authorization": f"Bearer {key}"} if key else {}
+    if engine == "online":
+        from .preferences import SERVICE_PRESETS  # here, not at the top: preferences imports this module
+        host = urlparse(url).hostname
+        for preset in SERVICE_PRESETS:
+            if urlparse(preset["url"]).hostname == host:
+                headers.update(preset.get("listing_headers", {}))
+                if key and preset.get("listing_key_header"):
+                    headers[preset["listing_key_header"]] = key
     request = urllib.request.Request(f"{api_base(engine, url)}/models", headers=headers)
     prefix = ERROR_PREFIX[engine]
     try:
@@ -787,7 +795,7 @@ def list_models(engine: str, url: str, api_key: str | None, timeout: float = 10)
             data = json.load(response)["data"]
     except urllib.error.HTTPError as error:
         # ponytail: a 400 also hides a bad key on a service that answers 400 for one; the first chat call then says so.
-        if error.code in (400, 404, 405):  # seen: a service's listing answered 400 wanting its own version header, while its chat endpoint takes the standard request
+        if error.code in (400, 404, 405):  # a listing this client cannot read; a preset's listing_headers cover the one service seen doing this
             error.close()
             return []
         reason = "" if engine == "mac" else _http_reason(error)

@@ -918,6 +918,30 @@ class EngineTests(unittest.TestCase):
             with self.assertRaisesRegex(OmlxError, "^Online "):
                 list_models("online", "https://api.example.com", "secret")
 
+    def test_list_models_sends_a_presets_listing_headers_to_that_host_only(self):
+        from lumen import preferences
+        preset = next(p for p in preferences.SERVICE_PRESETS if p.get("listing_headers"))
+        extra = {**preset["listing_headers"], preset["listing_key_header"]: "secret"}
+        opener = _Opener(json.dumps({"data": [{"id": "a"}]}).encode())
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+            self.assertEqual(["a"], list_models("online", preset["url"], "secret"))
+        request = opener.requests[0]
+        self.assertEqual("Bearer secret", request.get_header("Authorization"))
+        for name, value in extra.items():
+            self.assertEqual(value, request.get_header(name.capitalize()), name)
+        others = [("online", "https://api.example.com/v1"), ("base", "http://pc.local:11434/v1"),
+                  ("mac", "http://127.0.0.1:8000/v1"), ("base", preset["url"])]
+        for engine, url in others:
+            opener = _Opener(json.dumps({"data": []}).encode())
+            with self.subTest(engine=engine, url=url), patch("lumen.omlx.urllib.request.build_opener", return_value=opener):
+                list_models(engine, url, "secret")
+                sent = {name.lower() for name, _ in opener.requests[0].header_items()}
+                self.assertFalse(sent & {name.lower() for name in extra}, sent)
+        with patch("lumen.omlx.urllib.request.build_opener", return_value=_Opener(json.dumps({"data": []}).encode())) as build:
+            list_models("online", preset["url"], None)
+            sent = {name.lower() for name, _ in build.return_value.requests[0].header_items()}
+            self.assertNotIn(preset["listing_key_header"], sent, "no key, no key header")
+
     def test_refresh_models_holds_the_last_listing_and_a_failure_clears_it(self):
         self.assertIsNone(held_models("base"))
         with patch("lumen.omlx.list_models", return_value=["a", "b"]) as listing:

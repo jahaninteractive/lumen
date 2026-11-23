@@ -261,6 +261,15 @@ final class Shell: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// The Dock icon opens the browser, which takes the menu bar away, so the Dock menu repeats it.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Open Lumen", action: #selector(openLumen), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Set Up Lumen…", action: #selector(showSetup), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Uninstall Lumen…", action: #selector(showUninstall), keyEquivalent: "").target = self
+        return menu
+    }
+
     @objc func openLumen() {
         if let url = serverURL { NSWorkspace.shared.open(url) }
     }
@@ -288,7 +297,7 @@ final class Shell: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Quit Lumen", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        // No target: the first responder handles these, so the country codes field can be edited.
+        // No target: the first responder handles these, so the install log can be copied.
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
@@ -499,13 +508,15 @@ func indented(_ views: [NSView]) -> NSStackView {
 // MARK: Setup window
 
 /// One tick box per line of `bootstrap.sh --list`; Install runs the script with the ticked keys.
-/// The only key known here is `places`, whose row carries the country codes field.
-final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
+/// The only key known here is `places`, whose row carries the country picker.
+final class Setup: NSObject, NSWindowDelegate {
     let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
     let onClose: () -> Void
     let rows = NSStackView()
-    let countriesLabel = NSTextField(labelWithString: "Countries you photograph in (two-letter codes, e.g. ZA AQ)")
-    let countries = NSTextField()
+    let countriesLabel = NSTextField(labelWithString: "Countries you photograph in")
+    let countries = NSPopUpButton(frame: .zero, pullsDown: true)
+    let chosenLabel = NSTextField(wrappingLabelWithString: "None chosen")
+    var chosen: Set<String> = []  // two-letter codes, as LUMEN_GEONAMES_COUNTRIES takes them
     let logView = NSTextView()
     let logScroll = NSScrollView()
     let message = NSTextField(wrappingLabelWithString: "")
@@ -524,8 +535,23 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         super.init()
         let width: CGFloat = 440  // inside the margins
         countries.setAccessibilityTitleUIElement(countriesLabel)
-        countries.delegate = self
-        countries.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        countries.addItem(withTitle: "Add a country…")  // a pull-down shows its first item as the title
+        // macOS's own region list; these codes are groupings or places GeoNames has no country file for.
+        let notCountries: Set<String> = ["AC", "CP", "CQ", "DG", "EA", "EU", "EZ", "IC", "QO", "TA", "UN"]
+        let regions = Locale.Region.isoRegions.map(\.identifier).filter {
+            $0.count == 2 && $0.allSatisfy { $0.isASCII && $0.isLetter } && !notCountries.contains($0)
+        }
+        for (name, code) in regions.map({ (Locale.current.localizedString(forRegionCode: $0) ?? $0, $0) })
+            .sorted(by: { $0.0.localizedStandardCompare($1.0) == .orderedAscending }) {
+            countries.addItem(withTitle: name)
+            countries.lastItem?.representedObject = code
+        }
+        (countries.cell as? NSPopUpButtonCell)?.altersStateOfSelectedItem = false  // pickCountry toggles the tick itself
+        countries.target = self
+        countries.action = #selector(pickCountry)
+        chosenLabel.widthAnchor.constraint(equalToConstant: width - 20).isActive = true
+        chosenLabel.textColor = .secondaryLabelColor
+        chosenLabel.setAccessibilityLabel("Chosen countries")
         logView.isEditable = false
         logView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         logView.isVerticallyResizable = true
@@ -606,13 +632,12 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
             var below: [NSView] = [note]
             if key == "places" {
                 places = box
-                below += [countriesLabel, countries]
+                below += [countriesLabel, countries, chosenLabel]
             }
             rows.addArrangedSubview(box)
             rows.addArrangedSubview(indented(below))
             if !ready { boxes.append((key, box)) }
         }
-        if boxes.isEmpty { dismiss.title = "Done" }
         changed()
     }
 
@@ -620,20 +645,36 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         for (key, box) in boxes { ticked[key] = box.state == .on }
         install.isEnabled = script == nil && !tickedKeys.isEmpty
         countries.isEnabled = script == nil && places?.state == .on
+        // Nothing left for Install to do: Done is the way out, and Return takes it.
+        let done = script == nil && tickedKeys.isEmpty
+        dismiss.title = done ? "Done" : "Not Now"
+        dismiss.keyEquivalent = done ? "\r" : "\u{1b}"
+        install.keyEquivalent = done ? "" : "\r"
     }
 
-    /// The ticked missing keys, plus `places` when it is installed and country codes were typed:
+    /// Toggles the picked country's tick; the pull-down's title item is never picked.
+    @objc func pickCountry() {
+        guard let item = countries.selectedItem, let code = item.representedObject as? String else { return }
+        item.state = item.state == .on ? .off : .on
+        if item.state == .on { chosen.insert(code) } else { chosen.remove(code) }
+        showChosen()
+        changed()
+    }
+
+    func showChosen() {
+        let names = countries.itemArray.filter { $0.state == .on }.map(\.title)
+        chosenLabel.stringValue = names.isEmpty ? "None chosen" : names.joined(separator: ", ")
+    }
+
+    /// The ticked missing keys, plus `places` when it is installed and countries were chosen:
     /// the script skips the files already there and fetches the country files.
     var tickedKeys: [String] {
         var keys = boxes.filter { $0.box.state == .on }.map(\.key)
-        let codes = !countries.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
-        if places != nil && !boxes.contains(where: { $0.key == "places" }) && codes {
+        if places != nil && !boxes.contains(where: { $0.key == "places" }) && !chosen.isEmpty {
             keys.append("places")
         }
         return keys
     }
-
-    func controlTextDidChange(_ notification: Notification) { changed() }
 
     func show(_ text: String) {
         message.stringValue = text
@@ -648,9 +689,7 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         process.arguments = [resources.appendingPathComponent("bootstrap.sh").path, "--downloads-only",
                              "--dest", childEnvironment["LUMEN_VENDOR"]!, "--only", keys.joined(separator: ",")]
         var environment = childEnvironment
-        // The script splits on spaces only, so "ZA, AQ" would skip both.
-        environment["LUMEN_GEONAMES_COUNTRIES"] = countries.stringValue.replacingOccurrences(of: ",", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        environment["LUMEN_GEONAMES_COUNTRIES"] = chosen.sorted().joined(separator: " ")  // the script splits on spaces
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         skipped = []
@@ -684,8 +723,15 @@ final class Setup: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         if !skipped.isEmpty {
             text += (text.isEmpty ? "" : "\n\n") + "Not finished. Press Install to try again:\n" + skipped.joined(separator: "\n")
         }
-        dismiss.title = "Done"
+        if status == 0 && skipped.isEmpty {  // the chosen countries are fetched: none is new any more
+            chosen = []
+            countries.itemArray.forEach { $0.state = .off }
+            showChosen()
+        }
         reload()
+        if status == 0 && skipped.isEmpty {
+            add(shell.holdBrowser ? "Finished. Press Done to open Lumen." : "Finished.")
+        }
         show(text)
         NSAccessibility.post(element: window, notification: .announcementRequested, userInfo: [
             .announcement: text.isEmpty ? "Install finished." : text, .priority: NSAccessibilityPriorityLevel.high.rawValue])

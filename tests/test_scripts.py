@@ -109,6 +109,23 @@ class ScriptTests(unittest.TestCase):
         script = Path("scripts/bootstrap.sh").read_text()
         self.assertRegex(script, r"\ntrap 'exit 143' TERM INT")
 
+    def test_disk_image_attach_drops_only_the_deprecation_warning(self):
+        # Runs the script's own attach line against a fake hdiutil that warns, errors and fails.
+        line = next(l for l in Path("scripts/bootstrap.sh").read_text().splitlines() if "hdiutil attach" in l)
+        with tempfile.TemporaryDirectory() as root:
+            fake = Path(root) / "hdiutil"
+            fake.write_text("#!/bin/zsh\n"
+                            "echo \"hdiutil: WARNING: 'hdiutil attach' is deprecated. Please use 'diskutil image attach' instead.\" >&2\n"
+                            "echo 'hdiutil: attach failed - no such file' >&2\nexit 3\n")
+            fake.chmod(0o755)
+            body = f'set -eu\nmount_point=/nonexistent dmg=/nonexistent\n{line}\necho survived\n'
+            env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}"}
+            result = subprocess.run(["zsh", "-c", body], capture_output=True, text=True, timeout=30, check=False, env=env)
+        self.assertEqual(3, result.returncode)
+        self.assertNotIn("survived", result.stdout)
+        self.assertIn("attach failed", result.stderr)
+        self.assertNotIn("deprecated", result.stderr)
+
     def test_a_sha256_mismatch_removes_the_bad_download(self):
         # fetch skips a file that exists, so a bad one left behind would fail every re-run the same way.
         live = "\n".join(line.split("#")[0] for line in Path("scripts/bootstrap.sh").read_text().splitlines())

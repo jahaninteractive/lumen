@@ -24,8 +24,8 @@ so for now a built app opens only on the Mac that built it.
 4. Lumen then opens in your browser. Click Lumen in the Dock to open it again
    after closing the tab; quitting Lumen stops it, and asks first if a job is
    still running.
-5. The Lumen menu holds **Set Up Lumen…** (add a piece later) and
-   **Uninstall Lumen…**.
+5. The Lumen menu, and the menu from a right-click on Lumen's Dock icon, hold
+   **Set Up Lumen…** (add a piece later) and **Uninstall Lumen…**.
 6. For AI advice, connect Base or Online in [Settings](#settings-and-the-ai-engine).
    The app does not install AI on this Mac; for that, see [Local AI](#local-ai).
 

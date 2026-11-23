@@ -136,8 +136,8 @@ only on the Mac that built it.
    choose **Move** when it asks "Move Lumen to your Applications folder?". It
    copies itself there and opens the copy.
 3. The first time it opens, the **Set Up Lumen** window lists the optional
-   pieces with their sizes: Places (town names, about 50 MB; type the
-   two-letter codes of the countries you photograph in, such as ZA AQ, to add
+   pieces with their sizes: Places (town names, about 50 MB; pick the
+   countries you photograph in from **Add a country…** to add
    their parks, reserves and bays), Map (about 100 MB),
    darktable (310 MB, for refined previews and exports that use a darktable
    profile or start from a PNG, TIFF or HEIC; raws and camera JPEGs export
@@ -148,8 +148,9 @@ only on the Mac that built it.
 4. When the window closes, Lumen opens in your web browser. Closing the
    browser tab does not stop it: click Lumen in the Dock to open it again, and
    quit Lumen from the Dock or its menu to stop it.
-5. **Set Up Lumen…** and **Uninstall Lumen…** are in the Lumen menu, so you can
-   add a piece later or remove Lumen.
+5. **Set Up Lumen…** and **Uninstall Lumen…** are in the Lumen menu, and in the menu you get by
+   right-clicking Lumen's Dock icon, so you can add a piece later or remove
+   Lumen.
 6. For AI advice, open **Settings** (the gear at the far right of the tabs) and
    connect a service under AI engine: Base (your own computer at home) or
    Online (a service you hold a key for); see

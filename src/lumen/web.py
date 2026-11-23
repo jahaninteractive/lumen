@@ -315,11 +315,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
     # The switches offer the full and fast models only, never a typed name; fixed at startup so a switch cannot shrink the choice.
     role_models = list(dict.fromkeys((settings.omlx_model, settings.omlx_fast_model)))
     role_fields = {"fast": "omlx_fast_model", "review": "omlx_review_model"}  # role -> Settings field a switch rebinds
+    mac_models = {"fast": settings.omlx_fast_model, "review": settings.omlx_model}  # what This Mac's hint says to download; fixed before any switch
 
     def settings_body(library: Library) -> dict:
         return {"settings": preferences.describe(settings, library.catalog),
                 "keys": {engine: keychain.get_key(engine) is not None for engine in ("base", "online")},  # whether, never what
-                "presets": list(preferences.SERVICE_PRESETS)}
+                "presets": [{"name": preset["name"], "url": preset["url"]} for preset in preferences.SERVICE_PRESETS],
+                "mac_models": mac_models}
 
     class Handler(BaseHTTPRequestHandler):
         def handle_one_request(self) -> None:

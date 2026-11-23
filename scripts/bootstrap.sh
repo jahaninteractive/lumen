@@ -203,7 +203,8 @@ install_app() {
   fi
   verify_sha256 "$dmg" "$3"
   mount_point="$(mktemp -d -t lumen-dmg)"
-  hdiutil attach -nobrowse -readonly -mountpoint "$mount_point" "$dmg" >/dev/null
+  # Newer macOS warns that this form is deprecated; its replacement is not on 13.5, so only the warning goes.
+  hdiutil attach -nobrowse -readonly -mountpoint "$mount_point" "$dmg" >/dev/null 2> >(grep -v 'is deprecated' >&2)
   rm -rf "$5/$4.part"
   cp -R "$mount_point/$4" "$5/$4.part"
   mv "$5/$4.part" "$5/$4"

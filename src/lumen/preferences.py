@@ -30,8 +30,10 @@ SAVED: dict[str, str | None] = {
 }
 
 # The one agreed place service names appear in code: the Online engine's presets.
+# listing_headers / listing_key_header: what that host's model listing needs beyond the standard request (omlx.list_models).
 SERVICE_PRESETS: tuple[dict, ...] = (
-    {"name": "Anthropic", "url": "https://api.anthropic.com/v1"},
+    {"name": "Anthropic", "url": "https://api.anthropic.com/v1",
+     "listing_headers": {"anthropic-version": "2023-06-01"}, "listing_key_header": "x-api-key"},
     {"name": "Google", "url": "https://generativelanguage.googleapis.com/v1beta/openai"},
     {"name": "OpenAI", "url": "https://api.openai.com/v1"},
 )
