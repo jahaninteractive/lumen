@@ -973,11 +973,17 @@ if headless, let choice = setting("LUMEN_APP_UNINSTALL") {
         exit(2)
     }
     NSApplication.shared.setActivationPolicy(.prohibited)  // never activated, never on screen
+    /// The window's frame view, title bar included, at twice its point size.
     func save(_ window: NSWindow, _ name: String) {
+        // Controls draw at their window's screen scale: place the (unshown) window on a Retina screen if there is one.
+        if let retina = NSScreen.screens.first(where: { $0.backingScaleFactor >= 2 }) { window.setFrameOrigin(retina.frame.origin) }
         window.layoutIfNeeded()
         window.displayIfNeeded()
-        let view = window.contentView!
-        guard let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+        let view = window.contentView!.superview ?? window.contentView!
+        let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2),
+                                     pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                                     hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        image.size = view.bounds.size
         view.cacheDisplay(in: view.bounds, to: image)
         do {
             try image.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
@@ -986,23 +992,35 @@ if headless, let choice = setting("LUMEN_APP_UNINSTALL") {
             exit(1)
         }
     }
-    shell.holdBrowser = true
-    save(Setup(firstRun: true, onClose: {}).window, "setup-first-run.png")
-    let setup = Setup(firstRun: false, onClose: {})
-    save(setup.window, "setup.png")
-    // A clean install's end, through the real path: nothing ticked, a few lines, then finished(0).
-    setup.boxes.forEach { setup.ticked[$0.key] = false }
-    setup.logScroll.isHidden = false
-    ["Downloading https://download.geonames.org/export/dump/cities500.zip", "GeoNames cities500: ready",
-     "Downloading Natural Earth layers", "Map: ready", "Lumen is installed."].forEach(setup.add)
-    setup.finished(0)
-    save(setup.window, "setup-finished.png")
-    let uninstall = Uninstall(onUninstall: { _, _ in }, onClose: {})
-    RunLoop.main.run(until: Date().addingTimeInterval(2))  // the du sizes arrive on the main queue
-    save(uninstall.window, "uninstall.png")
-    let done = uninstalled(data: true, exports: false, notes: [])
-    done.layout()
-    save(done.window, "uninstalled.png")
+    for (suffix, look) in [("", NSAppearance.Name.aqua), ("-dark", .darkAqua)] {
+        NSApp.appearance = NSAppearance(named: look)
+        shell.holdBrowser = true
+        save(Setup(firstRun: true, onClose: {}).window, "setup-first-run\(suffix).png")
+        let setup = Setup(firstRun: false, onClose: {})
+        save(setup.window, "setup\(suffix).png")
+        // A clean install's end, through the real path: nothing ticked, a few lines, then finished(0).
+        setup.boxes.forEach { setup.ticked[$0.key] = false }
+        setup.logScroll.isHidden = false
+        ["Downloading https://download.geonames.org/export/dump/cities500.zip", "GeoNames cities500: ready",
+         "Downloading Natural Earth layers", "Map: ready", "Lumen is installed."].forEach(setup.add)
+        setup.finished(0)
+        save(setup.window, "setup-finished\(suffix).png")
+        let uninstall = Uninstall(onUninstall: { _, _ in }, onClose: {})
+        RunLoop.main.run(until: Date().addingTimeInterval(2))  // the du sizes arrive on the main queue
+        save(uninstall.window, "uninstall\(suffix).png")
+        let done = uninstalled(data: true, exports: false, notes: [])
+        done.layout()
+        save(done.window, "uninstalled\(suffix).png")
+        // The standard panel can only be built by ordering it front; it is ordered out again before
+        // the run loop turns, so it is never drawn on screen.
+        let before = Set(NSApp.windows)
+        NSApp.orderFrontStandardAboutPanel(nil)
+        if let about = NSApp.windows.first(where: { !before.contains($0) }) {
+            about.orderOut(nil)
+            save(about, "about\(suffix).png")
+            about.close()
+        }
+    }
     exit(0)
 } else if headless {
     // No NSApplication: nothing here may need the window server.
