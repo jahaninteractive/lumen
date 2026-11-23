@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.9.1 (2026-11-23)
+
+- Changing the Online or Base service works from Settings: replace the key, then save the new address. Before, a new address was refused while any key was saved, and with that engine in use it was refused without one too, so the only way through was to switch engine first. A key replaced since Lumen started may follow one change of address; the refusal now says so.
+
 ## 0.9.0 (2026-11-23)
 
 - `Lumen.app` and its disk image, built by `scripts/build_app.sh`: a double-clickable app carrying its own Python, exiftool and both native helpers. It starts the server, opens the workbench in the browser, reopens it from the Dock and stops the server on Quit (or when the app crashes). The first launch shows **Set Up Lumen**, tick boxes for Places, Map, darktable and Siril that run the same pinned downloads as `scripts/bootstrap.sh`; the app offers to move itself to Applications when opened from the disk image; **Uninstall Lumen…** moves the downloads and the app to the Trash, removes the saved service keys from the Keychain (they cannot be recovered) and keeps the library unless asked. The released disk image is signed and notarized; an unsigned build runs only on the Mac that built it.

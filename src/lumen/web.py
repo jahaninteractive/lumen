@@ -232,16 +232,24 @@ def _refresh_models_quietly(settings: Settings) -> None:
 MODEL_BATCHES = ("tag", "assist", "cull", "review_rejects", "triage")  # job kinds that call the AI engine per frame
 
 
-def _check_saved_change(before: Settings, after: Settings, catalog) -> None:
-    """Refuses, before any call, a switch under a running model batch and a saved key following a new host."""
+def _check_saved_change(before: Settings, after: Settings, catalog, fresh_keys: set[str]) -> set[str]:
+    """Refuses, before any call, a switch under a running model batch and a saved key following a new host.
+
+    A key saved since the server started (`fresh_keys`) may follow one new host: that is how a photographer
+    changes service. Returns the engines whose host changes, so the caller can spend that allowance."""
     engine = before.ai_engine
     moved = after.ai_engine != engine or (engine != "mac" and getattr(after, f"{engine}_url") != getattr(before, f"{engine}_url"))
     if moved and any(job.kind in MODEL_BATCHES and job.status in ("queued", "running") for job in catalog.list_jobs()):
         raise ValueError(f"A batch is still running on {preferences.ENGINE_LABELS[engine]}: wait for it or cancel it first.")
+    rehosted = set()
     for remote in ("base", "online"):
         old, new = getattr(before, f"{remote}_url"), getattr(after, f"{remote}_url")
-        if old and new and urlparse(old).netloc != urlparse(new).netloc and keychain.get_key(remote) is not None:
-            raise ValueError(f"{omlx.ERROR_PREFIX[remote]} has a key saved for its current address: remove or replace the key first.")
+        if old and new and urlparse(old).netloc != urlparse(new).netloc:
+            rehosted.add(remote)
+            if remote not in fresh_keys and keychain.get_key(remote) is not None:
+                raise ValueError(f"{omlx.ERROR_PREFIX[remote]} has a key saved for its current address: "
+                                 "replace it with the new address's key, then save the address again.")
+    return rehosted
 
 
 def _check_engine_change(before: Settings, after: Settings) -> None:
@@ -314,6 +322,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
 
     # The switches offer the full and fast models only, never a typed name; fixed at startup so a switch cannot shrink the choice.
     role_models = list(dict.fromkeys((settings.omlx_model, settings.omlx_fast_model)))
+    fresh_keys: set[str] = set()  # engines whose key was saved since startup and has not yet followed a new host
     role_fields = {"fast": "omlx_fast_model", "review": "omlx_review_model"}  # role -> Settings field a switch rebinds
     mac_models = {"fast": settings.omlx_fast_model, "review": settings.omlx_model}  # what This Mac's hint says to download; fixed before any switch
 
@@ -673,6 +682,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
             if key := re.fullmatch(r"/api/settings/key/(base|online)", path):
                 try:
                     keychain.delete_key(key.group(1))
+                    fresh_keys.discard(key.group(1))
                 except (ValueError, RuntimeError) as error:  # fixed messages, never the key
                     self._send_json({"error": str(error)}, status=HTTPStatus.BAD_REQUEST)
                     return
@@ -759,10 +769,11 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     # Checked on what the settings would become, before anything is saved.
                     after = replace(settings, **{key: preferences.validate(key, value) for key, value in payload.items()})
                     with Library(settings) as library:
-                        _check_saved_change(settings, after, library.catalog)
+                        rehosted = _check_saved_change(settings, after, library.catalog, fresh_keys)
                     _check_engine_change(settings, after)
                     with Library(settings) as library:
                         preferences.save(library.catalog, payload)
+                        fresh_keys.difference_update(rehosted)
                         settings = preferences.overlay(settings, library.catalog)  # keeps a session role-model switch
                         self._send_json(settings_body(library))
                     return
@@ -780,6 +791,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     if payload.keys() != {"engine", "key"} or payload["engine"] not in ("base", "online") or not isinstance(payload["key"], str):
                         raise ValueError("a key needs an engine, Base or Online, and the key and nothing else")
                     keychain.set_key(payload["engine"], payload["key"])  # its errors never carry the key
+                    fresh_keys.add(payload["engine"])
                     self._send_json({"engine": payload["engine"], "key_saved": True})
                     return
                 if path in {"/api/browse-xmp", "/api/outputs/reveal"}:

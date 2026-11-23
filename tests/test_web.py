@@ -2250,7 +2250,7 @@ console.log(JSON.stringify([panel.hidden, store]));
     def test_a_saved_key_does_not_follow_a_new_host(self):
         self.assertEqual(200, self.post_json("/api/settings", {"online_url": "https://api.example.com/v1"})[0])
         self.keychain.get_key.side_effect = lambda engine: "sk-abc12345" if engine == "online" else None
-        refusal = (400, {"error": "Online has a key saved for its current address: remove or replace the key first."})
+        refusal = (400, {"error": "Online has a key saved for its current address: replace it with the new address's key, then save the address again."})
         for url in ("https://other.example.com/v1", "https://api.example.com:8443/v1"):
             with self.subTest(url=url):
                 self.assertEqual(refusal, self.post_json("/api/settings", {"online_url": url}))
@@ -2262,8 +2262,17 @@ console.log(JSON.stringify([panel.hidden, store]));
         self.assertEqual(200, self.post_json("/api/settings", {"base_url": "http://pc.local:11434"})[0])
         self.assertEqual(200, self.post_json("/api/settings", {"base_url": "http://other.local:11434"})[0])  # Base has no key
         self.keychain.get_key.side_effect = lambda engine: "k-base-1234"
-        self.assertEqual((400, {"error": "Base has a key saved for its current address: remove or replace the key first."}),
+        self.assertEqual((400, {"error": "Base has a key saved for its current address: replace it with the new address's key, then save the address again."}),
                          self.post_json("/api/settings", {"base_url": "http://pc.local:11434"}))
+
+    def test_a_replaced_key_may_follow_one_new_host(self):
+        self.assertEqual(200, self.post_json("/api/settings", {"online_url": "https://api.example.com/v1"})[0])
+        self.keychain.get_key.side_effect = lambda engine: "sk-abc12345" if engine == "online" else None
+        refusal = (400, {"error": "Online has a key saved for its current address: replace it with the new address's key, then save the address again."})
+        self.assertEqual(refusal, self.post_json("/api/settings", {"online_url": "https://other.example.com/v1"}))
+        self.assertEqual(200, self.post_json("/api/settings/key", {"engine": "online", "key": "sk-new12345"})[0])
+        self.assertEqual(200, self.post_json("/api/settings", {"online_url": "https://other.example.com/v1"})[0])
+        self.assertEqual(refusal, self.post_json("/api/settings", {"online_url": "https://third.example.com/v1"}))  # once only
 
     def test_the_startup_listing_never_dies_with_a_traceback(self):
         import http.client

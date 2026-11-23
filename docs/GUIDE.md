@@ -867,8 +867,10 @@ engine that does not answer is refused and nothing is saved, and so is a
 switch while a batch is still running. While Base or Online is in use, the
 header status line begins "AI: Base" or "AI: Online", followed by the
 session's tokens once it has made calls. A saved key belongs to the address it
-was saved for: moving that engine to another host is refused until you remove
-or replace the key.
+was saved for: moving that engine to another host is refused until you
+replace the key. To change service, press **Replace**, paste the new service's
+key, then save the new address; a key replaced since Lumen started may follow
+one change of address.
 
 In the AI engine section, **Base setup** and **Online setup** fold away under
 the engine choice, one open at a time. The chosen engine's setup opens by
