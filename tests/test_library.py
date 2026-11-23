@@ -235,6 +235,28 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("bad model response", event.details["raw_response"])
         self.assertTrue(any("sidecar disk full" in note for note in raised.exception.__notes__))
 
+    def test_crop_candidates_of_a_straightened_frame_use_the_straightened_size(self):
+        from lumen.composition import straightened_size
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "large.jpg"
+            Image.new("RGB", (4000, 3000), "gray").save(source)
+            regions = SubjectRegions(4000, 3000, (RegionObservation(.4, .25, .1, .2),), ())
+            with Library(Settings(library_dir=Path(directory) / "library")) as library:
+                library.import_path(source)
+                photo = library.catalog.list_photos()[0]
+                with patch("lumen.library.analyze_subject_regions", return_value=regions) as analyze:
+                    plain = library.crop_candidates(photo.id)
+                    library.catalog.save_develop(photo.id, DevelopSettings({"exposure_ev": 0.5}), photo.fingerprint)
+                    self.assertEqual(plain, library.crop_candidates(photo.id), "other develop keys change nothing")
+                    calls = analyze.call_count
+                    library.catalog.save_develop(photo.id, DevelopSettings({"straighten_deg": 2.0}), photo.fingerprint)
+                    turned = library.crop_candidates(photo.id)
+                self.assertEqual((0, 0, 4000, 3000), plain[0].pixel_box)
+                self.assertTrue(any(item.kind == "subject-in-scene" for item in plain))
+                self.assertEqual((0, 0, *straightened_size(4000, 3000, 2.0)), turned[0].pixel_box)
+                self.assertEqual(calls, analyze.call_count, "regions measured on the unturned frame are not used")
+                self.assertFalse(any(item.kind == "subject-in-scene" for item in turned))
+
     def test_crop_selection_uses_candidate_id_and_writes_edit_to_sidecars(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "large.jpg"

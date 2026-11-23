@@ -26,7 +26,7 @@ from .analysis import (analyze_astro, analyze_faces, analyze_subject_regions, ap
                        measure_image)
 from .catalog import Catalog, GroupFilters
 from .config import Settings
-from .composition import CropCandidate, generate_candidates
+from .composition import CropCandidate, generate_candidates, straightened_size
 from .digest import day_facts, render_facts_table
 from .domain import (MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, DevelopSettings, Job,
                      Photo, PhotoEdit)
@@ -1428,6 +1428,10 @@ class Library:
         if not source.is_file():
             raise ValueError(f"source image is unavailable: {source}")
         width, height = read_image_dimensions(source)
+        if angle := (_develop_fields(self.catalog.get_develop(photo_id)) or {}).get("straighten_deg"):
+            # ponytail: subject-aware crops are skipped on a straightened frame, whose regions were measured unturned;
+            # transform the regions into the straightened frame if those crops are wanted there.
+            return generate_candidates(*straightened_size(width, height, angle), None)
         regions = analyze_subject_regions(source, self.settings.vision_analyzer_path)
         if regions and (regions.image_width, regions.image_height) != (width, height):
             regions = None

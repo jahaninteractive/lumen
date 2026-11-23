@@ -3,6 +3,7 @@ import io
 import tempfile
 import unittest
 import json
+import math
 from xml.etree import ElementTree
 from pathlib import Path
 from unittest.mock import patch
@@ -246,6 +247,79 @@ class PipelineTests(unittest.TestCase):
                     again = pipeline.export_jpeg(source, runner=runner, **cropped)
                     self.assertTrue(again.success, again.message)
                     self.assertNotEqual(source.read_bytes(), again.output.read_bytes())
+
+    @staticmethod
+    def tilted_camera_jpeg(path, degrees, size=(600, 400)):
+        """A white camera JPEG with a thick black line through the centre, rising to the right by `degrees` as seen."""
+        from PIL import ImageDraw
+        width, height = size
+        rise = math.tan(math.radians(degrees)) * width / 2
+        image = Image.new("RGB", size, "white")
+        ImageDraw.Draw(image).line((0, height / 2 + rise, width, height / 2 - rise), fill="black", width=8)
+        exif = Image.Exif()
+        exif[34665] = {40961: 1}
+        image.save(path, format="JPEG", quality=95, exif=exif.tobytes())
+
+    @staticmethod
+    def size_of(path):
+        with Image.open(path) as image:
+            return image.size
+
+    @staticmethod
+    def line_rise(path):
+        """How far the dark line climbs from a quarter in to three quarters across, in pixels (positive rises right)."""
+        with Image.open(path) as image:
+            grey = image.convert("L")
+            def centre(x):
+                rows = [y for y in range(grey.height) if grey.getpixel((x, y)) < 128]
+                return sum(rows) / len(rows)
+            return centre(grey.width // 4) - centre(3 * grey.width // 4)
+
+    def test_a_straightened_camera_jpeg_turns_clockwise_and_crops_level(self):
+        from lumen.composition import straightened_size
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC04639.JPG"
+            self.tilted_camera_jpeg(source, 5)
+            runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", "")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            self.assertGreater(self.line_rise(source), 20, "the fixture rises to the right")
+            level = pipeline.export_jpeg(source, develop={"straighten_deg": 5.0}, runner=runner)
+            self.assertTrue(level.success, level.message)
+            self.assertNotEqual("lossless", level.settings["quality"])
+            self.assertEqual(straightened_size(600, 400, 5.0), self.size_of(level.output))
+            self.assertLess(abs(self.line_rise(level.output)), 2, "a positive angle turns clockwise as seen")
+            worse = pipeline.export_jpeg(source, develop={"straighten_deg": -5.0}, runner=runner)
+            self.assertGreater(self.line_rise(worse.output), 1.5 * self.line_rise(source),
+                               "the opposite angle doubles the tilt")
+            with Image.open(source) as camera, Image.open(level.output) as kept:
+                self.assertEqual(camera.quantization, kept.quantization, "re-encoded once at the camera's tables")
+                self.assertEqual(JpegImagePlugin.get_sampling(camera), JpegImagePlugin.get_sampling(kept))
+            cropped = pipeline.export_jpeg(source, develop={"straighten_deg": 5.0}, runner=runner,
+                                           crop={"left": .25, "top": 0, "width": .5, "height": 1})
+            width, height = straightened_size(600, 400, 5.0)
+            self.assertEqual((round(.75 * width) - round(.25 * width), height), self.size_of(cropped.output),
+                             "the crop is taken from the straightened frame")
+
+    def test_a_camera_jpeg_without_an_angle_exports_as_before(self):
+        """Develop settings other than the angle mean nothing to a camera JPEG: still lossless, the same crop."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DSC04639.JPG"
+            self.tilted_camera_jpeg(source, 5)
+            runner = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", "")
+            pipeline = DarktablePipeline("darktable-cli", root / "outputs")
+            crop = {"left": .25, "top": 0, "width": .5, "height": 1}
+            plain = pipeline.export_jpeg(source, crop=crop, runner=runner)
+            for develop in (None, {}, {"exposure_ev": 0.5}):
+                with self.subTest(develop=develop):
+                    whole = pipeline.export_jpeg(source, develop=develop, runner=runner)
+                    self.assertEqual("lossless", whole.settings["quality"])
+                    self.assertEqual(source.read_bytes(), whole.output.read_bytes())
+                    again = pipeline.export_jpeg(source, crop=crop, develop=develop, runner=runner)
+                    with Image.open(plain.output) as before, Image.open(again.output) as after:
+                        self.assertEqual((300, 400), after.size)
+                        self.assertEqual(before.tobytes(), after.tobytes())
 
     def test_export_renders_other_non_raws_through_darktable(self):
         with tempfile.TemporaryDirectory() as directory:

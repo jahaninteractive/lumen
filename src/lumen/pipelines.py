@@ -14,6 +14,7 @@ from xml.etree import ElementTree
 
 from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps, JpegImagePlugin
 
+from .composition import straightened_box
 # Re-exported: Apple's Core Image raw pipeline (the native raw developer) decodes every raw in this list, including
 # the Sony reduced-size lossless ARWs darktable's rawspeed refuses; darktable renders non-raws and XMP profiles.
 from .domain import RAW_EXTENSIONS  # noqa: F401
@@ -263,7 +264,10 @@ class DarktablePipeline:
                     # A full export of a camera JPEG with nothing to draw is lossless: the body's bytes are published
                     # as they are and every tag Lumen adds goes in through exiftool below. Share and web are size
                     # budgets, and a crop or watermark has to re-encode once, at the camera's own tables.
-                    lossless = decoder == "camera" and options["long_edge"] is None and crop is None and not watermark
+                    # The raw developer turns a raw itself; only a camera JPEG is turned here, and only by this one key.
+                    angle = (develop or {}).get("straighten_deg") if decoder == "camera" else None
+                    lossless = (decoder == "camera" and options["long_edge"] is None and crop is None and not watermark
+                                and not angle)
                     if lossless:
                         settings["quality"] = "lossless"
                     encoding: dict[str, object] = {"quality": options["quality"]}
@@ -279,6 +283,8 @@ class DarktablePipeline:
                             raise ValueError("the camera JPEG is not sRGB (AdobeRGB or uncalibrated); set the body to sRGB or export the raw")
                     else:
                         raise ValueError(f"{decoder} render has no ICC profile; cannot guarantee sRGB")
+                    if angle:  # Pillow turns counterclockwise for a positive angle; straighten_deg is clockwise as seen.
+                        image = image.rotate(-angle, Image.Resampling.BICUBIC).crop(straightened_box(*image.size, angle))
                     if crop is not None:
                         image = image.crop((round(left * image.width), round(top * image.height), round((left + width) * image.width), round((top + height) * image.height)))
                     if long_edge := options["long_edge"]:
