@@ -28,6 +28,7 @@ uv run lumen doctor --json
 uv run lumen serve --open
 zsh scripts/build_app.sh            # dist/Lumen.app and dist/Lumen-<version>.dmg; --sign "<identity>" [--notarize <profile>]
 zsh scripts/smoke_app.sh dist/Lumen.app
+zsh scripts/release_app.sh           # checks only; --publish makes GitHub release v<version> (ask first). Steps: docs/RELEASING.md
 ```
 
 Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
