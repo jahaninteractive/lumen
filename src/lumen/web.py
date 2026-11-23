@@ -424,13 +424,15 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                 if not _MAP_BUILD_LOCK.acquire(blocking=False):
                     self._send_json({"building": True})
                     return
+                status = HTTPStatus.OK
                 try:
                     with Library(settings) as library:
-                        self._send_json(library.map_features(*box, zoom=zoom))
+                        body = library.map_features(*box, zoom=zoom)
                 except (ValueError, OSError) as error:
-                    self._send_json({"error": public_message(str(error))}, status=HTTPStatus.BAD_REQUEST)
+                    body, status = {"error": public_message(str(error))}, HTTPStatus.BAD_REQUEST
                 finally:
-                    _MAP_BUILD_LOCK.release()
+                    _MAP_BUILD_LOCK.release()  # before the answer: the next request can arrive as soon as it is read
+                self._send_json(body, status=status)
                 return
             if path in {"/api/map/photos", "/api/map/overlays"}:
                 try:

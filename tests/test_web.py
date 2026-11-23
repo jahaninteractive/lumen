@@ -202,6 +202,24 @@ class WebTests(unittest.TestCase):
         self.assertEqual(["coastline"], [feature["kind"] for feature in payload["features"]])
         self.assertEqual({"features": []}, self.get_json("/api/map/features?bbox=40,0,50,10&zoom=8")[1])
 
+    def test_map_features_frees_the_build_lock_before_it_answers(self):
+        # The next viewport request can arrive the moment the answer does; it must not be told "building".
+        import threading, time
+        from lumen import web
+
+        class SlowRelease:
+            def __init__(self): self.lock = threading.Lock()
+            def acquire(self, blocking=True): return self.lock.acquire(blocking)
+            def locked(self): return self.lock.locked()
+            def release(self):
+                time.sleep(0.3)
+                self.lock.release()
+
+        self.write_base_map()
+        with patch.object(web, "_MAP_BUILD_LOCK", SlowRelease()):
+            self.assertIn("features", self.get_json("/api/map/features?bbox=-35,17,-32,20&zoom=8")[1])
+            self.assertEqual({"features": []}, self.get_json("/api/map/features?bbox=40,0,50,10&zoom=8")[1])
+
     def test_photo_detail_carries_terrain_only_when_known(self):
         folder = self.root / "map"
         folder.mkdir(exist_ok=True)

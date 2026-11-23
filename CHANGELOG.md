@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.9.2 (2026-11-23)
+
+- The map's viewport route frees its build lock before it answers. A second request sent the moment the first was read could be told the index was still building; the test suite hit this once on a slow CI runner.
+
 ## 0.9.1 (2026-11-23)
 
 - Changing the Online or Base service works from Settings: replace the key, then save the new address. Before, a new address was refused while any key was saved, and with that engine in use it was refused without one too, so the only way through was to switch engine first. A key replaced since Lumen started may follow one change of address; the refusal now says so.
