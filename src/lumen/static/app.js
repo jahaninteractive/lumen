@@ -24,6 +24,7 @@ async function request(url, options = {}) {
   try {
     response = await fetch(url, options);
   } catch {  // fetch itself failed: the server went away, as when lumen serve restarts mid-request
+    checkServer();
     throw new Error('Lumen server unreachable. If you just restarted lumen serve, reload this page.');
   }
   // A route this server does not have answers with the stdlib's HTML error page, not JSON.
@@ -46,6 +47,47 @@ async function request(url, options = {}) {
   if (unreadable) throw new Error('Lumen sent a reply this page could not read.');
   return payload;
 }
+
+// The server can stop under an open page (Lumen quit, lumen serve stopped with Ctrl-C). A refused fetch
+// is asked again a second later before the page says so, since one dropped request is not a stop; a slow
+// answer, such as a long model call, is still an answer and never trips this. The heartbeat is a small
+// static file, once every 5 s while the tab is visible; it keeps going after a stop so the notice can
+// close by itself when the server is back (no reload: there may be unsaved typing).
+let serverGone = false;
+let serverCheck = null;
+function serverAnswers() {
+  return fetch('/static/mark.svg', { cache: 'no-store' }).then(() => true, () => false);
+}
+async function confirmServer() {
+  const notice = document.querySelector('#server-gone');
+  let answered = await serverAnswers();
+  if (!answered && !serverGone) {
+    await new Promise(resolve => window.setTimeout(resolve, 1000));
+    answered = await serverAnswers();
+  }
+  if (answered) {
+    if (!serverGone) return;
+    serverGone = false;
+    if (notice.close) notice.close();
+    else notice.hidden = true;
+    announce('Lumen is running again.');
+    return;
+  }
+  if (!notice.open) {
+    if (notice.showModal) notice.showModal();
+    else notice.hidden = false;
+  }
+  if (!serverGone) announce('Lumen has stopped. Reload this page once Lumen is open again.');
+  serverGone = true;
+}
+function checkServer() {
+  serverCheck ??= confirmServer().finally(() => { serverCheck = null; });
+  return serverCheck;
+}
+document.querySelector('#server-gone').addEventListener('cancel', event => event.preventDefault());  // Escape leaves a dead page looking alive
+document.querySelector('#server-gone-reload').addEventListener('click', () => location.reload());
+window.setInterval(() => { if (!document.hidden) checkServer(); }, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkServer(); });
 
 function post(url, payload = {}) {
   return request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -1774,7 +1816,9 @@ for (const select of roleSelects) {
 function renderSystemStatus(status) {
   const systemStatus = document.querySelector('#system-status');
   const remoteEngine = status.ai_engine === 'base' || status.ai_engine === 'online';  // off this Mac, oMLX's health is beside the point
-  const missing = Object.entries(status.tools || {}).filter(([name, tool]) => tool?.available === false && tool?.needed !== false && !(remoteEngine && name === 'omlx')).map(([name]) => `${name} missing`);
+  // oMLX run as an app has no omlx command on PATH; a server that answers is not missing.
+  const omlxBesideThePoint = remoteEngine || status.omlx_live?.online === true;
+  const missing = Object.entries(status.tools || {}).filter(([name, tool]) => tool?.available === false && tool?.needed !== false && !(omlxBesideThePoint && name === 'omlx')).map(([name]) => `${name} missing`);
   const health = [...(remoteEngine ? [] : [status.omlx_live?.online ? 'Local AI online' : 'Local AI offline']), ...missing].join(' · ');
   const tools = status.omlx_roles
     ? health

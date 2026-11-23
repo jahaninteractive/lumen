@@ -18,6 +18,9 @@ func setting(_ name: String) -> String? {
 }
 
 let headless = setting("LUMEN_APP_HEADLESS") == "1"
+// LUMEN_APP_SNAPSHOT=<dir> (a debug hook): renders the Setup and Uninstall windows to PNGs there
+// without showing them, starts no server, downloads nothing and exits; needs LUMEN_VENDOR and LUMEN_LIBRARY.
+let snapshotDir = setting("LUMEN_APP_SNAPSHOT")
 let defaultPort = 8765
 let urlLine = try! Regex(#"Lumen is running at (http://\S+)"#)
 let resources = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources")
@@ -27,7 +30,7 @@ let childEnvironment: [String: String] = {
     var environment = ProcessInfo.processInfo.environment
     environment["PATH"] = "\(resources.path)/bin:\(resources.path)/python/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     // Forced here, so the server and bootstrap.sh agree with the shell; inherited only for the smoke script.
-    environment["LUMEN_VENDOR"] = (headless ? setting("LUMEN_VENDOR") : nil) ?? FileManager.default
+    environment["LUMEN_VENDOR"] = (headless || snapshotDir != nil ? setting("LUMEN_VENDOR") : nil) ?? FileManager.default
         .homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Lumen").path
     environment["LUMEN_HELPER_DIR"] = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers").path
     environment["PYTHONDONTWRITEBYTECODE"] = "1"  // the bundle is signed; nothing may write into it
@@ -274,9 +277,15 @@ final class Shell: NSObject, NSApplicationDelegate {
         if let url = serverURL { NSWorkspace.shared.open(url) }
     }
 
+    /// The standard panel: the icon, name and version come from the bundle.
+    @objc func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
+
     @objc func showSetup() {
         if setup == nil {
-            setup = Setup(onClose: { [unowned self] in
+            setup = Setup(firstRun: holdBrowser, onClose: { [unowned self] in
                 setup = nil
                 if holdBrowser && !quitting {
                     holdBrowser = false
@@ -290,6 +299,8 @@ final class Shell: NSObject, NSApplicationDelegate {
 
     func buildMenu() -> NSMenu {
         let appMenu = NSMenu(title: "Lumen")
+        appMenu.addItem(withTitle: "About Lumen", action: #selector(showAbout), keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Open Lumen", action: #selector(openLumen), keyEquivalent: "o").target = self
         appMenu.addItem(withTitle: "Set Up Lumen…", action: #selector(showSetup), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Uninstall Lumen…", action: #selector(showUninstall), keyEquivalent: "").target = self
@@ -380,22 +391,20 @@ final class Shell: NSObject, NSApplicationDelegate {
         }
         stopServer()
         uninstaller?.window.orderOut(nil)
-        var title = "Lumen was uninstalled."
+        let alert: NSAlert
         do {
             try trashLumen(data: data, exports: exports)
             try FileManager.default.trashItem(at: Bundle.main.bundleURL, resultingItemURL: nil)
+            alert = uninstalled(data: data, exports: exports, notes: notes)
         } catch {
-            title = "Lumen could not finish uninstalling."
-            notes.insert(error.localizedDescription, at: 0)
-            notes.append("Lumen will quit now. Open it again to try again.")
+            alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Lumen could not finish uninstalling."
+            alert.informativeText = ([error.localizedDescription] + notes + ["Lumen will quit now. Open it again to try again."])
+                .joined(separator: "\n\n")
         }
-        if !notes.isEmpty {
-            let alert = NSAlert()
-            alert.alertStyle = title == "Lumen was uninstalled." ? .informational : .critical
-            alert.messageText = title
-            alert.informativeText = notes.joined(separator: "\n\n")
-            alert.runModal()
-        }
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
         NSApp.terminate(nil)
     }
 
@@ -422,6 +431,21 @@ final class Shell: NSObject, NSApplicationDelegate {
         process.waitUntilExit()
         return process.terminationStatus == 0
     }
+}
+
+/// The closing message, built from what was moved; `notes` (a Keychain failure) follow it.
+func uninstalled(data: Bool, exports: Bool, notes: [String]) -> NSAlert {
+    var moved = ["Lumen", "its downloaded tools and data"]
+    if data { moved.append("its working data") }
+    if exports { moved.append("your exported files") }
+    // "tools and data" holds its own "and", so a longer list takes a comma before the last.
+    var text = moved.dropLast().joined(separator: ", ") + (moved.count > 2 ? "," : "") + " and \(moved.last!) are in the Trash."
+    if !(data && exports) { text += " What you kept is still in \(NSString(string: libraryPath).abbreviatingWithTildeInPath)." }
+    text += " Nothing is deleted until you empty the Trash. You can close the Lumen tab in your browser."
+    let alert = NSAlert()
+    alert.messageText = "Lumen was uninstalled."
+    alert.informativeText = ([text] + notes).joined(separator: "\n\n")
+    return alert
 }
 
 struct Refusal: LocalizedError {
@@ -479,7 +503,7 @@ func measure(_ urls: [URL], _ show: @escaping (String) -> Void) -> Bool {
     DispatchQueue.global().async {
         let du = Process()
         du.executableURL = URL(fileURLWithPath: "/usr/bin/du")
-        du.arguments = ["-shc"] + present.map(\.path)
+        du.arguments = ["-skc"] + present.map(\.path)
         let output = Pipe()
         du.standardOutput = output
         du.standardError = FileHandle.nullDevice
@@ -488,7 +512,7 @@ func measure(_ urls: [URL], _ show: @escaping (String) -> Void) -> Bool {
             let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             du.waitUntilExit()
             if let total = text.split(separator: "\n").last?.split(separator: "\t").first {
-                size = total.trimmingCharacters(in: .whitespaces)
+                size = Int64(total.trimmingCharacters(in: .whitespaces)).map { formatted($0 * 1024) } ?? size
             }
         }
         DispatchQueue.main.async { show(size) }
@@ -496,13 +520,71 @@ func measure(_ urls: [URL], _ show: @escaping (String) -> Void) -> Bool {
     return true
 }
 
-func indented(_ views: [NSView]) -> NSStackView {
+// MARK: Window parts
+
+func stack(_ views: [NSView], spacing: CGFloat, vertical: Bool = true) -> NSStackView {
     let stack = NSStackView(views: views)
-    stack.orientation = .vertical
-    stack.alignment = .leading
-    stack.spacing = 4
-    stack.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 6, right: 0)
+    stack.orientation = vertical ? .vertical : .horizontal
+    stack.alignment = vertical ? .leading : .centerY
+    stack.spacing = spacing
     return stack
+}
+
+/// Secondary-colour text, wrapping at `width` when given.
+func quiet(_ text: String, width: CGFloat? = nil, small: Bool = false) -> NSTextField {
+    let field = width == nil ? NSTextField(labelWithString: text) : NSTextField(wrappingLabelWithString: text)
+    field.textColor = .secondaryLabelColor
+    if small { field.font = .systemFont(ofSize: NSFont.smallSystemFontSize) }
+    if let width { field.widthAnchor.constraint(equalToConstant: width).isActive = true }
+    return field
+}
+
+func separator(_ width: CGFloat) -> NSBox {
+    let line = NSBox()
+    line.boxType = .separator
+    line.widthAnchor.constraint(equalToConstant: width).isActive = true
+    return line
+}
+
+/// The app's icon beside a bold title and one secondary line, as a Mac app's own windows open.
+func header(_ title: String, _ detail: String, width: CGFloat) -> NSView {
+    let icon = NSImageView(image: NSApp.applicationIconImage)
+    icon.setAccessibilityElement(false)  // decorative: the title says whose window this is
+    icon.widthAnchor.constraint(equalToConstant: 64).isActive = true
+    icon.heightAnchor.constraint(equalToConstant: 64).isActive = true
+    let heading = NSTextField(labelWithString: title)
+    heading.font = .boldSystemFont(ofSize: 17)
+    heading.setAccessibilityRole(.staticText)
+    let words = stack([heading, quiet(detail, width: width - 80)], spacing: 4)
+    return stack([icon, words], spacing: 16, vertical: false)
+}
+
+/// A tick box with its size at the right edge and `below` (its explanation) indented beneath.
+func option(_ box: NSButton, size: NSTextField, below: [NSView], width: CGFloat) -> NSStackView {
+    let line = NSStackView()
+    line.setViews([box], in: .leading)
+    line.setViews([size], in: .trailing)
+    line.widthAnchor.constraint(equalToConstant: width).isActive = true
+    let details = stack(below, spacing: 6)
+    details.edgeInsets = NSEdgeInsets(top: 0, left: 20, bottom: 0, right: 0)
+    return stack([line, details], spacing: 3)
+}
+
+/// "about 50 MB", "310 MB", "6 GB" from bootstrap.sh's --list as bytes; 0 when it cannot be read.
+func bytes(_ size: String) -> Int64 {
+    guard let match = size.firstMatch(of: try! Regex(#"(\d+(?:\.\d+)?)\s*([MG])B"#)),
+          let number = Double(match.output[1].substring ?? "") else { return 0 }
+    return Int64(number * (match.output[2].substring == "G" ? 1e9 : 1e6))
+}
+
+func formatted(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+
+/// Free space on the volume that holds (or will hold) the downloads.
+func freeSpace() -> Int64? {
+    var folder = vendorURL
+    while !FileManager.default.fileExists(atPath: folder.path) && folder.path != "/" { folder.deleteLastPathComponent() }
+    return (try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+        .volumeAvailableCapacityForImportantUsage
 }
 
 // MARK: Setup window
@@ -511,8 +593,12 @@ func indented(_ views: [NSView]) -> NSStackView {
 /// The only key known here is `places`, whose row carries the country picker.
 final class Setup: NSObject, NSWindowDelegate {
     let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    let firstRun: Bool  // the launch's own showing, which holds the browser: Lumen is installed, these are extras
     let onClose: () -> Void
     let rows = NSStackView()
+    let progress = NSProgressIndicator()
+    let space = quiet("")
+    var sizes: [String: Int64] = [:]  // bytes per missing key, from --list
     let countriesLabel = NSTextField(labelWithString: "Countries you photograph in")
     let countries = NSPopUpButton(frame: .zero, pullsDown: true)
     let chosenLabel = NSTextField(wrappingLabelWithString: "None chosen")
@@ -530,7 +616,8 @@ final class Setup: NSObject, NSWindowDelegate {
     var lastLine = ""
     var closed = false
 
-    init(onClose: @escaping () -> Void) {
+    init(firstRun: Bool, onClose: @escaping () -> Void) {
+        self.firstRun = firstRun
         self.onClose = onClose
         super.init()
         let width: CGFloat = 440  // inside the margins
@@ -551,6 +638,8 @@ final class Setup: NSObject, NSWindowDelegate {
         countries.action = #selector(pickCountry)
         chosenLabel.widthAnchor.constraint(equalToConstant: width - 20).isActive = true
         chosenLabel.textColor = .secondaryLabelColor
+        chosenLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        countriesLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         chosenLabel.setAccessibilityLabel("Chosen countries")
         logView.isEditable = false
         logView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -563,11 +652,16 @@ final class Setup: NSObject, NSWindowDelegate {
         logScroll.isHidden = true
         logScroll.widthAnchor.constraint(equalToConstant: width).isActive = true
         logScroll.heightAnchor.constraint(equalToConstant: 140).isActive = true
+        progress.style = .bar
+        progress.isIndeterminate = true
+        progress.isHidden = true
+        progress.setAccessibilityLabel("Installing")
+        progress.widthAnchor.constraint(equalToConstant: width).isActive = true
         message.widthAnchor.constraint(equalToConstant: width).isActive = true
         message.isHidden = true
         rows.orientation = .vertical
         rows.alignment = .leading
-        rows.spacing = 4
+        rows.spacing = 14
         install.target = self
         install.action = #selector(installTicked)
         install.keyEquivalent = "\r"
@@ -575,13 +669,16 @@ final class Setup: NSObject, NSWindowDelegate {
         dismiss.action = #selector(NSWindow.performClose(_:))
         dismiss.keyEquivalent = "\u{1b}"
         let buttons = NSStackView()
+        buttons.setViews([space], in: .leading)
         buttons.setViews([dismiss, install], in: .trailing)
-        let ai = NSTextField(wrappingLabelWithString: "AI advice: connect a service in Settings, or see the guide to run it on this Mac.")
-        ai.widthAnchor.constraint(equalToConstant: width).isActive = true
-        let content = NSStackView(views: [rows, ai, logScroll, message, buttons])
+        let ai = quiet("AI advice: connect a service in Settings, or see the guide to run it on this Mac.", width: width, small: true)
+        let top = firstRun
+            ? header("Welcome to Lumen", "Lumen is ready to use. These extras are optional; choose any to download now, or add them later from the Lumen menu.", width: width)
+            : header("Set Up Lumen", "Choose what to download. You can add any of these later from the Lumen menu.", width: width)
+        let content = NSStackView(views: [top, separator(width), rows, separator(width), ai, progress, logScroll, message, buttons])
         content.orientation = .vertical
         content.alignment = .leading
-        content.spacing = 14
+        content.spacing = 16
         content.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         content.widthAnchor.constraint(equalToConstant: width + 40).isActive = true
         buttons.widthAnchor.constraint(equalToConstant: width).isActive = true
@@ -590,6 +687,7 @@ final class Setup: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         reload()
+        window.layoutIfNeeded()  // so center() places the window at its real size
         window.center()
     }
 
@@ -597,6 +695,7 @@ final class Setup: NSObject, NSWindowDelegate {
     func reload() {
         rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
         boxes = []
+        sizes = [:]
         places = nil
         let list = Process()
         list.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -622,21 +721,21 @@ final class Setup: NSObject, NSWindowDelegate {
             let field = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
             guard field.count == 6 else { continue }
             let (key, label, size, purpose, ready) = (field[0], field[1], field[2], field[3], field[4] == "ready")
-            let box = NSButton(checkboxWithTitle: ready ? "\(label) — installed" : "\(label) (\(size))",
-                               target: self, action: #selector(changed))
+            let box = NSButton(checkboxWithTitle: label, target: self, action: #selector(changed))
+            box.setAccessibilityLabel(ready ? "\(label), installed" : "\(label), \(size)")  // the size beside it is not read
             box.state = ready || (ticked[key] ?? (field[5] == "on")) ? .on : .off
             box.isEnabled = !ready && script == nil
             box.setAccessibilityHelp(purpose)
-            let note = NSTextField(labelWithString: purpose)
-            note.textColor = .secondaryLabelColor
-            var below: [NSView] = [note]
+            var below: [NSView] = [quiet(purpose, width: 420, small: true)]
             if key == "places" {
                 places = box
-                below += [countriesLabel, countries, chosenLabel]
+                below += [stack([countriesLabel, countries], spacing: 8, vertical: false), chosenLabel]
             }
-            rows.addArrangedSubview(box)
-            rows.addArrangedSubview(indented(below))
-            if !ready { boxes.append((key, box)) }
+            rows.addArrangedSubview(option(box, size: quiet(ready ? "Installed" : size), below: below, width: 440))
+            if !ready {
+                boxes.append((key, box))
+                sizes[key] = bytes(size)
+            }
         }
         changed()
     }
@@ -647,9 +746,17 @@ final class Setup: NSObject, NSWindowDelegate {
         countries.isEnabled = script == nil && places?.state == .on
         // Nothing left for Install to do: Done is the way out, and Return takes it.
         let done = script == nil && tickedKeys.isEmpty
-        dismiss.title = done ? "Done" : "Not Now"
+        dismiss.title = firstRun ? "Open Lumen" : done ? "Done" : "Not Now"
         dismiss.keyEquivalent = done ? "\r" : "\u{1b}"
         install.keyEquivalent = done ? "" : "\r"
+        let free = freeSpace().map { "\(formatted($0)) free" }
+        space.stringValue = ([neededBytes > 0 ? "Needs about \(formatted(neededBytes))" : nil, free])
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// Twice the ticked downloads: a disk image is downloaded, then its app copied out of it.
+    var neededBytes: Int64 {
+        2 * boxes.filter { $0.box.state == .on }.reduce(0) { $0 + (sizes[$1.key] ?? 0) }
     }
 
     /// Toggles the picked country's tick; the pull-down's title item is never picked.
@@ -684,6 +791,16 @@ final class Setup: NSObject, NSWindowDelegate {
     @objc func installTicked() {
         let keys = tickedKeys
         guard script == nil, !keys.isEmpty else { return }
+        if let free = freeSpace(), free < neededBytes {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Not enough free space"
+            alert.informativeText = "These need about \(formatted(neededBytes)), and this Mac has \(formatted(free)) free. "
+                + "Free some space or untick something."
+            alert.addButton(withTitle: "Cancel")  // the first button: the default, on Return
+            alert.addButton(withTitle: "Install Anyway")
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = [resources.appendingPathComponent("bootstrap.sh").path, "--downloads-only",
@@ -696,10 +813,14 @@ final class Setup: NSObject, NSWindowDelegate {
         lastLine = ""
         logView.string = ""
         logScroll.isHidden = false
+        progress.isHidden = false
+        progress.startAnimation(nil)
         show("")
         do {
             try launch(process, onLine: { [weak self] in self?.add($0) }, onExit: { [weak self] in self?.finished($0) })
         } catch {
+            progress.stopAnimation(nil)
+            progress.isHidden = true
             show(error.localizedDescription)
             return
         }
@@ -719,6 +840,8 @@ final class Setup: NSObject, NSWindowDelegate {
     func finished(_ status: Int32) {
         script = nil
         if closed { return }
+        progress.stopAnimation(nil)
+        progress.isHidden = true
         var text = status == 0 ? "" : lastLine
         if !skipped.isEmpty {
             text += (text.isEmpty ? "" : "\n\n") + "Not finished. Press Install to try again:\n" + skipped.joined(separator: "\n")
@@ -730,7 +853,7 @@ final class Setup: NSObject, NSWindowDelegate {
         }
         reload()
         if status == 0 && skipped.isEmpty {
-            add(shell.holdBrowser ? "Finished. Press Done to open Lumen." : "Finished.")
+            add(firstRun ? "Finished. Press Open Lumen to start." : "Finished.")
         }
         show(text)
         NSAccessibility.post(element: window, notification: .announcementRequested, userInfo: [
@@ -773,38 +896,41 @@ final class Uninstall: NSObject, NSWindowDelegate {
         self.onUninstall = onUninstall
         self.onClose = onClose
         super.init()
-        let width: CGFloat = 560  // inside the margins
-        func label(_ text: String) -> NSTextField {
-            let field = NSTextField(wrappingLabelWithString: text)
-            field.widthAnchor.constraint(equalToConstant: width).isActive = true
-            return field
-        }
-        let vendor = label("")
-        measure([vendorURL]) { vendor.stringValue = "Downloaded tools and data (\($0)) will be removed." }
-        let keys = label("Saved service keys will be removed from your Keychain.")
-        let library = label("Your library: \(libraryURL.path)")
+        let width: CGFloat = 440  // inside the margins
+        let library = stack([NSTextField(labelWithString: "Your library stays where it is unless you tick below."),
+                             quiet(NSString(string: libraryPath).abbreviatingWithTildeInPath, width: width, small: true)], spacing: 3)
         let outputs = libraryURL.appendingPathComponent("outputs")
         let working = ((try? FileManager.default.contentsOfDirectory(at: libraryURL, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.lastPathComponent != "outputs" }
-        data.isEnabled = measure(working) { [data] in
-            data.title = "Also remove Lumen's working data: ratings, picks, tags, crops and develop settings (\($0))"
+        var choices: [NSView] = []
+        for (box, title, note, urls) in [
+            (data, "Also remove my working data", "Ratings, picks, tags, crops and develop settings", working),
+            (exports, "Also remove my exported files", "JPEGs, crops and astro results", [outputs])] {
+            box.title = title
+            box.setAccessibilityHelp(note)
+            let size = quiet("")
+            box.isEnabled = measure(urls) { [box] in
+                size.stringValue = $0
+                box.setAccessibilityLabel("\(title), \($0)")  // the size beside it is not read
+            }
+            choices.append(option(box, size: size, below: [quiet(note, small: true)], width: width))
         }
-        exports.isEnabled = measure([outputs]) { [exports] in
-            exports.title = "Also remove my exported files: JPEGs, crops and astro results (\($0))"
-        }
-        let originals = NSTextField(labelWithString: "Your camera originals are never touched.")
-        originals.textColor = .secondaryLabelColor
-        let models = label("oMLX and any AI models are left alone.")
+        let vendor = quiet("", width: width, small: true)
+        let always = " Saved service keys are removed from your Keychain. oMLX and any AI models are left alone."
+        measure([vendorURL]) { vendor.stringValue = "Downloaded tools and data: \($0).\(always)" }
         let go = NSButton(title: "Uninstall", target: self, action: #selector(uninstall))
         let cancel = NSButton(title: "Cancel", target: window, action: #selector(NSWindow.performClose(_:)))
         cancel.keyEquivalent = "\u{1b}"
         let buttons = NSStackView()
         buttons.setViews([cancel, go], in: .trailing)
         buttons.widthAnchor.constraint(equalToConstant: width).isActive = true
-        let content = NSStackView(views: [vendor, keys, library, indented([data, exports, originals]), models, buttons])
+        let top = header("Uninstall Lumen", "Lumen and the tools and data it downloaded move to the Trash. "
+                         + "Your camera originals are never touched.", width: width)
+        let content = NSStackView(views: [top, separator(width), library, stack(choices, spacing: 12),
+                                          separator(width), vendor, buttons])
         content.orientation = .vertical
         content.alignment = .leading
-        content.spacing = 14
+        content.spacing = 16
         content.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
         content.widthAnchor.constraint(equalToConstant: width + 40).isActive = true
         window.title = "Uninstall Lumen"
@@ -812,6 +938,7 @@ final class Uninstall: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.initialFirstResponder = cancel
+        window.layoutIfNeeded()
         window.center()
     }
 
@@ -839,6 +966,43 @@ if headless, let choice = setting("LUMEN_APP_UNINSTALL") {
         FileHandle.standardError.write(Data("Lumen could not finish uninstalling.\n\(error.localizedDescription)\n".utf8))
         exit(1)
     }
+    exit(0)
+} else if let dir = snapshotDir {
+    guard setting("LUMEN_VENDOR") != nil, setting("LUMEN_LIBRARY") != nil else {
+        FileHandle.standardError.write(Data("LUMEN_APP_SNAPSHOT: refused: set both LUMEN_VENDOR and LUMEN_LIBRARY\n".utf8))
+        exit(2)
+    }
+    NSApplication.shared.setActivationPolicy(.prohibited)  // never activated, never on screen
+    func save(_ window: NSWindow, _ name: String) {
+        window.layoutIfNeeded()
+        window.displayIfNeeded()
+        let view = window.contentView!
+        guard let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+        view.cacheDisplay(in: view.bounds, to: image)
+        do {
+            try image.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name))
+        } catch {
+            FileHandle.standardError.write(Data("\(name): \(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+    shell.holdBrowser = true
+    save(Setup(firstRun: true, onClose: {}).window, "setup-first-run.png")
+    let setup = Setup(firstRun: false, onClose: {})
+    save(setup.window, "setup.png")
+    // A clean install's end, through the real path: nothing ticked, a few lines, then finished(0).
+    setup.boxes.forEach { setup.ticked[$0.key] = false }
+    setup.logScroll.isHidden = false
+    ["Downloading https://download.geonames.org/export/dump/cities500.zip", "GeoNames cities500: ready",
+     "Downloading Natural Earth layers", "Map: ready", "Lumen is installed."].forEach(setup.add)
+    setup.finished(0)
+    save(setup.window, "setup-finished.png")
+    let uninstall = Uninstall(onUninstall: { _, _ in }, onClose: {})
+    RunLoop.main.run(until: Date().addingTimeInterval(2))  // the du sizes arrive on the main queue
+    save(uninstall.window, "uninstall.png")
+    let done = uninstalled(data: true, exports: false, notes: [])
+    done.layout()
+    save(done.window, "uninstalled.png")
     exit(0)
 } else if headless {
     // No NSApplication: nothing here may need the window server.

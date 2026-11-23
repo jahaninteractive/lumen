@@ -2599,7 +2599,7 @@ const timers = new Map();
 const timeouts = new Map();
 let nextTimeout = 0;
 const observers = [];  // [node, callback] for crop-draw, which resizes the frame viewport
-const window = { ResizeObserver: scenario === 'crop-draw' ? class { constructor(callback) { this.callback = callback; } observe(node) { observers.push([node, this.callback]); } } : undefined, setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: callback => { activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }), getComputedStyle: node => ({ gridTemplateColumns: scenario === 'rows' && node?.className === 'burst-frames' ? '224px 224px' : 'none' }) };
+const window = { ResizeObserver: scenario === 'crop-draw' ? class { constructor(callback) { this.callback = callback; } observe(node) { observers.push([node, this.callback]); } } : undefined, setTimeout: callback => (scenario === 'find' ? (timeouts.set(++nextTimeout, callback), nextTimeout) : callback()), clearTimeout: id => { timeouts.delete(id); }, setInterval: (callback, delay) => { if (delay === 5000) return 0; activeTimers += 1; timers.set(++nextTimer, callback); return nextTimer; }, clearInterval: id => { if (timers.delete(id)) activeTimers -= 1; }, matchMedia: () => ({ matches: true }), getComputedStyle: node => ({ gridTemplateColumns: scenario === 'rows' && node?.className === 'burst-frames' ? '224px 224px' : 'none' }) };
 // pollJob returns its promise; setImmediate then flushes the fire-and-forget load() once the mocked-fetch microtasks drain.
 async function tick() { for (const cb of [...timers.values()]) await cb(); await new Promise(setImmediate); }
 async function settle() { for (let i = 0; i < 10 && activeTimers; i++) await tick(); }
@@ -2733,6 +2733,7 @@ function cropPayload(active = activeCrop) {
 async function fetch(url, options = {}) {
   if (holdUrls.delete(url)) return new Promise(resolve => heldReplies.push(() => resolve(fetch(url, options))));
   if (networkDown) throw new TypeError('NetworkError when attempting to fetch resource.');
+  if (url === '/static/mark.svg') return { ok: true, status: 200 };  // the server heartbeat
   if (routeMissing) return { ok: false, status: 404, json: async () => { throw new SyntaxError("Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON"); } };
   if (url.startsWith('/full/')) return { ok: false, status: fullStatus, json: async () => ({}) };
   let payload;
@@ -2741,7 +2742,7 @@ async function fetch(url, options = {}) {
   if (url === '/api/status' && scenario === 'status-skew') payload = { omlx_live: { summary: 'Ready' }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };  // an older server without omlx_roles
   else if (url === '/api/status' && scenario === 'stale-server') payload = { omlx_live: { summary: 'Ready' }, stale: ['This server is running code older than the files on disk. Restart it with lumen serve, then reload this page.'], omlx_roles: { fast: { model: 'm', loaded: true }, review: { model: 'm', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
   else if (url === '/api/status' && scenario === 'remote-confirm') payload = { omlx_live: { summary: 'Ready', online: true }, ai_engine: 'base', ai_engine_host: '127.0.0.1:9', ai_engine_reachable: false, ai_usage: remoteUsage, review_models: [], omlx_roles: { fast: { model: 'f', loaded: true }, review: { model: 'r', loaded: true } }, tools: {}, jpeg_output_dir: '/managed/outputs/jpeg' };
-  else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready', online: true }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
+  else if (url === '/api/status') payload = { omlx_live: { summary: 'Ready', online: true }, omlx_roles: { fast: { model: 'Qwen3-VL-8B-Instruct-4bit', loaded: scenario !== 'keywords-unloaded' }, review: { model: 'Qwen3.8-27B-4bit', loaded: scenario !== 'keywords-unloaded' } }, tools: { omlx: { available: false }, 'darktable-cli': { available: darktableReady }, 'siril-cli': { available: true } }, jpeg_output_dir: '/managed/outputs/jpeg', astro_output_dir: '/managed/outputs/astro', ingest_output_dir: '/managed/outputs/ingest', digest_dir: '/managed/digests' };
   else if (scenario.startsWith('workspace')) return httpFetch(apiBase + url, options);
   else if (/^\/api\/groups\/\d+\/critique$/.test(url)) {
     critiqueRequests.push([url, options.method]);
@@ -5339,6 +5340,7 @@ const regression = `
     await load();
     const line = element('#system-status').textContent;
     assert.equal(line, 'Local AI online · darktable-cli missing');
+    // oMLX run as an app has no omlx command on PATH; a server that answers is not missing.
     assert.ok(!line.includes('Qwen'), 'the header names no model');
     return;
   }
@@ -5437,11 +5439,21 @@ const regression = `
     await load();
     await inspect(state.groups[0].photos[1]);
     await loadComposition();
+    const said = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) said.push(value); } });
     networkDown = true;
     await askCompositionAI();
     assert.equal(element('#ai-status').dataset.phase, 'failed');
     assert.equal(element('#ai-status').textContent, 'Composition review failed: Lumen server unreachable. If you just restarted lumen serve, reload this page.');
+    await new Promise(setImmediate);
+    assert.equal(element('#server-gone').hidden, false, 'a refused fetch, refused again a second later, puts up the notice');
+    await checkServer();
+    const gone = said.filter(message => message === 'Lumen has stopped. Reload this page once Lumen is open again.');
+    assert.equal(gone.length, 1, 'said once, not on every check');
     networkDown = false;
+    await checkServer();
+    assert.equal(element('#server-gone').hidden, true, 'the notice goes once the server answers again');
+    assert.equal(said.at(-1), 'Lumen is running again.');
     // A route the server does not have answers with the stdlib's HTML error page, not JSON.
     // Reading the body before the status turned a plain 404 into "Unexpected token '<'",
     // which is what a lumen serve older than the page it is serving looked like.
@@ -6742,6 +6754,15 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_network_failure_names_the_server_not_the_browser(self):
         self.run_javascript_cleanup_regression("network-error")
+
+    def test_stopped_server_notice_names_no_launcher_and_offers_reload(self):
+        static = Path(__file__).resolve().parents[1] / "src" / "lumen" / "static"
+        html, javascript = (static / "index.html").read_text(), (static / "app.js").read_text()
+        self.assertIn('<h2 id="server-gone-heading">Lumen has stopped</h2>', html)
+        # The same words whether Lumen.app was quit or lumen serve was stopped with Ctrl-C.
+        self.assertIn("Lumen is no longer running, so this page cannot do anything. Open Lumen again, then reload this page.", html)
+        self.assertIn('<button type="button" id="server-gone-reload">Reload</button>', html)
+        self.assertIn("if (!document.hidden) checkServer()", javascript, "no heartbeat while the tab is hidden")
 
     def test_javascript_inspector_shows_gps_location_with_a_maps_link(self):
         self.run_javascript_cleanup_regression("location")
