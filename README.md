@@ -28,7 +28,7 @@ Silicon Macs. It catalogs Sony `.ARW`, Leica `.DNG`, Nikon `.NEF` and Canon `.CR
 extracts previews, groups bursts, explains a best-shot choice, optionally tags
 previews through oMLX, writes portable sidecars, shows where the frames were
 taken on an offline map, checks astrophotography frames, and hands exports to
-local tools such as darktable. Canon and Fujifilm raws are not supported yet.
+local tools such as darktable. Fujifilm raws are not supported yet.
 
 Lumen runs on any Apple Silicon Mac with 16 GB of memory using one oMLX
 model, the fast vision model (`Qwen3-VL-8B-Instruct-4bit`, about 6 GB loaded),
