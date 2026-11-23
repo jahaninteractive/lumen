@@ -3906,6 +3906,7 @@ const regression = `
       'the saved settings render as they are, at the viewport long edge');
     assert.equal(viewport.children[0].src, 'data:image/jpeg;base64,RENDER', 'the viewport shows the render, whole and uncropped');
     assert.equal(viewport.children[0].className, 'fit');
+    assert.equal(element('#develop-straighten_deg-megapixels').textContent, '', 'a helper that reports no native size leaves the count blank');
     assert.equal(element('#develop-histogram-y').getAttribute('d').startsWith('M0.00,60'), true, 'the luma band is drawn behind the curve');
     assert.ok(['y', 'r', 'g', 'b'].every(channel => element('#develop-histogram-' + channel).getAttribute('d')), 'every channel starts shown');
     // B holds 0.8 in its first bucket, above every other bucket in the fixture. Scaled to it,
@@ -7531,6 +7532,7 @@ class DevelopWebTests(unittest.TestCase):
             self.photo = library.catalog.get_photo(1)
         self.calls = []
         self.render_fails = False
+        self.native = (None, None)
         patchers = [patch("lumen.web.render_raw", side_effect=self.render),
                     patch("lumen.library.render_raw", side_effect=self.render)]
         for patcher in patchers:
@@ -7557,7 +7559,7 @@ class DevelopWebTests(unittest.TestCase):
         return DevelopRender(path=Path(destination), width=64, height=48, histogram={"y": (0.1, 0.2), "r": (0.3, 0.4), "g": (0.5, 0.6), "b": (0.7, 0.8)},
                               defaults={"contrast": 0.0, "sharpness": 1.0, "luminance_nr": 0.004, "color_nr": 0.5},
                               supported={"contrast": True, "sharpness": False, "luminance_nr": True, "color_nr": True, "lens_correction": True},
-                             neutral_temperature=5500.0, neutral_tint=3.0)
+                             neutral_temperature=5500.0, neutral_tint=3.0, native_width=self.native[0], native_height=self.native[1])
 
     post_json = WebTests.post_json
     get_json = WebTests.get_json
@@ -7620,9 +7622,15 @@ class DevelopWebTests(unittest.TestCase):
         self.assertNotIn("lens_correction", body)
 
     def test_develop_preview_reports_the_native_size(self):
-        """The Straighten group counts the megapixels an angle leaves, which the preview-sized render cannot say."""
+        """The Straighten group counts the megapixels an angle leaves, which the preview-sized render cannot say:
+        the helper's decoded size, not the file's, since the two differ on a raw."""
+        self.native = (3504, 2336)
         body = self.preview(settings={"straighten_deg": 2.0})[1]
-        self.assertEqual((120, 90), (body["native_width"], body["native_height"]), "the source, unturned and unscaled")
+        self.assertEqual((3504, 2336), (body["native_width"], body["native_height"]), "the decode, unturned and unscaled")
+        self.native = (None, None)  # a helper built before it reported the size
+        body = self.preview()[1]
+        self.assertNotIn("native_width", body)
+        self.assertNotIn("native_height", body)
 
     def test_develop_preview_clamps_an_oversized_long_edge(self):
         self.assertEqual(200, self.preview(long_edge=10**9)[0])

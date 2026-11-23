@@ -99,6 +99,22 @@ class RenderRawTests(unittest.TestCase):
                             self._responder({**older, "lens_correction_supported": True}))
         self.assertIs(True, render.supported["lens_correction"], "an unrebuilt helper's lens box keeps working")
 
+    def test_render_carries_the_native_size_the_helper_reports(self):
+        """The decoded frame before any turn or resample, which the Straighten group counts against."""
+        render = render_raw(self.source, self.destination,
+                            self._responder({**RESPONSE, "native_width": 3504, "native_height": 2336}))
+        self.assertEqual((3504, 2336), (render.native_width, render.native_height))
+        self.assertEqual((1100, 733), (render.width, render.height), "the render's own size is unchanged")
+
+    def test_native_size_is_none_from_an_older_helper_or_a_bad_value(self):
+        render = render_raw(self.source, self.destination, self._responder())
+        self.assertEqual((None, None), (render.native_width, render.native_height), "a helper built before this")
+        self.assertEqual((1100, 733), (render.width, render.height), "and the rest parses as before")
+        for width, height in ((0, 2336), (3504, -1), ("3504", 2336), (3504.5, 2336), (True, 2336), (3504, None)):
+            render = render_raw(self.source, self.destination,
+                                self._responder({**RESPONSE, "native_width": width, "native_height": height}))
+            self.assertEqual((None, None), (render.native_width, render.native_height), (width, height))
+
     def test_no_angle_sends_no_straighten_key_and_an_older_helper_renders_as_before(self):
         """Zero is invisible: without an angle neither shape of older helper notices anything."""
         render = render_raw(self.source, self.destination, self._responder(), settings={"exposure_ev": 0.5})

@@ -37,6 +37,16 @@ class DevelopRender:
     supported: Mapping[str, bool]
     neutral_temperature: float
     neutral_tint: float
+    # The decoded frame before any straighten turn or resample, which the Straighten group counts the
+    # megapixels an angle leaves against. None from a helper built before it reported them.
+    native_width: int | None = None
+    native_height: int | None = None
+
+
+def _native_size(payload: dict) -> tuple[int | None, int | None]:
+    """Both sides as positive whole numbers, or neither: a helper that predates them costs only the count."""
+    size = (payload.get("native_width"), payload.get("native_height"))
+    return size if all(type(side) is int and side > 0 for side in size) else (None, None)
 
 
 def _histogram(reported: object) -> dict[str, tuple[float, ...]]:
@@ -214,6 +224,8 @@ def render_raw(
             supported=_supported(payload),
             neutral_temperature=float(payload["neutral_temperature"]),
             neutral_tint=float(payload["neutral_tint"]),
+            native_width=_native_size(payload)[0],
+            native_height=_native_size(payload)[1],
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError):
         raise failed(f"The raw developer returned an unreadable result for {name}.") from None

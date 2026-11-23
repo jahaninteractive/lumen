@@ -27,7 +27,7 @@ from .astrodebrief import PLACES
 from .library import CleanupError, ExportRequest, Library, public_message, remote_engine_models
 from .omlx import OmlxError
 from .pipelines import EXPORT_PRESETS, validate_watermark
-from .previews import PreviewError, full_size_for, read_exif_summary, read_image_dimensions, thumbnail_for
+from .previews import PreviewError, full_size_for, read_exif_summary, thumbnail_for
 from .rawdevelop import DevelopError, render_raw
 
 
@@ -1105,11 +1105,9 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                              "defaults": dict(rendered.defaults), "supported": dict(rendered.supported),
                              "neutral_temperature": rendered.neutral_temperature, "neutral_tint": rendered.neutral_tint}
                     # The render is preview-sized and already turned, so the Straighten group's megapixel count
-                    # needs the source's own size, the same one the crop choices count against.
-                    try:
-                        reply["native_width"], reply["native_height"] = read_image_dimensions(Path(photo.path))
-                    except ValueError:
-                        pass  # the count is left blank; the render itself is fine
+                    # needs the decode's own size; an older helper reports none and the count is left blank.
+                    if rendered.native_width is not None:
+                        reply["native_width"], reply["native_height"] = rendered.native_width, rendered.native_height
                     self._send_json(reply)
                     return
                 match = re.fullmatch(r"/api/photos/(\d+)/composition-review", path)

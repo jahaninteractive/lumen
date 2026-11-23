@@ -253,6 +253,9 @@ if let wanted = optionalFlag(settings, "lens_correction") {
 guard var image = rawFilter.outputImage else {
     fail("unable to develop \(sourceURL.lastPathComponent)", 4)
 }
+// The decoded frame before any turn or resample: what a level full-size render measures, and
+// what Lumen counts the megapixels a straighten angle leaves against.
+let decodedExtent = image.extent
 
 // Straighten at native scale, before clarity and the resample, so the preview and the export frame
 // the same pixels. Keep the largest same-aspect rectangle inside the turned frame, centred; the size
@@ -362,6 +365,8 @@ do {
 var response: [String: Any] = [
     "width": Int(image.extent.width.rounded()),
     "height": Int(image.extent.height.rounded()),
+    "native_width": Int(decodedExtent.width.rounded()),
+    "native_height": Int(decodedExtent.height.rounded()),
     "neutral_temperature": Double(neutralTemperature),
     "neutral_tint": Double(neutralTint),
     "defaults": decodedDefaults,
