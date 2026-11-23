@@ -94,6 +94,7 @@ class PreferencesTests(unittest.TestCase):
              "listing_headers": {"anthropic-version": "2023-06-01"}, "listing_key_header": "x-api-key"},
             {"name": "Google", "url": "https://generativelanguage.googleapis.com/v1beta/openai"},
             {"name": "OpenAI", "url": "https://api.openai.com/v1"},
+            {"name": "OpenRouter", "url": "https://openrouter.ai/api/v1"},
         ))
 
     def test_every_service_preset_is_a_valid_online_address(self):

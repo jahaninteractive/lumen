@@ -5,6 +5,10 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.9.3 (2026-11-24)
+
+- OpenRouter joins the Online service list in Settings (tried by the photographer on 2026-11-23 with the address typed by hand).
+
 ## 0.9.2 (2026-11-23)
 
 - The map's viewport route frees its build lock before it answers. A second request sent the moment the first was read could be told the index was still building; the test suite hit this once on a slow CI runner.

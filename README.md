@@ -383,9 +383,10 @@ gives the usual addresses of two home model servers.
 
 | Engine | Service or program | Address |
 |--------|--------------------|---------|
-| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one). Its model list is not readable through this address, so type the model names |
+| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one). Its model names fill the lists after **Test** |
 | Online | Google | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | Online | OpenAI | `https://api.openai.com/v1` |
+| Online | OpenRouter | `https://openrouter.ai/api/v1` (one key reaches many makers' models; names look like `maker/model`) |
 | Online | Qwen (Alibaba Cloud) | no preset: choose **Other** and paste your workspace's address, `https://<WorkspaceId>.<region>.maas.aliyuncs.com/compatible-mode/v1`, from the service's console |
 | Base | Ollama | `http://<your PC>:11434/v1` |
 | Base | LM Studio | `http://<your PC>:1234/v1` |

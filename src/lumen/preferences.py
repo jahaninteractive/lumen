@@ -36,6 +36,7 @@ SERVICE_PRESETS: tuple[dict, ...] = (
      "listing_headers": {"anthropic-version": "2023-06-01"}, "listing_key_header": "x-api-key"},
     {"name": "Google", "url": "https://generativelanguage.googleapis.com/v1beta/openai"},
     {"name": "OpenAI", "url": "https://api.openai.com/v1"},
+    {"name": "OpenRouter", "url": "https://openrouter.ai/api/v1"},
 )
 
 MODEL_NAME_MAX = 200

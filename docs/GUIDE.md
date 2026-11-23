@@ -882,9 +882,10 @@ gives the usual addresses of two home model servers.
 
 | Engine | Service or program | Address |
 |--------|--------------------|---------|
-| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one). Its model list is not readable through this address, so type the Fast model and Review model names from the service's documentation |
+| Online | Anthropic | `https://api.anthropic.com/v1` (the service describes this chat-compatible address as a testing and comparison path; its native API is the supported one). Its model names fill the Fast model and Review model lists after **Test** |
 | Online | Google | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | Online | OpenAI | `https://api.openai.com/v1` |
+| Online | OpenRouter | `https://openrouter.ai/api/v1` (one key reaches many makers' models; names look like `maker/model`) |
 | Online | Qwen (Alibaba Cloud) | no preset: choose **Other** and paste your workspace's address, `https://<WorkspaceId>.<region>.maas.aliyuncs.com/compatible-mode/v1`, from the service's console |
 | Base | Ollama | `http://<your PC>:11434/v1` |
 | Base | LM Studio | `http://<your PC>:1234/v1` |
@@ -894,7 +895,7 @@ gives the usual addresses of two home model servers.
 | Service | Date | Fast model | Review model | Result |
 |---------|------|------------|--------------|--------|
 | Anthropic | 2026-11-21 | `claude-haiku-5-5` | `claude-sonnet-5-5` | Both worked through the address above and felt very fast to the photographer; no timings were recorded. Test passes with an empty model list, so the names are typed. |
-| OpenRouter (`https://openrouter.ai/api/v1`, typed as the address; not in the service list) | 2026-11-23 | not recorded | `qwen/qwen3.8-27b`, and Anthropic and OpenAI models through the same address | Worked, by the photographer's report. Which exact models, whether Test filled the model list, and what was run beyond that were not recorded. |
+| OpenRouter | 2026-11-23 | not recorded | `qwen/qwen3.8-27b`, and Anthropic and OpenAI models through the same address | Worked, by the photographer's report. Which exact models, whether Test filled the model list, and what was run beyond that were not recorded. |
 
 The other services in the table above have not been tried yet.
 
