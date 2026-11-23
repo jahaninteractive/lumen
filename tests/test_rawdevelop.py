@@ -99,6 +99,41 @@ class RenderRawTests(unittest.TestCase):
                             self._responder({**older, "lens_correction_supported": True}))
         self.assertIs(True, render.supported["lens_correction"], "an unrebuilt helper's lens box keeps working")
 
+    def test_no_angle_sends_no_straighten_key_and_an_older_helper_renders_as_before(self):
+        """Zero is invisible: without an angle neither shape of older helper notices anything."""
+        render = render_raw(self.source, self.destination, self._responder(), settings={"exposure_ev": 0.5})
+        self.assertEqual({"exposure_ev": 0.5}, self._request()["settings"])
+        self.assertIs(False, render.supported["straighten"], "a helper that does not report it cannot straighten")
+        self.assertEqual((1100, 733), (render.width, render.height))
+        self.assertTrue(self.destination.is_file())
+
+    def test_an_angle_is_sent_and_a_helper_that_reports_straighten_renders_it(self):
+        current = {**RESPONSE, "width": 1000, "height": 666,
+                   "supported": {**RESPONSE["supported"], "straighten": True}}
+        render = render_raw(self.source, self.destination, self._responder(current),
+                            settings={"straighten_deg": 2.0})
+        self.assertEqual({"straighten_deg": 2.0}, self._request()["settings"])
+        self.assertIs(True, render.supported["straighten"])
+        self.assertEqual((1000, 666), (render.width, render.height))
+
+    def test_an_angle_asked_of_an_older_helper_is_refused_with_the_rebuild_step(self):
+        """An old helper never lies: one that renders unrotated, and one that predates the key, both refuse."""
+        helpers = {
+            "renders without reporting straighten": lambda: self._responder(),
+            "rejects the key as unknown": lambda: self._stub(
+                "echo 'unknown develop setting straighten_deg' >&2\nexit 2"),
+        }
+        for label, helper in helpers.items():
+            with self.subTest(label):
+                with self.assertRaises(DevelopError) as caught:
+                    render_raw(self.source, self.destination, helper(), settings={"straighten_deg": -2.0})
+                message = str(caught.exception)
+                self.assertIn("scripts/bootstrap.sh", message)
+                self.assertIn("DSC02733.ARW", message)
+                self.assertNotIn("unknown develop setting", message)
+                self.assertNotIn(str(self.root), message)
+                self.assertNothingLeftBehind(label)
+
     def test_render_raw_ignores_defaults_it_cannot_read(self):
         for shape in ([0.5], {"sharpness": "lots"}, "nonsense", {}):
             with self.subTest(shape=shape):
@@ -282,6 +317,9 @@ class NativeHelperRequestTests(unittest.TestCase):
             "a curve of the wrong length": {"settings": {"curve": [[0, 0], [1, 1]]}},
             "a curve that does not ascend": {"settings": {"curve": [[0, 0], [0.5, 0.2], [0.25, 0.5], [0.75, 0.8], [1, 1]]}},
             "a misspelled setting": {"settings": {"exposure": 0.5}},
+            "a string straighten angle": {"settings": {"straighten_deg": "2"}},
+            "a straighten angle past 15 degrees": {"settings": {"straighten_deg": 15.5}},
+            "a straighten angle past -15 degrees": {"settings": {"straighten_deg": -20}},
             "an unsupported format": {"format": "png"},
             "a non-boolean histogram flag": {"histogram": "yes"},
         }

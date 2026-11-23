@@ -31,8 +31,9 @@ class DevelopRender:
     # The panel parks each unset handle here; empty when the helper reported none.
     defaults: dict[str, float]
     # Which of the decoder's controls this file offers, keyed by DEVELOP_AMOUNTS and
-    # "lens_correction". A one-channel sensor has no contrast, sharpness or noise controls, and
-    # not every body and lens pair carries a profile; the panel disables what is not offered.
+    # "lens_correction", plus "straighten" (the helper can turn the frame). A one-channel sensor has no
+    # contrast, sharpness or noise controls, and not every body and lens pair carries a profile; the
+    # panel disables what is not offered.
     supported: Mapping[str, bool]
     neutral_temperature: float
     neutral_tint: float
@@ -64,6 +65,8 @@ def _supported(payload: dict) -> dict[str, bool]:
     reported = reported if isinstance(reported, dict) else {}
     supported = {amount: reported.get(amount) is not False for amount in DEVELOP_AMOUNTS}
     supported["lens_correction"] = reported.get("lens_correction", payload.get("lens_correction_supported")) is True
+    # A helper built before straightening would render the frame unturned, so only an explicit yes counts.
+    supported["straighten"] = reported.get("straighten") is True
     return supported
 
 
@@ -154,6 +157,11 @@ def render_raw(
         _discard(destination)
         return DevelopError(message)
 
+    sent = {key: value for key, value in (settings or {}).items() if value is not None}
+    # An older helper either rejects the key or renders the frame unturned; neither may pass for a straightened render.
+    straightens = "straighten_deg" in sent
+    cannot_straighten = f"The raw developer cannot straighten {name}; rebuild the helper with scripts/bootstrap.sh."
+
     # The camera original is never written, whatever a caller asks for.
     try:
         # resolve() catches symlinks and the plain case; samefile also catches a hard
@@ -174,7 +182,7 @@ def render_raw(
         "format": image_format,
         "long_edge": long_edge,
         "histogram": histogram,
-        "settings": {key: value for key, value in (settings or {}).items() if value is not None},
+        "settings": sent,
     }
     try:
         completed = runner(
@@ -192,6 +200,8 @@ def render_raw(
     if completed.returncode != 0:
         # The helper's messages name no paths, only the file's basename, so its last line is safe to pass on.
         reason = completed.stderr.strip().splitlines()[-1:] if isinstance(completed.stderr, str) else []
+        if straightens and reason and reason[0] == "unknown develop setting straighten_deg":
+            raise failed(cannot_straighten)
         raise failed(f"The raw developer could not develop {name}" + (f": {reason[0]}." if reason else "."))
     try:
         payload = json.loads(completed.stdout)
@@ -207,6 +217,8 @@ def render_raw(
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError):
         raise failed(f"The raw developer returned an unreadable result for {name}.") from None
+    if straightens and not render.supported["straighten"]:
+        raise failed(cannot_straighten)
     if not destination.is_file():
         raise failed(f"The raw developer wrote no image for {name}.")
     return render

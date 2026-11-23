@@ -178,6 +178,12 @@ for key in settings.keys where !knownSettings.contains(key) {
     fail("unknown develop setting \(key)", invalidRequest)
 }
 let curve = curvePoints(settings)
+// Degrees, positive turning the frame clockwise as the photographer sees it. Absent and 0 both
+// leave the image untouched, so a frame never straightened takes exactly the path it always did.
+let straighten = optionalNumber(settings, "straighten_deg") ?? 0
+guard abs(straighten) <= 15 else {
+    fail("straighten_deg must be from -15 through 15", invalidRequest)
+}
 
 // MARK: - Develop
 
@@ -207,6 +213,9 @@ let supported: [String: Bool] = [
     "luminance_nr": rawFilter.isLuminanceNoiseReductionSupported,
     "color_nr": rawFilter.isColorNoiseReductionSupported,
     "lens_correction": rawFilter.isLensCorrectionSupported,
+    // Not a decoder control: this helper turns every file. Reported so Lumen can tell a helper
+    // built before straightening, which would render the frame unturned, from this one.
+    "straighten": true,
 ]
 // Asking for one the file lacks is the request's mistake, not a silent no-op: the panel
 // disables it whenever the render says it is not offered.
@@ -243,6 +252,27 @@ if let wanted = optionalFlag(settings, "lens_correction") {
 
 guard var image = rawFilter.outputImage else {
     fail("unable to develop \(sourceURL.lastPathComponent)", 4)
+}
+
+// Straighten at native scale, before clarity and the resample, so the preview and the export frame
+// the same pixels. Keep the largest same-aspect rectangle inside the turned frame, centred; the size
+// must match composition.straightened_size exactly (floor, clamped to 1...source), since crops and
+// the camera-JPEG path are measured against it.
+if straighten != 0 {
+    let extent = image.extent
+    let turn = abs(straighten) * .pi / 180
+    let fit = min(extent.width / (extent.width * cos(turn) + extent.height * sin(turn)),
+                  extent.height / (extent.width * sin(turn) + extent.height * cos(turn)))
+    let width = min(extent.width, max(1, (fit * extent.width).rounded(.down)))
+    let height = min(extent.height, max(1, (fit * extent.height).rounded(.down)))
+    // Core Image is y-up, so turning clockwise on screen is a negative angle here.
+    let rotation = CGAffineTransform(rotationAngle: -straighten * .pi / 180)
+    let centre = CGPoint(x: extent.midX, y: extent.midY).applying(rotation)
+    // Clamped first so the interpolation at the kept rectangle's edge samples image, not transparency.
+    image = image.clampedToExtent()
+        .transformed(by: rotation.concatenating(
+            CGAffineTransform(translationX: width / 2 - centre.x, y: height / 2 - centre.y)))
+        .cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
 }
 
 // Clarity is a wide, gentle unsharp mask, the way most editors build it. Its radius is in
