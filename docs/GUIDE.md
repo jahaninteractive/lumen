@@ -1,7 +1,8 @@
 # Lumen user guide
 
 Website: [lumen.contact](https://lumen.contact), with a [step-by-step walk
-through one real trip](https://lumen.contact/guide.html).
+through one real trip](https://lumen.contact/guide), [AI setup](https://lumen.contact/ai)
+and an [install page](https://lumen.contact/install).
 
 Everything a photographer does after install, in the order a shoot goes:
 ingest, cull, frame view, places, map, local AI, settings, export, refine, stack. Installing
@@ -10,30 +11,75 @@ from the command line are in the [README](../README.md#install).
 
 ## Install the app
 
-`Lumen.app` needs nothing else installed. Its disk image is built with
-`zsh scripts/build_app.sh`; a signed release that opens on any Mac is pending,
-so for now a built app opens only on the Mac that built it.
+`Lumen.app` needs nothing else installed and never needs Terminal. It wants an
+Apple Silicon Mac on macOS 13.5 or newer and about 80 MB for itself.
+**[Download Lumen for Mac](https://github.com/jahaninteractive/lumen/releases/latest/download/Lumen-latest.dmg)**:
+a 40 MB disk image, signed and notarized, so macOS asks only its usual
+question about a download from the internet. Every version is on the
+[releases page](https://github.com/jahaninteractive/lumen/releases). The
+website's [install page](https://lumen.contact/install) shows the same steps
+with a picture of the first window.
 
-1. Open `Lumen-<version>.dmg`.
-2. Drag Lumen onto the Applications folder beside it, or double-click Lumen
-   and choose **Move** when it offers to move itself to Applications.
-3. On the first launch, **Set Up Lumen** lists Places, Map, darktable and
-   Siril with their sizes. Tick what you want (for Places, type the country
-   codes you photograph in, such as `ZA AQ`) and press **Install**, or **Not
-   Now**. Anything that did not finish is listed; press Install again for it.
-4. Lumen then opens in your browser. Click Lumen in the Dock to open it again
-   after closing the tab; quitting Lumen stops it, and asks first if a job is
-   still running.
-5. The Lumen menu, and the menu from a right-click on Lumen's Dock icon, hold
-   **Set Up Lumen…** (add a piece later) and **Uninstall Lumen…**.
-6. For AI advice, connect Base or Online in [Settings](#settings-and-the-ai-engine).
-   The app does not install AI on this Mac; for that, see [Local AI](#local-ai).
+1. **Open the disk image.** It holds Lumen and a shortcut to Applications.
+2. **Open Lumen.** From the disk image it asks "Move Lumen to your
+   Applications folder?" Choose **Move**: it copies itself, opens the copy,
+   and the disk image can be ejected. Dragging Lumen onto Applications by hand
+   also works.
+3. **Welcome to Lumen.** The first launch shows one window: "Lumen is ready to
+   use. These extras are optional; choose any to download now, or add them
+   later from the Lumen menu."
 
-**Uninstall Lumen…** moves the downloaded pieces and the app to the Trash and
+   | Extra | Size | What it adds |
+   |-------|------|--------------|
+   | Places | about 50 MB | Turns each photo's GPS position into a place name, on this Mac. Most people want this. **Add a country…** picks the countries you photograph in by name, which adds their parks, reserves and bays |
+   | Map | about 100 MB | The world map behind the Map tab, with no internet connection. Most people want this |
+   | darktable | 310 MB | A free raw editor Lumen uses for refined previews, darktable looks, and exporting HEIC, PNG or TIFF photos. Raws and camera JPEGs export without it |
+   | Siril | 230 MB | A free astronomy program, only for stacking night-sky frames |
+
+   The bottom line shows the space needed and the space free; Lumen allows
+   twice the listed size while installing, and warns first when there is not
+   enough.
+4. **Install**, or **Open Lumen** to skip. A progress bar runs and a log shows
+   each download. It ends with "Finished. Press Open Lumen to start."
+   Anything that did not finish is listed under "Not finished. Press Install
+   to try again:", and Install picks it up.
+5. **Lumen opens in your default browser.** That is normal: Lumen's window is
+   a browser tab, and the app in the Dock is what keeps it running. The **Add
+   photos** tab takes a card or folder.
+6. **Privacy questions.** The first time Lumen reads photos, macOS asks
+   whether it may open that folder or memory card. Lumen reads photos from
+   those places and never changes the originals.
+7. **Coming back.** Click Lumen in the Dock to open the tab again. Right-click
+   the Dock icon for **Open Lumen**, **Set Up Lumen…** and **Uninstall
+   Lumen…**; the same items, and **About Lumen**, are in the Lumen menu, but
+   the menu bar belongs to the browser while the tab is in front.
+8. **Adding extras later.** Set Up Lumen… shows what is installed. Countries
+   already fetched read "Added: …"; new picks read "To add: …".
+9. **Quitting.** Quit Lumen from the Dock or its menu; it asks first if a job
+   is still running. The server stops, and the browser tab says "Lumen has
+   stopped".
+10. **AI advice.** The app does not install AI on this Mac. The quickest route
+    is Base or Online: open [Settings](#settings-and-the-ai-engine), choose
+    the engine under AI engine, paste the key and press **Test**. To run the
+    advice on this Mac, install oMLX yourself; see [Local AI](#local-ai) and
+    [On a 16 GB Mac](#on-a-16-gb-mac).
+
+**Updating.** There are no automatic updates. A new version is a new disk
+image: open it and choose Move again, which replaces the old copy. The library
+and the downloaded extras stay.
+
+**Uninstall Lumen…** moves the downloaded extras and the app to the Trash and
 removes saved service keys from the Keychain, which cannot be undone. The library stays unless you tick one or both of its boxes:
 Lumen's working data (ratings, picks, tags, crops, develop settings, previews)
-and your exported files. Camera originals are never touched; oMLX and its
-models are left alone.
+and your exported files. Leave both off and a later reinstall finds the
+library again, with every rating and edit. Camera originals are never touched; oMLX and its
+models are left alone, so remove oMLX separately. It ends with "Lumen was
+uninstalled."; everything is in the Trash, so nothing is lost until it is
+emptied.
+
+Not yet tried in the app: night-sky stacking with Siril, the "Not enough free
+space" warning, an update over an existing copy, and a first launch with no
+internet connection.
 
 ## What is working
 
@@ -684,6 +730,24 @@ offers both models into oMLX's `model_dir` from `~/.omlx/settings.json`, or
 `~/Models` before oMLX has written one. It shows the memory the Mac reports:
 the 8B defaults to yes, the 27B to yes only from 32 GB. A model folder that
 already holds `config.json` and weights is left alone.
+
+With the app there is no script: install oMLX from its own site, open it, and
+download the models in it. Settings names them under AI engine: the 8B is
+needed for every AI feature, and the 27B is worth adding from 32 GB of memory.
+
+#### On a 16 GB Mac
+
+Tried on a 16 GB M4 Mac mini on 2026-11-23:
+
+- Take the 8B only; the 27B wants 32 GB or more. Close other apps before
+  loading it.
+- oMLX refused to load the 8B with its memory guard on `safe` ("does not fit
+  under the dynamic memory ceiling") and loaded it on `balanced`. The setting
+  is in oMLX's admin page.
+- oMLX then suggests `sudo sysctl iogpu.wired_limit_mb=13312`. That is a
+  Terminal command needing an administrator password, and it resets on
+  restart; treat it as optional. Whether advice runs acceptably without it has
+  not been measured.
 
 Start oMLX, then tag:
 

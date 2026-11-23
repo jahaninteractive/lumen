@@ -117,55 +117,62 @@ reporting anything sensitive. Versions are listed in [CHANGELOG.md](CHANGELOG.md
 
 Prerequisites: macOS 13.5 or newer on an Apple Silicon Mac with at least 16 GB
 of memory (AI advice on this Mac needs macOS 15). Lumen was built and measured on a
-48 GB M4; a 16 GB machine has not been tested, but the fast model needs about
-6 GB and nothing else in Lumen is memory-hungry.
+48 GB M4. The app was installed and used on a 16 GB M4 Mac mini; AI on a Mac
+that size takes the fast model only (about 6 GB), with the notes in the guide's
+[Local AI](docs/GUIDE.md#on-a-16-gb-mac).
 
 There are two ways in: the app, for photographers who would rather not use a
 terminal, and the project folder, for those who would.
 
 ### The app
 
-`Lumen.app` carries everything Lumen needs to import, cull, develop and export;
-nothing else has to be installed first. There is no download link yet: the disk
-image is built with `zsh scripts/build_app.sh` (it lands in `dist/`), and a
-signed release that opens on any Mac is pending. Until then a built app opens
-only on the Mac that built it.
+`Lumen.app` carries everything Lumen needs to import, cull, develop and export,
+in about 80 MB; nothing else has to be installed first and Terminal is never
+needed. **[Download Lumen for Mac](https://github.com/jahaninteractive/lumen/releases/latest/download/Lumen-latest.dmg)**
+(a 40 MB disk image, signed and notarized; every version is on the
+[releases page](https://github.com/jahaninteractive/lumen/releases)).
 
-1. Open `Lumen-<version>.dmg`. It shows Lumen beside an Applications folder.
-2. Drag Lumen onto Applications, or double-click it in the disk image and
-   choose **Move** when it asks "Move Lumen to your Applications folder?". It
-   copies itself there and opens the copy.
-3. The first time it opens, the **Set Up Lumen** window lists the optional
-   pieces with their sizes: Places (town names, about 50 MB; pick the
-   countries you photograph in from **Add a country…** to add
-   their parks, reserves and bays), Map (about 100 MB),
+1. Open the disk image. It holds Lumen and a shortcut to Applications.
+2. Open Lumen and choose **Move** when it asks "Move Lumen to your Applications
+   folder?". It copies itself there and opens the copy; dragging it onto
+   Applications works too.
+3. The first launch shows **Welcome to Lumen**. Lumen is ready to use already;
+   the window lists four optional extras with their sizes: Places (place
+   names, about 50 MB; **Add a country…** picks the countries you photograph
+   in by name, which adds their parks, reserves and bays), Map (about 100 MB),
    darktable (310 MB, for refined previews and exports that use a darktable
    profile or start from a PNG, TIFF or HEIC; raws and camera JPEGs export
-   without it) and Siril (230 MB, for
-   night-sky stacking). Tick what you want and press **Install**, or **Not
-   Now**; nothing is required. Anything that did not finish is listed, and
-   pressing Install again picks it up.
-4. When the window closes, Lumen opens in your web browser. Closing the
-   browser tab does not stop it: click Lumen in the Dock to open it again, and
-   quit Lumen from the Dock or its menu to stop it.
-5. **Set Up Lumen…** and **Uninstall Lumen…** are in the Lumen menu, and in the menu you get by
-   right-clicking Lumen's Dock icon, so you can add a piece later or remove
-   Lumen.
+   without it) and Siril (230 MB, for night-sky stacking). Tick what you want
+   and press **Install**, or **Open Lumen** to skip. An install ends with
+   "Finished. Press Open Lumen to start."; anything that did not finish is
+   listed, and pressing Install again picks it up.
+4. Lumen opens in your web browser: its window is a browser tab, and the app
+   in the Dock keeps it running. Closing the tab does not stop it; click Lumen
+   in the Dock to open it again, and quit Lumen from the Dock to stop it.
+5. Right-click Lumen's Dock icon for **Open Lumen**, **Set Up Lumen…** (add an
+   extra later) and **Uninstall Lumen…**. The same items are in the Lumen menu.
 6. For AI advice, open **Settings** (the gear at the far right of the tabs) and
    connect a service under AI engine: Base (your own computer at home) or
    Online (a service you hold a key for); see
    [Settings and the AI engine](#settings-and-the-ai-engine). The app does not
-   set up AI on this Mac; to run it here, follow
-   [Local AI](docs/GUIDE.md#local-ai) after installing from the project folder.
+   install AI on this Mac; to run it here, install oMLX yourself and follow
+   [Local AI](docs/GUIDE.md#local-ai).
 
-**Uninstall Lumen…** always moves the downloaded pieces and the app itself to
+The guide's [Install the app](docs/GUIDE.md#install-the-app) has the same steps
+in more detail, with updating and what was found on a 16 GB Mac.
+
+**Uninstall Lumen…** always moves the downloaded extras and the app itself to
 the Trash, and removes any saved service keys from your Keychain; those cannot
 be recovered, so keep a copy of a key you will need again. Your library (`~/Pictures/Lumen
 Library`) is kept unless you tick its boxes: one for Lumen's working data
 (ratings, picks, tags, crops, develop settings and previews), one for your
-exported files. Your camera originals are never touched, and oMLX and its
+exported files. Leave them off and a later reinstall finds the library again.
+Your camera originals are never touched, and oMLX and its
 models are left alone. Everything else goes to the Trash, so a mistake can be
 put back.
+
+There are no automatic updates: a new version is a new disk image, and Move
+replaces the old copy while the library and the extras stay.
 
 If a Lumen is already running from the project folder on the usual address,
 the app says so and opens that one instead of starting a second.
