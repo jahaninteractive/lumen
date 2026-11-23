@@ -16,6 +16,7 @@
 #   --downloads-only   only the downloads below that need no uv, Homebrew, Xcode tools or python3
 #   --only <keys>      only these components, comma separated (implies --yes); see --list for keys
 #   --list             print key, label, size, purpose, ready|missing, on|off per component, tab separated; change nothing
+#   --countries        print the two-letter codes whose GeoNames country file is installed, one per line; change nothing
 set -eu
 
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -38,7 +39,7 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 
 usage() {
-  echo "usage: zsh scripts/bootstrap.sh [--yes] [--no-download] [--downloads-only] [--only <keys>] [--dest <dir>] [--list] | --check" >&2
+  echo "usage: zsh scripts/bootstrap.sh [--yes] [--no-download] [--downloads-only] [--only <keys>] [--dest <dir>] [--list] [--countries] | --check" >&2
   exit 2
 }
 
@@ -46,6 +47,7 @@ no_download=0
 assume_yes=0
 downloads_only=0
 list=0
+show_countries=0
 only_given=0
 only_keys=()
 vendor_root="$project_root/vendor"
@@ -55,6 +57,7 @@ while (( $# )); do
     --yes) assume_yes=1 ;;
     --downloads-only) downloads_only=1 ;;
     --list) list=1 ;;
+    --countries) show_countries=1 ;;
     --dest) (( $# > 1 )) || usage; vendor_root="$2"; shift ;;
     --only) (( $# > 1 )) || usage; only_given=1; assume_yes=1; only_keys=(${(s:,:)2}); shift ;;
     *) usage ;;
@@ -219,6 +222,14 @@ unzip_member() {
 }
 
 # Before the platform check, so a front end can show the list anywhere; it reads, never writes.
+if (( show_countries )); then
+  # Step 5 unzips each country to <CC>.txt beside cities500.txt; the glob sorts by name.
+  for code in "$vendor_root"/data/geonames/[A-Z][A-Z].txt(N:t:r); do
+    print -r -- "$code"
+  done
+  exit 0
+fi
+
 if (( list )); then
   if (( ! downloads_only )); then
     model_dir="$(omlx_model_dir)"

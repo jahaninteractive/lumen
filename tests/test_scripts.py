@@ -83,6 +83,20 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual("ready", rows["places"])
             self.assertEqual("missing", rows["map"])
 
+    def test_countries_prints_the_installed_country_files_only(self):
+        with tempfile.TemporaryDirectory() as dest:
+            result = self._bootstrap("--downloads-only", "--dest", dest, "--countries")
+            self.assertEqual((0, ""), (result.returncode, result.stdout), result.stderr)
+            geonames = Path(dest) / "data" / "geonames"
+            geonames.mkdir(parents=True)
+            for name in ("ZA.txt", "AQ.txt", "ZA.zip", "cities500.txt", "countryInfo.txt", "readme.txt", "cities500.zip"):
+                (geonames / name).write_text("")
+            result = self._bootstrap("--downloads-only", "--dest", dest, "--countries")
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("AQ\nZA\n", result.stdout)
+            self.assertEqual(sorted(["ZA.txt", "AQ.txt", "ZA.zip", "cities500.txt", "countryInfo.txt", "readme.txt", "cities500.zip"]),
+                             sorted(os.listdir(geonames)))
+
     def test_downloads_only_places_with_no_country_codes_is_not_skipped(self):
         with tempfile.TemporaryDirectory() as dest:
             geonames = Path(dest) / "data" / "geonames"

@@ -602,7 +602,8 @@ final class Setup: NSObject, NSWindowDelegate {
     let countriesLabel = NSTextField(labelWithString: "Countries you photograph in")
     let countries = NSPopUpButton(frame: .zero, pullsDown: true)
     let chosenLabel = NSTextField(wrappingLabelWithString: "None chosen")
-    var chosen: Set<String> = []  // two-letter codes, as LUMEN_GEONAMES_COUNTRIES takes them
+    var chosen: Set<String> = []  // new two-letter codes, as LUMEN_GEONAMES_COUNTRIES takes them
+    var added: Set<String> = []  // codes whose country file is installed, from --countries
     let logView = NSTextView()
     let logScroll = NSScrollView()
     let message = NSTextField(wrappingLabelWithString: "")
@@ -634,6 +635,7 @@ final class Setup: NSObject, NSWindowDelegate {
             countries.lastItem?.representedObject = code
         }
         (countries.cell as? NSPopUpButtonCell)?.altersStateOfSelectedItem = false  // pickCountry toggles the tick itself
+        countries.autoenablesItems = false  // installed countries stay disabled
         countries.target = self
         countries.action = #selector(pickCountry)
         chosenLabel.widthAnchor.constraint(equalToConstant: width - 20).isActive = true
@@ -691,32 +693,46 @@ final class Setup: NSObject, NSWindowDelegate {
         window.center()
     }
 
-    /// Rebuilds the tick boxes from `--list`, which only reads.
-    func reload() {
-        rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        boxes = []
-        sizes = [:]
-        places = nil
+    /// Runs one of bootstrap.sh's read-only flags (`--list`, `--countries`); its output, or the error.
+    func ask(_ flag: String) -> (ok: Bool, text: String) {
         let list = Process()
         list.executableURL = URL(fileURLWithPath: "/bin/zsh")
         list.arguments = [resources.appendingPathComponent("bootstrap.sh").path, "--downloads-only",
-                          "--dest", childEnvironment["LUMEN_VENDOR"]!, "--list"]
+                          "--dest", childEnvironment["LUMEN_VENDOR"]!, flag]
         list.environment = childEnvironment
         list.standardInput = FileHandle.nullDevice
         let output = Pipe()
         list.standardOutput = output
         list.standardError = output
-        var text = ""
         do {
             try list.run()
-            text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             list.waitUntilExit()
+            return (!list.isRunning && list.terminationStatus == 0, text)
         } catch {
-            text = error.localizedDescription
+            return (false, error.localizedDescription)
         }
-        if list.isRunning || list.terminationStatus != 0 {
+    }
+
+    /// Rebuilds the tick boxes from `--list` and the installed countries from `--countries`; both only read.
+    func reload() {
+        rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        boxes = []
+        sizes = [:]
+        places = nil
+        let (ok, text) = ask("--list")
+        if !ok {
             show("The list of downloads could not be read: \(text)")
         }
+        let installed = ask("--countries")
+        added = installed.ok ? Set(installed.text.split(separator: "\n").map(String.init)) : []
+        chosen.subtract(added)
+        for item in countries.itemArray {
+            guard let code = item.representedObject as? String else { continue }
+            item.isEnabled = !added.contains(code)
+            item.state = added.contains(code) || chosen.contains(code) ? .on : .off
+        }
+        showChosen()
         for line in text.split(separator: "\n") {
             let field = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
             guard field.count == 6 else { continue }
@@ -768,9 +784,15 @@ final class Setup: NSObject, NSWindowDelegate {
         changed()
     }
 
+    /// "Added: …" for what is on disk, "To add: …" for the new picks, or "None chosen".
     func showChosen() {
-        let names = countries.itemArray.filter { $0.state == .on }.map(\.title)
-        chosenLabel.stringValue = names.isEmpty ? "None chosen" : names.joined(separator: ", ")
+        func names(_ codes: Set<String>) -> String {
+            countries.itemArray.filter { codes.contains($0.representedObject as? String ?? "") }.map(\.title)
+                .joined(separator: ", ")
+        }
+        let parts = [added.isEmpty ? nil : "Added: \(names(added))", chosen.isEmpty ? nil : "To add: \(names(chosen))"]
+            .compactMap { $0 }
+        chosenLabel.stringValue = parts.isEmpty ? "None chosen" : parts.joined(separator: " · ")
     }
 
     /// The ticked missing keys, plus `places` when it is installed and countries were chosen:
@@ -846,11 +868,7 @@ final class Setup: NSObject, NSWindowDelegate {
         if !skipped.isEmpty {
             text += (text.isEmpty ? "" : "\n\n") + "Not finished. Press Install to try again:\n" + skipped.joined(separator: "\n")
         }
-        if status == 0 && skipped.isEmpty {  // the chosen countries are fetched: none is new any more
-            chosen = []
-            countries.itemArray.forEach { $0.state = .off }
-            showChosen()
-        }
+        if status == 0 && skipped.isEmpty { chosen = [] }  // fetched: reload lists them under Added
         reload()
         if status == 0 && skipped.isEmpty {
             add(firstRun ? "Finished. Press Open Lumen to start." : "Finished.")
