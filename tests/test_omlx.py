@@ -569,6 +569,32 @@ class DevelopAdviceTests(unittest.TestCase):
         self.assertIn('{"settings": {', prompt)  # the shape, so a flat settings object is not returned
         self.assertEqual("image_url", captured["content"][-1]["type"])
 
+    def test_suggest_develop_prompt_is_unchanged_by_controls_it_does_not_offer(self):
+        """straighten_deg is a develop range the prompt does not offer yet: the text stays byte for byte."""
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        captured = {}
+        reply = json.dumps({"settings": {}, "rationale": "Nothing needed."})
+        with tempfile.TemporaryDirectory() as directory:
+            preview = Path(directory) / "p.jpg"
+            Image.new("RGB", (8, 8)).save(preview)
+            with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), reply)[1]):
+                tagger.suggest_develop(preview, settings={}, histogram_note="", feedback=None)
+        self.assertEqual(
+            "You are helping a photographer develop one raw frame. Propose develop settings and explain them so "
+            "that they learn to read the histogram. Every control is optional: omit one to leave this file's own "
+            "default alone. Controls: exposure_ev -3.0 through 3.0; temperature_k 2000 through 12000; tint -150 "
+            "through 150; contrast 0.0 through 1.0; sharpness 0.0 through 1.0; luminance_nr 0.0 through 1.0; "
+            "color_nr 0.0 through 1.0; clarity 0.0 through 1.0; lens_correction true or false; curve as five "
+            "[x, y] pairs in 0 to 1 ascending in x, where y above x brightens that tone and y below x darkens it. "
+            "exposure_ev is in stops: positive brightens, negative darkens, +1 doubles the light. A histogram "
+            "median near 50 is a balanced exposure; well below 50 is dark and wants positive exposure_ev unless "
+            "the scene is meant to be dark. No control has been changed yet; each one sits at this file's own "
+            "default.  Return JSON only, shaped {\"settings\": {\"<control>\": <value>}, \"rationale\": \"<text>\"}, "
+            "with settings (an object of the controls above, absolute values, empty when the frame needs nothing) "
+            "and rationale (at most 600 characters, two or three plain sentences naming what you read in the frame "
+            "and in the histogram and what each change does about it). Do not identify a person.",
+            captured["content"][0]["text"])
+
     def test_suggest_develop_prompt_omits_the_feedback_line_on_the_first_attempt(self):
         tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
         captured = {}

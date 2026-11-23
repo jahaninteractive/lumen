@@ -173,7 +173,7 @@ if let value = request["settings"] {
 // finished fixing, so it stays out until a file is found where it bites.
 let knownSettings = ["exposure_ev", "temperature_k", "tint", "contrast",
                      "sharpness", "luminance_nr", "color_nr",
-                     "clarity", "lens_correction", "curve"]
+                     "clarity", "lens_correction", "curve", "straighten_deg"]
 for key in settings.keys where !knownSettings.contains(key) {
     fail("unknown develop setting \(key)", invalidRequest)
 }

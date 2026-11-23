@@ -607,7 +607,9 @@ class OmlxTagger:
         The frame comes in rendered with `settings` already applied, so the model critiques what the
         photographer is looking at and answers with absolute values, not deltas.
         """
-        controls = "; ".join(f"{key} {low} through {high}" for key, (low, high) in DEVELOP_RANGES.items())
+        # straighten_deg is not offered to the model yet; the prompt names it once the advice can level a frame.
+        controls = "; ".join(f"{key} {low} through {high}" for key, (low, high) in DEVELOP_RANGES.items()
+                             if key != "straighten_deg")
         current = (f"The photographer's current settings are {json.dumps(settings, sort_keys=True)}."
                    if settings else "No control has been changed yet; each one sits at this file's own default.")
         prompt = (

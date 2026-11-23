@@ -912,6 +912,18 @@ class DevelopSettingsTests(unittest.TestCase):
         self.assertTrue(DevelopSettings({}).is_empty)
         self.assertFalse(DevelopSettings({"tint": 0}).is_empty)
 
+    def test_develop_settings_straighten_round_trips_and_zero_means_absent(self):
+        self.assertEqual({"straighten_deg": -2.5}, DevelopSettings.from_dict({"straighten_deg": -2.5}).to_dict())
+        self.assertEqual((-15.0, 15.0), DEVELOP_RANGES["straighten_deg"])
+        for zero in (0, 0.0, -0.0):
+            with self.subTest(zero=zero):
+                self.assertEqual(DevelopSettings({}), DevelopSettings({"straighten_deg": zero}))
+                self.assertTrue(DevelopSettings({"straighten_deg": zero}).is_empty)
+        self.assertEqual({"contrast": 0.5}, DevelopSettings({"contrast": 0.5, "straighten_deg": 0}).to_dict())
+        for bad in (15.5, -15.01, float("nan"), True, "1"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                DevelopSettings({"straighten_deg": bad})
+
     def test_develop_settings_curve_round_trips_through_json_lists(self):
         settings = DevelopSettings({"curve": [list(point) for point in self.GOOD_CURVE]})
         self.assertEqual(settings, DevelopSettings.from_dict(settings.to_dict()))

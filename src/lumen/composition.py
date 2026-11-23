@@ -50,6 +50,24 @@ def _validate_dimensions(width: int, height: int) -> None:
         raise ValueError("image pixel count exceeds the supported maximum")
 
 
+def straightened_size(width: int, height: int, degrees: float) -> tuple[int, int]:
+    """The largest same-aspect rectangle inside the frame turned by `degrees`, floored to whole pixels."""
+    _validate_dimensions(width, height)
+    if isinstance(degrees, bool) or not isinstance(degrees, (int, float)) or not -15 <= degrees <= 15:
+        raise ValueError("straighten angle must be from -15.0 through 15.0 degrees")
+    turn = math.radians(abs(degrees))
+    cos, sin = math.cos(turn), math.sin(turn)
+    scale = min(width / (width * cos + height * sin), height / (width * sin + height * cos))
+    return max(1, min(width, math.floor(scale * width))), max(1, min(height, math.floor(scale * height)))
+
+
+def straightened_box(width: int, height: int, degrees: float) -> tuple[int, int, int, int]:
+    """`straightened_size` centred in the source, as a (left, top, right, bottom) pixel box."""
+    w, h = straightened_size(width, height, degrees)
+    left, top = (width - w) // 2, (height - h) // 2
+    return left, top, left + w, top + h
+
+
 def _is_acceptable_non_original(pixel_count: int) -> bool:
     return pixel_count >= MIN_CROP_PIXELS
 

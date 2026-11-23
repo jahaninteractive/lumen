@@ -56,6 +56,8 @@ DEVELOP_RANGES = {
     "exposure_ev": (-3.0, 3.0), "temperature_k": (2000, 12000), "tint": (-150, 150),
     "contrast": (0.0, 1.0), "sharpness": (0.0, 1.0), "luminance_nr": (0.0, 1.0), "color_nr": (0.0, 1.0),
     "clarity": (0.0, 1.0),
+    # Degrees, positive turns the image clockwise as the photographer sees it.
+    "straighten_deg": (-15.0, 15.0),
 }
 # Applied after the decode rather than being an amount the decoder already has a value for.
 DEVELOP_FLAGS = ("lens_correction",)
@@ -95,6 +97,8 @@ class DevelopSettings:
                 clean[key] = value
             elif key in DEVELOP_RANGES:
                 clean[key] = _develop_number(value, *DEVELOP_RANGES[key], key)
+                if key == "straighten_deg" and value == 0:  # a level frame is the same state as no angle
+                    del clean[key]
             else:
                 raise ValueError(f"unknown develop setting: {key}")
         object.__setattr__(self, "fields", MappingProxyType(clean))

@@ -1,7 +1,7 @@
 import unittest
 
 from lumen.analysis import RegionObservation, SubjectRegions
-from lumen.composition import CropRect, generate_candidates
+from lumen.composition import CropRect, generate_candidates, straightened_box, straightened_size
 
 
 class CompositionTests(unittest.TestCase):
@@ -210,3 +210,43 @@ class CompositionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StraightenGeometryTests(unittest.TestCase):
+    def test_zero_degrees_is_the_whole_frame(self):
+        self.assertEqual((6000, 4000), straightened_size(6000, 4000, 0))
+        self.assertEqual((0, 0, 6000, 4000), straightened_box(6000, 4000, 0.0))
+
+    def test_the_sign_of_the_angle_does_not_change_the_framing(self):
+        for degrees in (0.3, 1, 2, 5, 15):
+            with self.subTest(degrees=degrees):
+                self.assertEqual(straightened_size(6000, 4000, degrees), straightened_size(6000, 4000, -degrees))
+                self.assertEqual(straightened_box(6000, 4000, degrees), straightened_box(6000, 4000, -degrees))
+
+    def test_landscape_and_portrait_lose_what_the_spec_says(self):
+        expected = {1: (5847, 3898), 2: (5704, 3803), 5: (5324, 3549)}  # about 5%, 10% and 21% of the pixels
+        for degrees, (width, height) in expected.items():
+            with self.subTest(degrees=degrees):
+                self.assertEqual((width, height), straightened_size(6000, 4000, degrees))
+                self.assertEqual((height, width), straightened_size(4000, 6000, degrees))
+                left, top = (6000 - width) // 2, (4000 - height) // 2
+                self.assertEqual((left, top, left + width, top + height), straightened_box(6000, 4000, degrees))
+                left, top = (4000 - height) // 2, (6000 - width) // 2
+                self.assertEqual((left, top, left + height, top + width), straightened_box(4000, 6000, degrees))
+
+    def test_rounding_never_exceeds_the_source(self):
+        for width, height in ((1, 1), (3, 2), (2, 3), (1001, 667), (7, 4999)):
+            for degrees in (-15, -0.01, 0.01, 7.5, 15):
+                with self.subTest(size=(width, height), degrees=degrees):
+                    w, h = straightened_size(width, height, degrees)
+                    self.assertTrue(1 <= w <= width and 1 <= h <= height)
+                    left, top, right, bottom = straightened_box(width, height, degrees)
+                    self.assertEqual((w, h), (right - left, bottom - top))
+                    self.assertTrue(left >= 0 and top >= 0 and right <= width and bottom <= height)
+
+    def test_out_of_range_angles_and_bad_sizes_are_refused(self):
+        for degrees in (15.01, -16, float("nan"), float("inf"), True, "2"):
+            with self.subTest(degrees=degrees), self.assertRaises(ValueError):
+                straightened_size(6000, 4000, degrees)
+        with self.assertRaises(ValueError):
+            straightened_box(0, 4000, 1)
