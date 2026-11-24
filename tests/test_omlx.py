@@ -595,6 +595,36 @@ class DevelopAdviceTests(unittest.TestCase):
             "and in the histogram and what each change does about it). Do not identify a person.",
             captured["content"][0]["text"])
 
+    def test_suggest_develop_places_the_tilt_note_and_offers_straighten_only_when_asked(self):
+        tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
+        reply = json.dumps({"settings": {}, "rationale": "Nothing needed."})
+        offer = ("straighten_deg rotates the frame to level the horizon and trims the edges to fit. You may set it "
+                 "only to the value the horizon detector gives below, or omit it. Set it when the frame shows a real "
+                 "horizon or waterline that should be level. Omit it when there is no true horizon in the frame, when "
+                 "the measured line is something else (a rail, a shoreline running away from the camera, a slope, a "
+                 "roof), or when the tilt is clearly a deliberate choice. Never choose a different angle. Say in the "
+                 "rationale whether you levelled the frame or why you left it.")
+        measured = ("The horizon detector measured this frame as tilted by 2.9 degrees, anticlockwise. Setting "
+                    "straighten_deg to 2.9 would level it.")
+        already = "This frame has already been straightened by 2.0 degrees; leave that alone."
+
+        def prompt(**kwargs):
+            captured = {}
+            with tempfile.TemporaryDirectory() as directory:
+                preview = Path(directory) / "p.jpg"
+                Image.new("RGB", (8, 8)).save(preview)
+                with patch.object(tagger, "_complete", lambda content, timeout, **kw: (captured.update(content=content), reply)[1]):
+                    tagger.suggest_develop(preview, settings={}, histogram_note="Median 40.", **kwargs)
+            return captured["content"][0]["text"]
+
+        base = prompt()
+        self.assertEqual(base, prompt(tilt_note="", offer_straighten=False), "the defaults add nothing, not even a space")
+        self.assertEqual(base.replace("darkens it. ", "darkens it. " + offer + " ")
+                             .replace("Median 40. Return", "Median 40. " + measured + " Return"),
+                         prompt(tilt_note=measured, offer_straighten=True))
+        self.assertEqual(base.replace("Median 40. Return", "Median 40. " + already + " Return"),
+                         prompt(tilt_note=already))
+
     def test_suggest_develop_prompt_omits_the_feedback_line_on_the_first_attempt(self):
         tagger = OmlxTagger("http://127.0.0.1:8000", "review-model", api_key="k", role="review")
         captured = {}

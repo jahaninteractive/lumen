@@ -4388,6 +4388,73 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual({"exposure_ev": 0.3}, advice.settings)
         self.assertEqual({"exposure_ev": 0.3}, stored)
 
+    def straighten_advice(self, *, horizon, returned, settings=None, can_turn=True, sky=None):
+        """Suggest develop on one frame whose horizon measured `horizon`; the model answers `returned`."""
+        class TiltTagger:
+            model, role = "review-model", "review"
+            def suggest_develop(self, preview, *, settings, histogram_note, feedback=None, **kwargs):
+                self.seen = kwargs
+                return DevelopAdvice(dict(returned), "Level it.", "{}")
+
+        render = self.develop_render([])
+
+        def turning(*args, **kwargs):
+            return replace(render(*args, **kwargs), supported={"lens_correction": False, "straighten": can_turn})
+
+        tagger = TiltTagger()
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            with patch("lumen.library.analyze_faces", return_value=self.vision(horizon)):
+                library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            if sky:
+                library.catalog.save_tags(photo_id, {"sky": {"class": sky, "confidence": 0.9}}, "fast-model")
+            with patch("lumen.library.render_raw", side_effect=turning):
+                advice = library.suggest_develop(photo_id, tagger, settings=DevelopSettings(settings or {}))
+            stored = library.latest_develop_advice(photo_id)["settings"]
+        self.assertEqual(advice.settings, stored)
+        return tagger.seen, advice.settings
+
+    def test_suggest_develop_offers_the_measured_angle_and_keeps_only_that_one(self):
+        for horizon, note, corrective in (
+                (-2.875, "The horizon detector measured this frame as tilted by 2.9 degrees, anticlockwise. "
+                         "Setting straighten_deg to 2.9 would level it.", 2.9),
+                (3.125, "The horizon detector measured this frame as tilted by 3.1 degrees, clockwise. "
+                        "Setting straighten_deg to -3.1 would level it.", -3.1)):
+            for returned, kept in ((corrective, corrective), (corrective + 0.04, corrective), (4.0, None)):
+                with self.subTest(horizon=horizon, returned=returned):
+                    seen, settings = self.straighten_advice(
+                        horizon=horizon, returned={"exposure_ev": 0.3, "straighten_deg": returned})
+                    self.assertEqual({"tilt_note": note, "offer_straighten": True}, seen)
+                    expected = {"exposure_ev": 0.3} | ({} if kept is None else {"straighten_deg": kept})
+                    self.assertEqual(expected, settings, "an invented angle is dropped and the rest kept")
+
+    def test_suggest_develop_carries_an_angle_the_frame_already_has(self):
+        for returned in ({"exposure_ev": 0.3}, {"exposure_ev": 0.3, "straighten_deg": 5.0}):
+            with self.subTest(returned=returned):
+                seen, settings = self.straighten_advice(horizon=-2.875, returned=returned,
+                                                        settings={"straighten_deg": 2.0})
+                self.assertEqual({"tilt_note": "This frame has already been straightened by 2.0 degrees; leave "
+                                               "that alone.", "offer_straighten": False}, seen)
+                self.assertEqual({"exposure_ev": 0.3, "straighten_deg": 2.0}, settings)
+
+    def test_suggest_develop_drops_an_angle_it_never_offered(self):
+        for case in ({"horizon": None}, {"horizon": 9.0}, {"horizon": -2.875, "can_turn": False},
+                     {"horizon": -2.875, "sky": "milky_way"}):
+            with self.subTest(**case):
+                seen, settings = self.straighten_advice(returned={"exposure_ev": 0.3, "straighten_deg": 2.9}, **case)
+                self.assertEqual({}, seen, "no usable measurement: today's call, today's prompt")
+                self.assertEqual({"exposure_ev": 0.3}, settings)
+
+    def test_develop_advice_stored_before_straightening_reads_back_unchanged(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            library.catalog.append_event(photo_id, "develop_advised", {
+                "model": "review-model", "role": "review", "settings": {"exposure_ev": 0.3, "clarity": 0.2},
+                "rationale": "Old.", "feedback": None})
+            self.assertEqual({"settings": {"exposure_ev": 0.3, "clarity": 0.2}, "rationale": "Old."},
+                             library.latest_develop_advice(photo_id))
+
     def test_suggest_develop_records_a_failure_and_refuses_an_offline_original(self):
         class FailingTagger:
             model, role = "review-model", "review"

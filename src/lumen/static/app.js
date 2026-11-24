@@ -5014,11 +5014,11 @@ developNode('develop-reset-all').addEventListener('click', async () => {
   await saveDevelop();  // the clear also re-renders the contact-sheet preview
   renderDevelopPreview();
 });
-// The advice does not level frames, so a parked suggestion carries the photographer's angle, or none.
+// The advice may only accept the measured angle, so a parked suggestion carries the photographer's angle
+// when the panel has one, and otherwise the advice's, if any.
 function withPanelAngle(settings) {
-  const { straighten_deg: _ignored, ...rest } = settings;
   const angle = state.develop.fields.straighten_deg;
-  return angle === undefined ? rest : { ...rest, straighten_deg: angle };
+  return angle === undefined ? { ...settings } : { ...settings, straighten_deg: angle };
 }
 
 // Advisory, like every other local AI control: the sliders move so the change is visible in the

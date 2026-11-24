@@ -2910,6 +2910,7 @@ async function fetch(url, options = {}) {
     payload = suggestCount === 1
       ? { settings: { exposure_ev: 0.8, clarity: 0.2 }, rationale: 'The top of the histogram is empty, so nothing reaches white; +0.8 EV fills it.' }
       : { settings: { exposure_ev: 0.6 }, rationale: 'Pulled back and the warmth left alone.' };
+    if (scenario === 'develop-straighten') payload.settings.straighten_deg = 1.4;  // the measured angle, accepted
   }
   else if (/^\/api\/photos\/\d+\/develop(\/preview|\/apply-to-group)?$/.test(url)) {
     assert.equal(options.method, 'POST');
@@ -4221,7 +4222,7 @@ const regression = `
     const held = { ...state.develop.fields };
     await element('#develop-ask').listeners.click();
     await flush();
-    assert.deepEqual(state.develop.fields, { exposure_ev: 0.8, clarity: 0.2, straighten_deg: 2 }, 'the advice does not level frames, so the angle stays');
+    assert.deepEqual(state.develop.fields, { exposure_ev: 0.8, clarity: 0.2, straighten_deg: 2 }, "the photographer's angle wins over the advice's");
     range.value = '4';
     range.listeners.change();
     await flush();
@@ -4253,6 +4254,15 @@ const regression = `
     assert.equal(element('#announcer').textContent, 'No clear horizon found; set it by hand');
     assert.ok(!('straighten_deg' in state.develop.fields));
     assert.equal(developPosts.length, before, 'nothing renders or saves');
+
+    // With no angle of its own, the panel parks the advice's, and Discard takes it away again.
+    await element('#develop-ask').listeners.click();
+    await flush();
+    assert.deepEqual(state.develop.fields, { exposure_ev: 0.6, straighten_deg: 1.4 }, 'an accepted angle parks with the rest');
+    assert.equal(field('straighten_deg').value, '1.4');
+    await element('#develop-discard-advice').listeners.click();
+    await flush();
+    assert.ok(!('straighten_deg' in state.develop.fields), 'Discard leaves the frame level as it was');
 
     // Frame 2 has no crop: the angle saves without the crop warning.
     field('straighten_deg').value = '-3';

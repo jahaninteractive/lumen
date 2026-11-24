@@ -32,6 +32,14 @@ MODEL_IMAGE_LONG_EDGE = 1024  # measured: the 27B tags as well at 1024 as at 161
 STACK_NOTES_MAX = 5
 STACK_NOTE_CHARS = 200
 DEVELOP_RATIONALE_MAX = 600  # two or three sentences: the explanation is the product, not the numbers
+# Sent only beside a usable horizon measurement: the model judges the measured angle, it never picks one.
+STRAIGHTEN_OFFER = (
+    "straighten_deg rotates the frame to level the horizon and trims the edges to fit. You may set it only to the "
+    "value the horizon detector gives below, or omit it. Set it when the frame shows a real horizon or waterline "
+    "that should be level. Omit it when there is no true horizon in the frame, when the measured line is something "
+    "else (a rail, a shoreline running away from the camera, a slope, a roof), or when the tilt is clearly a "
+    "deliberate choice. Never choose a different angle. Say in the rationale whether you levelled the frame or why "
+    "you left it.")
 
 
 class OmlxError(RuntimeError):
@@ -601,13 +609,15 @@ class OmlxTagger:
         return self._parse(parse_caption_response, content)
 
     def suggest_develop(self, preview: Path, *, settings: dict, histogram_note: str = "",
-                        feedback: str | None = None, timeout: float = 240) -> DevelopAdvice:
+                        feedback: str | None = None, tilt_note: str = "", offer_straighten: bool = False,
+                        timeout: float = 240) -> DevelopAdvice:
         """Propose develop settings for one frame, with the rationale that teaches the histogram.
 
         The frame comes in rendered with `settings` already applied, so the model critiques what the
         photographer is looking at and answers with absolute values, not deltas.
         """
-        # straighten_deg is not offered to the model yet; the prompt names it once the advice can level a frame.
+        # straighten_deg is never a free control: the model may only accept the measured angle, through
+        # `offer_straighten` and `tilt_note`, which the caller builds from the horizon measurement.
         controls = "; ".join(f"{key} {low} through {high}" for key, (low, high) in DEVELOP_RANGES.items()
                              if key != "straighten_deg")
         current = (f"The photographer's current settings are {json.dumps(settings, sort_keys=True)}."
@@ -616,10 +626,11 @@ class OmlxTagger:
             "You are helping a photographer develop one raw frame. Propose develop settings and explain them so "
             "that they learn to read the histogram. Every control is optional: omit one to leave this file's own "
             f"default alone. Controls: {controls}; lens_correction true or false; curve as five [x, y] pairs in 0 "
-            "to 1 ascending in x, where y above x brightens that tone and y below x darkens it. exposure_ev is in "
+            "to 1 ascending in x, where y above x brightens that tone and y below x darkens it. "
+            f"{STRAIGHTEN_OFFER + ' ' if offer_straighten else ''}exposure_ev is in "
             "stops: positive brightens, negative darkens, +1 doubles the light. A histogram median near 50 is a "
             "balanced exposure; well below 50 is dark and wants positive exposure_ev unless the scene is meant to "
-            f"be dark. {current} {histogram_note} Return JSON only, shaped "
+            f"be dark. {current} {histogram_note}{' ' + tilt_note if tilt_note else ''} Return JSON only, shaped "
             '{"settings": {"<control>": <value>}, "rationale": "<text>"}, with settings (an object of the '
             "controls above, absolute values, empty when the frame needs nothing) and rationale (at most "
             f"{DEVELOP_RATIONALE_MAX} characters, two or three plain sentences naming what you read in the frame "

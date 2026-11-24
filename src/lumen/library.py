@@ -1525,13 +1525,28 @@ class Library:
             raise DevelopError(f"{source.name} is unavailable; reimport it before developing.")
         model, role = getattr(tagger, "model", "unknown"), getattr(tagger, "role", None)
         fields = settings.to_dict()
+        current_angle = fields.get("straighten_deg")
         with tempfile.TemporaryDirectory(prefix=".advise-", dir=self.settings.cache_dir) as directory:
             render = render_raw(source, Path(directory) / "advice.jpg", self.settings.raw_developer_path,
                                 settings=fields, long_edge=DEVELOP_ADVICE_LONG_EDGE, image_format="jpeg",
                                 histogram=True)
+            # The model judges the measured angle, never picks one: offered only with a usable measurement on a
+            # frame with no angle yet, and a frame that has one keeps it. Otherwise the call is exactly as before.
+            corrective = None if current_angle is not None or not render.supported.get("straighten") \
+                else self.straighten_auto(photo_id)
+            tilt = {}
+            if current_angle is not None:
+                tilt = {"tilt_note": f"This frame has already been straightened by {current_angle:.1f} degrees; "
+                                     "leave that alone.", "offer_straighten": False}
+            elif corrective is not None:
+                measured = abs(self.catalog.horizon_for(photo_id))
+                direction = "anticlockwise" if corrective > 0 else "clockwise"
+                tilt = {"tilt_note": f"The horizon detector measured this frame as tilted by {measured:.1f} degrees, "
+                                     f"{direction}. Setting straighten_deg to {corrective:.1f} would level it.",
+                        "offer_straighten": True}
             try:
                 advice = tagger.suggest_develop(render.path, settings=fields, feedback=feedback,
-                                                histogram_note=describe_histogram(render.histogram))
+                                                histogram_note=describe_histogram(render.histogram), **tilt)
             except Exception as error:
                 with self._mutation():
                     self.catalog.append_event(photo_id, "develop_advice_failed", {
@@ -1539,8 +1554,15 @@ class Library:
                         "raw_response": getattr(error, "raw_response", None)})
                 raise
         # The helper refuses a control this file's decoder lacks, and the panel disables it.
-        advice = replace(advice, settings={key: value for key, value in advice.settings.items()
-                                           if render.supported.get(key, True)})
+        # straighten_deg is not a decoder control: it is settled here, from the angle offered or carried.
+        kept = {key: value for key, value in advice.settings.items()
+                if key != "straighten_deg" and render.supported.get(key, True)}
+        returned = advice.settings.get("straighten_deg")
+        if current_angle is not None:
+            kept["straighten_deg"] = current_angle
+        elif corrective is not None and returned is not None and abs(returned - corrective) <= 0.05:
+            kept["straighten_deg"] = corrective
+        advice = replace(advice, settings=kept)
         with self._mutation():
             self.catalog.append_event(photo_id, "develop_advised", {
                 "model": model, "role": role, "settings": advice.settings, "rationale": advice.rationale,
