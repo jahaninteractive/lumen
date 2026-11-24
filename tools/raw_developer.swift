@@ -232,7 +232,7 @@ for name in ["contrast", "sharpness", "luminance_nr", "color_nr"]
 // Measured on a 3504x2336 raw: decoding native costs 0.41s against 0.35s for a 700px decode,
 // because the decode dominates and the resample is nearly free.
 let native = max(nativeSize.width, nativeSize.height)
-let previewScale = longEdge > 0 && native > 0 ? min(1.0, longEdge / native) : 1.0
+var previewScale = longEdge > 0 && native > 0 ? min(1.0, longEdge / native) : 1.0
 
 if let value = optionalNumber(settings, "exposure_ev") { rawFilter.exposure = Float(value) }
 if let value = optionalNumber(settings, "temperature_k") { rawFilter.neutralTemperature = Float(value) }
@@ -276,6 +276,11 @@ if straighten != 0 {
         .transformed(by: rotation.concatenating(
             CGAffineTransform(translationX: width / 2 - centre.x, y: height / 2 - centre.y)))
         .cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
+    // The kept frame is smaller than the decode, so a scale taken from the unturned long edge would
+    // deliver a preview short of the long edge the page asked for, and the viewport would show a bar
+    // beside it. Scale from the straightened frame's own long edge; a level frame keeps the one above.
+    let kept = max(width, height)
+    previewScale = longEdge > 0 && kept > 0 ? min(1.0, longEdge / kept) : 1.0
 }
 
 // Clarity is a wide, gentle unsharp mask, the way most editors build it. Its radius is in
