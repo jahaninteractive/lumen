@@ -2930,6 +2930,7 @@ async function fetch(url, options = {}) {
   else if (/^\/api\/photos\/[123]$/.test(url) && photoDetailRequests.push(url)) payload = { metrics: { sharpness: 0.8, exposure: 0.8, eye_quality: null },
     develop: scenario === 'develop' && url.endsWith('/1') ? { exposure_ev: 0.5 } : scenario === 'develop-straighten' && url.endsWith('/1') ? { exposure_ev: 0.5, straighten_deg: 2 } : null,
     advice: scenario === 'advice-status' && url.endsWith('/1') ? { settings: { exposure_ev: 0.5 }, rationale: 'lift' } : null,
+    straighten_auto: scenario === 'develop-straighten' && url.endsWith('/1') ? 1.4 : null,
     photo: Object.assign({ format: 'ARW', is_raw: true, offline: scenario === 'develop-offline' },
       (scenario === 'place-line' || scenario === 'place-edit') && url.endsWith('/1') ? { latitude: -24.74351, longitude: 26.25732, altitude: null, place: 'Madikwe Game Reserve', place_country: 'South Africa' }
       : scenario === 'location' && url.endsWith('/1') ? { latitude: -24.1234, longitude: 31.5678, altitude: 312.4 } : { latitude: null, longitude: null, altitude: null }),
@@ -4200,7 +4201,7 @@ const regression = `
     assert.equal(field('straighten_deg').value, '2.0');
     assert.equal(range.getAttribute('aria-valuetext'), '2.0 degrees');
     assert.equal(megapixels(), '21.7 MP remaining', '5704 by 3803 of the native 6000 by 4000');
-    assert.equal([range.disabled, field('straighten_deg').disabled, element('#develop-straighten_deg-reset').disabled].join(), 'false,false,false');
+    assert.equal([range.disabled, field('straighten_deg').disabled, element('#develop-straighten_deg-reset').disabled, element('#develop-straighten_deg-auto').disabled].join(), 'false,false,false,false');
     assert.equal(element('#develop-straighten_deg-note').hidden, true);
     const renders = developPosts.length;
     range.value = '0';
@@ -4245,6 +4246,14 @@ const regression = `
     assert.deepEqual(saved(1), { exposure_ev: 0.5, contrast: 0.3 }, 'the reset angle is cleared from the frame');
     assert.ok(announcements.slice(heard).includes('Develop settings saved. ' + cropNote), announcements.slice(heard).join(' | '));
 
+    // Frame 2 has no measured horizon: Auto changes nothing and says to set it by hand.
+    const before = developPosts.length;
+    await element('#develop-straighten_deg-auto').listeners.click();
+    await flush();
+    assert.equal(element('#announcer').textContent, 'No clear horizon found; set it by hand');
+    assert.ok(!('straighten_deg' in state.develop.fields));
+    assert.equal(developPosts.length, before, 'nothing renders or saves');
+
     // Frame 2 has no crop: the angle saves without the crop warning.
     field('straighten_deg').value = '-3';
     field('straighten_deg').listeners.change();
@@ -4258,16 +4267,22 @@ const regression = `
     assert.ok(!announcements.slice(heard).some(text => text.includes(cropNote)), 'no crop, nothing to check');
 
     // A changed angle on the cropped frame warns again; saving it unchanged would not.
+    // Auto sets the measured angle like a hand-set one: it renders now and saves only when the frame does.
     assert.equal(state.develop.photoId, 1);
     element('#develop-tab').listeners.click();
     await flush();
-    range.value = '5';
-    range.listeners.change();
+    const saves = developPosts.filter(post => post.url === '/api/photos/1/develop').length;
+    await element('#develop-straighten_deg-auto').listeners.click();
     await flush();
+    assert.equal(element('#announcer').textContent, 'Straighten set to 1.4 degrees');
+    assert.equal(field('straighten_deg').value, '1.4');
+    assert.equal(range.getAttribute('aria-valuetext'), '1.4 degrees');
+    assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5, straighten_deg: 1.4 }, 'the preview renders the angle');
+    assert.equal(developPosts.filter(post => post.url === '/api/photos/1/develop').length, saves, 'not saved yet');
     heard = announcements.length;
     element('#close-loupe').listeners.click();
     await flush();
-    assert.deepEqual(saved(1), { exposure_ev: 0.5, straighten_deg: 5 });
+    assert.deepEqual(saved(1), { exposure_ev: 0.5, straighten_deg: 1.4 });
     assert.ok(announcements.slice(heard).includes('Develop settings saved. ' + cropNote), announcements.slice(heard).join(' | '));
 
     // A helper built before straightening: the group is disabled and says why.
@@ -4276,7 +4291,7 @@ const regression = `
     await flush();
     element('#develop-tab').listeners.click();
     await flush();
-    assert.equal([range.disabled, field('straighten_deg').disabled, element('#develop-straighten_deg-reset').disabled].join(), 'true,true,true');
+    assert.equal([range.disabled, field('straighten_deg').disabled, element('#develop-straighten_deg-reset').disabled, element('#develop-straighten_deg-auto').disabled].join(), 'true,true,true,true');
     assert.equal(element('#develop-straighten_deg-note').hidden, false);
     assert.equal(element('#develop-straighten_deg-note').textContent, "This Lumen's raw developer is older than straightening; run scripts/bootstrap.sh to rebuild it.");
     assert.equal(element('#develop-contrast').disabled, false, 'the other controls are unaffected');
@@ -7602,6 +7617,15 @@ class DevelopWebTests(unittest.TestCase):
             library.catalog.save_metrics(raw_id, library.catalog.get_metrics(1))
         self.assertTrue(self.get_json(f"/api/photos/{raw_id}")[1]["photo"]["is_raw"])
         self.assertFalse(self.get_json("/api/photos/1")[1]["photo"]["is_raw"])
+
+    def test_photo_detail_offers_the_corrective_straighten_angle_and_never_the_measurement(self):
+        self.assertIsNone(self.get_json("/api/photos/1")[1]["straighten_auto"])
+        with Library(self.settings) as library:
+            library.catalog.save_horizon(1, -2.875)
+        payload = self.get_json("/api/photos/1")[1]
+        self.assertEqual(2.9, payload["straighten_auto"])
+        self.assertNotIn("horizon", json.dumps(payload))
+        self.assertNotIn("-2.875", json.dumps(payload))
 
     def test_develop_preview_returns_an_image_and_a_histogram(self):
         code, body = self.preview()

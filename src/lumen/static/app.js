@@ -4718,6 +4718,7 @@ function syncDevelopControls() {
     }
   });
   showStraightenMegapixels(fields.straighten_deg ?? 0);
+  developNode('develop-straighten_deg-auto').disabled = developNode('develop-straighten_deg').disabled;
   CURVE_IDENTITY.forEach((_point, index) => developNode(`develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
   const lens = developNode('develop-lens_correction');
   lens.checked = fields.lens_correction === true;
@@ -4746,7 +4747,7 @@ function fillDevelop(photo) {
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
     neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, drag: null, controller: null,
-    beforeAdvice: null, advice: state.details?.advice || null,
+    beforeAdvice: null, advice: state.details?.advice || null, straightenAuto: state.details?.straighten_auto ?? null,
   });
   aiTaskLine(`develop:${photo.id}`, developNode('develop-task'));
   developNode('develop-advice').textContent = develop.advice?.rationale ?? '';  // the last stored suggestion, not yet parked
@@ -4849,11 +4850,11 @@ async function saveDevelop() {
   }
 }
 
-function setDevelopField(control, value) {
+function setDevelopField(control, value, spoken = null) {
   if (value === null) delete state.develop.fields[control.key];
   else state.develop.fields[control.key] = value;
   syncDevelopControls();
-  announce(value === null ? `${control.label} reset to this file's own value` : `${control.label} ${value.toFixed(control.decimals)}${control.unit}`);
+  announce(spoken ?? (value === null ? `${control.label} reset to this file's own value` : `${control.label} ${value.toFixed(control.decimals)}${control.unit}`));
   renderDevelopPreview();
 }
 
@@ -4919,6 +4920,14 @@ DEVELOP_CONTROLS.forEach(control => {
     setDevelopField(control, typed === '' || !Number.isFinite(Number(typed)) ? null : bounded(Number(typed)));
   });
   developNode(`develop-${control.key}-reset`).addEventListener('click', () => setDevelopField(control, null));
+});
+// Auto parks the angle Vision measured on the unstraightened frame, so it is absolute whatever is set now;
+// it goes through the same path as a hand-set angle and saves only when the frame does.
+developNode('develop-straighten_deg-auto').addEventListener('click', () => {
+  const angle = state.develop.straightenAuto;
+  if (!Number.isFinite(angle)) return announce('No clear horizon found; set it by hand');
+  const control = DEVELOP_CONTROLS.find(item => item.key === 'straighten_deg');
+  setDevelopField(control, angle, `Straighten set to ${angle.toFixed(control.decimals)} degrees`);
 });
 // The count follows the handle as it moves; the render still waits for the release.
 developNode('develop-straighten_deg').addEventListener('input', event => showStraightenMegapixels(Number(event.target.value)));

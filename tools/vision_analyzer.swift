@@ -44,9 +44,10 @@ func analyze(_ path: String) throws -> [String: Any] {
     let quality = VNDetectFaceCaptureQualityRequest()
     let saliency = VNGenerateAttentionBasedSaliencyImageRequest()
     let printRequest = VNGenerateImageFeaturePrintRequest()
+    let horizon = VNDetectHorizonRequest()
     let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
     do {
-        try handler.perform([landmarks, quality, saliency, printRequest])
+        try handler.perform([landmarks, quality, saliency, printRequest, horizon])
     } catch {
         throw AnalysisError.vision(error)
     }
@@ -67,7 +68,7 @@ func analyze(_ path: String) throws -> [String: Any] {
         }
     }
     var result: [String: Any] = [
-        "schema_version": 3,
+        "schema_version": 4,
         "coordinate_system": "normalized_bottom_left",
         "image_width": cgImage.width,
         "image_height": cgImage.height,
@@ -75,7 +76,9 @@ func analyze(_ path: String) throws -> [String: Any] {
         "faces": faceRectangles,
         "saliency_objects": saliencyObjects,
         "face_quality": qualities.isEmpty ? NSNull() : qualities.reduce(0, +) / Double(qualities.count),
-        "eye_quality": eyeScores.isEmpty ? NSNull() : eyeScores.reduce(0, +) / Double(eyeScores.count)
+        "eye_quality": eyeScores.isEmpty ? NSNull() : eyeScores.reduce(0, +) / Double(eyeScores.count),
+        // Vision's angle of the horizon it found, in degrees; null when it found none.
+        "horizon_deg": horizon.results?.first.map { Double($0.angle) * 180 / Double.pi } ?? NSNull()
     ]
     if let vector = featurePrint(printRequest.results?.first) {
         result["feature_print"] = vector

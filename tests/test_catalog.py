@@ -287,6 +287,34 @@ class CatalogTests(unittest.TestCase):
             columns = [row["name"] for row in migrated.connection.execute("PRAGMA table_info(metrics)")]
         self.assertIn("dhash", columns)
 
+    def test_horizon_is_stored_apart_from_the_metrics_and_old_catalogues_gain_an_empty_column(self):
+        photo_id = self.catalog.upsert_photo(Photo(path="/photos/z.ARW", fingerprint="z" * 8, captured_at=None, camera_id="A"))
+        self.assertIsNone(self.catalog.horizon_for(photo_id), "no metrics row yet")
+        self.catalog.save_metrics(photo_id, PhotoMetrics(sharpness=0.5, exposure=0.5, clipping=0.0))
+        self.assertIsNone(self.catalog.horizon_for(photo_id))
+        self.catalog.save_horizon(photo_id, -2.875)
+        self.assertEqual(-2.875, self.catalog.horizon_for(photo_id))
+        self.catalog.save_metrics(photo_id, PhotoMetrics(sharpness=0.9, exposure=0.5, clipping=0.0))
+        self.assertEqual(-2.875, self.catalog.horizon_for(photo_id), "re-saved metrics keep the measurement")
+        self.catalog.save_horizon(photo_id, None)
+        self.assertIsNone(self.catalog.horizon_for(photo_id))
+
+        legacy_path = Path(self.tmp.name) / "pre-horizon.sqlite3"
+        with closing(sqlite3.connect(legacy_path)) as legacy:
+            legacy.executescript(
+                """
+                CREATE TABLE metrics (
+                    photo_id INTEGER PRIMARY KEY, sharpness REAL NOT NULL, exposure REAL NOT NULL,
+                    clipping REAL NOT NULL, face_quality REAL, eye_quality REAL, astro_json TEXT NOT NULL,
+                    total_score REAL, dhash TEXT
+                );
+                INSERT INTO metrics VALUES (1, 0.5, 0.5, 0.0, 0.8, NULL, '{}', 0.7, 'ff');
+                """
+            )
+        with Catalog(legacy_path) as migrated:
+            self.assertIsNone(migrated.horizon_for(1))
+            self.assertEqual(0.8, migrated.get_metrics(1).face_quality)
+
     def test_migration_adds_job_label_and_counts_to_existing_database(self):
         legacy_path = Path(self.tmp.name) / "pre-migration.sqlite3"
         with closing(sqlite3.connect(legacy_path)) as legacy:

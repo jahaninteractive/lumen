@@ -158,7 +158,7 @@ def parse_vision_result(raw: str) -> dict[str, float | int | None]:
     if (
         not isinstance(schema_version, int)
         or isinstance(schema_version, bool)
-        or schema_version not in (1, 2, 3)
+        or schema_version not in (1, 2, 3, 4)
         or not isinstance(face_count, int)
         or isinstance(face_count, bool)
         or face_count < 0
@@ -175,7 +175,25 @@ def parse_vision_result(raw: str) -> dict[str, float | int | None]:
         ):
             raise ValueError(f"macOS Vision returned an invalid {key}")
         result[key] = float(value) if value is not None else None
+    horizon = payload.get("horizon_deg")  # schema 4; anything unusable is no measurement, never an error
+    result["horizon_deg"] = (float(horizon) if isinstance(horizon, (int, float)) and not isinstance(horizon, bool)
+                             and math.isfinite(horizon) else None)
     return result
+
+
+# A tilt under this is level enough to leave alone; over that it is a tilted subject, not a tilted camera.
+HORIZON_MIN_DEG = 0.3
+HORIZON_MAX_DEG = 8.0
+
+
+def straighten_from_horizon(horizon_deg: float | None) -> float | None:
+    """The straighten_deg that levels a horizon Vision measured on the unstraightened frame, or None.
+
+    Vision reports a horizon rising to the right as seen as a negative angle; leveling that takes a
+    clockwise turn, which is a positive straighten_deg. NativeHorizonTests pins the sign."""
+    if horizon_deg is None or not HORIZON_MIN_DEG <= abs(horizon_deg) <= HORIZON_MAX_DEG:
+        return None
+    return round(-horizon_deg, 1)
 
 
 def _valid_dimension(value: object) -> bool:
@@ -222,7 +240,7 @@ def _parse_observation(value: object) -> RegionObservation | None:
 def parse_vision_regions(raw: str) -> SubjectRegions:
     payload = _vision_payload(raw)
     if (
-        payload.get("schema_version") not in (2, 3)
+        payload.get("schema_version") not in (2, 3, 4)
         or payload.get("coordinate_system") != "normalized_bottom_left"
         or not _valid_dimension(payload.get("image_width"))
         or not _valid_dimension(payload.get("image_height"))

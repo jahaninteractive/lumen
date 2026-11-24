@@ -23,7 +23,7 @@ from pathlib import Path
 from PIL import Image
 
 from .analysis import (analyze_astro, analyze_faces, analyze_subject_regions, apply_vision_result, difference_hash, feature_prints,
-                       measure_image)
+                       measure_image, straighten_from_horizon)
 from .catalog import Catalog, GroupFilters
 from .config import Settings
 from .composition import CropCandidate, generate_candidates, straightened_size
@@ -70,6 +70,8 @@ def _coordinated(method):
             return method(self, *args, **kwargs)
     return coordinated
 
+
+ASTRO_SKIES = {"night_sky", "aurora", "milky_way"}  # the triage classes that make a frame astro
 
 _ABSOLUTE_PATH = re.compile(r"'?/[^\s'\"]+'?")
 
@@ -1039,11 +1041,21 @@ class Library:
         self._write_sidecar(photo.id)
         return triage
 
+    def _sky(self, photo_id: int) -> str | None:
+        return ((self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("sky") or {}).get("class")
+
     def astro_cue(self, photo_ids: Sequence[int]) -> bool:
         """True when stored triage says more than half these frames are night sky, aurora, or Milky Way."""
-        skies = [((self.catalog.get_tags(photo_id) or {"data": {}})["data"].get("sky") or {}).get("class")
-                 for photo_id in photo_ids]  # ponytail: per-photo tag reads; batch with json_extract if the sheet slows
-        return sum(sky in {"night_sky", "aurora", "milky_way"} for sky in skies) * 2 > len(skies)
+        skies = [self._sky(photo_id) for photo_id in photo_ids]  # ponytail: per-photo tag reads; batch with json_extract if the sheet slows
+        return sum(sky in ASTRO_SKIES for sky in skies) * 2 > len(skies)
+
+    def straighten_auto(self, photo_id: int) -> float | None:
+        """The straighten_deg that levels this frame's measured horizon, or None: no clear horizon, or an astro frame
+        (triaged as sky, or a light in a stack), whose horizon is the photographer's to set."""
+        if self._sky(photo_id) in ASTRO_SKIES or self.catalog.connection.execute(
+                "SELECT 1 FROM provenance WHERE photo_id = ? AND kind = 'astro_stacked' LIMIT 1", (photo_id,)).fetchone():
+            return None
+        return straighten_from_horizon(self.catalog.horizon_for(photo_id))
 
     def astro_triage(self, group_id: int) -> dict:
         """Per-light sky triage plus metric warnings for the Astro tab; advisory, without raw model output."""
@@ -1188,6 +1200,7 @@ class Library:
         previous = Path(photo.preview_path) if photo.preview_path else None
         self.catalog.update_preview(photo.id, str(destination), "refined")
         self.catalog.save_metrics(photo.id, metrics)  # total_score is kept until the group is re-ranked.
+        self.catalog.save_horizon(photo.id, (vision or {}).get("horizon_deg"))
         if vision and vision.get("feature_print") is not None:
             self.catalog.save_feature_print(photo.id, vision["feature_print"])
         self.catalog.append_event(photo.id, "preview_refined", {
@@ -1593,6 +1606,8 @@ class Library:
         kind = "refined" if settings is None else "developed"
         self.catalog.update_preview(photo_id, str(destination), kind)
         self.catalog.save_metrics(photo_id, metrics)  # total_score is left as the last ranking wrote it.
+        if not (_develop_fields(settings) or {}).get("straighten_deg"):  # a turned render would measure the turn
+            self.catalog.save_horizon(photo_id, (vision or {}).get("horizon_deg"))
         if vision and vision.get("feature_print") is not None:
             self.catalog.save_feature_print(photo_id, vision["feature_print"])
         details = {"preview_kind": kind, "metrics": {key: getattr(metrics, key) for key in
@@ -2865,6 +2880,7 @@ class Library:
         if vision := analyze_faces(preview_path, self.settings.vision_analyzer_path):
             apply_vision_result(metrics, vision)
         self.catalog.save_metrics(photo_id, metrics)
+        self.catalog.save_horizon(photo_id, (vision or {}).get("horizon_deg"))
         if vision and vision.get("feature_print") is not None:
             self.catalog.save_feature_print(photo_id, vision["feature_print"])
         self.catalog.append_event(

@@ -21,7 +21,7 @@ _JOB_TRANSITIONS = {
 # Columns added after a table first shipped: {table: {column: DDL}}; applied once to older catalogs.
 _MIGRATIONS = {
     "jobs": {"label": "TEXT", "processed": "INTEGER", "total": "INTEGER"},
-    "metrics": {"dhash": "TEXT"},
+    "metrics": {"dhash": "TEXT", "horizon_deg": "REAL"},
     "photos": {"decision": "TEXT NOT NULL DEFAULT 'none'", "rating": "INTEGER NOT NULL DEFAULT 0", "mirror_path": "TEXT",
                "preview_kind": "TEXT NOT NULL DEFAULT 'embedded'", "exposure_seconds": "REAL", "merged_into": "TEXT",
                "latitude": "REAL", "longitude": "REAL", "altitude": "REAL", "place": "TEXT", "place_country": "TEXT",
@@ -886,6 +886,15 @@ class Catalog:
             ),
         )
         self.connection.commit()
+
+    def save_horizon(self, photo_id: int, horizon_deg: float | None) -> None:
+        """Vision's horizon angle for the unstraightened preview, as the helper reported it; save_metrics leaves it be."""
+        self.connection.execute("UPDATE metrics SET horizon_deg = ? WHERE photo_id = ?", (horizon_deg, photo_id))
+        self.connection.commit()
+
+    def horizon_for(self, photo_id: int) -> float | None:
+        row = self.connection.execute("SELECT horizon_deg FROM metrics WHERE photo_id = ?", (photo_id,)).fetchone()
+        return row["horizon_deg"] if row else None
 
     def save_feature_print(self, photo_id: int, data: bytes) -> None:
         self.connection.execute(

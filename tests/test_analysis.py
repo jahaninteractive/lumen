@@ -1,5 +1,9 @@
 from array import array
 import json
+import math
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +23,7 @@ from lumen.analysis import (
     parse_feature_print,
     parse_vision_result,
     parse_vision_regions,
+    straighten_from_horizon,
 )
 
 
@@ -221,15 +226,44 @@ class AnalysisTests(unittest.TestCase):
         executable.chmod(0o755)
         return executable
 
-    def test_parse_vision_result_accepts_schema_3_and_regions_accept_it_too(self):
-        self.assertEqual(0, parse_vision_result(self.SCHEMA_3)["face_count"])
-        regions = parse_vision_regions(self.SCHEMA_3)
-        self.assertEqual((64, 48), (regions.image_width, regions.image_height))
+    def test_parse_vision_result_accepts_schemas_3_and_4_and_regions_accept_them_too(self):
         schema_4 = self.SCHEMA_3.replace('"schema_version":3', '"schema_version":4')
+        for raw in (self.SCHEMA_3, schema_4):
+            with self.subTest(raw=raw):
+                self.assertEqual(0, parse_vision_result(raw)["face_count"])
+                regions = parse_vision_regions(raw)
+                self.assertEqual((64, 48), (regions.image_width, regions.image_height))
+        schema_5 = self.SCHEMA_3.replace('"schema_version":3', '"schema_version":5')
         with self.assertRaises(ValueError):
-            parse_vision_result(schema_4)
+            parse_vision_result(schema_5)
         with self.assertRaises(ValueError):
-            parse_vision_regions(schema_4)
+            parse_vision_regions(schema_5)
+
+    def test_horizon_is_read_from_schema_4_and_anything_unusable_is_no_measurement(self):
+        schema_4 = self.SCHEMA_3.replace('"schema_version":3', '"schema_version":4')
+        with_horizon = lambda value: schema_4[:-1] + ',"horizon_deg":%s}' % value
+        self.assertEqual(-2.875, parse_vision_result(with_horizon("-2.875"))["horizon_deg"])
+        self.assertEqual(3.0, parse_vision_result(with_horizon("3"))["horizon_deg"])
+        self.assertIsNone(parse_vision_result(self.SCHEMA_3)["horizon_deg"], "schema 3 predates the horizon")
+        self.assertIsNone(parse_vision_result(schema_4)["horizon_deg"])
+        for bad in ("null", '"3"', "true", "Infinity", "NaN", "[1]"):
+            with self.subTest(bad=bad):
+                result = parse_vision_result(with_horizon(bad))
+                self.assertIsNone(result["horizon_deg"])
+                self.assertEqual(0, result["face_count"], "the rest of the result still stands")
+                self.assertEqual(64, parse_vision_regions(with_horizon(bad)).image_width)
+
+    def test_straighten_from_horizon_keeps_the_usable_band_and_rounds_to_the_slider_step(self):
+        self.assertIsNone(straighten_from_horizon(None))
+        for measured in (0.0, 0.29, -0.29, 8.01, -8.01, 30.0):
+            with self.subTest(measured=measured):
+                self.assertIsNone(straighten_from_horizon(measured))
+        # Vision reports a horizon that rises to the right as a negative angle; leveling it is a clockwise,
+        # positive turn. The sign is pinned by the native test below, not by documentation.
+        self.assertEqual(2.9, straighten_from_horizon(-2.874999937708556))
+        self.assertEqual(-3.1, straighten_from_horizon(3.1250000158132436))
+        self.assertEqual(-0.3, straighten_from_horizon(0.3))
+        self.assertEqual(8.0, straighten_from_horizon(-8.0))
 
     def test_parse_feature_print_round_trips_float32_and_rejects_bad_vectors(self):
         self.assertEqual(array("f", [0.5, -0.25]).tobytes(), parse_feature_print(self.SCHEMA_3))
@@ -276,3 +310,41 @@ class AnalysisTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(sys.platform == "darwin" and shutil.which("swiftc"), "the Vision helper builds only on macOS with swiftc")
+class NativeHorizonTests(unittest.TestCase):
+    """The one test that runs the real Vision helper: the sign of a straighten angle is checked against
+    what Vision actually measures, never against its documentation."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name)
+        cls.executable = cls.root / "vision_analyzer"
+        build = subprocess.run(["swiftc", "-O", "tools/vision_analyzer.swift", "-o", str(cls.executable)],
+                               capture_output=True, text=True, timeout=300, check=False)
+        if build.returncode != 0:
+            raise AssertionError(f"tools/vision_analyzer.swift does not compile:\n{build.stderr}")
+
+    def horizon(self, rising_right_deg: float) -> Path:
+        """Sky over sea, the horizon rising to the right by the given degrees as the picture is seen."""
+        width, height = 900, 600
+        image = Image.new("RGB", (width, height), (170, 200, 235))
+        rise = math.tan(math.radians(rising_right_deg)) * width / 2
+        ImageDraw.Draw(image).polygon([(0, height / 2 + rise), (width, height / 2 - rise), (width, height), (0, height)],
+                                      fill=(30, 50, 80))
+        path = self.root / f"horizon{rising_right_deg}.jpg"
+        image.save(path, quality=95)
+        return path
+
+    def test_the_corrective_angle_levels_a_tilted_horizon(self):
+        for drawn, expected in ((3.0, 3.0), (-3.0, -3.0)):
+            with self.subTest(drawn=drawn):
+                result = analyze_faces(self.horizon(drawn), self.executable)
+                self.assertIsNotNone(result)
+                corrective = straighten_from_horizon(result["horizon_deg"])
+                # Rising to the right needs a clockwise turn: a positive straighten_deg.
+                self.assertIsNotNone(corrective, result)
+                self.assertAlmostEqual(expected, corrective, delta=0.5)

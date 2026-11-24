@@ -2808,6 +2808,58 @@ class LibraryTests(unittest.TestCase):
         self.assertNotEqual(before.sharpness, after.sharpness)
         self.assertGreater(after.sharpness, 0.9)
 
+    def vision(self, horizon_deg, face_quality=None):
+        return {"face_count": 0, "face_quality": face_quality, "eye_quality": None, "feature_print": None, "horizon_deg": horizon_deg}
+
+    def test_import_stores_the_horizon_and_straighten_auto_levels_it_within_the_usable_band(self):
+        for horizon, expected in ((-2.875, 2.9), (3.125, -3.1), (0.2, None), (9.0, None), (None, None)):
+            with self.subTest(horizon=horizon), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "frame.jpg"
+                Image.new("RGB", (64, 48), "gray").save(source)
+                with Library(Settings(library_dir=Path(directory) / "library")) as library, \
+                        patch("lumen.library.analyze_faces", return_value=self.vision(horizon)):
+                    library.import_path(source)
+                    photo_id = library.catalog.list_photos()[0].id
+                    self.assertEqual(horizon, library.catalog.horizon_for(photo_id))
+                    self.assertEqual(expected, library.straighten_auto(photo_id))
+
+    def test_straighten_auto_is_none_for_an_astro_frame(self):
+        with Library(Settings(library_dir=self.library_dir)) as library, \
+                patch("lumen.library.analyze_faces", return_value=self.vision(-2.0)):
+            (first, second, third), single = self.import_burst(library, (118, 70, 30))
+            library.catalog.save_tags(first, {"sky": {"class": "milky_way", "confidence": 0.9}}, "fast-model")
+            library.catalog.save_tags(second, {"sky": {"class": "cloud", "confidence": 0.9}}, "fast-model")
+            library.catalog.append_event(third, "astro_stacked", {"job_id": 1})
+            self.assertEqual([None, 2.0, None, 2.0], [library.straighten_auto(photo_id) for photo_id in (first, second, third, single)])
+
+    def test_a_straightened_preview_never_replaces_the_horizon_measurement(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            with patch("lumen.library.analyze_faces", return_value=self.vision(-2.0)):
+                library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])), \
+                    patch("lumen.library.analyze_faces", return_value=self.vision(0.1, face_quality=0.6)):
+                library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.5, "straighten_deg": 2.0}))
+                self.assertEqual(-2.0, library.catalog.horizon_for(photo_id), "measured on a turned frame: kept")
+                self.assertEqual(0.6, library.catalog.get_metrics(photo_id).face_quality, "the rest is re-measured as before")
+                library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.5}))
+                self.assertEqual(0.1, library.catalog.horizon_for(photo_id), "with the angle cleared it is measured again")
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])), \
+                    patch("lumen.library.analyze_faces", return_value=self.vision(-1.5)):
+                library.clear_develop(photo_id)
+            self.assertEqual(-1.5, library.catalog.horizon_for(photo_id))
+            self.assertEqual(1.5, library.straighten_auto(photo_id))
+
+    def test_refine_previews_measures_the_horizon_of_an_old_frame(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            with patch("lumen.library.analyze_faces", return_value=None):  # imported before the helper measured it
+                library.import_path(self.image_path)
+            photo_id = library.catalog.list_photos()[0].id
+            self.assertIsNone(library.straighten_auto(photo_id))
+            with patch("lumen.library.analyze_faces", return_value=self.vision(-2.0)):
+                self.refine(library, all_photos=True)
+            self.assertEqual(2.0, library.straighten_auto(photo_id))
+
     def test_save_develop_leaves_the_group_pick_untouched(self):
         """The decisive test: developing a frame must never move the Best badge."""
         with Library(Settings(library_dir=self.library_dir)) as library:
