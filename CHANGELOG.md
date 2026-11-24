@@ -5,6 +5,11 @@ Versions follow `MAJOR.MINOR.PATCH`. The version lives in
 UI, in `lumen --version`, and as `version` in `lumen doctor --json` and
 `GET /api/status`.
 
+## 0.10.0 (2026-11-24)
+
+- Straighten a tilted horizon on the Develop tab: an angle from -15 to 15 degrees by slider or number, **Auto** to take the horizon Lumen measured, **Draw horizon** to drag along a line that should be level or upright, and a grid over the image while you do. The edges are trimmed to the largest rectangle of the same shape (about 5% of a 3:2 frame at 1 degree, 22% at 5), the megapixels left are shown, the export matches the preview, and a crop is taken from the straightened frame. **Suggest settings** offers the review model the measured angle to accept or decline, and **Pick and develop every burst** saves an accepted angle with the pick's develop, or levels an untouched raw pick from the measurement alone when no advice comes back. Night-sky frames are never offered an angle.
+- An existing library needs `zsh scripts/bootstrap.sh` run once to rebuild both native helpers (or the next Lumen.app); until then Straighten is disabled. Frames get a horizon measurement when their previews are refined, their develop settings are saved without an angle or cleared, or they are imported again.
+
 ## 0.9.3 (2026-11-24)
 
 - OpenRouter joins the Online service list in Settings (tried by the photographer on 2026-11-23 with the address typed by hand).

@@ -315,8 +315,8 @@ Each step is a section of [docs/GUIDE.md](docs/GUIDE.md):
   [import](docs/GUIDE.md#ingest-or-import) frames already on a drive.
 - [Cull](docs/GUIDE.md#cull): bursts as rows, one key per decision, an
   explained best-shot proposal you can override.
-- [Frame view](docs/GUIDE.md#frame-view): full-size check, crop, develop,
-  EXIF, keywords, caption, and place in one dialog.
+- [Frame view](docs/GUIDE.md#frame-view): full-size check, crop, develop
+  and straighten, EXIF, keywords, caption, and place in one dialog.
 - [Filters and paging](docs/GUIDE.md#filters-and-paging), and
   [Places](docs/GUIDE.md#places): offline place names from GeoNames, typed
   GPS for frames without a fix.

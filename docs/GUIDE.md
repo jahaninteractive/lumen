@@ -465,6 +465,43 @@ the tile to its pre-develop render. Develop is unavailable while the original
 is offline, or when the frame is not a raw file, and the tab says which. A profile export (darktable
 XMP) cannot be combined with develop settings.
 
+**Straighten.** The Develop tab's Straighten section levels a tilted horizon,
+from -15 to 15 degrees; a positive angle turns the picture clockwise as you
+see it. Drag the slider or type the angle, or press **Auto** to take the angle
+Lumen measured on the frame's horizon ("No clear horizon found; set it by hand"
+when there is none). **Draw horizon** lets you drag along any line in the
+preview that should be straight: a line nearer horizontal is levelled, one
+nearer vertical is made upright, and the correction is added to the angle
+already set; Escape cancels. A grid covers the image while you use the slider
+or the number box and while Draw horizon is on. **Reset** returns the original
+framing. Turning the frame trims its edges, because Lumen keeps the largest
+rectangle of the same shape that fits inside the turned picture; on a 3:2
+frame that costs about 5% of the pixels at 1 degree, 10% at 2 and 22% at 5,
+and the line under the controls says how many megapixels remain. The preview
+shows the framing the export produces. A crop is taken from the straightened
+frame, so changing the angle keeps your crop but moves what it holds, and the
+save says "Straighten changed; check the crop". The suggested crops follow the
+straightened frame too, without the subject-aware ones for now.
+
+Two other places offer an angle: **Suggest settings** under Where to start
+offers the review model the measured angle to accept or decline, and **Pick
+and develop every burst** (see [Local AI](#local-ai)) carries it into the
+pick's develop. Neither changes an angle you set yourself.
+
+Auto measures one dominant line with the macOS Vision framework. It does well on
+sea and flat land, but it can lock onto a ship's rail, a shoreline running
+away from the camera or the edge of an iceberg, so look before you keep it.
+It ignores a tilt under 0.3 or over 8 degrees, and a night-sky frame (one
+triaged as night sky, aurora or Milky Way, or a light in a stack) is never
+offered an angle; straighten those by hand.
+
+Straightening needs both native helpers rebuilt: in a checkout run
+`zsh scripts/bootstrap.sh` once, or install the next Lumen.app. Until then the
+Straighten section is disabled and says the raw developer is too old. A frame
+imported before then has no horizon measurement, so Auto has nothing to offer;
+it gets one when you refine previews, save develop settings with no angle,
+clear its develop settings, or import it anew.
+
 **Your own crop.** Drag on the image to draw a rectangle; the outside dims and
 the view switches to the Crop tab, where a **Your crop** card shows the
 megapixels it keeps. Drag inside the outline to move it; hold Shift to draw a
@@ -789,7 +826,11 @@ same way. Bursts already picked and advised are not asked again unless
 **Redo finished work** is ticked, and a rerun never undoes a frame you chose
 by hand, never overwrites settings a frame already has, and never redoes a
 develop you saved or reset after the suggestion. Nothing is exported. A
-failing burst is logged and the next still runs.
+failing burst is logged and the next still runs. When the pick has a measured
+horizon, the model is only ever asked to accept or decline that angle, never
+to choose one, on This Mac, Base and Online alike; when no advice comes back
+at all, an untouched raw pick is levelled from the measurement alone (see
+Straighten under [Frame view](#frame-view)).
 
 The other model actions, each also available from the UI:
 
