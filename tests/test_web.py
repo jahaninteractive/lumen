@@ -4307,6 +4307,156 @@ const regression = `
     assert.equal(element('#develop-contrast').disabled, false, 'the other controls are unaffected');
     return;
   }
+  if (scenario === 'develop-draw-horizon') {
+    // The geometry: a line rising to the right needs a clockwise (positive) turn; the drag's direction never matters.
+    const lean = 200 * Math.tan(3 * Math.PI / 180);
+    for (const [x1, y1, x2, y2, want, why] of [
+      [0, 100, 200, 100 - lean, 3, 'rises to the right, drawn left to right'],
+      [200, 100 - lean, 0, 100, 3, 'rises to the right, drawn right to left'],
+      [0, 100, 200, 100 + lean, -3, 'falls to the right, drawn left to right'],
+      [200, 100 + lean, 0, 100, -3, 'falls to the right, drawn right to left'],
+      [100, 300, 100 + lean, 100, -3, 'top leans right, drawn upward'],
+      [100 + lean, 100, 100, 300, -3, 'top leans right, drawn downward'],
+      [100, 300, 100 - lean, 100, 3, 'top leans left, drawn upward'],
+      [100 - lean, 100, 100, 300, 3, 'top leans left, drawn downward'],
+    ]) assert.equal(drawnStraighten(x1, y1, x2, y2, 0), want, why);
+    assert.equal(drawnStraighten(0, 100, 200, 100 - lean, 2), 5, 'the preview already carries 2 degrees');
+    assert.equal(drawnStraighten(0, 100, 200, 100 + lean, 3), null, 'level again is not set');
+    assert.equal(drawnStraighten(0, 100, 200, 100 - 200 * Math.tan(10 * Math.PI / 180), 10), 15, 'clamped to the range');
+    assert.equal(drawnStraighten(0, 0, 200, -200 * Math.tan(1.234 * Math.PI / 180), 0), 1.2, 'rounded to 0.1');
+
+    const announcements = [];
+    Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
+    const supported = { contrast: true, sharpness: true, luminance_nr: true, color_nr: true, lens_correction: true, straighten: true };
+    developPreviewExtra = { supported, native_width: 6000, native_height: 4000 };
+    await load();
+    const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
+    const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
+    Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', clientWidth: 800, clientHeight: 600 });
+    const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(setImmediate); };
+    const draw = element('#develop-straighten_deg-draw');
+    draw.setAttribute('aria-pressed', 'false');  // as the markup ships it
+    const overlay = Object.assign(element('#straighten-overlay'), { hidden: true });  // as the markup ships it
+    const line = element('#straighten-line');
+    line.setAttribute('visibility', 'hidden');
+    const range = element('#develop-straighten_deg');
+    const field = element('#develop-straighten_deg-value');
+    const pointer = (name, x, y) => overlay.listeners[name]({ button: 0, pointerId: 7, clientX: x, clientY: y, preventDefault() {} });
+    await key('Home', card(1), element('#contact-sheet'));
+    await key('Enter', card(1), element('#contact-sheet'));
+    await flush();
+    element('#develop-tab').listeners.click();
+    await flush();
+    assert.equal(draw.disabled, false, 'enabled with Auto');
+    assert.equal(draw.getAttribute('aria-pressed'), 'false');
+    assert.equal(overlay.hidden, true, 'no grid until straightening is active');
+
+    // Mode off: a press on the preview starts no line.
+    pointer('pointerdown', 10, 10);
+    pointer('pointermove', 300, 60);
+    pointer('pointerup', 300, 60);
+    await flush();
+    assert.equal(line.getAttribute('visibility'), 'hidden');
+    assert.ok(!('straighten_deg' in state.develop.fields), 'nothing set with the mode off');
+
+    // On: pressed, announced, the grid shows over the image and takes the drag.
+    draw.listeners.click();
+    assert.equal(draw.getAttribute('aria-pressed'), 'true');
+    assert.equal(announcements.at(-1), 'Draw horizon: drag along a line that should be level or upright');
+    assert.equal(overlay.hidden, false, 'the grid shows in draw mode');
+    assert.ok(overlay.getAttribute('data-drawing') !== undefined, 'the overlay takes the drag');
+    assert.ok(viewport.contains(overlay), 'the overlay sits in the viewport over the image');
+
+    // A slip under 20 px is ignored and the mode stays on.
+    overlay.box = { left: 50, top: 20, width: 800, height: 533 };
+    const heard = announcements.length;
+    pointer('pointerdown', 60, 120);
+    pointer('pointerup', 70, 125);
+    await flush();
+    assert.ok(!('straighten_deg' in state.develop.fields), 'a slip sets nothing');
+    assert.equal(draw.getAttribute('aria-pressed'), 'true', 'the mode stays on after a slip');
+    assert.equal(announcements.length, heard, 'a slip says nothing');
+
+    // A real drag draws the amber line, then sets the angle like a hand-set one and leaves the mode.
+    pointer('pointerdown', 50, 120);
+    pointer('pointermove', 150, 90);
+    assert.equal(line.getAttribute('visibility'), 'visible');
+    assert.deepEqual(['x1', 'y1', 'x2', 'y2'].map(name => Number(line.getAttribute(name))), [0, 100, 100, 70], "drawn in the overlay's own pixels");
+    pointer('pointerup', 250, 120 - lean);
+    await flush();
+    assert.equal(state.develop.fields.straighten_deg, 3);
+    assert.equal(announcements.at(-1), 'Straighten set to 3.0 degrees');
+    assert.equal(field.value, '3.0');
+    assert.equal(developPosts.at(-1).body.settings.straighten_deg, 3, 'the preview renders the drawn angle');
+    assert.equal(draw.getAttribute('aria-pressed'), 'false', 'the mode ends after a draw');
+    assert.equal(line.getAttribute('visibility'), 'hidden');
+    assert.equal(overlay.hidden, true);
+
+    // Drawn again on the turned preview: a level line now means no angle at all.
+    draw.listeners.click();
+    pointer('pointerdown', 50, 120);
+    pointer('pointerup', 250, 120 + lean);
+    await flush();
+    assert.ok(!('straighten_deg' in state.develop.fields), 'zero is not set');
+    assert.equal(announcements.at(-1), "Straighten reset to this file's own value");
+
+    // Escape cancels the mode and nothing else hears it; with the mode off it passes on.
+    draw.listeners.click();
+    let stopped = 0;
+    const escape = () => element('#develop-panel').listeners.keydown({ key: 'Escape', target: draw, preventDefault() {}, stopPropagation() { stopped += 1; } });
+    escape();
+    assert.equal(draw.getAttribute('aria-pressed'), 'false');
+    assert.equal(announcements.at(-1), 'Draw horizon cancelled');
+    assert.equal(stopped, 1, 'the dialog never sees this Escape');
+    escape();
+    assert.equal(stopped, 1, 'with the mode off Escape is left alone');
+    draw.listeners.click();
+    draw.listeners.click();
+    assert.equal(draw.getAttribute('aria-pressed'), 'false');
+    assert.equal(announcements.at(-1), 'Draw horizon cancelled', 'pressing again cancels');
+
+    // The grid follows the slider's and the number field's focus, and a drag on the slider.
+    range.focus();
+    range.listeners.focus();
+    assert.equal(overlay.hidden, false, 'the slider has focus');
+    assert.equal(overlay.getAttribute('data-drawing'), undefined, 'the grid alone takes no pointer');
+    field.focus();
+    range.listeners.blur();
+    field.listeners.focus();
+    assert.equal(overlay.hidden, false, 'the number field has focus');
+    element('#develop-exposure_ev').focus();
+    field.listeners.blur();
+    assert.equal(overlay.hidden, true, 'focus left the angle');
+    range.listeners.pointerdown({ button: 0 });
+    assert.equal(overlay.hidden, false, 'the slider is held');
+    document.listeners.pointerup({});
+    assert.equal(overlay.hidden, true, 'and let go');
+
+    // Leaving the tab, switching frame and an old helper each end the mode silently.
+    draw.listeners.click();
+    let quiet = announcements.length;
+    element('#frame-tab').listeners.click();
+    await flush();
+    assert.equal(draw.getAttribute('aria-pressed'), 'false', 'leaving the tab ends it');
+    assert.equal(announcements.length, quiet, 'silently');
+    element('#develop-tab').listeners.click();
+    await flush();
+    draw.listeners.click();
+    quiet = announcements.length;
+    await key(']', viewport, element('#loupe'));
+    await flush();
+    assert.equal(state.develop.photoId, 2);
+    assert.equal(draw.getAttribute('aria-pressed'), 'false', 'a new frame ends it');
+    assert.ok(!announcements.slice(quiet).includes('Draw horizon cancelled'), 'silently');
+    draw.listeners.click();
+    supported.straighten = false;
+    renderDevelopPreview();
+    await flush();
+    assert.equal(draw.disabled, true, 'disabled with Auto');
+    assert.equal(draw.getAttribute('aria-pressed'), 'false', 'a panel that cannot straighten ends it');
+    return;
+  }
   if (scenario === 'frame-view-full') {
     groups[0].photos.forEach(item => { item.preview_url = '/preview/' + item.id + '?v=abc-embedded'; });
     await load();
@@ -6322,6 +6472,26 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
 
     def test_javascript_develop_straighten_group(self):
         self.run_javascript_cleanup_regression("develop-straighten")
+
+    def test_javascript_develop_draw_horizon(self):
+        self.run_javascript_cleanup_regression("develop-draw-horizon")
+
+    def test_develop_draw_horizon_markup(self):
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        draw = by_id["develop-straighten_deg-draw"]
+        self.assertIn(by_id["develop-panel"], draw["parents"])
+        self.assertEqual(("button", "button", "false", "Draw horizon"),
+                         (draw["tag"], draw["attrs"].get("type"), draw["attrs"].get("aria-pressed"), draw["text"].strip()))
+        order = [parser.nodes.index(by_id[f"develop-straighten_deg-{name}"]) for name in ("auto", "draw", "reset")]
+        self.assertEqual(sorted(order), order, "between Auto and Reset")
+        overlay = by_id["straighten-overlay"]
+        self.assertIn(by_id["loupe-viewport"], overlay["parents"])
+        self.assertEqual("true", overlay["attrs"].get("aria-hidden"), "the grid is purely visual")
+        self.assertIn("hidden", overlay["attrs"])
+        self.assertIn(overlay, by_id["straighten-line"]["parents"])
 
     def test_javascript_develop_tab_is_disabled_when_the_original_is_offline(self):
         self.run_javascript_cleanup_regression("develop-offline")

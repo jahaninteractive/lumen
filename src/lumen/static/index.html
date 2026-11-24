@@ -786,7 +786,7 @@
   <dialog id="loupe" aria-labelledby="loupe-heading">
     <h2 id="loupe-heading">Frame</h2>
     <div class="frame-image">
-      <div id="loupe-viewport" class="loupe-viewport" tabindex="0" role="group" aria-label="Frame viewport"><div id="crop-overlay" hidden><div id="crop-outline"></div></div></div>
+      <div id="loupe-viewport" class="loupe-viewport" tabindex="0" role="group" aria-label="Frame viewport"><div id="crop-overlay" hidden><div id="crop-outline"></div></div><div id="straighten-overlay" aria-hidden="true" hidden><svg><line id="straighten-line" visibility="hidden"/></svg></div></div>
       <div class="button-row">
         <button type="button" id="loupe-full" class="secondary" aria-pressed="false">Full size</button>
       </div>
@@ -958,6 +958,7 @@
               <input type="range" id="develop-straighten_deg" aria-describedby="develop-straighten_deg-megapixels develop-straighten_deg-note" min="-15" max="15" step="0.1" value="0">
               <input type="number" id="develop-straighten_deg-value" min="-15" max="15" step="0.1" placeholder="not set" aria-label="Straighten in degrees">
               <button type="button" class="secondary" id="develop-straighten_deg-auto">Auto</button>
+              <button type="button" class="secondary" id="develop-straighten_deg-draw" aria-pressed="false">Draw horizon</button>
               <button type="button" class="secondary" id="develop-straighten_deg-reset">Reset</button>
             </div>
             <p id="develop-straighten_deg-megapixels" class="quiet"></p>

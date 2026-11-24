@@ -359,6 +359,14 @@ button.version:hover { color: var(--cyan); text-decoration: underline; }
 #loupe-viewport img.fit { max-width: 100%; max-height: calc(var(--loupe-h) - 2px); }  /* the whole frame shows while cropping; Full size stays 1:1 */
 #loupe-viewport img { user-select: none; -webkit-user-select: none; cursor: crosshair; }
 #crop-overlay { position: absolute; left: 0; top: 0; overflow: hidden; pointer-events: none; }
+/* Straighten's grid: eight by eight light lines, each with a dark hairline so it reads on bright and dark frames. */
+#straighten-overlay { position: absolute; left: 0; top: 0; z-index: 1; pointer-events: none;  /* above the crop outline, which takes pointers */
+  background-image: linear-gradient(to right, rgba(255, 255, 255, .45) 1px, rgba(0, 0, 0, .45) 1px, rgba(0, 0, 0, .45) 2px, transparent 2px),
+    linear-gradient(to bottom, rgba(255, 255, 255, .45) 1px, rgba(0, 0, 0, .45) 1px, rgba(0, 0, 0, .45) 2px, transparent 2px);
+  background-size: 12.5% 12.5%; }
+#straighten-overlay[data-drawing] { pointer-events: auto; cursor: crosshair; touch-action: none; }  /* draw mode takes the drag from the crop */
+#straighten-overlay svg { display: block; width: 100%; height: 100%; overflow: visible; }
+#straighten-line { stroke: var(--amber); stroke-width: 2; stroke-linecap: round; }
 #crop-outline { position: absolute; box-sizing: border-box; border: 2px solid var(--amber); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55); pointer-events: auto; cursor: move; }  /* the shadow takes no clicks; the box moves the crop */
 #loupe .button-row { align-items: center; }
 .loupe-viewport:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }

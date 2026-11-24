@@ -4478,6 +4478,7 @@ const cropOverlay = document.querySelector('#crop-overlay');
 const cropOutline = document.querySelector('#crop-outline');
 const cropLock = document.querySelector('#crop-lock');
 const selectFrameTab = wireTablist('#frame-tabs', 'lumen-frame-tab', tab => {
+  if (tab.id !== 'develop-tab') setStraightenDraw(false, false);
   if (tab.id === 'develop-tab') return renderDevelopPreview();  // the panel's render is also the histogram's source
   if (tab.id === 'exif-tab') loadExif(state.selectedId);
   // Only a develop render needs handing back. The embedded JPEG at full size belongs to the
@@ -4598,6 +4599,9 @@ const CURVE_GAP = 0.01;  // the server rejects equal x values, so a dragged poin
 const [CURVE_W, CURVE_H] = [100, 60];  // the viewBox in index.html
 
 const developNodes = {};
+const STRAIGHTEN_DRAW_MIN = 20;  // CSS px; a shorter drag is a slip
+let straightenStart = null;  // [x, y] in the overlay's own px while a horizon is being drawn
+let straightenHeld = false;  // the angle's handle is held by a pointer, which need not focus it
 function developNode(id) {
   return developNodes[id] ??= document.querySelector(`#${id}`);
 }
@@ -4719,6 +4723,8 @@ function syncDevelopControls() {
   });
   showStraightenMegapixels(fields.straighten_deg ?? 0);
   developNode('develop-straighten_deg-auto').disabled = developNode('develop-straighten_deg').disabled;
+  developNode('develop-straighten_deg-draw').disabled = developNode('develop-straighten_deg').disabled;
+  if (developNode('develop-straighten_deg-draw').disabled) setStraightenDraw(false, false);
   CURVE_IDENTITY.forEach((_point, index) => developNode(`develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
   const lens = developNode('develop-lens_correction');
   lens.checked = fields.lens_correction === true;
@@ -4744,6 +4750,7 @@ function fillDevelop(photo) {
   const saved = state.details?.develop || {};
   const develop = state.develop;
   develop.controller?.abort();
+  setStraightenDraw(false, false);
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
     neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, drag: null, controller: null,
@@ -4805,6 +4812,7 @@ async function renderDevelopPreview() {
   syncDevelopControls();
   showPreview(loupeViewport, photo, result.image, loaded => {
     drawCropOverlay(shownCropRect());
+    drawStraightenOverlay();
     if (!zoomed) return;
     fullButton.textContent = `Full size, ${loaded.naturalWidth} by ${loaded.naturalHeight}`;
     // Hold the middle of the frame rather than the corner, as the embedded-JPEG path does.
@@ -4931,6 +4939,103 @@ developNode('develop-straighten_deg-auto').addEventListener('click', () => {
 });
 // The count follows the handle as it moves; the render still waits for the release.
 developNode('develop-straighten_deg').addEventListener('input', event => showStraightenMegapixels(Number(event.target.value)));
+
+// Draw horizon. The line is drawn on a preview already turned by current degrees, so the correction adds to it.
+// Screen y grows downward and positive turns clockwise. A line nearer horizontal is levelled, one nearer vertical
+// made upright; it is first pointed right (or up), so the direction of the drag never matters.
+function drawnStraighten(x1, y1, x2, y2, current) {
+  let [dx, dy] = [x2 - x1, y2 - y1];
+  const level = Math.abs(dx) >= Math.abs(dy);
+  if (level ? dx < 0 : dy > 0) [dx, dy] = [-dx, -dy];
+  const correction = level ? Math.atan2(-dy, dx) : -Math.atan2(dx, -dy);  // rising right turns clockwise; a top leaning right, anticlockwise
+  const angle = developClamp(Math.round((current + correction * 180 / Math.PI) * 10) / 10, -15, 15);
+  return angle === 0 ? null : angle;  // level is not set, as Reset leaves it
+}
+
+function straightenDrawing() {
+  return developNode('develop-straighten_deg-draw').getAttribute('aria-pressed') === 'true';
+}
+
+// The grid covers the image's rendered box, as the crop overlay does, while straightening is active:
+// draw mode, or the angle's slider or field in use. It takes the pointer only in draw mode.
+function drawStraightenOverlay() {
+  const overlay = developNode('straighten-overlay');
+  const image = loupeViewport.children[0];
+  const drawing = straightenDrawing();
+  const focus = document.activeElement;
+  const active = drawing || straightenHeld || focus === developNode('develop-straighten_deg') || focus === developNode('develop-straighten_deg-value');
+  overlay.hidden = !active || image?.tagName !== 'IMG';
+  if (drawing) overlay.setAttribute('data-drawing', '');
+  else overlay.removeAttribute('data-drawing');
+  if (overlay.hidden) return;
+  if (!loupeViewport.contains(overlay)) loupeViewport.append(overlay);
+  const box = image.getBoundingClientRect();
+  Object.assign(overlay.style, { width: `${box.width}px`, height: `${box.height}px` });
+}
+
+// Leaving the tab or the frame, or a panel that cannot straighten, ends the mode without a word.
+function setStraightenDraw(on, spoken = true) {
+  if (on === straightenDrawing()) return;
+  developNode('develop-straighten_deg-draw').setAttribute('aria-pressed', String(on));
+  straightenStart = null;
+  developNode('straighten-line').setAttribute('visibility', 'hidden');
+  drawStraightenOverlay();
+  if (spoken) announce(on ? 'Draw horizon: drag along a line that should be level or upright' : 'Draw horizon cancelled');
+}
+
+developNode('develop-straighten_deg-draw').addEventListener('click', () => {
+  developNode('develop-straighten_deg-draw').focus();  // a click need not focus a button, and Escape is heard from inside the panel
+  setStraightenDraw(!straightenDrawing());
+});
+developNode('develop-panel').addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || !straightenDrawing()) return;
+  event.preventDefault();
+  event.stopPropagation();  // the frame view stays open
+  setStraightenDraw(false);
+}, { capture: true });
+const straightenOverlay = developNode('straighten-overlay');
+function straightenPoint(event) {
+  const box = straightenOverlay.getBoundingClientRect();
+  return [event.clientX - box.left, event.clientY - box.top];
+}
+straightenOverlay.addEventListener('pointerdown', event => {
+  if (event.button !== 0 || !straightenDrawing()) return;
+  event.preventDefault();  // no focus move: Escape still reaches the panel
+  straightenOverlay.setPointerCapture(event.pointerId);
+  straightenStart = straightenPoint(event);
+});
+straightenOverlay.addEventListener('pointermove', event => {
+  if (!straightenStart) return;
+  const line = developNode('straighten-line');
+  const [x, y] = straightenPoint(event);
+  Object.entries({ x1: straightenStart[0], y1: straightenStart[1], x2: x, y2: y }).forEach(([name, value]) => line.setAttribute(name, String(value)));
+  line.setAttribute('visibility', 'visible');
+});
+straightenOverlay.addEventListener('pointerup', event => {
+  if (!straightenStart) return;
+  const [x1, y1] = straightenStart;
+  const [x2, y2] = straightenPoint(event);
+  straightenStart = null;
+  developNode('straighten-line').setAttribute('visibility', 'hidden');
+  if (Math.hypot(x2 - x1, y2 - y1) < STRAIGHTEN_DRAW_MIN) return;  // the mode stays on for another try
+  const control = DEVELOP_CONTROLS.find(item => item.key === 'straighten_deg');
+  const angle = drawnStraighten(x1, y1, x2, y2, state.develop.fields.straighten_deg ?? 0);
+  setStraightenDraw(false, false);
+  setDevelopField(control, angle, angle === null ? null : `Straighten set to ${angle.toFixed(control.decimals)} degrees`);
+});
+straightenOverlay.addEventListener('pointercancel', () => {
+  straightenStart = null;
+  developNode('straighten-line').setAttribute('visibility', 'hidden');
+});
+['develop-straighten_deg', 'develop-straighten_deg-value'].forEach(id => {
+  developNode(id).addEventListener('focus', drawStraightenOverlay);
+  developNode(id).addEventListener('blur', drawStraightenOverlay);
+});
+developNode('develop-straighten_deg').addEventListener('pointerdown', () => { straightenHeld = true; drawStraightenOverlay(); });
+const releaseStraightenHandle = () => { if (straightenHeld) { straightenHeld = false; drawStraightenOverlay(); } };
+document.addEventListener('pointerup', releaseStraightenHandle);
+document.addEventListener('pointercancel', releaseStraightenHandle);
+if (window.ResizeObserver) new window.ResizeObserver(drawStraightenOverlay).observe(loupeViewport);
 
 // Dragging a point keeps the x values strictly ascending, which is what the server validates.
 function moveCurvePoint(index, x, y) {
