@@ -497,10 +497,11 @@ offered an angle; straighten those by hand.
 
 Straightening needs both native helpers rebuilt: in a checkout run
 `zsh scripts/bootstrap.sh` once, or install the next Lumen.app. Until then the
-Straighten section is disabled and says the raw developer is too old. A frame
-imported before then has no horizon measurement, so Auto has nothing to offer;
-it gets one when you refine previews, save develop settings with no angle,
-clear its develop settings, or import it anew.
+Straighten section is disabled and says the raw developer is too old. Auto
+measures the frame the first time you press it. **Suggest settings** and
+**Pick and develop every burst** use a stored measurement, which a frame gets
+from Auto, from refining previews, from saving develop settings with no angle,
+from clearing them, or from a new import.
 
 **Your own crop.** Drag on the image to draw a rectangle; the outside dims and
 the view switches to the Crop tab, where a **Your crop** card shows the

@@ -1055,6 +1055,13 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                         job = library.start_develop_group_job(int(match.group(1)))
                         self._send_json(library.job_status(job.id), status=HTTPStatus.ACCEPTED)
                     return
+                if match := re.fullmatch(r"/api/photos/(\d+)/straighten-auto", path):
+                    if payload:
+                        raise ValueError("straighten auto requires an empty JSON object")
+                    photo_id = int(match.group(1))
+                    with Library(settings) as library:
+                        self._send_json({"photo_id": photo_id, "straighten_auto": library.measure_horizon(photo_id)})
+                    return
                 match = re.fullmatch(r"/api/photos/(\d+)/develop/suggest", path)
                 if match:
                     if payload.keys() != {"settings", "feedback"}:
@@ -1301,7 +1308,7 @@ def make_server(settings: Settings, host: str = "127.0.0.1", port: int = 8765) -
                     self._send_json({"error": "another heavy job is already active"}, status=HTTPStatus.CONFLICT)
                     return
                 job_route = path.startswith(("/api/map/", "/api/astro/", "/api/jobs/", "/api/import", "/api/ingest", "/api/photos/tag", "/api/photos/assist", "/api/photos/cull",
-                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/", "/api/settings")) or re.search(r"/develop(/|$)", path)
+                                             "/api/photos/review-rejects", "/api/previews/", "/api/digests", "/api/groups/", "/api/settings")) or re.search(r"/(develop|straighten-auto)(/|$)", path)
                 message = public_message(str(error)) if job_route else str(error)
                 self._send_json({"error": message}, status=HTTPStatus.BAD_REQUEST)
 

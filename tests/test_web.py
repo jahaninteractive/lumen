@@ -1137,7 +1137,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
-            "/api/photos/1/develop/suggest", "/api/photos/1/location", "/api/photos/1/split",
+            "/api/photos/1/develop/suggest", "/api/photos/1/location", "/api/photos/1/split", "/api/photos/1/straighten-auto",
         )
         headers = ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"})
         with patch("lumen.web.subprocess.run", side_effect=AssertionError("macOS tool invoked")):
@@ -1158,7 +1158,7 @@ class WebTests(unittest.TestCase):
             "/api/photos/1/composition-review", "/api/astro/jobs", "/api/astro/jobs/1/run", "/api/astro/jobs/1/cancel",
             "/api/import", "/api/photos/tag-all", "/api/jobs/1/cancel", "/api/groups/merge", "/api/groups/1/triage", "/api/photos/assist",
             "/api/vocabulary/forget", "/api/search/expand", "/api/library/remove-cleared", "/api/photos/1/place",
-            "/api/photos/1/develop/suggest", "/api/photos/1/location", "/api/photos/1/split",
+            "/api/photos/1/develop/suggest", "/api/photos/1/location", "/api/photos/1/split", "/api/photos/1/straighten-auto",
         ):
             for raw in (b"[]", b"null", b"{", b""):
                 with self.subTest(route=route, raw=raw):
@@ -2700,6 +2700,8 @@ const suggestPosts = [];
 let suggestCount = 0;
 let developPolls = 0;
 let developSaveError = null;
+const straightenAutoPosts = [];
+const straightenAutoReplies = [];  // each a number, null, or { error }
 let developPreviewExtra = {};  // a scenario's own render fields, laid over the shared ones
 const developPreview = () => ({ image: 'data:image/jpeg;base64,RENDER', histogram: { y: [0.1, 0.2, 0.4, 0.1], r: [0.1, 0.2, 0.2, 0.1], g: [0.1, 0.1, 0.2, 0.1], b: [0.8, 0.05, 0.1, 0.05] }, defaults: { contrast: 0, sharpness: 1, luminance_nr: 0.004, color_nr: 0.5 }, neutral_temperature: 5600, neutral_tint: 7, ...developPreviewExtra });
 const developJob = (status, progress, extra = {}) => ({ job_id: 21, kind: 'develop_group', status, progress, label: null, processed: null, total: null, error: null, result: null, log_tail: [], created_at: '', updated_at: '', ...extra });
@@ -2908,6 +2910,12 @@ async function fetch(url, options = {}) {
     const body = JSON.parse(options.body);
     captionPosts.push({ url, body });
     payload = url.endsWith('/edit') ? { photo_id: 1, ...body } : { photo_id: 1, caption: 'Drafted.', alt_text: 'Drafted alt.' };
+  }
+  else if (/^\/api\/photos\/\d+\/straighten-auto$/.test(url)) {
+    straightenAutoPosts.push({ url, body: JSON.parse(options.body) });
+    const reply = straightenAutoReplies.shift();
+    if (reply?.error) { ok = false; payload = { error: reply.error }; }
+    else payload = { photo_id: Number(url.split('/')[3]), straighten_auto: reply ?? null };
   }
   else if (/^\/api\/photos\/\d+\/develop\/suggest$/.test(url)) {
     suggestPosts.push(JSON.parse(options.body));
@@ -4252,13 +4260,71 @@ const regression = `
     assert.deepEqual(saved(1), { exposure_ev: 0.5, contrast: 0.3 }, 'the reset angle is cleared from the frame');
     assert.ok(announcements.slice(heard).includes('Develop settings saved. ' + cropNote), announcements.slice(heard).join(' | '));
 
-    // Frame 2 has no measured horizon: Auto changes nothing and says to set it by hand.
+    // Frame 2 has no stored measurement: the first press measures it, and a second press while that runs does nothing.
+    const auto = element('#develop-straighten_deg-auto');
+    const hint = () => element('#develop-straighten_deg-hint').textContent;
     const before = developPosts.length;
-    await element('#develop-straighten_deg-auto').listeners.click();
+    holdUrls.add('/api/photos/2/straighten-auto');
+    straightenAutoReplies.push({ error: 'The raw developer could not develop DSC0002.ARW.' });
+    let pressed = auto.listeners.click();
     await flush();
+    assert.equal(auto.disabled, true, 'disabled while measuring');
+    assert.equal(hint(), 'Measuring the horizon…');
+    await auto.listeners.click();
+    assert.equal(heldReplies.length, 1, 'one measurement in flight');
+    heldReplies.shift()();
+    await pressed;
+    await flush();
+    assert.deepEqual(straightenAutoPosts.map(post => [post.url, post.body]), [['/api/photos/2/straighten-auto', {}]]);
+    assert.equal(element('#announcer').textContent, 'The horizon could not be measured: The raw developer could not develop DSC0002.ARW.');
+    assert.equal(hint(), element('#announcer').textContent, 'shown as well as spoken');
+    assert.equal(auto.disabled, false, 'a failure gives the button back');
+    straightenAutoReplies.push(null);
+    await auto.listeners.click();
+    await flush();
+    assert.equal(straightenAutoPosts.length, 2, 'a failed measurement is asked again');
     assert.equal(element('#announcer').textContent, 'No clear horizon found; set it by hand');
+    assert.equal(hint(), 'No clear horizon found; set it by hand');
+    assert.equal(auto.disabled, false);
     assert.ok(!('straighten_deg' in state.develop.fields));
     assert.equal(developPosts.length, before, 'nothing renders or saves');
+
+    // An answer that arrives after the panel moved to another frame is dropped.
+    holdUrls.add('/api/photos/2/straighten-auto');
+    straightenAutoReplies.push(2.5);
+    pressed = auto.listeners.click();
+    await flush();
+    await key('[', element('#loupe-viewport'), element('#loupe'));
+    await flush();
+    assert.equal(state.develop.photoId, 1);
+    const frameOne = [field('straighten_deg').value, hint()];
+    heldReplies.shift()();
+    await pressed;
+    await flush();
+    assert.deepEqual([field('straighten_deg').value, hint()], frameOne, "frame 2's answer never reaches frame 1");
+    assert.equal(state.develop.straightenAuto, 1.4);
+    assert.equal(auto.disabled, false);
+    await key(']', element('#loupe-viewport'), element('#loupe'));
+    await flush();
+    assert.equal(state.develop.photoId, 2);
+
+    // A measured angle parks like a hand-set one, and is kept for this frame so the next press asks nothing.
+    straightenAutoReplies.push(2.5);
+    await auto.listeners.click();
+    await flush();
+    assert.equal(element('#announcer').textContent, 'Straighten set to 2.5 degrees');
+    assert.equal(hint(), 'Straighten set to 2.5 degrees from the measured horizon');
+    assert.equal(field('straighten_deg').value, '2.5');
+    assert.equal(state.details.straighten_auto, 2.5);
+    const asked = straightenAutoPosts.length;
+    await element('#develop-straighten_deg-reset').listeners.click();
+    await flush();
+    await auto.listeners.click();
+    await flush();
+    assert.equal(straightenAutoPosts.length, asked, 'a known angle is not measured again');
+    assert.equal(field('straighten_deg').value, '2.5');
+    await element('#develop-straighten_deg-reset').listeners.click();
+    await flush();
 
     // With no angle of its own, the panel parks the advice's, and Discard takes it away again.
     await element('#develop-ask').listeners.click();
@@ -4287,8 +4353,10 @@ const regression = `
     element('#develop-tab').listeners.click();
     await flush();
     const saves = developPosts.filter(post => post.url === '/api/photos/1/develop').length;
+    const measured = straightenAutoPosts.length;
     await element('#develop-straighten_deg-auto').listeners.click();
     await flush();
+    assert.equal(straightenAutoPosts.length, measured, 'a stored measurement needs no request');
     assert.equal(element('#announcer').textContent, 'Straighten set to 1.4 degrees');
     assert.equal(field('straighten_deg').value, '1.4');
     assert.equal(range.getAttribute('aria-valuetext'), '1.4 degrees');
@@ -4363,7 +4431,7 @@ const regression = `
     assert.ok(!viewport.contains(overlay), "the preview load replaced the viewport's children, taking the overlay with it");
 
     // Auto with no measurement says so on the page as well as aloud.
-    element('#develop-straighten_deg-auto').listeners.click();
+    await element('#develop-straighten_deg-auto').listeners.click();
     assert.equal(hint(), 'No clear horizon found; set it by hand');
 
     // Mode off: a press on the preview starts no line.
@@ -7828,6 +7896,26 @@ class DevelopWebTests(unittest.TestCase):
         self.assertEqual(2.9, payload["straighten_auto"])
         self.assertNotIn("horizon", json.dumps(payload))
         self.assertNotIn("-2.875", json.dumps(payload))
+
+    def test_straighten_auto_measures_an_unmeasured_frame_on_demand(self):
+        url = "/api/photos/1/straighten-auto"
+        vision = {"face_count": 0, "face_quality": None, "eye_quality": None, "feature_print": None, "horizon_deg": -2.875}
+        with patch("lumen.library.analyze_faces", return_value=vision) as helper:
+            self.assertIsNone(self.get_json("/api/photos/1")[1]["straighten_auto"])
+            helper.assert_not_called()  # opening the frame never measures
+            for body in ({"extra": 1}, {"photo_id": 1}):
+                self.assertEqual(400, self.post_json(url, body)[0], body)
+            for headers in ({"Origin": "https://attacker.example"}, {"Host": f"attacker.example:{self.server.server_port}"}):
+                self.assertEqual(403, self.post_json(url, {}, headers=headers)[0])
+            helper.assert_not_called()
+            code, body = self.post_json("/api/photos/999/straighten-auto", {})
+            self.assertEqual((400, {"error": "unknown photo ID: 999"}), (code, body))
+            self.assertEqual((200, {"photo_id": 1, "straighten_auto": 2.9}), self.post_json(url, {}))
+        self.assertEqual(2.9, self.get_json("/api/photos/1")[1]["straighten_auto"])
+        with patch("lumen.library.analyze_faces", return_value=None):
+            with Library(self.settings) as library:
+                library.catalog.save_horizon(1, None)
+            self.assertEqual((200, {"photo_id": 1, "straighten_auto": None}), self.post_json(url, {}))
 
     def test_develop_preview_returns_an_image_and_a_histogram(self):
         code, body = self.preview()

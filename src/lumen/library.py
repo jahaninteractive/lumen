@@ -1076,6 +1076,33 @@ class Library:
             return None
         return straighten_from_horizon(self.catalog.horizon_for(photo_id))
 
+    @_coordinated
+    def measure_horizon(self, photo_id: int) -> float | None:
+        """straighten_auto, measuring the frame first when the catalog holds no measurement (a frame imported
+        before horizons were measured). Only the measurement is stored; the frame's preview, metrics and develop
+        settings are untouched. A measurement is only ever taken from an unstraightened image."""
+        if type(photo_id) is not int or not (photo := self.catalog.get_photo(photo_id)):
+            raise ValueError(f"unknown photo ID: {photo_id}")
+        # ponytail: NULL means both "never measured" and "none found", so a frame with no horizon is measured on
+        # every press; add a "measured" flag to the catalog if that repeat ever costs too much.
+        if self.catalog.horizon_for(photo_id) is None:
+            fields = _develop_fields(self.catalog.get_develop(photo_id)) or {}
+            vision = None
+            if "straighten_deg" not in fields:  # the stored preview is unturned
+                if photo.preview_path and Path(photo.preview_path).is_file():
+                    vision = analyze_faces(Path(photo.preview_path), self.settings.vision_analyzer_path)
+            elif (source := Path(photo.path)).is_file():
+                fields.pop("straighten_deg")
+                with tempfile.TemporaryDirectory(prefix=".horizon-", dir=self.settings.cache_dir) as directory:
+                    rendered, normalized = Path(directory) / "render.jpg", Path(directory) / "preview.jpg"
+                    render_raw(source, rendered, self.settings.raw_developer_path, settings=fields,
+                               long_edge=self.previews.max_size, image_format="jpeg")
+                    vision = analyze_faces(self.previews.normalize(rendered, normalized),
+                                           self.settings.vision_analyzer_path)
+            if vision:
+                self.catalog.save_horizon(photo_id, vision.get("horizon_deg"))
+        return self.straighten_auto(photo_id)
+
     def astro_triage(self, group_id: int) -> dict:
         """Per-light sky triage plus metric warnings for the Astro tab; advisory, without raw model output."""
         group = self._group(group_id)

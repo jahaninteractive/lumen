@@ -5,7 +5,7 @@ const state = {
   rejectSuggestions: [], job: null, jobTimer: null, jobRequest: 0, details: null, rejectedCount: 0, keeperCount: 0, shown: 200, focusedId: null, compare: [],
   astro: { job: null, folders: { darks: null, flats: null, biases: null }, lightsKey: null, triage: null },
   // Develop holds only the fields the photographer touched; saved is the last body the server was given.
-  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null },
+  develop: { photoId: null, fields: {}, saved: '{}', ready: false, neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, controller: null, drag: null, beforeAdvice: null, advice: null, straightenAuto: null, measuring: null },
   mergeSelection: new Set(), mergeAnchor: null, clearedFrames: 0,
   aiTasks: new Map(),  // per-panel local AI status by key, e.g. critique:<groupId>; it outlives the panel that asked
   ingest: { card: null, primary: null, mirror: null },
@@ -4726,7 +4726,7 @@ function syncDevelopControls() {
     }
   });
   showStraightenMegapixels(fields.straighten_deg ?? 0);
-  developNode('develop-straighten_deg-auto').disabled = developNode('develop-straighten_deg').disabled;
+  developNode('develop-straighten_deg-auto').disabled = developNode('develop-straighten_deg').disabled || state.develop.measuring !== null;
   developNode('develop-straighten_deg-draw').disabled = developNode('develop-straighten_deg').disabled;
   if (developNode('develop-straighten_deg-draw').disabled) setStraightenDraw(false, false);
   CURVE_IDENTITY.forEach((_point, index) => developNode(`develop-point-${index}`).setAttribute('tabindex', ready ? '0' : '-1'));
@@ -4760,6 +4760,7 @@ function fillDevelop(photo) {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
     neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, drag: null, controller: null,
     beforeAdvice: null, advice: state.details?.advice || null, straightenAuto: state.details?.straighten_auto ?? null,
+    measuring: null,
   });
   aiTaskLine(`develop:${photo.id}`, developNode('develop-task'));
   developNode('develop-advice').textContent = develop.advice?.rationale ?? '';  // the last stored suggestion, not yet parked
@@ -4937,8 +4938,31 @@ DEVELOP_CONTROLS.forEach(control => {
 });
 // Auto parks the angle Vision measured on the unstraightened frame, so it is absolute whatever is set now;
 // it goes through the same path as a hand-set angle and saves only when the frame does.
-developNode('develop-straighten_deg-auto').addEventListener('click', () => {
-  const angle = state.develop.straightenAuto;
+// A frame imported before horizons were measured has none stored: the first press measures it.
+developNode('develop-straighten_deg-auto').addEventListener('click', async () => {
+  const develop = state.develop;
+  if (develop.measuring !== null) return;
+  if (!Number.isFinite(develop.straightenAuto)) {
+    const pending = develop.measuring = {};
+    const photoId = develop.photoId;
+    developNode('develop-straighten_deg-auto').disabled = true;
+    straightenHint('Measuring the horizon…');
+    let answer;
+    try {
+      answer = await post(`/api/photos/${photoId}/straighten-auto`, {});
+    } catch (error) {
+      if (develop.measuring !== pending) return;  // another frame since: its panel owns the hint
+      develop.measuring = null;
+      syncDevelopControls();
+      return announce(straightenHint(`The horizon could not be measured: ${error.message}`));
+    }
+    if (develop.measuring !== pending) return;
+    develop.measuring = null;
+    develop.straightenAuto = answer.straighten_auto;
+    if (state.details && state.selectedId === photoId) state.details.straighten_auto = answer.straighten_auto;  // reopening asks no more
+    syncDevelopControls();
+  }
+  const angle = develop.straightenAuto;
   if (!Number.isFinite(angle)) return announce(straightenHint('No clear horizon found; set it by hand'));
   const control = DEVELOP_CONTROLS.find(item => item.key === 'straighten_deg');
   setDevelopField(control, angle, `Straighten set to ${angle.toFixed(control.decimals)} degrees`);

@@ -2860,6 +2860,102 @@ class LibraryTests(unittest.TestCase):
                 self.refine(library, all_photos=True)
             self.assertEqual(2.0, library.straighten_auto(photo_id))
 
+    def old_frame(self, library, horizon=None):
+        """One frame imported before the helper measured horizons, so the catalog holds `horizon`."""
+        with patch("lumen.library.analyze_faces", return_value=self.vision(horizon)):
+            library.import_path(self.image_path)
+        return library.catalog.list_photos()[0].id
+
+    def test_measure_horizon_uses_a_stored_measurement_without_the_helper(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library, -2.0)
+            with patch("lumen.library.analyze_faces") as helper, patch("lumen.library.render_raw") as render:
+                self.assertEqual(2.0, library.measure_horizon(photo_id))
+            helper.assert_not_called()
+            render.assert_not_called()
+
+    def test_measure_horizon_measures_the_stored_preview_of_an_undeveloped_frame(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library)
+            preview = library.catalog.get_photo(photo_id).preview_path
+            with patch("lumen.library.analyze_faces", return_value=self.vision(3.125)) as helper, \
+                    patch("lumen.library.render_raw") as render:
+                self.assertEqual(-3.1, library.measure_horizon(photo_id))
+            self.assertEqual(Path(preview), Path(helper.call_args.args[0]))
+            render.assert_not_called()
+            self.assertEqual(3.125, library.catalog.horizon_for(photo_id))
+
+    def test_measure_horizon_renders_a_straightened_frame_without_its_angle_and_changes_nothing_else(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(photo_id, DevelopSettings({"exposure_ev": 0.5, "straighten_deg": -7.1}))
+            photo = library.catalog.get_photo(photo_id)
+            before = (photo.preview_path, photo.preview_kind, Path(photo.preview_path).read_bytes(),
+                      library.catalog.get_metrics(photo_id), library.develop_for(photo_id).to_dict(),
+                      [(e.kind, e.details) for e in library.catalog.events_for(photo_id)])
+            calls, measured = [], []
+
+            def helper(path, executable):
+                measured.append((Path(path), Path(path).is_file()))
+                return self.vision(-2.0, face_quality=0.9)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render(calls)), \
+                    patch("lumen.library.analyze_faces", side_effect=helper):
+                self.assertEqual(2.0, library.measure_horizon(photo_id))
+            photo = library.catalog.get_photo(photo_id)
+            after = (photo.preview_path, photo.preview_kind, Path(photo.preview_path).read_bytes(),
+                     library.catalog.get_metrics(photo_id), library.develop_for(photo_id).to_dict(),
+                     [(e.kind, e.details) for e in library.catalog.events_for(photo_id)])
+
+        self.assertEqual([{"exposure_ev": 0.5}], [call["settings"] for call in calls], "the angle is left out, the rest kept")
+        self.assertEqual(library.previews.max_size, calls[0]["long_edge"])
+        self.assertNotEqual(Path(photo.preview_path), measured[0][0], "never the turned stored preview")
+        self.assertTrue(measured[0][1])
+        self.assertFalse(measured[0][0].exists(), "the temporary render is removed")
+        self.assertEqual(before, after)
+
+    def test_measure_horizon_stores_nothing_when_the_helper_has_no_answer(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library)
+            with patch("lumen.library.analyze_faces", return_value=None):
+                self.assertIsNone(library.measure_horizon(photo_id))
+            self.assertIsNone(library.catalog.horizon_for(photo_id))
+            with patch("lumen.library.analyze_faces", return_value=self.vision(None)):
+                self.assertIsNone(library.measure_horizon(photo_id), "no horizon found is measured again next time")
+
+    def test_measure_horizon_never_overwrites_a_measurement(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library, 9.0)
+            with patch("lumen.library.analyze_faces", return_value=None) as helper:
+                self.assertIsNone(library.measure_horizon(photo_id), "outside the band: no angle")
+            helper.assert_not_called()
+            self.assertEqual(9.0, library.catalog.horizon_for(photo_id))
+
+    def test_measure_horizon_stores_a_measurement_outside_the_band_but_offers_no_angle(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library)
+            with patch("lumen.library.analyze_faces", return_value=self.vision(9.0)):
+                self.assertIsNone(library.measure_horizon(photo_id))
+            self.assertEqual(9.0, library.catalog.horizon_for(photo_id))
+
+    def test_measure_horizon_offers_no_angle_on_an_astro_frame(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library)
+            library.catalog.save_tags(photo_id, {"sky": {"class": "milky_way", "confidence": 0.9}}, "fast-model")
+            with patch("lumen.library.analyze_faces", return_value=self.vision(-2.0)):
+                self.assertIsNone(library.measure_horizon(photo_id))
+            self.assertEqual(-2.0, library.catalog.horizon_for(photo_id))
+
+    def test_measure_horizon_answers_none_without_a_preview_and_refuses_an_unknown_frame(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            photo_id = self.old_frame(library)
+            Path(library.catalog.get_photo(photo_id).preview_path).unlink()
+            with patch("lumen.library.analyze_faces") as helper:
+                self.assertIsNone(library.measure_horizon(photo_id))
+            helper.assert_not_called()
+            with self.assertRaises(ValueError):
+                library.measure_horizon(9999)
+
     def test_save_develop_leaves_the_group_pick_untouched(self):
         """The decisive test: developing a frame must never move the Best badge."""
         with Library(Settings(library_dir=self.library_dir)) as library:
