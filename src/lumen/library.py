@@ -29,7 +29,7 @@ from .config import Settings
 from .composition import CropCandidate, generate_candidates, straightened_size
 from .digest import day_facts, render_facts_table
 from .domain import (MANUAL_ASPECTS, MANUAL_CROP_ID, SUPPORTED_EXTENSIONS, Artifact, CropRect, DevelopSettings, Job,
-                     Photo, PhotoEdit)
+                     Photo, PhotoEdit, is_raw)
 from .geonames import Place, PlaceIndex, distance_km, online_lookup, parse_position
 from . import ingest, keychain, omlx
 from .mapdata import MapIndex, parse_geojson, parse_gpx, position_at
@@ -811,10 +811,12 @@ class Library:
         """One job over every burst: the review model names the best frame, that frame becomes the pick, and the
         same model proposes develop settings for it, which are saved as the pick's develop (see
         `_develop_from_advice`). A burst already critiqued, and a pick already advised, is not asked again
-        unless `redo`."""
+        unless `redo`. With no review model (`review` None) it critiques and advises nothing: stored critiques and
+        advice are still used, and a pick with no advice at all is levelled from its measured horizon alone."""
         if type(redo) is not bool:
             raise ValueError("redo must be true or false")
-        manifest = {"kind": "cull", "redo": redo, "role": getattr(review, "role", None), "model": review.model}
+        manifest = {"kind": "cull", "redo": redo, "role": getattr(review, "role", None),
+                    "model": getattr(review, "model", None)}
         runner = self.job_runner
         job = self.catalog.create_prepared_job("cull", lambda job_id: self._write_job_files(job_id, manifest))
 
@@ -869,6 +871,8 @@ class Library:
         names: list[str] = []
         if chosen is None:
             if critique is None:
+                if review is None:
+                    return ("skipped",)
                 try:
                     critique = self.critique_burst(group["id"], review)
                 except (OmlxError, ValueError, OSError, RuntimeError) as error:
@@ -881,12 +885,12 @@ class Library:
                 return (*names, "failed")
         if group["automatic_pick_id"] != chosen["id"]:
             try:
-                self.set_pick(chosen["id"], by_model={"job_id": job.id, "model": review.model,
+                self.set_pick(chosen["id"], by_model={"job_id": job.id, "model": getattr(review, "model", None),
                                                       "role": getattr(review, "role", None)})
             except ValueError as error:  # the frame left its burst since the snapshot
                 self._log_job(job, f"{Path(chosen['path']).name}: pick {type(error).__name__}: {error}")
                 return (*names, "failed")
-        if redo or self.latest_develop_advice(chosen["id"]) is None:
+        if review is not None and (redo or self.latest_develop_advice(chosen["id"]) is None):
             try:
                 self.suggest_develop(chosen["id"], review, settings=self.develop_for(chosen["id"]) or DevelopSettings())
             except (OmlxError, ValueError, OSError, RuntimeError) as error:
@@ -895,7 +899,7 @@ class Library:
             else:
                 names.append("advised")
         try:
-            if self._develop_from_advice(chosen["id"]):
+            if self._develop_from_advice(chosen["id"]) or self._develop_from_horizon(chosen):
                 names.append("developed")
         except (DevelopError, ValueError, OSError) as error:
             self._log_job(job, f"{Path(chosen['path']).name}: develop {type(error).__name__}: {error}")
@@ -925,6 +929,21 @@ class Library:
             if not rest:
                 return False
             self.save_develop(photo_id, DevelopSettings(rest))
+        return True
+
+    def _develop_from_horizon(self, photo: dict) -> bool:
+        """With no develop advice at all (no engine, or advice failed), level a raw's measured horizon alone, unless
+        the photographer ever saved or cleared its develop. Advice that declined the angle is never overruled."""
+        photo_id = photo["id"]
+        if (not is_raw(photo["path"]) or self.latest_develop_advice(photo_id) is not None
+                or self.develop_for(photo_id) is not None or self.catalog.connection.execute(
+                    "SELECT 1 FROM provenance WHERE photo_id = ? AND kind IN ('develop_changed', 'develop_cleared') "
+                    "LIMIT 1", (photo_id,)).fetchone()):
+            return False
+        if (angle := self.straighten_auto(photo_id)) is None:
+            return False
+        with self._mutation():
+            self._develop(photo_id, DevelopSettings({"straighten_deg": angle}), origin="vision")
         return True
 
     def start_triage_job(self, tagger, *, group_id: int) -> Job:
@@ -1583,7 +1602,7 @@ class Library:
     def develop_for(self, photo_id: int) -> DevelopSettings | None:
         return self.catalog.get_develop(photo_id)
 
-    def _develop(self, photo_id: int, settings: DevelopSettings | None) -> None:
+    def _develop(self, photo_id: int, settings: DevelopSettings | None, *, origin: str | None = None) -> None:
         """Re-render one contact-sheet preview from the raw and re-measure it. It deliberately does not re-rank
         the burst: a develop choice is the photographer's, and must never move the Best badge. Nothing inside the
         library changes until the render and the measurement have both succeeded."""
@@ -1634,6 +1653,8 @@ class Library:
             self.catalog.save_feature_print(photo_id, vision["feature_print"])
         details = {"preview_kind": kind, "metrics": {key: getattr(metrics, key) for key in
                    ("sharpness", "exposure", "clipping", "face_quality", "eye_quality")}}
+        if origin is not None:  # settings no one asked for, e.g. "vision": the measured horizon alone
+            details["source"] = origin
         if settings is None:
             self.catalog.clear_develop(photo_id, details)
         else:

@@ -4118,6 +4118,137 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual("succeeded", status["status"])
         regroup.assert_not_called()
 
+    def cull_raws(self, root, review, *, lone=("lone",), jpegs=(), burst=True, before=lambda library, ids: None,
+                  render=None):
+        """Import a three-frame burst (b0-b2) and one-frame bursts, each measured 2 degrees off level, let the catalog
+        see all but `jpegs` as the raws they stand in for, then run the cull job. Answers (status, ids, library)."""
+        if burst:
+            self._burst(root)
+        for index, name in enumerate((*lone, *jpegs)):
+            exif = Image.Exif(); exif[36867] = f"2026:10:23 {10 + index}:00:00"
+            Image.new("RGB", (120, 90), (0, 40 * index, 90)).save(root / f"{name}.jpg", exif=exif)
+        library = Library(Settings(library_dir=root / "library"))
+        self.addCleanup(library.close)
+        turning = self.develop_render([])
+        render = render or (lambda *args, **kwargs: replace(turning(*args, **kwargs),
+                                                            supported={"lens_correction": False, "straighten": True}))
+        with patch("lumen.library.analyze_faces", return_value=self.vision(-2.0)):
+            library.import_path(root)
+            ids = {}
+            for photo in library.catalog.list_photos():
+                path = Path(photo.path)
+                if path.stem not in jpegs:
+                    path = path.rename(path.with_suffix(".ARW"))
+                    with library.catalog.connection:
+                        library.catalog.connection.execute("UPDATE photos SET path = ?, format = 'ARW' WHERE id = ?",
+                                                           (str(path), photo.id))
+                ids[path.stem] = photo.id
+            with patch("lumen.library.render_raw", side_effect=render):
+                before(library, ids)
+                job = library.start_cull_job(review)
+                library.wait_for_job(job.id)
+        return library.job_status(job.id), ids, library
+
+    def develop_events(self, library, photo_id):
+        return [event.details for event in library.catalog.events_for(photo_id) if event.kind == "develop_changed"]
+
+    def test_cull_job_saves_an_advised_angle_and_angle_only_advice_on_each_pick(self):
+        for returned in ({"exposure_ev": 0.3, "straighten_deg": 2.0}, {"straighten_deg": 2.0}):
+            class FakeReview:
+                model, role = "review-model", "review"
+                def critique_burst(self, frames):
+                    return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
+                def suggest_develop(self, render, *, settings, feedback=None, histogram_note=None, **kwargs):
+                    return DevelopAdvice(dict(returned), "Level it.", "{}")
+
+            with self.subTest(returned=returned), tempfile.TemporaryDirectory() as directory:
+                status, ids, library = self.cull_raws(Path(directory), FakeReview())
+                self.assertEqual({"picked": 1, "advised": 2, "developed": 2, "skipped": 0, "failed": 0}, status["result"])
+                pick = next(group for group in library.list_groups() if len(group["photos"]) == 3)["automatic_pick_id"]
+                for photo_id in (pick, ids["lone"]):
+                    self.assertEqual(returned, library.develop_for(photo_id).to_dict())
+                    self.assertNotIn("source", self.develop_events(library, photo_id)[-1], "advice is not vision")
+
+    def test_cull_job_without_an_engine_levels_the_measured_horizon_alone(self):
+        class FakeReview:
+            model, role = "review-model", "review"
+            def critique_burst(self, frames):
+                return BurstCritique(frames[-1][0], "Best timing.", 0.72, "{}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            status, ids, library = self.cull_raws(Path(directory), None)
+            burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
+            first_pick = burst["automatic_pick_id"]
+            self.assertEqual({"picked": 0, "advised": 0, "developed": 1, "skipped": 1, "failed": 0}, status["result"],
+                             "a burst that needs a critique is skipped; the lone keeper is levelled")
+            self.assertTrue(all(library.develop_for(ids[name]) is None for name in ("b0", "b1", "b2")))
+            self.assertFalse(library.catalog.get_photo(first_pick).model_pick, "the pick is untouched")
+            self.assertEqual({"straighten_deg": 2.0}, library.develop_for(ids["lone"]).to_dict())
+            self.assertEqual("vision", self.develop_events(library, ids["lone"])[-1]["source"])
+            self.assertIsNone(library.latest_develop_advice(ids["lone"]), "no model was asked")
+            chosen = library.critique_burst(burst["id"], FakeReview())["photo_id"]  # reused without an engine
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])), \
+                    patch("lumen.library.analyze_faces", return_value=self.vision(-2.0)):
+                again = library.start_cull_job(None)
+                library.wait_for_job(again.id)
+            burst = next(group for group in library.list_groups() if len(group["photos"]) == 3)
+            self.assertEqual({"picked": 0, "advised": 0, "developed": 1, "skipped": 1, "failed": 0},
+                             library.job_status(again.id)["result"])
+            self.assertNotEqual(first_pick, chosen)
+            self.assertEqual(chosen, burst["automatic_pick_id"])
+            pick = [event.details for event in library.catalog.events_for(chosen) if event.kind == "model_pick"][-1]
+            self.assertEqual((again.id, None, None), (pick["job_id"], pick["model"], pick["role"]))
+            self.assertEqual({"straighten_deg": 2.0}, library.develop_for(chosen).to_dict())
+            self.assertEqual({"straighten_deg": 2.0}, library.develop_for(ids["lone"]).to_dict(), "levelled once")
+
+    def test_cull_job_levels_the_horizon_when_advice_failed_but_never_after_advice_declined_it(self):
+        def failing(self, render, **kwargs):
+            raise OmlxError("model went away")
+
+        for advise, expected, counts in (
+                (failing, {"straighten_deg": 2.0}, {"advised": 0, "developed": 1, "failed": 1}),
+                (lambda self, render, **kwargs: DevelopAdvice({"exposure_ev": 0.3}, "Bright.", "{}"),
+                 {"exposure_ev": 0.3}, {"advised": 1, "developed": 1, "failed": 0}),
+                (lambda self, render, **kwargs: DevelopAdvice({}, "Leave it.", "{}"), None,
+                 {"advised": 1, "developed": 0, "failed": 0})):
+            FakeReview = type("FakeReview", (), {"model": "review-model", "role": "review", "suggest_develop": advise})
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                status, ids, library = self.cull_raws(Path(directory), FakeReview(), burst=False)
+                self.assertEqual({"picked": 0, "skipped": 0, **counts}, status["result"])
+                develop = library.develop_for(ids["lone"])
+                self.assertEqual(expected, develop and develop.to_dict())
+
+    def test_cull_job_never_levels_a_touched_astro_or_camera_jpeg_frame(self):
+        def touch(library, ids):
+            library.save_develop(ids["kept"], DevelopSettings({"exposure_ev": 0.5}))
+            library.save_develop(ids["cleared"], DevelopSettings({"exposure_ev": 0.5}))
+            library.clear_develop(ids["cleared"])
+            library.catalog.save_tags(ids["stars"], {"sky": {"class": "milky_way", "confidence": 0.9}}, "fast-model")
+
+        with tempfile.TemporaryDirectory() as directory:
+            status, ids, library = self.cull_raws(Path(directory), None, burst=False, lone=("kept", "cleared", "stars"),
+                                                  jpegs=("plain",), before=touch)
+            self.assertEqual({"picked": 0, "advised": 0, "developed": 0, "skipped": 4, "failed": 0}, status["result"])
+            self.assertEqual({"exposure_ev": 0.5}, library.develop_for(ids["kept"]).to_dict())
+            self.assertEqual([None] * 3, [library.develop_for(ids[name]) for name in ("cleared", "stars", "plain")])
+
+    def test_cull_job_logs_a_frame_whose_levelling_fails_and_carries_on(self):
+        render = self.develop_render([])
+
+        def refuse_first(source, *args, **kwargs):
+            if Path(source).stem == "first":
+                raise library_module.DevelopError("This raw developer cannot straighten; run scripts/bootstrap.sh.")
+            return render(source, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            status, ids, library = self.cull_raws(Path(directory), None, burst=False, lone=("first", "second"),
+                                                  render=refuse_first)
+            self.assertEqual("succeeded", status["status"])
+            self.assertIn("first.ARW: develop DevelopError: This raw developer cannot straighten", "\n".join(status["log_tail"]))
+            self.assertEqual({"picked": 0, "advised": 0, "developed": 1, "skipped": 0, "failed": 1}, status["result"])
+            self.assertIsNone(library.develop_for(ids["first"]))
+            self.assertEqual({"straighten_deg": 2.0}, library.develop_for(ids["second"]).to_dict())
+
     def test_low_confidence_species_named_in_subjects_stays_suggested(self):
         class FakeTagger:
             model, role = "fast-model", "fast"
