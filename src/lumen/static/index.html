@@ -951,8 +951,21 @@
             <p id="develop-color_nr-note" class="quiet" hidden></p>
             </div>
           </details>
-          <details>
+          <details class="how"><summary>How this works</summary>
+            <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping.</p>
+            <p class="quiet">The review model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>
+            <p class="quiet">The handles start at this frame's own neutral, which the camera and the light set. Until you move one, nothing is sent.</p>
+            <p class="quiet">Sharpness is the decoder's own, and arrives at full strength, so it only goes down. Clarity is separate: a wide, gentle local contrast that lifts texture. Sharpness works on single pixels, so choose Full size to judge it: at viewport size the change is averaged away.</p>
+            <p class="quiet">Auto leaves the file's own baseline alone. Off asks for none at all. Manual sets both amounts by hand. Like sharpness, noise lives in single pixels: judge it at Full size.</p>
+            <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own, except Straighten: each frame keeps its own angle. Your RAW files never change.</p>
+          </details>
+          <div class="button-row">
+            <button type="button" id="develop-reset-all" class="secondary">Reset all</button>
+            <button type="button" id="develop-apply-group" class="secondary">Apply to every frame in this burst</button>
+          </div>
+          <details id="develop-straighten">
             <summary>Straighten</summary>
+            <p class="quiet">Set per frame; not copied to the burst.</p>
             <div class="develop-row">
               <label for="develop-straighten_deg">Angle (degrees)</label>
               <input type="range" id="develop-straighten_deg" aria-describedby="develop-straighten_deg-megapixels develop-straighten_deg-note" min="-15" max="15" step="0.1" value="0">
@@ -965,18 +978,6 @@
             <p id="develop-straighten_deg-hint" class="quiet"></p>
             <p id="develop-straighten_deg-note" class="quiet" hidden></p>
           </details>
-          <details class="how"><summary>How this works</summary>
-            <p class="quiet">The histogram is this render's, in display values: Y is Rec. 709 luma, R, G and B are the colour channels. A spike at either edge is clipping.</p>
-            <p class="quiet">The review model reads this render and its histogram, then parks the handles below where it would start and says why. Nothing is saved until you leave the tab, and Discard puts every handle back. Say what is wrong in the box and ask again to have it try once more.</p>
-            <p class="quiet">The handles start at this frame's own neutral, which the camera and the light set. Until you move one, nothing is sent.</p>
-            <p class="quiet">Sharpness is the decoder's own, and arrives at full strength, so it only goes down. Clarity is separate: a wide, gentle local contrast that lifts texture. Sharpness works on single pixels, so choose Full size to judge it: at viewport size the change is averaged away.</p>
-            <p class="quiet">Auto leaves the file's own baseline alone. Off asks for none at all. Manual sets both amounts by hand. Like sharpness, noise lives in single pixels: judge it at Full size.</p>
-            <p class="quiet">Apply gives every other frame in this burst these settings, replacing any it had of its own. Your RAW files never change.</p>
-          </details>
-          <div class="button-row">
-            <button type="button" id="develop-reset-all" class="secondary">Reset all</button>
-            <button type="button" id="develop-apply-group" class="secondary">Apply to every frame in this burst</button>
-          </div>
         </div>
         <p id="develop-status" role="status" aria-live="polite"></p>
       </section>

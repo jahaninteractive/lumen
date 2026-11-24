@@ -2593,6 +2593,55 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual([{"exposure_ev": 0.5}] * 4, stored)
         self.assertNotIn(str(self.root), json.dumps(status))
 
+    def test_apply_to_group_leaves_each_frames_straighten_angle_alone(self):
+        """The angle is set per frame: targets keep their own (or none) and gain everything else."""
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5, "straighten_deg": 2.0}))
+                library.save_develop(ids[1], DevelopSettings({"contrast": 0.9, "straighten_deg": -3.5}))
+            status = self.run_group_job(library, ids[0])
+            stored = [library.develop_for(i).to_dict() for i in ids]
+
+        self.assertEqual({"applied": 3, "skipped_non_raw": 0, "skipped_offline": 0, "failed": 0}, status["result"])
+        self.assertEqual({"exposure_ev": 0.5, "straighten_deg": 2.0}, stored[0], "the source is untouched")
+        self.assertEqual({"exposure_ev": 0.5, "straighten_deg": -3.5}, stored[1])
+        self.assertEqual([{"exposure_ev": 0.5}] * 2, stored[2:])
+
+    def test_apply_to_group_refuses_a_source_with_only_a_straighten_angle(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library)
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"straighten_deg": 2.0}))
+            with self.assertRaisesRegex(ValueError, "^this frame has only a straighten angle, which is set per "
+                                                    "frame; there is nothing to apply$"):
+                library.start_develop_group_job(ids[0])
+            self.assertEqual([], library.catalog.list_jobs())
+
+    def test_apply_to_group_fails_each_frame_when_the_source_becomes_angle_only_mid_job(self):
+        with Library(Settings(library_dir=self.library_dir)) as library:
+            ids = self.burst(library, names=("DSC0002.jpg",))
+            with patch("lumen.library.render_raw", side_effect=self.develop_render([])):
+                library.save_develop(ids[0], DevelopSettings({"exposure_ev": 0.5, "straighten_deg": 2.0}))
+            fingerprint = library.catalog.get_photo(ids[0]).fingerprint
+            real = library.catalog.group_photo_ids
+
+            def narrow(group_id):  # runs at start, before the job: the source becomes angle-only
+                library.catalog.save_develop(ids[0], DevelopSettings({"straighten_deg": 2.0}), fingerprint)
+                return real(group_id)
+
+            renders = []
+            with patch.object(library.catalog, "group_photo_ids", side_effect=narrow):
+                status = self.run_group_job(library, ids[0], renders)
+            stored = library.develop_for(ids[1])
+
+        self.assertEqual("succeeded", status["status"])
+        self.assertEqual((0, 1), (status["result"]["applied"], status["result"]["failed"]))
+        self.assertEqual(["DSC0002.jpg: the source frame has only a straighten angle now; there is nothing to apply"],
+                         status["log_tail"])
+        self.assertIsNone(stored)
+        self.assertEqual([], renders, "nothing was saved, so nothing was rendered")
+
     def test_apply_to_group_includes_rejected_frames(self):
         with Library(Settings(library_dir=self.library_dir)) as library:
             ids = self.burst(library)

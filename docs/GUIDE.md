@@ -456,7 +456,8 @@ camera's embedded JPEG, because sharpness, clarity, and noise reduction act on
 single pixels and a render scaled to the window averages them away. Leaving the
 tab hands the viewer back whatever it was showing before. **Apply to every
 frame in this burst** copies the settings to each raw in the burst, rejected
-ones included, as a background job; frames that are not raw or whose original is offline are
+ones included, as a background job, all but the Straighten angle, which each
+frame keeps as its own; frames that are not raw or whose original is offline are
 skipped and counted. **Export this frame** bakes the settings into the JPEG;
 tick **Also export the untouched version** (in the dialog footer or the Export
 tab) to get
@@ -467,7 +468,12 @@ XMP) cannot be combined with develop settings.
 
 **Straighten.** The Develop tab's Straighten section levels a tilted horizon,
 from -15 to 15 degrees; a positive angle turns the picture clockwise as you
-see it. Drag the slider or type the angle, or press **Auto** to take the angle
+see it. The angle is set per frame, since each frame of a burst has its own
+tilt, so the section sits below **Reset all** and **Apply to every frame in
+this burst**: Apply copies the other develop settings and leaves each frame's
+angle alone (a frame you levelled keeps its angle, one you did not stays level
+as shot), and says so when this frame has one. The section opens by itself on
+a frame that has an angle. Drag the slider or type the angle, or press **Auto** to take the angle
 Lumen measured on the frame's horizon ("No clear horizon found; set it by hand"
 when there is none). **Draw horizon** lets you drag along any line in the
 preview that should be straight: a line nearer horizontal is levelled, one

@@ -4777,6 +4777,7 @@ function fillDevelop(photo) {
   message.hidden = develop.ready;
   developNode('develop-workspace').hidden = !develop.ready;
   developNode('develop-status').textContent = '';  // the reason above says it once
+  if ('straighten_deg' in saved) developNode('develop-straighten').open = true;  // a set angle is never hidden; closing it stays the photographer's
   drawDevelopWidget();
   syncDevelopControls();
   if (develop.ready && developNode('develop-tab').getAttribute('aria-selected') === 'true') renderDevelopPreview();
@@ -5226,11 +5227,14 @@ developNode('develop-discard-advice').addEventListener('click', () => discardDev
 developNode('develop-use-advice').addEventListener('click', () => useStoredDevelopAdvice());
 developNode('develop-apply-group').addEventListener('click', async () => {
   const photoId = state.develop.photoId;
+  const angled = 'straighten_deg' in state.develop.fields;
   state.busy = true;
   updateWorkflow();
   try {
     await saveDevelop();  // the job copies the stored settings, so this frame's must be stored first
-    watchJob(await post(`/api/photos/${photoId}/develop/apply-to-group`));
+    const job = await post(`/api/photos/${photoId}/develop/apply-to-group`);
+    watchJob(job);
+    if (angled) announce(`${jobText(job)} Straighten is set per frame and was not copied.`);
   } catch (error) {
     document.querySelector('#develop-status').textContent = `Apply to this burst could not start: ${error.message}`;
     announce(document.querySelector('#develop-status').textContent);

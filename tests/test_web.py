@@ -4147,6 +4147,7 @@ const regression = `
     dated.listeners.change();
 
     await element('#develop-apply-group').listeners.click();
+    assert.ok(!element('#announcer').textContent.includes('Straighten'), 'no angle, nothing said about it: ' + element('#announcer').textContent);
     assert.equal(developPosts.at(-2).url, '/api/photos/1/develop', 'the settings are stored before the job copies them');
     assert.deepEqual([developPosts.at(-1).url, developPosts.at(-1).body], ['/api/photos/1/develop/apply-to-group', {}]);
     assert.equal(element('#export-dialog').hidden, false, 'the burst job uses the existing progress dialog');
@@ -4206,11 +4207,14 @@ const regression = `
     assert.deepEqual(straightenedSize(6000, 4000, 2), [5704, 3803], 'the same whole pixels as composition.straightened_size');
     assert.deepEqual(straightenedSize(6000, 4000, -2), [5704, 3803], 'either direction costs the same');
 
+    const group = element('#develop-straighten');
+    assert.ok(!group.open, 'closed until a frame with an angle is shown');
     await key('Home', card(1), element('#contact-sheet'));
     await key('Enter', card(1), element('#contact-sheet'));
     await flush();
     element('#develop-tab').listeners.click();
     await flush();
+    assert.equal(group.open, true, 'a saved angle is never hidden');
     assert.deepEqual(developPosts.at(-1).body.settings, { exposure_ev: 0.5, straighten_deg: 2 }, 'the stored angle renders');
     assert.equal(field('straighten_deg').value, '2.0');
     assert.equal(range.getAttribute('aria-valuetext'), '2.0 degrees');
@@ -4257,6 +4261,8 @@ const regression = `
     await key(']', element('#loupe-viewport'), element('#loupe'));
     await flush();
     assert.equal(state.develop.photoId, 2);
+    assert.equal(group.open, true, 'a frame without an angle never closes the group');
+    group.open = false;  // the photographer folds it away
     assert.deepEqual(saved(1), { exposure_ev: 0.5, contrast: 0.3 }, 'the reset angle is cleared from the frame');
     assert.ok(announcements.slice(heard).includes('Develop settings saved. ' + cropNote), announcements.slice(heard).join(' | '));
 
@@ -4288,6 +4294,7 @@ const regression = `
     assert.equal(auto.disabled, false);
     assert.ok(!('straighten_deg' in state.develop.fields));
     assert.equal(developPosts.length, before, 'nothing renders or saves');
+    assert.equal(group.open, false, 'redrawing the controls leaves the fold as the photographer left it');
 
     // An answer that arrives after the panel moved to another frame is dropped.
     holdUrls.add('/api/photos/2/straighten-auto');
@@ -4297,6 +4304,7 @@ const regression = `
     await key('[', element('#loupe-viewport'), element('#loupe'));
     await flush();
     assert.equal(state.develop.photoId, 1);
+    assert.equal(group.open, true, "frame 1's saved angle opens it again");
     const frameOne = [field('straighten_deg').value, hint()];
     heldReplies.shift()();
     await pressed;
@@ -4378,6 +4386,15 @@ const regression = `
     assert.equal(element('#develop-straighten_deg-note').hidden, false);
     assert.equal(element('#develop-straighten_deg-note').textContent, "This Lumen's raw developer is older than straightening; run scripts/bootstrap.sh to rebuild it.");
     assert.equal(element('#develop-contrast').disabled, false, 'the other controls are unaffected');
+
+    // The burst copy leaves the angle out, and says so when this frame has one.
+    supported.straighten = true;
+    heard = announcements.length;
+    await element('#develop-apply-group').listeners.click();
+    await flush();
+    assert.equal(developPosts.filter(post => post.url === '/api/photos/1/develop/apply-to-group').length, 1);
+    assert.ok(announcements.slice(heard).some(text => /^Apply develop to burst .+ Straighten is set per frame and was not copied\.$/.test(text)),
+      announcements.slice(heard).join(' | '));
     return;
   }
   if (scenario === 'develop-draw-horizon') {
@@ -6534,7 +6551,8 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         # The suggestion panel is not a develop control, so it sits above them all rather than in
         # their order: it is where a photographer who cannot read the histogram yet starts.
         self.assertEqual(["Where to start", "Brightness", "White Balance", "Contrast", "Sharpness",
-                          "Lens Correction", "Noise Reduction", "Straighten", "How this works"], summaries, "IEDT's order, after the suggestion")
+                          "Lens Correction", "Noise Reduction", "How this works", "Straighten"], summaries,
+                         "IEDT's order, after the suggestion; Straighten is per frame, below the burst buttons")
         # Every flag in DEVELOP_FLAGS needs a control, or the server accepts a setting the
         # panel cannot reach.
         for flag in DEVELOP_FLAGS:
@@ -6582,6 +6600,26 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertNotIn("aria-live", hint["attrs"], "the announcer is the one spoken channel")
         styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
         self.assertIn('#develop-straighten_deg-draw[aria-pressed="true"]', styles, "draw mode shows as pressed")
+
+    def test_develop_straighten_group_sits_after_the_burst_buttons(self):
+        """The angle is set per frame, so its group sits below Apply to every frame, outside what the copy covers."""
+        html = urllib.request.urlopen(self.base + "/", timeout=3).read().decode()
+        parser = LandmarkParser()
+        parser.feed(html)
+        by_id = {node["attrs"]["id"]: node for node in parser.nodes if "id" in node["attrs"]}
+        group = by_id["develop-straighten"]
+        self.assertEqual("details", group["tag"])
+        self.assertIn(by_id["develop-panel"], group["parents"])
+        at = parser.nodes.index
+        self.assertLess(at(by_id["develop-reset-all"]), at(group))
+        self.assertLess(at(by_id["develop-apply-group"]), at(group))
+        for name in ("develop-straighten_deg", "develop-straighten_deg-value", "develop-straighten_deg-auto",
+                     "develop-straighten_deg-draw", "develop-straighten_deg-reset", "develop-straighten_deg-megapixels",
+                     "develop-straighten_deg-hint", "develop-straighten_deg-note"):
+            self.assertIn(group, by_id[name]["parents"], name)
+        kids = [node for node in parser.nodes if node["parents"] and node["parents"][-1] is group]
+        self.assertEqual(["summary", "p"], [node["tag"] for node in kids[:2]])
+        self.assertEqual("Set per frame; not copied to the burst.", kids[1]["text"].strip())
 
     def test_javascript_develop_tab_is_disabled_when_the_original_is_offline(self):
         self.run_javascript_cleanup_regression("develop-offline")

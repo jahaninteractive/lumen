@@ -2241,12 +2241,16 @@ class Library:
 
     def start_develop_group_job(self, photo_id: int) -> Job:
         """Copy one frame's develop settings onto every other frame of its burst, in the background. Rejected
-        frames are included; non-raw and offline frames are skipped and counted, never failed."""
+        frames are included; non-raw and offline frames are skipped and counted, never failed. The straighten
+        angle is set per frame: it is never copied, and each target keeps its own."""
         photo = self.catalog.get_photo(photo_id) if type(photo_id) is int else None
         if photo is None:
             raise ValueError(f"unknown photo ID: {photo_id}")
-        if photo.group_id is None or self.catalog.get_develop(photo_id) is None:
+        develop = self.catalog.get_develop(photo_id)
+        if photo.group_id is None or develop is None:
             raise ValueError("develop this frame first; it has no settings to apply")
+        if develop.fields.keys() == {"straighten_deg"}:
+            raise ValueError("this frame has only a straighten angle, which is set per frame; there is nothing to apply")
         ids = [other for other in self.catalog.group_photo_ids(photo.group_id) if other != photo_id]
         manifest = {"kind": "develop_group", "source_photo_id": photo_id, "photo_ids": ids}
         runner = self.job_runner
@@ -2264,20 +2268,27 @@ class Library:
                         with worker._mutation():
                             other = worker.catalog.get_photo(other_id)
                             source = worker.catalog.get_develop(photo_id)
+                            copied = {} if source is None else {
+                                key: value for key, value in source.to_dict().items() if key != "straighten_deg"}
                             if other is not None:
                                 name = Path(other.path).name
-                            if other is None or source is None:  # Removed or cleared since the job started.
+                            if other is None or not copied:  # Removed, cleared or left angle-only since the start.
                                 counts["failed"] += 1
                                 worker._log_job(job, f"{name or f'photo {other_id}'}: "
                                                      + ("removed since the job started" if other is None
-                                                        else "the source frame's settings were cleared"))
+                                                        else "the source frame's settings were cleared" if source is None
+                                                        else "the source frame has only a straighten angle now; "
+                                                             "there is nothing to apply"))
                             elif f".{other.format.lower()}" not in RAW_EXTENSIONS:
                                 counts["skipped_non_raw"] += 1
                             elif not Path(other.path).is_file():  # The volume is routinely unplugged.
                                 counts["skipped_offline"] += 1
                             else:
-                                try:  # DevelopSettings(source.fields) raises: fields is read-only.
-                                    worker.save_develop(other_id, DevelopSettings.from_dict(source.to_dict()))
+                                own = worker.catalog.get_develop(other_id)
+                                if own is not None and "straighten_deg" in own.fields:
+                                    copied["straighten_deg"] = own.fields["straighten_deg"]
+                                try:
+                                    worker.save_develop(other_id, DevelopSettings.from_dict(copied))
                                 except (DevelopError, ValueError, OSError) as error:
                                     counts["failed"] += 1
                                     worker._log_job(job, f"{name}: {error}")
