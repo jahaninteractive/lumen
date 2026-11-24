@@ -22,6 +22,13 @@ advice run entirely offline on a Mac with nothing uploaded. The AI cullers
 are cloud-dependent or subscription. That matters to travelling wildlife and
 expedition shooters with no bandwidth and a privacy stance.
 
+Correction (2026-11-24): the sentence above is out of date. Aftershoot and
+Narrative Select both process locally and work offline, so offline alone is
+not the differentiator. What sets Lumen apart is that it is free and open
+source, built around remote travel and wildlife rather than faces, and uses a
+general vision model for captions, keywords and develop advice. It is not
+positioned as a competitor to those apps.
+
 Hard limits: Sony ARW only, Apple Silicon only, terminal install (uv,
 ExifTool, Xcode tools, a separately configured oMLX model), version 0.1.0,
 one user, no screenshots, 16 GB machines untested. Most photographers will
