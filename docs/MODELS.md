@@ -14,8 +14,8 @@ The fast model handles the per-photo volume work; the review model handles the
 few calls where reading the frame closely matters more than throughput.
 
 Memory decides which to load. The 8B takes about 6 GB loaded and alone covers
-every job, which is why a 16 GB Apple Silicon Mac is the minimum (not yet
-tested; the measurements here are from a 48 GB M4). The 27B takes about 16 GB
+every job, which is why a 16 GB Apple Silicon Mac is the minimum (tried on
+a 16 GB M4 Mac mini; the measurements here are from a 48 GB M4). The 27B takes about 16 GB
 loaded, so both together are about 21 GB; on a machine with that headroom it
 earns its place with fuller descriptions and bolder, frame-specific develop
 advice, and it stays useful outside Lumen for anything else you run through

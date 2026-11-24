@@ -115,11 +115,45 @@ reporting anything sensitive. Versions are listed in [CHANGELOG.md](CHANGELOG.md
 
 ## Install
 
-Prerequisites: macOS 13.5 or newer on an Apple Silicon Mac with at least 16 GB
-of memory (AI advice on this Mac needs macOS 15). Lumen was built and measured on a
-48 GB M4. The app was installed and used on a 16 GB M4 Mac mini; AI on a Mac
-that size takes the fast model only (about 6 GB), with the notes in the guide's
-[Local AI](docs/GUIDE.md#on-a-16-gb-mac).
+### System requirements
+
+Lumen runs on Apple Silicon Macs only. There is no version for Intel Macs,
+Windows or Linux.
+
+**To run Lumen:**
+
+| | Needed |
+|---|---|
+| Mac | Apple Silicon (M1 or newer) |
+| macOS | 13.5 (Ventura) or newer |
+| Memory | Used on a 16 GB M4 Mac mini and built and measured on a 48 GB M4. Macs with 8 GB are untested |
+| Disk space | A 40 MB download and about 80 MB installed, plus room for the library (`~/Pictures/Lumen Library`: previews, ratings and exports) |
+| Browser | Lumen's window is a tab in your default web browser |
+| Internet | Only to download Lumen and any extras; none needed to use it |
+
+**Optional extras** (the installer wants twice an extra's size free while it
+installs):
+
+| Extra | Disk space | Needed for |
+|---|---|---|
+| Places and Map | about 150 MB together | offline place names and the Map tab |
+| darktable 5.6.2 | 310 MB | exports that use a darktable profile or start from a PNG, TIFF or HEIC |
+| Siril 1.4.4 | 230 MB | stacking night-sky frames |
+
+**Optional AI advice:**
+
+| Engine | Needed |
+|---|---|
+| Online or Base | Nothing extra on the Mac: a key for an online service and a connection, or a model server on your own network |
+| This Mac | macOS 15 (Sequoia) or newer, 16 GB of memory or more, oMLX 0.7.2 and 6 GB of disk for the fast model |
+| This Mac, review model too | 32 GB of memory or more and a further 16 GB of disk |
+
+On a 16 GB Mac, AI on this Mac takes the fast model only, with the notes in
+the guide's [Local AI](docs/GUIDE.md#on-a-16-gb-mac).
+
+**From the project folder** you also need Terminal, git and Apple's
+command-line tools (the bootstrap starts their installer); Homebrew only if
+`uv` or ExifTool is missing.
 
 There are two ways in: the app, for photographers who would rather not use a
 terminal, and the project folder, for those who would.
