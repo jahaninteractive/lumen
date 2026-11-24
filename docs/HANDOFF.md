@@ -2,6 +2,8 @@
 
 Last updated: 2026-11-24 — 0.10.0 Straighten released as `v0.10.0`; the website has Straighten, pushed
 
+**CI after the 0.10.0 push (2026-11-24):** run 45356311080 on `91ec83a`, the first CI run with the straighten code, failed in `test_rawdevelop` because the macos-15 runner's Swift gave up type-checking the straightened-size expression in `tools/raw_developer.swift` ("unable to type-check this expression in reasonable time"; the build Mac's Swift 6.3.3 compiles it). The expression is now typed and split into steps, same arithmetic, no version bump; `tests.test_rawdevelop` passes here, the full suite was not run. The released 0.10.0 app is unaffected. The photographer's `<library>/cache/bin/raw_developer` is older than the source again, so `/api/status` reports `stale` until `zsh scripts/bootstrap.sh --no-download` is run.
+
 **Website (2026-11-24, `~/Developer/lumen-site`, pushed as `9d6493f` on the photographer's word; lumen.contact/features serves the Straighten section, the new site version and the still (checked by `curl`)):** a Straighten article on the features page after Develop with a new still `images/straighten.jpg` (frame 8 of the photographer's library, the saved -1.9 degrees, grid showing, taken headless at 1456 by 830 at 2x), a Straighten paragraph, tip sentence and Behind it note in the guide's step 9, a "New in version 0.10" paragraph and feature bullet in `llms.txt`, site version 2026.11.24-1 on all five pages, and the sitemap dates for features and guide. The features page was read at 1376 by 1385. Not done: the home page and the video (still 0.9) say nothing of it.
 
 ## Resume here

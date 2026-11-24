@@ -263,9 +263,13 @@ let decodedExtent = image.extent
 // the camera-JPEG path are measured against it.
 if straighten != 0 {
     let extent = image.extent
-    let turn = abs(straighten) * .pi / 180
-    let fit = min(extent.width / (extent.width * cos(turn) + extent.height * sin(turn)),
-                  extent.height / (extent.width * sin(turn) + extent.height * cos(turn)))
+    // Typed and split up: as one expression the CI's compiler gave up type-checking it.
+    let turn: CGFloat = abs(straighten) * .pi / 180
+    let cosTurn: CGFloat = cos(turn)
+    let sinTurn: CGFloat = sin(turn)
+    let fitWidth: CGFloat = extent.width / (extent.width * cosTurn + extent.height * sinTurn)
+    let fitHeight: CGFloat = extent.height / (extent.width * sinTurn + extent.height * cosTurn)
+    let fit: CGFloat = min(fitWidth, fitHeight)
     let width = min(extent.width, max(1, (fit * extent.width).rounded(.down)))
     let height = min(extent.height, max(1, (fit * extent.height).rounded(.down)))
     // Core Image is y-up, so turning clockwise on screen is a negative angle here.
