@@ -1,8 +1,10 @@
 # Lumen implementation handoff
 
-Last updated: 2026-11-24 — 0.10.0 Straighten merged to `main` (not pushed, not released); the Develop layout was tried twice and set aside
+Last updated: 2026-11-24 — 0.10.0 Straighten is on `main` with a notarized disk image built, not yet pushed or published; the website is next, in a new session
 
 ## Resume here
+
+**0.10.0 disk image built and notarized (2026-11-24), not yet pushed or published.** The released app was still 0.9.3, with no Straighten. `scripts/build_app.sh --sign … --notarize lumen-notary` on `main`: notarization submission `23f012fa-d166-4e31-a5bb-a78db88ae669`, Accepted, stapled, `spctl` "Notarized Developer ID"; `dist/Lumen-0.10.0.dmg` 40,484,645 bytes, SHA-256 `c5505d730c32f5f46206d7e5aaad5c9cfcb02599af738f5b40708742e0781a6d`; suite 1113 passing, smoke test passing before and after notarizing. This closes the straighten plan's manual check D as far as the build goes (all three Swift tools compile into the app, and the bundled helpers and page carry the straighten code); a straightened raw has not been rendered through the built app, and it has not been opened on the clean Mac. Still to do, each on the photographer's word: push `main`, then `zsh scripts/release_app.sh --publish` for release `v0.10.0` (it refuses if any app source changes after this build). **Next session: the website** (`~/Developer/lumen-site`) has nothing about Straighten yet; the guide and changelog here are current (the guide's Develop still predates the Straighten controls), and the README names it only in the Frame view line.
 
 **Develop tab layout: tried and set aside (2026-11-24).** The photographer chose option A (Straighten under the photo), saw it in their own window (about 1376 by 1385, far taller than the 900 px the spec assumed) and rejected it, then rejected a rough stacked layout (the whole Develop tab in three columns under the photo), which gave no bigger photo. `main` is unchanged: the Develop tab is as 0.10.0 left it. Option A is kept on branch `feature/develop-layout` (`67f12af`, not merged, its worktree removed); the stacked attempt was discarded. What was learned is in the spec's "What was tried" (`docs/superpowers/specs/2026-11-24-develop-layout-design.md`). Do not reopen it unless the photographer asks; check any layout at their window size first.
 

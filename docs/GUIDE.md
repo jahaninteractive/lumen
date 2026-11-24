@@ -502,7 +502,7 @@ triaged as night sky, aurora or Milky Way, or a light in a stack) is never
 offered an angle; straighten those by hand.
 
 Straightening needs both native helpers rebuilt: in a checkout run
-`zsh scripts/bootstrap.sh` once, or install the next Lumen.app. Until then the
+`zsh scripts/bootstrap.sh` once, or install Lumen.app 0.10.0 or later. Until then the
 Straighten section is disabled and says the raw developer is too old. Auto
 measures the frame the first time you press it. **Suggest settings** and
 **Pick and develop every burst** use a stored measurement, which a frame gets
