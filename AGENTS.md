@@ -82,8 +82,8 @@ Focused tests use `uv run python -W error -m unittest tests.test_<module> -v`.
 - Lumen.app and DMG plan (complete, on `main`, signed and notarized; clean-Mac testing is in `docs/HANDOFF.md`): `docs/superpowers/plans/2026-11-23-app-dmg.md`
 - Approved design: `docs/superpowers/specs/2026-11-24-straighten-design.md`
 - Straighten plan (complete, on `main`; its manual checks B, C and D are still open, see `docs/HANDOFF.md`): `docs/superpowers/plans/2026-11-24-straighten.md`
-- Design options, not yet approved: `docs/superpowers/specs/2026-11-24-develop-layout-design.md`
-- Develop layout plan (not started; next up, in a fresh session): `docs/superpowers/plans/2026-11-24-develop-layout.md`
+- Develop layout options (tried and set aside 2026-11-24; read its "What was tried" first): `docs/superpowers/specs/2026-11-24-develop-layout-design.md`
+- Develop layout plan (set aside, do not start): `docs/superpowers/plans/2026-11-24-develop-layout.md`
 
 `GET /api/status` carries `stale`: reasons the running server no longer matches the tree, shown first in `#system-status` and marked `data-stale`. `diagnostics.source_digest()` hashes the package's `*.py` at import and again per request, so an edit after startup is caught while a `git checkout` that only touches mtimes is not; the Swift helper is compared by mtime against its source. The reasons reach the browser, so they name no absolute paths. This exists because static files are served from disk on every request while the Python stays as imported, which makes a stale server look current and fail as whatever validation error fires first.
 

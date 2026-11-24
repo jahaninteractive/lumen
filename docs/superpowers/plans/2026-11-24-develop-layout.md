@@ -3,8 +3,8 @@
 > **For agentic workers:** one lead and one implementer per task. The lead owns this plan, hands out one task
 > at a time, reviews every diff and runs the gates. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** not started. Written 2026-11-24 for a fresh session. The photographer has not yet chosen between
-the options; the plan below is the recommended path (A, then B). Ask before Task 1 if that is still the choice.
+**Status:** set aside 2026-11-24. Task 1 (option A) was built on `feature/develop-layout` and rejected by the
+photographer on sight; nothing is merged. Do not start this plan; see the spec's "What was tried".
 
 **Goal:** The Develop tab's right column stops scrolling on a landscape frame, by moving the picture tools
 (Straighten) and then the suggestion ("Where to start") under the photo. No control changes what it does.

@@ -1,7 +1,26 @@
 # Lumen Develop Tab Layout Design
 
-Status: options written up for the photographer on 2026-11-24. Option A then B is
-recommended; nothing is approved or built.
+Status: tried and set aside on 2026-11-24. The photographer chose option A, saw
+it in their own window and rejected it ("hate it - it doesnt make any sense"),
+then rejected a rough stacked layout too ("no its bad - best to return it for
+now"). The Develop tab is as 0.10.0 left it. See "What was tried" before
+proposing any of this again.
+
+## What was tried (2026-11-24)
+
+- The photographer's window is about 1376 by 1385, not the 1456 by 900 this
+  document assumed. There the column nearly fits and the gap under the photo is
+  about 700 px, so a 100 px Straighten strip sits alone above a large blank
+  area. Any future layout is judged at that size first.
+- Option A was built on branch `feature/develop-layout` (commit `67f12af`, kept,
+  not merged). It needed a DOM move: `#loupe .frame-panel` is the scrolling box,
+  so CSS cannot place a child of `#develop-panel` under the photo.
+- Stacked (photo on top, the whole Develop tab in three columns beneath, in
+  windows 1150 px or taller) was a throwaway and is gone. It did not make the
+  photo bigger: Full size, the tabs, the controls and the Export row take about
+  650 px of a 1330 px dialog, leaving a photo of 887 by 592 against today's
+  900 by 600. Four columns squeeze the sliders to nothing; three is the most.
+- Option B does not fit at 900 px tall (about 115 px under a landscape frame).
 
 ## Intent
 
