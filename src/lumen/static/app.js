@@ -4602,6 +4602,10 @@ const developNodes = {};
 const STRAIGHTEN_DRAW_MIN = 20;  // CSS px; a shorter drag is a slip
 let straightenStart = null;  // [x, y] in the overlay's own px while a horizon is being drawn
 let straightenHeld = false;  // the angle's handle is held by a pointer, which need not focus it
+// Taken once while the markup is attached: every preview load replaces the viewport's children, after which the
+// document no longer finds the overlay or the line inside it.
+const straightenOverlay = document.querySelector('#straighten-overlay');
+const straightenLine = document.querySelector('#straighten-line');
 function developNode(id) {
   return developNodes[id] ??= document.querySelector(`#${id}`);
 }
@@ -4751,6 +4755,7 @@ function fillDevelop(photo) {
   const develop = state.develop;
   develop.controller?.abort();
   setStraightenDraw(false, false);
+  straightenHint('');
   Object.assign(develop, {
     photoId: photo.id, fields: { ...saved, ...(saved.curve ? { curve: saved.curve.map(point => [...point]) } : {}) },
     neutral: null, defaults: {}, supported: {}, native: null, zoomShown: false, histogram: {}, drag: null, controller: null,
@@ -4859,6 +4864,7 @@ async function saveDevelop() {
 }
 
 function setDevelopField(control, value, spoken = null) {
+  if (control.key === 'straighten_deg') straightenHint('');  // the field now shows the angle
   if (value === null) delete state.develop.fields[control.key];
   else state.develop.fields[control.key] = value;
   syncDevelopControls();
@@ -4933,9 +4939,10 @@ DEVELOP_CONTROLS.forEach(control => {
 // it goes through the same path as a hand-set angle and saves only when the frame does.
 developNode('develop-straighten_deg-auto').addEventListener('click', () => {
   const angle = state.develop.straightenAuto;
-  if (!Number.isFinite(angle)) return announce('No clear horizon found; set it by hand');
+  if (!Number.isFinite(angle)) return announce(straightenHint('No clear horizon found; set it by hand'));
   const control = DEVELOP_CONTROLS.find(item => item.key === 'straighten_deg');
   setDevelopField(control, angle, `Straighten set to ${angle.toFixed(control.decimals)} degrees`);
+  straightenHint(`Straighten set to ${angle.toFixed(control.decimals)} degrees from the measured horizon`);
 });
 // The count follows the handle as it moves; the render still waits for the release.
 developNode('develop-straighten_deg').addEventListener('input', event => showStraightenMegapixels(Number(event.target.value)));
@@ -4952,6 +4959,12 @@ function drawnStraighten(x1, y1, x2, y2, current) {
   return angle === 0 ? null : angle;  // level is not set, as Reset leaves it
 }
 
+// The announcement is the spoken channel; this plain line is the same news for the eye, and never a second live region.
+function straightenHint(text) {
+  developNode('develop-straighten_deg-hint').textContent = text;
+  return text;
+}
+
 function straightenDrawing() {
   return developNode('develop-straighten_deg-draw').getAttribute('aria-pressed') === 'true';
 }
@@ -4959,7 +4972,7 @@ function straightenDrawing() {
 // The grid covers the image's rendered box, as the crop overlay does, while straightening is active:
 // draw mode, or the angle's slider or field in use. It takes the pointer only in draw mode.
 function drawStraightenOverlay() {
-  const overlay = developNode('straighten-overlay');
+  const overlay = straightenOverlay;
   const image = loupeViewport.children[0];
   const drawing = straightenDrawing();
   const focus = document.activeElement;
@@ -4978,8 +4991,9 @@ function setStraightenDraw(on, spoken = true) {
   if (on === straightenDrawing()) return;
   developNode('develop-straighten_deg-draw').setAttribute('aria-pressed', String(on));
   straightenStart = null;
-  developNode('straighten-line').setAttribute('visibility', 'hidden');
+  straightenLine.setAttribute('visibility', 'hidden');
   drawStraightenOverlay();
+  straightenHint(on ? 'Drag along a line in the picture that should be level or upright. Escape cancels.' : '');
   if (spoken) announce(on ? 'Draw horizon: drag along a line that should be level or upright' : 'Draw horizon cancelled');
 }
 
@@ -4993,7 +5007,6 @@ developNode('develop-panel').addEventListener('keydown', event => {
   event.stopPropagation();  // the frame view stays open
   setStraightenDraw(false);
 }, { capture: true });
-const straightenOverlay = developNode('straighten-overlay');
 function straightenPoint(event) {
   const box = straightenOverlay.getBoundingClientRect();
   return [event.clientX - box.left, event.clientY - box.top];
@@ -5006,7 +5019,7 @@ straightenOverlay.addEventListener('pointerdown', event => {
 });
 straightenOverlay.addEventListener('pointermove', event => {
   if (!straightenStart) return;
-  const line = developNode('straighten-line');
+  const line = straightenLine;
   const [x, y] = straightenPoint(event);
   Object.entries({ x1: straightenStart[0], y1: straightenStart[1], x2: x, y2: y }).forEach(([name, value]) => line.setAttribute(name, String(value)));
   line.setAttribute('visibility', 'visible');
@@ -5016,7 +5029,7 @@ straightenOverlay.addEventListener('pointerup', event => {
   const [x1, y1] = straightenStart;
   const [x2, y2] = straightenPoint(event);
   straightenStart = null;
-  developNode('straighten-line').setAttribute('visibility', 'hidden');
+  straightenLine.setAttribute('visibility', 'hidden');
   if (Math.hypot(x2 - x1, y2 - y1) < STRAIGHTEN_DRAW_MIN) return;  // the mode stays on for another try
   const control = DEVELOP_CONTROLS.find(item => item.key === 'straighten_deg');
   const angle = drawnStraighten(x1, y1, x2, y2, state.develop.fields.straighten_deg ?? 0);
@@ -5025,7 +5038,7 @@ straightenOverlay.addEventListener('pointerup', event => {
 });
 straightenOverlay.addEventListener('pointercancel', () => {
   straightenStart = null;
-  developNode('straighten-line').setAttribute('visibility', 'hidden');
+  straightenLine.setAttribute('visibility', 'hidden');
 });
 ['develop-straighten_deg', 'develop-straighten_deg-value'].forEach(id => {
   developNode(id).addEventListener('focus', drawStraightenOverlay);

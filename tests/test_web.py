@@ -2528,8 +2528,9 @@ class Element {
       remove: name => { this.className = this.className.split(' ').filter(item => item !== name).join(' '); },
     };
   }
-  append(...children) { children.forEach(child => { if (child && typeof child === 'object') child.parent = this; }); this.children.push(...children); }
-  replaceChildren(...children) { this.children.forEach(child => { if (child && typeof child === 'object') child.parent = null; }); this.children = []; this.append(...children); }
+  append(...children) { children.forEach(child => { if (child && typeof child === 'object') { child.parent = this; child.detached = false; } }); this.children.push(...children); }
+  // A replaced child leaves the document, so document.querySelector stops finding it or anything inside it.
+  replaceChildren(...children) { this.children.forEach(child => { if (child && typeof child === 'object') { child.parent = null; child.detached = true; } }); this.children = []; this.append(...children); }
   contains(node) { for (; node; node = node.parent) if (node === this) return true; return false; }
   setAttribute(name, value) { this.attrs[name] = value; }
   getAttribute(name) { return this.attrs[name]; }
@@ -2571,6 +2572,10 @@ function pickStatus(value) {
   ['all', 'keepers', 'flag', 'none', 'reject'].forEach(name => { element('#status-' + name).checked = name === value; });
   return element('#status-' + value);
 }
+function attached(node) {
+  for (let at = node; at; at = at.parent) if (at.detached) return null;
+  return node;
+}
 function element(selector) {
   if (!elements.has(selector)) elements.set(selector, new Element());
   return elements.get(selector);
@@ -2603,7 +2608,7 @@ const document = {
   addEventListener(name, callback) { this.listeners[name] = callback; },
   createElement: tag => Object.assign(new Element(), { tagName: tag.toUpperCase() }),
   querySelector: selector => selector === 'input[name="export-scope"]:checked' ? scope : selector === 'input[name="astro-recipe"]:checked' ? recipes.find(input => input.checked) : selector === 'input[name="export-preset"]:checked' ? presetRadios.find(input => input.checked) : selector === '.burst-frames' ? (() => { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).find(node => node.className === 'burst-frames') ?? null; })() : byData(selector) ? byData(selector)[0] ?? null
-    : selector === '#rating' ? inspectorRating() : element(selector),
+    : selector === '#rating' ? inspectorRating() : attached(element(selector)),
   querySelectorAll: selector => {
     if (selector === '.frame') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#contact-sheet')).filter(item => item.className === 'frame'); }
     if (selector === '.batch-button' || selector === '.batch-select') { const tree = node => [node, ...(node.children || []).flatMap(tree)]; return tree(element('#batch-list')).filter(node => node.className === selector.slice(1)); }
@@ -4329,17 +4334,21 @@ const regression = `
     Object.defineProperty(element('#announcer'), 'textContent', { get() { return this._text || ''; }, set(value) { this._text = value; if (value) announcements.push(value); } });
     const supported = { contrast: true, sharpness: true, luminance_nr: true, color_nr: true, lens_correction: true, straighten: true };
     developPreviewExtra = { supported, native_width: 6000, native_height: 4000 };
+    // As the markup ships it: the overlays inside the viewport and the line inside the grid, so a preview load detaches them.
+    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', clientWidth: 800, clientHeight: 600 });
+    const draw = element('#develop-straighten_deg-draw');
+    draw.setAttribute('aria-pressed', 'false');
+    const overlay = Object.assign(element('#straighten-overlay'), { hidden: true });
+    const line = element('#straighten-line');
+    line.setAttribute('visibility', 'hidden');
+    overlay.append(line);
+    viewport.append(element('#crop-overlay'), overlay);
+    const hint = () => element('#develop-straighten_deg-hint').textContent || '';
     await load();
     const card = id => document.querySelectorAll('.frame').find(item => Number(item.dataset.id) === id);
     const key = (name, target, node) => node.listeners.keydown({ key: name, metaKey: false, ctrlKey: false, altKey: false, target, preventDefault() {}, stopPropagation() {} });
     Object.assign(element('#loupe'), { tagName: 'DIALOG', id: 'loupe' });
-    const viewport = Object.assign(element('#loupe-viewport'), { tagName: 'DIV', clientWidth: 800, clientHeight: 600 });
     const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(setImmediate); };
-    const draw = element('#develop-straighten_deg-draw');
-    draw.setAttribute('aria-pressed', 'false');  // as the markup ships it
-    const overlay = Object.assign(element('#straighten-overlay'), { hidden: true });  // as the markup ships it
-    const line = element('#straighten-line');
-    line.setAttribute('visibility', 'hidden');
     const range = element('#develop-straighten_deg');
     const field = element('#develop-straighten_deg-value');
     const pointer = (name, x, y) => overlay.listeners[name]({ button: 0, pointerId: 7, clientX: x, clientY: y, preventDefault() {} });
@@ -4351,6 +4360,11 @@ const regression = `
     assert.equal(draw.disabled, false, 'enabled with Auto');
     assert.equal(draw.getAttribute('aria-pressed'), 'false');
     assert.equal(overlay.hidden, true, 'no grid until straightening is active');
+    assert.ok(!viewport.contains(overlay), "the preview load replaced the viewport's children, taking the overlay with it");
+
+    // Auto with no measurement says so on the page as well as aloud.
+    element('#develop-straighten_deg-auto').listeners.click();
+    assert.equal(hint(), 'No clear horizon found; set it by hand');
 
     // Mode off: a press on the preview starts no line.
     pointer('pointerdown', 10, 10);
@@ -4367,6 +4381,7 @@ const regression = `
     assert.equal(overlay.hidden, false, 'the grid shows in draw mode');
     assert.ok(overlay.getAttribute('data-drawing') !== undefined, 'the overlay takes the drag');
     assert.ok(viewport.contains(overlay), 'the overlay sits in the viewport over the image');
+    assert.equal(hint(), 'Drag along a line in the picture that should be level or upright. Escape cancels.');
 
     // A slip under 20 px is ignored and the mode stays on.
     overlay.box = { left: 50, top: 20, width: 800, height: 533 };
@@ -4392,6 +4407,7 @@ const regression = `
     assert.equal(draw.getAttribute('aria-pressed'), 'false', 'the mode ends after a draw');
     assert.equal(line.getAttribute('visibility'), 'hidden');
     assert.equal(overlay.hidden, true);
+    assert.equal(hint(), '', 'the field shows the result');
 
     // Drawn again on the turned preview: a level line now means no angle at all.
     draw.listeners.click();
@@ -4409,6 +4425,7 @@ const regression = `
     assert.equal(draw.getAttribute('aria-pressed'), 'false');
     assert.equal(announcements.at(-1), 'Draw horizon cancelled');
     assert.equal(stopped, 1, 'the dialog never sees this Escape');
+    assert.equal(hint(), '', 'a cancel clears the hint');
     escape();
     assert.equal(stopped, 1, 'with the mode off Escape is left alone');
     draw.listeners.click();
@@ -6492,6 +6509,11 @@ vm.runInNewContext(harness + fs.readFileSync(process.argv[1], 'utf8') + regressi
         self.assertEqual("true", overlay["attrs"].get("aria-hidden"), "the grid is purely visual")
         self.assertIn("hidden", overlay["attrs"])
         self.assertIn(overlay, by_id["straighten-line"]["parents"])
+        hint = by_id["develop-straighten_deg-hint"]
+        self.assertIn(by_id["develop-panel"], hint["parents"])
+        self.assertNotIn("aria-live", hint["attrs"], "the announcer is the one spoken channel")
+        styles = (Path(__file__).resolve().parents[1] / "src" / "lumen" / "static" / "styles.css").read_text()
+        self.assertIn('#develop-straighten_deg-draw[aria-pressed="true"]', styles, "draw mode shows as pressed")
 
     def test_javascript_develop_tab_is_disabled_when_the_original_is_offline(self):
         self.run_javascript_cleanup_regression("develop-offline")
